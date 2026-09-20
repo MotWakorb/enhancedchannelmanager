@@ -1750,6 +1750,48 @@ def _plan_principal(principal) -> str:
     )
 
 
+def _replay_skip_warnings(write_plan, outcome) -> list:
+    """Durable, operator-visible record of planned writes the replay skipped.
+
+    A skipped write is cosmetic degradation, not failure (PR #1014 review
+    item 3): the channel work completed, but a planned logo was not created
+    (``soft_failure``) or an update that only carried that logo was not sent
+    (``dependency_skipped``). Without this the execution reads as if every
+    planned operation executed.
+    """
+    warnings = []
+    for entry in getattr(outcome, "skipped", []) or []:
+        index = entry.get("index")
+        write = write_plan.writes[index] if index is not None and index < len(write_plan.writes) else None
+        method = entry.get("method")
+        if entry.get("reason") == "soft_failure":
+            message = (
+                f"Planned write {index} ({method}) failed upstream and was skipped; "
+                f"the rest of the plan completed. The affected channel has no logo "
+                f"from this run."
+            )
+        else:
+            message = (
+                f"Planned write {index} ({method}) was not sent: every field it carried "
+                f"depended on a skipped write. The channel's existing values were left unchanged."
+            )
+        warning = {
+            "type": "replay_write_skipped",
+            "index": index,
+            "method": method,
+            "reason": entry.get("reason"),
+            "message": message,
+        }
+        if entry.get("error_type"):
+            warning["error_type"] = entry["error_type"]
+        if write is not None and write.method == "update_channel" and write.args:
+            target = write.args[0]
+            if isinstance(target, int) and target >= 0:
+                warning["channel_id"] = target
+        warnings.append(warning)
+    return warnings
+
+
 def _planned_run_warnings(result: dict) -> list:
     """Preserve the warning surface produced during shadow planning."""
     warnings = list(result.get("normalization_warnings", []))
@@ -1908,7 +1950,7 @@ async def commit_auto_creation_pipeline(request: CommitPipelinePlanRequest, _adm
     """Validate drift, consume once, then execute the prepared pipeline scope."""
     from services.mutation_plan_store import mutation_plan_store
     from services.pipeline_write_plan import (
-        PipelineWritePlan, PlannedWrite, PartialReplayError,
+        PipelineWritePlan, PlannedWrite, PartialReplayError, ReplayOutcome,
         replay_write_plan, validate_read_set,
         journal_entries_for_plan,
     )
@@ -2021,7 +2063,10 @@ async def commit_auto_creation_pipeline(request: CommitPipelinePlanRequest, _adm
             replay_options = {"read_set_validated": True}
             if any(write.event_sync for write in write_plan.writes):
                 replay_options["execution_id"] = execution_id
-            _, remap = await replay_write_plan(engine.client, write_plan, **replay_options)
+            replay_outcome = ReplayOutcome()
+            _, remap = await replay_write_plan(
+                engine.client, write_plan, outcome=replay_outcome, **replay_options
+            )
         except PartialReplayError as exc:
             partial_replay = {
                 "failed_index": exc.failed_index,
@@ -2048,9 +2093,12 @@ async def commit_auto_creation_pipeline(request: CommitPipelinePlanRequest, _adm
             return value
 
         from models import ChannelPipelineExecution
-        planned_journal = journal_entries_for_plan(write_plan, remap, execution_id)
+        planned_journal = journal_entries_for_plan(
+            write_plan, remap, execution_id, outcome=replay_outcome
+        )
         if planned_journal:
             journal.log_entries(entries=planned_journal)
+        replay_skip_warnings = _replay_skip_warnings(write_plan, replay_outcome)
         result = remapped(plan.payload["result"])
         for summary in result.get("event_sync", []):
             for decision in summary.get("cleanup", {}).get("decisions", []):
@@ -2107,8 +2155,10 @@ async def commit_auto_creation_pipeline(request: CommitPipelinePlanRequest, _adm
             execution.streams_excluded = result.get("streams_excluded", 0)
             execution.set_created_entities(result.get("created_entities", []))
             execution.set_modified_entities(result.get("modified_entities", []))
-            execution.set_execution_log(result.get("execution_log", []))
-            execution.set_warnings(_planned_run_warnings(result))
+            execution_log = list(result.get("execution_log", []))
+            execution_log.extend(replay_skip_warnings)
+            execution.set_execution_log(execution_log)
+            execution.set_warnings(_planned_run_warnings(result) + replay_skip_warnings)
             event_summaries = [
                 {key: value for key, value in summary.items() if key != "review_candidates"}
                 for summary in result.get("event_sync", [])
