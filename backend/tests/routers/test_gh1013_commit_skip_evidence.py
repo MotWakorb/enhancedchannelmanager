@@ -2,18 +2,51 @@
 write persists truthful evidence, not a reconstruction in which every planned
 operation succeeded.
 
-Drives ``commit_auto_creation_pipeline`` directly (as the other planned-run
-tests do) with a stored plan and a replay double that reports one skipped
-``create_logo`` and one dependent ``update_channel`` through ``ReplayOutcome``.
-Asserts the durable execution row and the journal rows handed to
-``journal.log_entries``.
+The skipped writes, the warnings and the journal rows asserted here come from
+the PRODUCTION replay path: ``commit_auto_creation_pipeline`` runs the real
+``replay_write_plan`` against the real ``DispatcharrClient`` over a controlled
+``httpx.MockTransport`` whose logo endpoint rejects the create and whose
+catalog lookups cannot reconcile it. Nothing synthesises a ``ReplayOutcome``.
 """
-from unittest.mock import AsyncMock, MagicMock, patch
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from sqlalchemy.orm import sessionmaker
 
+from config import DispatcharrSettings
+from dispatcharr_client import DispatcharrClient
 from models import ChannelPipelineExecution
+
+
+def _upstream(record: list[tuple[str, str, dict | None]]):
+    channels = {7: {"id": 7, "name": "Existing", "logo_id": 99, "streams": []}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path, method = request.url.path, request.method
+        body = json.loads(request.content) if request.content else None
+        record.append((method, path, body))
+        if path == "/api/channels/logos/" and method == "GET":
+            return httpx.Response(200, json={"count": 0, "next": None, "results": []})
+        if path == "/api/channels/logos/" and method == "POST":
+            return httpx.Response(400, json={"url": ["logo with this url already exists."]})
+        if path == "/api/channels/channels/" and method == "POST":
+            channels[101] = {"id": 101, **body}
+            return httpx.Response(201, json=channels[101])
+        if path == "/api/channels/channels/7/" and method == "GET":
+            return httpx.Response(200, json=channels[7])
+        if path == "/api/channels/channels/7/" and method == "PATCH":
+            channels[7].update(body)
+            return httpx.Response(200, json=channels[7])
+        raise AssertionError(f"unexpected upstream call: {method} {path}")
+
+    client = DispatcharrClient(
+        DispatcharrSettings(url="http://dispatcharr", auth_method="api_key", api_key="k")
+    )
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return client, channels
 
 
 @pytest.mark.asyncio
@@ -44,35 +77,38 @@ async def test_skipped_replay_writes_leave_a_durable_warning_and_no_phantom_jour
         "channel_pipeline", payload, canonical_hash(router._canonical_pipeline_decision(payload)),
     )
 
-    async def fake_replay(client, write_plan, *, outcome=None, **_kwargs):
-        # What the real replay reports when the logo create fails upstream and
-        # the update that only carried that logo is therefore not sent.
-        outcome.skipped.append({"index": 0, "method": "create_logo", "reason": "soft_failure", "error_type": "Exception"})
-        outcome.skipped.append({"index": 2, "method": "update_channel", "reason": "dependency_skipped"})
-        return [None, {"id": 101}, None], {-1: None, -2: 101}
-
-    engine = MagicMock(client=object())
-    engine._load_rules = AsyncMock(return_value=[])
-    engine._update_rule_stats = AsyncMock()
+    record: list = []
+    client, channels = _upstream(record)
+    engine = SimpleNamespace(
+        client=client, _load_rules=AsyncMock(return_value=[]), _update_rule_stats=AsyncMock(),
+    )
     logged: list = []
 
-    with patch.object(store, "mutation_plan_store", fresh_store), \
-         patch.object(router, "_ensure_engine", AsyncMock(return_value=engine)), \
-         patch.object(router, "_compute_pipeline_plan_payload", AsyncMock(return_value=payload)), \
-         patch("services.pipeline_write_plan.validate_read_set", AsyncMock()), \
-         patch("services.pipeline_write_plan.replay_write_plan", AsyncMock(side_effect=fake_replay)), \
-         patch.object(router.journal, "log_entries", side_effect=lambda entries: logged.extend(entries)), \
-         patch.object(router, "get_session", sessionmaker(bind=test_engine)):
-        response = await router.commit_auto_creation_pipeline(
-            router.CommitPipelinePlanRequest(
-                plan_id=plan.plan_id, plan_hash=plan.payload_hash, phase="execute",
-            ),
-            _admin=None,
-        )
+    try:
+        with patch.object(store, "mutation_plan_store", fresh_store), \
+             patch.object(router, "_ensure_engine", AsyncMock(return_value=engine)), \
+             patch.object(router, "_compute_pipeline_plan_payload", AsyncMock(return_value=payload)), \
+             patch.object(router.journal, "log_entries", side_effect=lambda entries: logged.extend(entries)), \
+             patch.object(router, "get_session", sessionmaker(bind=test_engine)):
+            response = await router.commit_auto_creation_pipeline(
+                router.CommitPipelinePlanRequest(
+                    plan_id=plan.plan_id, plan_hash=plan.payload_hash, phase="execute",
+                ),
+                _admin=None,
+            )
+    finally:
+        await client._client.aclose()
 
     assert response.status_code == 202
-    import json
     execution_id = json.loads(response.body)["execution_id"]
+
+    # What upstream actually received: one rejected logo POST, one channel
+    # create WITHOUT a logo field, and no PATCH to channel 7 at all.
+    assert ("POST", "/api/channels/logos/", {"name": "L", "url": "http://l/x.png"}) in record
+    channel_posts = [b for m, p, b in record if m == "POST" and p == "/api/channels/channels/"]
+    assert channel_posts == [{"name": "New", "streams": [5]}]
+    assert not any(m == "PATCH" for m, _, _ in record)
+    assert channels[7]["logo_id"] == 99
 
     session = sessionmaker(bind=test_engine)()
     try:
