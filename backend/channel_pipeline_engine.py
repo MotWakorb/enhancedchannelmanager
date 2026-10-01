@@ -50,6 +50,7 @@ from channel_pipeline_executor import (
     ExecutionContext,
 )
 from channel_pipeline_sort import sort_channels_by_name
+from channel_pipeline_airtime import airtime_sort_key, event_start_time
 from smart_sort_evaluator import (
     StreamFacts,
     health_deprioritization_category,
@@ -3300,6 +3301,13 @@ class ChannelPipelineEngine:
             rule_groups[entry[1].id].append(entry)
 
         sorted_entries = []
+        event_start_cache: dict[int, datetime | None] = {}
+
+        def start_for(stream):
+            if stream.stream_id not in event_start_cache:
+                event_start_cache[stream.stream_id] = event_start_time(stream.stream_name)
+            return event_start_cache[stream.stream_id]
+
         for rule_id, entries in rule_groups.items():
             rule = rule_map.get(rule_id)
             if rule and rule.sort_field:
@@ -3330,10 +3338,16 @@ class ChannelPipelineEngine:
                             "unsorted order for stream_name_regex",
                             rule.name, e,
                         )
-                entries.sort(
-                    key=lambda e: _sort_key(e[0], rule.sort_field, precompiled_sort_regex),
-                    reverse=(rule.sort_order == "desc")
-                )
+                if rule.sort_field == "event_start_time":
+                    entries.sort(key=lambda e: airtime_sort_key(
+                        start_for(e[0]), e[0].stream_id,
+                        descending=rule.sort_order == "desc",
+                    ))
+                else:
+                    entries.sort(
+                        key=lambda e: _sort_key(e[0], rule.sort_field, precompiled_sort_regex),
+                        reverse=(rule.sort_order == "desc")
+                    )
             sorted_entries.extend(entries)
 
         logger.debug("[AUTO-CREATE-ENGINE] Total sorted entries: %s", len(sorted_entries))
@@ -3359,6 +3373,7 @@ class ChannelPipelineEngine:
         # - Pass 3 renumber: ONLY channels the rule owns (created this run OR pre-run managed)
         # - Pass 3.5 stream reorder: channels the rule owns OR channels it actually modified this run
         rule_channel_order = defaultdict(list)  # rule_id -> [channel_id, ...] in sorted order (renumber gating)
+        rule_channel_start_times = defaultdict(dict)  # rule_id -> channel_id -> earliest matched event start
         rule_channel_order_streams = defaultdict(list)  # rule_id -> [channel_id, ...] in sorted order (reorder gating)
 
         # Snapshot each rule's pre-run managed channel set. Used to gate the
@@ -3631,6 +3646,11 @@ class ChannelPipelineEngine:
                 )
                 if owned_by_this_rule:
                     rule_channel_order[winning_rule.id].append(cid)
+                    if winning_rule.sort_field == "event_start_time":
+                        start = start_for(stream)
+                        previous = rule_channel_start_times[winning_rule.id].get(cid)
+                        if start is not None and (previous is None or start < previous):
+                            rule_channel_start_times[winning_rule.id][cid] = start
                 else:
                     logger.debug(
                         "[AUTO-CREATE-ENGINE] Rule '%s': skipping Pass 3 append for "
@@ -3757,6 +3777,11 @@ class ChannelPipelineEngine:
             if not rule.sort_field:
                 continue
             channel_ids = list(dict.fromkeys(rule_channel_order.get(rule.id, [])))
+            if rule.sort_field == "event_start_time":
+                starts = rule_channel_start_times[rule.id]
+                channel_ids.sort(key=lambda cid: airtime_sort_key(
+                    starts.get(cid), cid, descending=rule.sort_order == "desc",
+                ))
             if not channel_ids or len(channel_ids) < 2:
                 continue
 
@@ -3775,6 +3800,19 @@ class ChannelPipelineEngine:
                     "would_create": False,
                     "would_modify": True
                 })
+                if rule.sort_field == "event_start_time":
+                    for offset, cid in enumerate(channel_ids):
+                        start = rule_channel_start_times[rule.id].get(cid)
+                        results["dry_run_results"].append({
+                            "stream_id": None,
+                            "stream_name": "[AUTO-CREATE-ENGINE]",
+                            "rule_id": rule.id,
+                            "rule_name": rule.name,
+                            "action": f"Channel #{cid}: {start.isoformat() if start else 'unparseable time'} "
+                                      f"-> #{starting_number + offset}",
+                            "would_create": False,
+                            "would_modify": True,
+                        })
             else:
                 try:
                     await self.client.assign_channel_numbers(channel_ids, starting_number)

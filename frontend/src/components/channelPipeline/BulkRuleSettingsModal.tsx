@@ -254,6 +254,7 @@ export function BulkRuleSettingsModal({
                     { value: 'group_name', label: 'Group Name' },
                     { value: 'quality', label: 'Quality (Resolution)' },
                     { value: 'stream_name_regex', label: 'Stream Name (Regex)' },
+                    { value: 'event_start_time', label: 'Event Start Time (ET)' },
                     { value: 'provider_order', label: 'Provider Order (M3U)' },
                     { value: 'channel_number', label: 'Channel Number' },
                   ]}

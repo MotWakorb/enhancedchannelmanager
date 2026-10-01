@@ -1115,6 +1115,65 @@ class TestPass3RenumberGating:
             )
         return _fake_execute
 
+    @pytest.mark.parametrize("dry_run", [False, True])
+    @patch("channel_pipeline_engine._auto_rename_after_renumber", new_callable=AsyncMock)
+    @patch("channel_pipeline_engine.get_session")
+    def test_event_start_sorts_merged_channels_and_never_renumbers_foreign_channels(
+            self, mock_get_session, mock_rename, dry_run):
+        mock_get_session.return_value = MagicMock()
+        streams = [
+            StreamContext(stream_id=11, stream_name="Evening (2026-09-30 20:00:00)"),
+            StreamContext(stream_id=12, stream_name="Noon (2026-09-30 12:00:00)"),
+            StreamContext(stream_id=13, stream_name="Noon alt (2026-09-30 15:00:00)"),
+            StreamContext(stream_id=14, stream_name="Teamarr (2026-09-30 06:00:00)"),
+            StreamContext(stream_id=15, stream_name="Overnight (2026-09-30 01:00:00)"),
+            StreamContext(stream_id=16, stream_name="Undated event"),
+        ]
+        rule = self._make_rule(
+            2, "Today's events", sort_field="event_start_time",
+            starting_channel_number="9000-9499", managed_channel_ids=[501, 502, 504, 505],
+        )
+        channel_for_stream = {11: 501, 12: 502, 13: 502, 14: 503, 15: 504, 16: 505}
+
+        async def execute(action, stream_ctx, exec_ctx, template_ctx=None, **kwargs):
+            cid = channel_for_stream[stream_ctx.stream_id]
+            exec_ctx.current_channel_id = cid
+            return self.ActionResult(
+                success=True, action_type="create_channel", description="Found channel",
+                entity_type="channel", entity_id=cid, created=False,
+            )
+
+        execution = MagicMock(id=1)
+        with patch("channel_pipeline_engine.ActionExecutor") as executor_cls:
+            executor = MagicMock()
+            executor.execute = AsyncMock(side_effect=execute)
+            executor.verify_epg_assignments = AsyncMock(return_value=(0, 0, 0))
+            executor.prune_merge_streams = AsyncMock()
+            executor._channel_by_id = {}
+            executor._created_channels = {}
+            executor_cls.return_value = executor
+            self.engine._refresh_dummy_epg_and_retry = AsyncMock()
+            self.engine._reconcile_orphans = AsyncMock()
+            self.engine._update_rule_stats = AsyncMock()
+            result = asyncio.get_event_loop().run_until_complete(
+                self.engine._process_streams(streams, [rule], execution, dry_run=dry_run)
+            )
+
+        if dry_run:
+            self.client.assign_channel_numbers.assert_not_awaited()
+            proposals = [row["action"] for row in result["dry_run_results"]
+                         if row["action"].startswith("Channel #")]
+            assert proposals == [
+                "Channel #504: 2026-09-30T05:00:00+00:00 -> #9000",
+                "Channel #502: 2026-09-30T16:00:00+00:00 -> #9001",
+                "Channel #501: 2026-10-01T00:00:00+00:00 -> #9002",
+                "Channel #505: unparseable time -> #9003",
+            ]
+        else:
+            self.client.assign_channel_numbers.assert_awaited_once_with(
+                [504, 502, 501, 505], 9000,
+            )
+
     @patch("channel_pipeline_engine.get_session")
     def test_does_not_renumber_foreign_channel_matched_via_fallback(self, mock_get_session):
         """

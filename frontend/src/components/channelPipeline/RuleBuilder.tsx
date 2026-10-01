@@ -1178,6 +1178,7 @@ export function RuleBuilder({
                       { value: 'group_name', label: 'Group Name' },
                       { value: 'quality', label: 'Quality (Resolution)' },
                       { value: 'stream_name_regex', label: 'Stream Name (Regex)' },
+                      { value: 'event_start_time', label: 'Event Start Time (ET)' },
                       { value: 'provider_order', label: 'Provider Order (M3U)' },
                       { value: 'channel_number', label: 'Channel Number' },
                     ]}
@@ -1212,6 +1213,11 @@ export function RuleBuilder({
                       Example: (\d{"{4}"}-\d{"{2}"}-\d{"{2}"}) captures dates like 2024-03-09
                     </p>
                   </div>
+                )}
+                {sortField === 'event_start_time' && (
+                  <p className="form-hint">
+                    Parses dated event times in ET (including provider ISO timestamps). Merged channels use their earliest matched start; events without a parsed time sort last. Only channels owned by this rule are renumbered.
+                  </p>
                 )}
                 {sortField === 'quality' && (
                   <div className="checkbox-group">

@@ -26,8 +26,28 @@ rule* in `sort_field` order, starting at that number. That's Pass 3 of the
 Channel Pipeline engine.
 
 What `sort_field` does **not** do: renumber channels for a rule using **Auto**
-numbering, or touch channels created by a different rule, or reorder channels
-that already have their final numbers from a previous run.
+numbering, or touch channels owned by a different rule. Previously managed
+channels that match again can be renumbered on each run.
+
+### Event Start Time (ET)
+
+Choose **Event Start Time (ET)** to order event channels by their advertised
+airtime rather than alphabetically. This opt-in mode reuses Event Sync's
+dated-name parser (day-first or month-first dates with 12-hour times) and also
+accepts provider ISO timestamps such as `(2026-09-30 22:00:10)`. A timestamp
+without an offset is interpreted in `America/New_York`; explicit offsets are
+honored. A bare time without a date is **not** guessed to be today.
+
+When multiple streams **matched by this rule on this run** lead to the same
+channel, their **earliest parsed start** determines its position; unrelated
+older streams still attached to that channel do not affect the sort.
+Unparseable channels sort last in either direction; equal starts are ordered
+by channel ID. The dry-run shows
+the derived start and proposed number for each channel. The rule-level
+renumber pass only includes channels the rule created or already manages;
+it does not adopt or renumber channels owned by another pipeline or Teamarr.
+As with other Channel Sort modes, Create Channel must use a fixed number or
+range for renumbering; this option does not hard-cap range overflow.
 
 ## The Auto gotcha
 

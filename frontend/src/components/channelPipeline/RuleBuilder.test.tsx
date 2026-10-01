@@ -1421,6 +1421,19 @@ describe('RuleBuilder', () => {
     });
 
     describe('sort/numbering hint (GH #644)', () => {
+      it('describes event airtime sorting without suggesting it can renumber Auto channels', () => {
+        const rule: Partial<ChannelPipelineRule> = {
+          name: 'Events',
+          conditions: [{ type: 'always' }],
+          actions: [{ type: 'create_channel', name_template: '{stream_name}', group_id: 1 }],
+          sort_field: 'event_start_time',
+        };
+        render(<RuleBuilder rule={rule as ChannelPipelineRule} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+        expect(screen.getByText(/Merged channels use their earliest matched start/)).toBeInTheDocument();
+        expect(screen.getByTestId('sort-numbering-hint')).toHaveTextContent(/won't renumber channels/i);
+      });
+
       it('shows the hint when Channel Sort is set and Channel Number is unset (auto)', () => {
         const rule: Partial<ChannelPipelineRule> = {
           name: 'PL Channels',
