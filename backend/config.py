@@ -346,27 +346,25 @@ BACKEND_LOG_FILE_MIN_BACKUPS = 1
 BACKEND_LOG_FILE_MAX_BACKUPS = 9
 DEFAULT_BACKEND_LOG_FILE_BACKUP_COUNT = 4
 
-# CANONICAL: the :class:`DispatcharrSettings` fields whose VALUES are withheld
-# from a non-admin caller on READ (bead …-9ej7f). Outbound notification
+# CANONICAL: the :class:`DispatcharrSettings` fields holding the legacy shared
+# Discord webhook and Telegram bot (bead …-9ej7f). Outbound notification
 # credentials — a Discord webhook URL is a bearer capability to post into a
 # server, and a Telegram bot token plus chat id is a bearer capability to post
 # into a chat.
 #
-# WHY IT LIVES HERE and not in the router that enforces it (bead
-# …-9kwzp.9). This partition has two independent enforcement points, and while
-# it was defined in ``routers/settings.py`` only ONE of them knew about it:
+# GH #1026 moved Discord / Telegram into Alert Methods rows, so GET
+# /api/settings no longer returns these at all (9ej7f's read redaction of them
+# went with them). The fields stay on the model only as restore inputs for
+# ``notification_migration``, and this partition stays because old settings
+# files and old backups still carry the values: ``routers.backup`` must keep
+# redacting them out of every artifact (bead …-9kwzp.9: GET
+# /api/backup/create, /export and /saved/{filename} ADMIT the MCP service
+# principal), and the persistent-log credential harvester must keep
+# recognising them.
 #
-#   * ``routers.settings`` withholds these on GET /api/settings.
-#   * ``routers.backup`` must redact them out of every backup artifact,
-#     because GET /api/backup/create, /export and /saved/{filename} carry
-#     ``RequireAdminIfEnabled``, which ADMITS the MCP service principal — the
-#     exact principal ``_resolve_settings_admin`` classifies as non-admin. Two
-#     of the three fields were readable straight out of a standard backup by
-#     the caller the settings endpoint had just refused.
-#
-# The partition is defined in ``credential_sentinel``, the leaf shared by the
-# settings read gate, backup redaction, and persistent-log credential harvester.
-# ``config`` re-exports it because these names partition this module's model.
+# The partition is defined in ``credential_sentinel``, the leaf shared by
+# backup redaction and the persistent-log credential harvester. ``config``
+# re-exports it because these names partition this module's model.
 
 
 def normalize_public_base_url(raw_url: str) -> tuple[str, str | None]:
@@ -775,9 +773,11 @@ class DispatcharrSettings(BaseModel):
     smtp_from_name: str = "ECM Alerts"
     smtp_use_tls: bool = True
     smtp_use_ssl: bool = False
-    # Shared Discord webhook for notifications (M3U Digest, etc.)
+    # DEPRECATED (GH #1026): the pre-#1026 shared Discord webhook and Telegram
+    # bot. Discord / Telegram destinations are Alert Methods rows now. These
+    # stay only as restore inputs: notification_migration moves any value
+    # found here (at startup or after a restore) into a row and clears it.
     discord_webhook_url: str = ""
-    # Shared Telegram bot for notifications (M3U Digest, etc.)
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     # Stream preview mode: how to handle audio codecs in browser preview
@@ -1072,14 +1072,6 @@ class DispatcharrSettings(BaseModel):
     def is_smtp_configured(self) -> bool:
         """Check if shared SMTP settings are configured."""
         return bool(self.smtp_host and self.smtp_from_email)
-
-    def is_discord_configured(self) -> bool:
-        """Check if shared Discord webhook is configured."""
-        return bool(self.discord_webhook_url)
-
-    def is_telegram_configured(self) -> bool:
-        """Check if shared Telegram bot is configured."""
-        return bool(self.telegram_bot_token and self.telegram_chat_id)
 
 
 def stream_sort_point_rules_for_evaluator(

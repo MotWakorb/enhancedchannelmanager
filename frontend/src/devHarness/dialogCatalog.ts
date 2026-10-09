@@ -94,6 +94,7 @@ export const DIALOG_CATALOG = [
   { id: 'stream-profiles-list', file: 'src/components/StreamProfilesListModal.tsx', label: 'Stream profiles list', status: 'stubbed', via: 'direct' },
   { id: 'type-to-confirm', file: 'src/components/TypeToConfirmDialog.tsx', label: 'Type-to-confirm', status: 'stubbed', via: 'direct' },
   { id: 'vlc-protocol-helper', file: 'src/components/VLCProtocolHelperModal.tsx', label: 'VLC protocol helper', status: 'stubbed', via: 'direct' },
+  { id: 'alert-method-editor', file: 'src/components/settings/AlertMethodModal.tsx', label: 'Alert method add / edit', status: 'stubbed', via: 'direct' },
   { id: 'cloud-target-editor', file: 'src/components/settings/CloudTargetEditor.tsx', label: 'Cloud target editor', status: 'stubbed', via: 'direct' },
   { id: 'cp-bulk-rule-settings', file: 'src/components/channelPipeline/BulkRuleSettingsModal.tsx', label: 'Pipeline: bulk rule settings', status: 'stubbed', via: 'direct' },
   { id: 'cp-circuit-breaker-banner', file: 'src/components/channelPipeline/CircuitBreakerBanner.tsx', label: 'Pipeline: circuit-breaker banner (role=dialog)', status: 'stubbed', via: 'direct' },

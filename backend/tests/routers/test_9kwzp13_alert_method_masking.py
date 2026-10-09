@@ -188,10 +188,13 @@ class TestReadRoutesMaskCredentials:
 
         assert by_name["Discord Alerts"]["config"]["webhook_url"] == MASK
         assert by_name["Telegram Alerts"]["config"]["bot_token"] == MASK
-        # Not credentials, and callers depend on them: the Settings tab reads
+        # GH #1026: the chat id is masked per type (it was withheld from this
+        # admitted MCP principal by GET /api/settings while it lived there,
+        # bead 9ej7f), without joining the global credential key tuple.
+        assert by_name["Telegram Alerts"]["config"]["chat_id"] == MASK
+        # Not a credential, and callers depend on it: the Settings tab reads
         # `to_emails` back to populate the Email alert recipients field, so
         # over-masking would silently blank an operator's recipient list.
-        assert by_name["Telegram Alerts"]["config"]["chat_id"] == "-1001234567890"
         assert by_name["Email"]["config"]["to_emails"] == ["alice@example.com"]
         assert by_name["ntfy Alerts"]["config"] == {
             "server_url": "https://ntfy.example.test/base",

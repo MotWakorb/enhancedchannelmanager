@@ -10,7 +10,13 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from alert_methods import get_alert_manager, get_method_types, create_method
+from alert_methods import (
+    ALERT_CATEGORIES,
+    ENTITY_FILTER_ALERT_CATEGORIES,
+    create_method,
+    get_alert_manager,
+    get_method_types,
+)
 from auth import (
     RequireAdminIfEnabled,
     RequireHumanAdminForNotificationCredential,
@@ -95,42 +101,63 @@ def _normalize_smtp_config_for_persist(method_type: str, config: dict) -> dict:
     return config
 
 
+# PATCH keeps the stored value of these config keys when the request leaves
+# them blank or echoes the '********' mask back (GH #1026), so the edit form
+# can show a destination without ever holding its secret. ntfy is deliberately
+# absent: keeping its access token across a server_url change would send the
+# token to a server the operator never gave it to (credential harvesting), so
+# an ntfy config update must always carry the token again.
+_PRESERVED_ON_UPDATE: dict[str, tuple[str, ...]] = {
+    "discord": ("webhook_url",),
+    "telegram": ("bot_token", "chat_id"),
+}
+_MASKED_CONFIG_VALUE = "********"
+
+
+def _preserve_stored_secrets(method_type: str, stored_config: dict, new_config: dict) -> dict:
+    """Fill blank or masked secrets in ``new_config`` from ``stored_config``."""
+    preserved_keys = _PRESERVED_ON_UPDATE.get(method_type, ())
+    if not preserved_keys:
+        return new_config
+    merged = dict(new_config)
+    for key in preserved_keys:
+        incoming = merged.get(key)
+        if (incoming is None or incoming == "" or incoming == _MASKED_CONFIG_VALUE) and stored_config.get(key):
+            merged[key] = stored_config[key]
+    return merged
+
+
 def validate_alert_sources(alert_sources: Optional[dict]) -> Optional[str]:
     """Validate alert_sources structure. Returns error message or None if valid."""
     if alert_sources is None:
         return None
 
+    for category in sorted(ALERT_CATEGORIES):
+        if category not in alert_sources:
+            continue
+        section = alert_sources[category]
+        if not isinstance(section, dict):
+            return f"{category} must be an object"
+        if "enabled" in section and not isinstance(section["enabled"], bool):
+            return f"{category}.enabled must be a boolean"
+
+    # EPG source / M3U account sections (every section is a dict by now)
     valid_filter_modes = {"all", "only_selected", "all_except"}
+    for category, ids_key in ENTITY_FILTER_ALERT_CATEGORIES.items():
+        section = alert_sources.get(category)
+        if section is None:
+            continue
+        if "filter_mode" in section and section["filter_mode"] not in valid_filter_modes:
+            return f"{category}.filter_mode must be one of: {valid_filter_modes}"
+        if ids_key in section and not isinstance(section[ids_key], list):
+            return f"{category}.{ids_key} must be an array"
 
-    # Validate EPG refresh section
-    if "epg_refresh" in alert_sources:
-        epg = alert_sources["epg_refresh"]
-        if not isinstance(epg, dict):
-            return "epg_refresh must be an object"
-        if "filter_mode" in epg and epg["filter_mode"] not in valid_filter_modes:
-            return f"epg_refresh.filter_mode must be one of: {valid_filter_modes}"
-        if "source_ids" in epg and not isinstance(epg["source_ids"], list):
-            return "epg_refresh.source_ids must be an array"
-
-    # Validate M3U refresh section
-    if "m3u_refresh" in alert_sources:
-        m3u = alert_sources["m3u_refresh"]
-        if not isinstance(m3u, dict):
-            return "m3u_refresh must be an object"
-        if "filter_mode" in m3u and m3u["filter_mode"] not in valid_filter_modes:
-            return f"m3u_refresh.filter_mode must be one of: {valid_filter_modes}"
-        if "account_ids" in m3u and not isinstance(m3u["account_ids"], list):
-            return "m3u_refresh.account_ids must be an array"
-
-    # Validate probe failures section
-    if "probe_failures" in alert_sources:
-        probe = alert_sources["probe_failures"]
-        if not isinstance(probe, dict):
-            return "probe_failures must be an object"
-        if "min_failures" in probe:
-            min_failures = probe["min_failures"]
-            if not isinstance(min_failures, int) or min_failures < 0:
-                return "probe_failures.min_failures must be a non-negative integer"
+    # Probe failures section
+    probe = alert_sources.get("probe_failures")
+    if probe is not None and "min_failures" in probe:
+        min_failures = probe["min_failures"]
+        if not isinstance(min_failures, int) or min_failures < 0:
+            return "probe_failures.min_failures must be a non-negative integer"
 
     return None
 
@@ -370,6 +397,11 @@ async def update_alert_method(
 
     bead 9kwzp.10 item 4: can replace the stored notification credentials, so
     it can repoint where ECM sends alerts. See :func:`create_alert_method`.
+
+    ``config`` replaces the stored config, except that a blank or masked
+    Discord ``webhook_url`` or Telegram ``bot_token`` / ``chat_id`` keeps the
+    stored value (:data:`_PRESERVED_ON_UPDATE`). Omitting ``config`` leaves it
+    untouched, which is how severity / filter edits are saved.
     """
     from models import AlertMethod as AlertMethodModel
 
@@ -389,8 +421,10 @@ async def update_alert_method(
         if data.name is not None:
             method.name = data.name
         if data.config is not None:
+            stored_config = json.loads(method.config) if method.config else {}
+            new_config = _preserve_stored_secrets(method.method_type, stored_config, data.config)
             # Canonicalize SMTP to_emails to list[str] before validation/persistence (bd-9vz32).
-            new_config = _normalize_smtp_config_for_persist(method.method_type, data.config)
+            new_config = _normalize_smtp_config_for_persist(method.method_type, new_config)
             # Validate new config
             method_instance = create_method(method.method_type, method.id, method.name, new_config)
             if method_instance:

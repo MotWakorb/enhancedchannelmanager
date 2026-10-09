@@ -133,7 +133,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.2-0043"
+APP_VERSION = "0.18.2-0044"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -4544,6 +4544,12 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
     except Exception as e:
         logger.warning("[BACKUP] Failed to reset Dispatcharr client (non-fatal): %s", e)
 
+    # GH #1026: the restored settings.json can carry the legacy shared
+    # Discord / Telegram fields, and journal.db was swapped under the alert
+    # manager. Move the fields into Alert Methods and reload the manager.
+    from notification_migration import migrate_after_settings_restore
+    migrate_after_settings_restore()
+
     return restored
 
 
@@ -6377,6 +6383,10 @@ def _restore_settings(settings_data: dict) -> dict:
     new_settings = DispatcharrSettings(**merged)
     save_settings(new_settings)
     clear_settings_cache()
+    # GH #1026: a YAML backup taken before Discord / Telegram moved to Alert
+    # Methods carries the legacy shared fields; move them now.
+    from notification_migration import migrate_after_settings_restore
+    migrate_after_settings_restore()
     return {"warnings": warnings}
 
 

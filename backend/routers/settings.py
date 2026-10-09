@@ -5,7 +5,6 @@ Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 """
 import asyncio
 import logging
-import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -25,7 +24,6 @@ from auth.dependencies import get_current_user, is_mcp_service_principal
 from auth.mcp_service import rotate_mcp_service_credentials
 from auth.settings import get_auth_settings
 from config import (
-    ADMIN_ONLY_READ_REDACTED_FIELDS,
     BACKEND_LOG_FILE_MAX_BACKUPS,
     BACKEND_LOG_FILE_MAX_BYTES,
     BACKEND_LOG_FILE_MIN_BACKUPS,
@@ -62,6 +60,11 @@ from media_connection_errors import media_connection_error, redact_media_diagnos
 from cache import get_cache
 from database import get_session
 from log_utils import get_persistent_log_policy
+from notification_validation import (
+    TELEGRAM_BOT_TOKEN_ERROR,
+    is_valid_discord_webhook,
+    is_valid_telegram_bot_token,
+)
 from stream_prober import StreamProber, get_prober, set_prober
 from stream_user_agent import StreamUserAgent
 from bandwidth_tracker import BandwidthTracker, get_tracker, set_tracker
@@ -69,12 +72,6 @@ from services.notification_service import create_notification_internal, update_n
 
 logger = logging.getLogger(__name__)
 
-# Discord webhook URL prefix — accepts the canonical discord.com host, the legacy
-# discordapp.com host, and the canary/ptb subdomains. Anchored to the start so
-# only well-formed webhook URLs are admitted by the test-discord endpoint.
-_DISCORD_WEBHOOK_RE = re.compile(
-    r"^https://(discord\.com|discordapp\.com|canary\.discord\.com|ptb\.discord\.com)/api/webhooks/"
-)
 
 router = APIRouter(prefix="/api/settings", tags=["Settings"])
 
@@ -124,10 +121,8 @@ _ADMIN_ONLY_SETTINGS_FIELDS: dict[str, str] = {
     # whole account-takeover surface the setting exists to close, so it is an
     # admin action and never a per-user preference.
     "public_base_url": "public_base_url",
-    # Outbound notification credentials.
-    "discord_webhook_url": "discord_webhook_url",
-    "telegram_bot_token": "telegram_bot_token",
-    "telegram_chat_id": "telegram_chat_id",
+    # Outbound notification settings (Discord / Telegram live in Alert
+    # Methods since GH #1026).
     "smtp_host": "smtp_host",
     "smtp_port": "smtp_port",
     "smtp_user": "smtp_user",
@@ -170,36 +165,15 @@ _ADMIN_ONLY_PROTECTED_FIELDS: tuple[str, ...] = (
     "jellyfin_api_key",
     "smtp_password",
 )
-# bead 9ej7f — admin-only fields whose VALUES are also withheld on READ.
-#
-# The set itself now lives in ``config`` as ``ADMIN_ONLY_READ_REDACTED_FIELDS``
-# and is re-exported here under its historical private name (bead 9kwzp.9): the
-# backup artifact producer has to redact exactly the same partition, and while
-# the literal lived in this module it did not, so the MCP service principal read
-# two of the three straight out of a standard backup. Both enforcement points
-# derive from the one definition now — add a field in ``config`` and it is
-# withheld on GET /api/settings AND redacted out of every artifact. The
-# rationale for the READ gate stays here, where the gate is.
-#
-# These three are outbound notification credentials: a Discord webhook URL is a
-# bearer capability to post into a server, and a Telegram bot token plus chat id
-# is a bearer capability to post into a chat. They were returned verbatim by a
-# GET that carried no dependency at all, so any authenticated non-admin and the
-# static MCP service key could read them, while ``_resolve_settings_admin``
-# goes to real lengths to deny those same principals WRITE on the same fields.
-# Read is now gated by the same predicate as write: a field you may not write,
-# you may not read.
-#
-# They stay in ``_ADMIN_ONLY_SETTINGS_FIELDS`` (compare-based) rather than
-# moving to ``_ADMIN_ONLY_PROTECTED_FIELDS`` (any-non-empty-is-a-change)
-# because an ADMIN must keep literal write semantics: blanking a webhook is how
-# an operator disables the integration, and preserve-on-omit would take that
-# away with no replacement affordance (there is no "clear" endpoint for the
-# protected fields — see the Emby/Plex/Jellyfin keys). What the redaction needs
-# instead is a single carve-out in ``_assert_admin_for_changed_fields``: an
-# EMPTY value from a non-admin is the redacted placeholder coming back, not a
-# request to clear.
-_ADMIN_ONLY_READ_REDACTED_FIELDS: frozenset[str] = ADMIN_ONLY_READ_REDACTED_FIELDS
+# GH #1026 retired the shared Discord webhook and Telegram bot from this
+# contract: Discord and Telegram are Alert Methods rows now, behind the
+# human-admin gates in routers/alert_methods.py, so ``discord_webhook_url``,
+# ``telegram_bot_token`` and ``telegram_chat_id`` are neither read nor written
+# here any more (bead 9ej7f's read redaction of them went with them). They
+# stay on the settings model only as restore inputs for
+# ``notification_migration``, and stay in
+# ``config.ADMIN_ONLY_READ_REDACTED_FIELDS`` so every backup artifact still
+# redacts them.
 
 
 async def _resolve_settings_admin(
@@ -260,15 +234,6 @@ def _assert_admin_for_changed_fields(
         # None, which is not a value and therefore not a change attempt. The
         # write path resolves it back to the stored value.
         if new_value is None:
-            continue
-        # 9ej7f: GET /api/settings redacts these to "" for a non-admin, so the
-        # Settings UI round-trips "" back on an ordinary preference save. That
-        # is the placeholder returning, not a request to clear the field, and
-        # refusing it would make every non-admin save fail. A NON-empty value
-        # is still a real change attempt and still lands in ``changed``. The
-        # write path separately takes the STORED value for a non-admin, so the
-        # empty round-trip cannot wipe a working webhook either.
-        if req_field in _ADMIN_ONLY_READ_REDACTED_FIELDS and not new_value:
             continue
         changed.append(req_field)
     for protected_field in _ADMIN_ONLY_PROTECTED_FIELDS:
@@ -357,31 +322,6 @@ def _validate_public_base_url_on_save(raw_url: str) -> str:
             ),
         )
     return normalized
-
-
-def _validate_discord_webhook_on_save(raw_url: str) -> None:
-    """Validate ``discord_webhook_url`` at save time against the Discord allowlist.
-
-    The Discord webhook is POSTed VERBATIM by the notification service (a
-    POST-SSRF, strictly worse than the GET sinks) and the URL's PATH is
-    significant — so we do NOT run ``_sanitize_base_url`` (it would strip the
-    path). Instead we require the canonical Discord webhook host+path shape via
-    the existing :data:`_DISCORD_WEBHOOK_RE` (also used by the test-discord
-    endpoint). Empty is allowed (disables the integration). Raises 400 on a
-    non-Discord host.
-    """
-    if not raw_url:
-        return
-    if not _DISCORD_WEBHOOK_RE.match(raw_url):
-        logger.info("[SETTINGS] Rejected discord_webhook_url on save (non-Discord host)")
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Invalid Discord webhook URL — must be an https webhook on "
-                "discord.com / discordapp.com (e.g. "
-                "https://discord.com/api/webhooks/...)."
-            ),
-        )
 
 
 class NormalizationTag(BaseModel):
@@ -503,11 +443,6 @@ class SettingsRequest(BaseModel):
     smtp_from_name: str = "ECM Alerts"
     smtp_use_tls: bool = True
     smtp_use_ssl: bool = False
-    # Shared Discord settings
-    discord_webhook_url: str = ""
-    # Shared Telegram settings
-    telegram_bot_token: str = ""
-    telegram_chat_id: str = ""
     # Stream preview mode: "passthrough", "transcode", or "video_only"
     stream_preview_mode: str = "passthrough"
     stream_user_agent: StreamUserAgent = "dispatcharr"
@@ -656,13 +591,9 @@ class SettingsResponse(BaseModel):
     smtp_from_name: str
     smtp_use_tls: bool
     smtp_use_ssl: bool
-    # Shared Discord settings
-    discord_configured: bool  # Whether shared Discord webhook is configured
-    discord_webhook_url: str
-    # Shared Telegram settings
-    telegram_configured: bool  # Whether shared Telegram bot is configured
-    telegram_bot_token: str
-    telegram_chat_id: str
+    # Whether an enabled Discord / Telegram alert method exists (GH #1026)
+    discord_configured: bool
+    telegram_configured: bool
     # Stream preview mode
     stream_preview_mode: str
     stream_user_agent: StreamUserAgent = "dispatcharr"
@@ -791,14 +722,14 @@ class TelegramTestRequest(BaseModel):
     chat_id: str
 
 
-def _has_discord_alert_method() -> bool:
-    """Check if any enabled Discord alert method exists."""
+def _has_enabled_alert_method(method_type: str) -> bool:
+    """Check if any enabled alert method of ``method_type`` exists."""
     try:
         from models import AlertMethod
         session = get_session()
         try:
             return session.query(AlertMethod).filter(
-                AlertMethod.method_type == "discord",
+                AlertMethod.method_type == method_type,
                 AlertMethod.enabled == True,
             ).first() is not None
         finally:
@@ -807,37 +738,37 @@ def _has_discord_alert_method() -> bool:
         return False
 
 
+def _has_discord_alert_method() -> bool:
+    """Check if any enabled Discord alert method exists."""
+    return _has_enabled_alert_method("discord")
+
+
+def _has_telegram_alert_method() -> bool:
+    """Check if any enabled Telegram alert method exists."""
+    return _has_enabled_alert_method("telegram")
+
+
 @router.get("")
 async def get_current_settings(
     is_settings_admin: bool = Depends(_resolve_settings_admin),
 ):
     """Get current settings (secrets masked).
 
-    bead 9ej7f: the response is caller-dependent for exactly one partition,
-    ``_ADMIN_ONLY_READ_REDACTED_FIELDS`` (the Discord webhook and the Telegram
-    bot token + chat id). Those are outbound notification credentials that were
-    returned verbatim to any authenticated caller — an ordinary non-admin, and
-    the static MCP service key — by a handler that carried no dependency at
-    all, while ``_resolve_settings_admin`` explicitly denies those same
-    principals the ability to WRITE them. Reusing that same predicate here
-    makes read and write agree: a field you may not write, you may not read.
-    The ``discord_configured`` / ``telegram_configured`` booleans are NOT
-    redacted, so a non-admin still sees that the integration is set up.
+    Every secret (password, Dispatcharr / Emby / Jellyfin API keys, the Plex
+    token, the SMTP password, the MCP key) is reduced to its ``*_configured``
+    boolean for every caller. The Discord and Telegram credentials are not on
+    this contract at all since GH #1026 (they are Alert Methods rows);
+    ``discord_configured`` / ``telegram_configured`` report whether an enabled
+    method of that type exists.
 
-    Every other secret (password, Dispatcharr / Emby / Jellyfin API keys, the
-    Plex token, the SMTP password, the MCP key) is unconditionally reduced to
-    its ``*_configured`` boolean for every caller, as before.
+    ``_resolve_settings_admin`` is kept as a dependency for its authentication
+    side: in auth-enabled mode it raises 401 for a missing or invalid token.
+    The admin verdict itself no longer changes this response (bead 9ej7f's
+    read redaction covered only the retired Discord / Telegram fields).
     """
     logger.debug("[SETTINGS] GET /api/settings")
     settings = get_settings()
     logger.debug("[SETTINGS] Settings retrieved - configured: %s, log level: %s", settings.is_configured(), settings.backend_log_level)
-    # 9ej7f: redact to "" rather than to a partial mask ("***" + tail, the
-    # shape tls/routes.py uses). The Settings UI loads these into text inputs
-    # and POSTs them straight back, so any non-empty placeholder would be
-    # round-tripped and would overwrite a working webhook with the placeholder
-    # on the next save — the hazard backup._merge_settings_preserving_redacted
-    # exists to handle. An empty redaction has nothing to write back.
-    redact = not is_settings_admin
     return SettingsResponse(
         url=settings.url,
         auth_method=settings.auth_method,
@@ -928,14 +859,9 @@ async def get_current_settings(
         smtp_from_name=settings.smtp_from_name,
         smtp_use_tls=settings.smtp_use_tls,
         smtp_use_ssl=settings.smtp_use_ssl,
-        # Shared Discord settings (also check alert methods for Discord webhook).
-        # 9ej7f: the URL itself is withheld from a caller that may not write it.
-        discord_configured=settings.is_discord_configured() or _has_discord_alert_method(),
-        discord_webhook_url="" if redact else settings.discord_webhook_url,
-        # Shared Telegram settings (9ej7f: same redaction as Discord)
-        telegram_configured=settings.is_telegram_configured(),
-        telegram_bot_token="" if redact else settings.telegram_bot_token,
-        telegram_chat_id="" if redact else settings.telegram_chat_id,
+        # GH #1026: Discord / Telegram destinations are Alert Methods rows.
+        discord_configured=_has_discord_alert_method(),
+        telegram_configured=_has_telegram_alert_method(),
         stream_preview_mode=settings.stream_preview_mode,
         stream_user_agent=settings.stream_user_agent,
         auto_creation_excluded_terms=settings.auto_creation_excluded_terms,
@@ -986,8 +912,9 @@ async def update_settings(
     field-level admin gate (``_assert_admin_for_changed_fields``) rejects a
     non-admin — including the MCP service principal — who attempts to change
     any admin-only field, while still letting a non-admin save personal prefs.
-    Every non-empty outbound base URL is SSRF-validated on save and the
-    Discord webhook is checked against the Discord host allowlist.
+    Every non-empty outbound base URL is SSRF-validated on save. Discord and
+    Telegram destinations are Alert Methods since GH #1026; an old client that
+    still sends their fields here has them ignored.
     """
     logger.debug("[SETTINGS] POST /api/settings - URL: %s, username: %s", request.url, request.username)
     current_settings = get_settings()
@@ -996,25 +923,8 @@ async def update_settings(
     # change any admin-only field BEFORE any validation or write side effect.
     _assert_admin_for_changed_fields(request, current_settings, is_settings_admin)
 
-    # 9ej7f: GET redacts _ADMIN_ONLY_READ_REDACTED_FIELDS to "" for a non-admin,
-    # so a non-admin's ordinary preference save round-trips "" for all three. A
-    # non-admin can never legitimately change them (a non-empty value already
-    # 403'd above), so take the STORED value and the redacted read can never
-    # silently wipe a working webhook / bot token. An admin keeps literal
-    # semantics, which is what preserves "blank the field to disable the
-    # integration" as a working operator action.
-    if is_settings_admin:
-        discord_webhook_url = request.discord_webhook_url
-        telegram_bot_token = request.telegram_bot_token
-        telegram_chat_id = request.telegram_chat_id
-    else:
-        discord_webhook_url = current_settings.discord_webhook_url
-        telegram_bot_token = current_settings.telegram_bot_token
-        telegram_chat_id = current_settings.telegram_chat_id
-
     # kgz3k SSRF-on-save — validate every CHANGED, NON-EMPTY outbound base URL
-    # through the canonical mode-aware chokepoint, and the Discord webhook
-    # against the Discord allowlist. Empty = operator disabling an integration
+    # through the canonical mode-aware chokepoint. Empty = operator disabling an integration
     # (allowed). We validate only on CHANGE: an already-stored value was either
     # validated on a prior save or predates this guard, and an unreachable-but-
     # legitimate LAN host that is already configured must not be un-saveable on
@@ -1028,11 +938,6 @@ async def update_settings(
         request.plex_base_url = _validate_outbound_base_url_on_save("Plex base URL", request.plex_base_url)
     if request.jellyfin_base_url and request.jellyfin_base_url != current_settings.jellyfin_base_url:
         request.jellyfin_base_url = _validate_outbound_base_url_on_save("Jellyfin base URL", request.jellyfin_base_url)
-    # Validate the EFFECTIVE webhook resolved above, not the raw request value:
-    # a non-admin's redacted "" resolves back to the stored URL, which is not a
-    # change and must not be re-validated (9ej7f).
-    if discord_webhook_url != current_settings.discord_webhook_url:
-        _validate_discord_webhook_on_save(discord_webhook_url)
 
     # bead ...-qsqfv: resolve public_base_url under preserve-on-omit, then
     # validate. Unlike the outbound URLs above we validate on every supplied
@@ -1262,12 +1167,12 @@ async def update_settings(
         smtp_from_name=request.smtp_from_name,
         smtp_use_tls=request.smtp_use_tls,
         smtp_use_ssl=request.smtp_use_ssl,
-        # Shared Discord settings (9ej7f: resolved above — stored value for a
-        # non-admin, whose read was redacted; literal for an admin)
-        discord_webhook_url=discord_webhook_url,
-        # Shared Telegram settings (9ej7f: same resolution as Discord)
-        telegram_bot_token=telegram_bot_token,
-        telegram_chat_id=telegram_chat_id,
+        # GH #1026: not on this contract any more. Carry the stored values so
+        # a settings save never discards one notification_migration has not
+        # moved yet (e.g. restored while settings.json was read-only).
+        discord_webhook_url=current_settings.discord_webhook_url,
+        telegram_bot_token=current_settings.telegram_bot_token,
+        telegram_chat_id=current_settings.telegram_chat_id,
         stream_preview_mode=request.stream_preview_mode,
         stream_user_agent=(request.stream_user_agent if "stream_user_agent" in request.model_fields_set else current_settings.stream_user_agent),
         auto_creation_excluded_terms=request.auto_creation_excluded_terms,
@@ -1893,11 +1798,11 @@ async def test_discord_webhook(
     request: DiscordTestRequest,
     _admin=RequireHumanAdminForOutboundTest,
 ):
-    """Test Discord webhook by sending a test message.
+    """Test a Discord webhook URL by sending a test message.
 
-    bead i4qrp: admin-gated, MCP principal refused. Pairs with 9ej7f — the
-    webhook URL is no longer readable by a non-admin, and posting to one is no
-    longer drivable by a non-admin either.
+    bead i4qrp: admin-gated, MCP principal refused. Since GH #1026 this tests
+    the URL typed into the Alert Methods dialog before it is saved; a saved
+    destination is tested by POST /api/alert-methods/{id}/test.
     """
     import aiohttp
 
@@ -1908,7 +1813,7 @@ async def test_discord_webhook(
         return {"success": False, "message": "Webhook URL is required"}
 
     # Validate URL format - accept discord.com, discordapp.com, and variants (canary, ptb)
-    if not _DISCORD_WEBHOOK_RE.match(webhook_url):
+    if not is_valid_discord_webhook(webhook_url):
         return {"success": False, "message": "Invalid Discord webhook URL format"}
 
     try:
@@ -1954,10 +1859,11 @@ async def test_telegram_bot(
     request: TelegramTestRequest,
     _admin=RequireHumanAdminForOutboundTest,
 ):
-    """Test Telegram bot by sending a test message.
+    """Test a Telegram bot token and chat id by sending a test message.
 
-    bead i4qrp: admin-gated, MCP principal refused. Same pairing with 9ej7f as
-    ``test_discord_webhook``.
+    bead i4qrp: admin-gated, MCP principal refused. Like
+    ``test_discord_webhook``, this tests credentials typed into the Alert
+    Methods dialog before they are saved (GH #1026).
     """
     import aiohttp
 
@@ -1966,9 +1872,8 @@ async def test_telegram_bot(
     logger.debug("[SETTINGS-TEST] POST /api/settings/test-telegram")
 
     # Validate bot token format to prevent SSRF via URL manipulation
-    import re as _re
-    if not bot_token or not _re.match(r'^\d+:[A-Za-z0-9_-]+$', bot_token):
-        return {"success": False, "message": "Invalid bot token format"}
+    if not is_valid_telegram_bot_token(bot_token):
+        return {"success": False, "message": TELEGRAM_BOT_TOKEN_ERROR}
     if not chat_id:
         return {"success": False, "message": "Chat ID is required"}
 

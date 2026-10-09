@@ -244,6 +244,7 @@ async def _sync_notification_locked(
             title="Channel profile conflict needs review",
             message=message,
             source=NOTIFICATION_SOURCE,
+            alert_category="profile_conflicts",
             source_id=source_id,
             action_label="Review choices",
             action_url=None,

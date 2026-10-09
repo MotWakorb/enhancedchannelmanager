@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { TypeToConfirmDialog } from '../TypeToConfirmDialog';
+import { summarizeRouting } from '../../utils/alertSources';
+import { AlertMethodModal } from './AlertMethodModal';
 import './AlertMethodsSection.css';
 
 const METHOD_TYPE_LABELS: Record<string, string> = {
@@ -17,17 +19,16 @@ function methodTypeLabel(type: string): string {
 }
 
 /**
- * List configured alert methods with per-row Delete and Send Test actions
- * (enhancedchannelmanager-p4qt8).
+ * Every alert destination, with Add / Edit / Send Test / Delete
+ * (enhancedchannelmanager-p4qt8, GH #1026).
  *
- * DISCOVERED SCOPE NOTE: no list UI for alert methods existed anywhere in the
- * frontend before this — SMTP/Discord/Telegram are each configured through
- * their own dedicated settings fields (which create/update a single
- * AlertMethod row behind the scenes), and GET /api/alert-methods was only
- * ever read to resolve the SMTP method's id. This component is the minimal
- * scaffold needed to attach the requested Delete/Send Test buttons. ntfy adds
- * a deliberately create-only form here because its masked access token cannot
- * safely round-trip through the generic whole-config update endpoint.
+ * Since GH #1026 every external destination is an alert method row, and
+ * each row chooses its own severities and alert categories. Discord and
+ * Telegram destinations are added and edited in AlertMethodModal; the Email
+ * row is created by the Email Alert Recipients field on this page; ntfy keeps
+ * its create-only form below because its access token must not survive a
+ * server change through the update endpoint (the modal still edits an ntfy
+ * row's name, toggles and categories, never its connection).
  *
  * ADMIN-ONLY (bead enhancedchannelmanager-9kwzp.10 item 4). Every backing
  * endpoint — the list, the per-method read, create, update and delete — is now
@@ -39,9 +40,11 @@ function methodTypeLabel(type: string): string {
 interface AlertMethodsSectionProps {
   /** Whether the signed-in user is an administrator. */
   isAdmin: boolean;
+  /** Called with the full list after every load (and so after every change). */
+  onMethodsChanged?: (methods: api.AlertMethod[]) => void;
 }
 
-export function AlertMethodsSection({ isAdmin }: AlertMethodsSectionProps) {
+export function AlertMethodsSection({ isAdmin, onMethodsChanged }: AlertMethodsSectionProps) {
   const notifications = useNotifications();
   const [methods, setMethods] = useState<api.AlertMethod[]>([]);
   const [loading, setLoading] = useState(true);
@@ -49,10 +52,19 @@ export function AlertMethodsSection({ isAdmin }: AlertMethodsSectionProps) {
   const [deleteTarget, setDeleteTarget] = useState<api.AlertMethod | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [creating, setCreating] = useState(false);
+  // undefined = closed, null = adding a new destination, a method = editing it
+  const [editorTarget, setEditorTarget] = useState<api.AlertMethod | null | undefined>(undefined);
   const [ntfyName, setNtfyName] = useState('');
   const [ntfyServerUrl, setNtfyServerUrl] = useState('');
   const [ntfyTopic, setNtfyTopic] = useState('');
   const [ntfyAccessToken, setNtfyAccessToken] = useState('');
+
+  // Held in a ref so a parent passing an inline callback does not change
+  // loadMethods' identity, which would re-run the load effect on every render.
+  const onMethodsChangedRef = useRef(onMethodsChanged);
+  useEffect(() => {
+    onMethodsChangedRef.current = onMethodsChanged;
+  });
 
   const loadMethods = useCallback(async () => {
     if (!isAdmin) return;
@@ -60,6 +72,7 @@ export function AlertMethodsSection({ isAdmin }: AlertMethodsSectionProps) {
     try {
       const result = await api.listAlertMethods();
       setMethods(result);
+      onMethodsChangedRef.current?.(result);
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to load alert methods', 'Alert Methods');
     } finally {
@@ -93,7 +106,9 @@ export function AlertMethodsSection({ isAdmin }: AlertMethodsSectionProps) {
     try {
       await api.deleteAlertMethod(deleteTarget.id);
       notifications.success(`Deleted alert method "${deleteTarget.name}"`, 'Alert Methods');
-      setMethods((prev) => prev.filter((m) => m.id !== deleteTarget.id));
+      const remaining = methods.filter((m) => m.id !== deleteTarget.id);
+      setMethods(remaining);
+      onMethodsChangedRef.current?.(remaining);
       setDeleteTarget(null);
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Failed to delete alert method', 'Alert Methods');
@@ -163,7 +178,7 @@ export function AlertMethodsSection({ isAdmin }: AlertMethodsSectionProps) {
     return (
       <div className="settings-section alert-methods-section">
         <div className="settings-section-header">
-          <h3>ntfy Notifications</h3>
+          <h3>Alert Methods</h3>
         </div>
         <div className="alert-methods-empty empty-inline">
           <span className="material-icons">lock</span>
@@ -176,10 +191,20 @@ export function AlertMethodsSection({ isAdmin }: AlertMethodsSectionProps) {
   return (
     <div className="settings-section alert-methods-section">
       <div className="settings-section-header">
-        <h3>ntfy Notifications</h3>
+        <h3>Alert Methods</h3>
+        <button
+          type="button"
+          className="btn-primary alert-methods-add"
+          onClick={() => setEditorTarget(null)}
+        >
+          <span className="material-icons" aria-hidden="true">add</span>
+          Add Discord or Telegram
+        </button>
       </div>
       <p className="section-description">
-        Send a test message or remove an alert method you no longer use.
+        Every destination ECM sends alerts to. Each one chooses which severities and alert
+        categories it receives, so you can, for example, send only errors to one Discord channel
+        and everything to Telegram.
       </p>
 
       <form className="ntfy-create-form" onSubmit={handleCreateNtfy}>
@@ -233,14 +258,25 @@ export function AlertMethodsSection({ isAdmin }: AlertMethodsSectionProps) {
         <div className="alert-methods-list">
           {methods.map((method) => (
             <div key={method.id} className="alert-method-row">
-              <div className="alert-method-info">
-                <span className="alert-method-name">{method.name}</span>
-                <span className="alert-method-type-badge">{methodTypeLabel(method.method_type)}</span>
-                <span className={`badge badge-sm ${method.enabled ? 'badge-success' : ''}`}>
-                  {method.enabled ? 'Enabled' : 'Disabled'}
-                </span>
+              <div className="alert-method-details">
+                <div className="alert-method-info">
+                  <span className="alert-method-name">{method.name}</span>
+                  <span className="alert-method-type-badge">{methodTypeLabel(method.method_type)}</span>
+                  <span className={`badge badge-sm ${method.enabled ? 'badge-success' : ''}`}>
+                    {method.enabled ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
+                <span className="alert-method-summary">{summarizeRouting(method)}</span>
               </div>
               <div className="alert-method-actions">
+                <button
+                  className="btn-secondary alert-method-btn"
+                  onClick={() => setEditorTarget(method)}
+                  aria-label={`Edit ${method.name}`}
+                  title="Edit alert method"
+                >
+                  <span className="material-icons" aria-hidden="true">edit</span>
+                </button>
                 <button
                   className="btn-secondary alert-method-btn"
                   onClick={() => handleSendTest(method)}
@@ -264,6 +300,14 @@ export function AlertMethodsSection({ isAdmin }: AlertMethodsSectionProps) {
             </div>
           ))}
         </div>
+      )}
+
+      {editorTarget !== undefined && (
+        <AlertMethodModal
+          method={editorTarget}
+          onClose={() => setEditorTarget(undefined)}
+          onSaved={loadMethods}
+        />
       )}
 
       {deleteTarget && (

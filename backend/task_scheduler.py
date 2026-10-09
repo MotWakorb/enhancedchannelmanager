@@ -17,6 +17,8 @@ from enum import Enum
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from alert_methods import alert_category_for_task
+
 logger = logging.getLogger(__name__)
 
 
@@ -502,6 +504,7 @@ class TaskScheduler(ABC):
                 source=f"task_{self.task_id}",
                 source_id=f"progress_{int(time.time())}",
                 send_alerts=self._send_alerts,
+                alert_category=alert_category_for_task(self.task_id),
                 metadata={
                     "progress": {
                         "current": 0,

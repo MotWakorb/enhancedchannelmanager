@@ -811,17 +811,20 @@ class AlertMethod(Base):
     method_type = Column(String(50), nullable=False)  # discord, telegram, smtp, etc.
     enabled = Column(Boolean, default=True, nullable=False)
     # Configuration (JSON) - contains type-specific settings
-    # Discord: webhook_url
+    # Discord: webhook_url (+ optional username, avatar_url)
     # Telegram: bot_token, chat_id
-    # SMTP: host, port, username, password, from_address, to_addresses
+    # SMTP: to_emails (the server settings are shared, in settings.json)
+    # ntfy: server_url, topic (+ optional access_token)
     config = Column(Text, nullable=False)
     # Filter settings - which notification types to send
     notify_info = Column(Boolean, default=False, nullable=False)
     notify_success = Column(Boolean, default=True, nullable=False)
     notify_warning = Column(Boolean, default=True, nullable=False)
     notify_error = Column(Boolean, default=True, nullable=False)
-    # Granular source filtering (JSON) - controls which sources trigger alerts
-    # Schema: {"version": 1, "epg_refresh": {...}, "m3u_refresh": {...}, "probe_failures": {...}}
+    # Granular source filtering (JSON) - controls which alert categories reach
+    # this method (alert_methods.ALERT_CATEGORIES). Schema: {"version": 1,
+    # "epg_refresh": {...}, "m3u_refresh": {...}, "probe_failures": {...},
+    # "<toggle category>": {"enabled": bool}}. A missing section is enabled.
     # NULL means "send all" (backwards compatible)
     alert_sources = Column(Text, nullable=True)
     # Digest tracking
@@ -843,12 +846,17 @@ class AlertMethod(Base):
         """
         config = json.loads(self.config) if self.config else {}
 
-        # Mask sensitive fields unless explicitly requested
+        # Mask sensitive fields unless explicitly requested. Two identity keys
+        # are masked per type: the ntfy topic, and the Telegram chat id, which
+        # GET /api/settings withheld from non-admins and the MCP principal
+        # while it lived in settings (bead 9ej7f, GH #1026).
         if not include_sensitive:
             masked_config = {}
             for key, value in config.items():
                 if key in ALERT_METHOD_CREDENTIAL_KEYS or (
                     self.method_type == "ntfy" and key == "topic"
+                ) or (
+                    self.method_type == "telegram" and key == "chat_id"
                 ):
                     masked_config[key] = '********' if value else None
                 else:
@@ -1101,7 +1109,7 @@ class M3UDigestSettings(Base):
     show_detailed_list = Column(Boolean, default=True, nullable=False)
     # Only send digest if at least this many changes occurred
     min_changes_threshold = Column(Integer, default=1, nullable=False)
-    # Send digest to Discord (uses shared Discord webhook from General Settings)
+    # Send digest to Discord (the first enabled Discord alert method)
     send_to_discord = Column(Boolean, default=False, nullable=False)
     # JSON arrays of regex patterns for excluding groups/streams from digest
     exclude_group_patterns = Column(Text, nullable=True)

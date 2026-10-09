@@ -264,6 +264,7 @@ async def run_version_check() -> Optional[dict]:
             title="Update available",
             message=f"Version {latest} is available. You are running {running}.",
             source=NOTIFICATION_SOURCE,
+            alert_category="other",
             source_id=latest,
             action_label="View release",
             action_url=release.get("release_url"),

@@ -121,3 +121,26 @@
   color: var(--danger-text);
   border-color: var(--error, #ff6b6b);
 }
+
+/* GH #1026: the Add button sits at the end of the section header. */
+.alert-methods-add {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.alert-method-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+/* Meta role — the one-line severity / category summary under a row's name. */
+.alert-method-summary {
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary, #888);
+}

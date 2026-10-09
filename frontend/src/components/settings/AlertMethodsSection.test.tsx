@@ -2,7 +2,9 @@
  * Unit tests for AlertMethodsSection (enhancedchannelmanager-p4qt8).
  *
  * Contracts under test:
- *   - Lists alert methods from GET /api/alert-methods.
+ *   - Lists alert methods from GET /api/alert-methods, with a routing summary,
+ *     and reports the list to `onMethodsChanged` (GH #1026).
+ *   - "Add" and "Edit" open AlertMethodModal (GH #1026).
  *   - "Send test" calls POST /api/alert-methods/{id}/test and surfaces the result.
  *   - "Delete" opens a type-to-confirm dialog gated on the method's name and,
  *     once confirmed, calls DELETE /api/alert-methods/{id} and removes the row.
@@ -14,8 +16,13 @@ import { AlertMethodsSection } from './AlertMethodsSection';
 vi.mock('../../services/api', () => ({
   listAlertMethods: vi.fn(),
   createAlertMethod: vi.fn(),
+  updateAlertMethod: vi.fn(),
   testAlertMethod: vi.fn(),
   deleteAlertMethod: vi.fn(),
+  testDiscordWebhook: vi.fn(),
+  testTelegramBot: vi.fn(),
+  getEPGSources: vi.fn().mockResolvedValue([]),
+  getM3UAccounts: vi.fn().mockResolvedValue([]),
 }));
 
 const mockSuccess = vi.fn();
@@ -72,8 +79,7 @@ describe('AlertMethodsSection', () => {
     await waitFor(() => {
       expect(screen.getByText(/no alert methods configured/i)).toBeInTheDocument();
     });
-    expect(screen.getByRole('heading', { level: 3, name: 'ntfy Notifications' }).parentElement)
-      .toHaveTextContent(/^ntfy Notifications$/);
+    expect(screen.getByRole('heading', { level: 3, name: 'Alert Methods' })).toBeInTheDocument();
   });
 
   it('renders a create-only ntfy form with password token input', async () => {
@@ -182,6 +188,63 @@ describe('AlertMethodsSection', () => {
     expect(screen.getByText('Discord')).toBeInTheDocument();
     expect(screen.getByText('Enabled')).toBeInTheDocument();
     expect(screen.getByText('Disabled')).toBeInTheDocument();
+    // GH #1026: each row summarises what it receives.
+    expect(screen.getAllByText('Errors, warnings, successes · all categories')).toHaveLength(2);
+  });
+
+  it('summarises a destination with categories switched off and a filter', async () => {
+    vi.mocked(api.listAlertMethods).mockResolvedValue([{
+      ...discordMethod,
+      notify_info: true,
+      alert_sources: {
+        emby: { enabled: false },
+        epg_refresh: { filter_mode: 'only_selected', source_ids: [3] },
+      },
+    }]);
+    render(<AlertMethodsSection isAdmin />);
+
+    expect(await screen.findByText('All severities · 1 category off · 1 filtered')).toBeInTheDocument();
+  });
+
+  it('reports the loaded list, and the list after a delete, to onMethodsChanged', async () => {
+    vi.mocked(api.listAlertMethods).mockResolvedValue([smtpMethod, discordMethod]);
+    vi.mocked(api.deleteAlertMethod).mockResolvedValue({ success: true });
+    const onMethodsChanged = vi.fn();
+    render(<AlertMethodsSection isAdmin onMethodsChanged={onMethodsChanged} />);
+
+    await waitFor(() => expect(onMethodsChanged).toHaveBeenCalledWith([smtpMethod, discordMethod]));
+
+    fireEvent.click(screen.getByLabelText('Delete Discord Alerts'));
+    fireEvent.change(screen.getByLabelText(/type/i), { target: { value: 'Discord Alerts' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(onMethodsChanged).toHaveBeenLastCalledWith([smtpMethod]));
+  });
+
+  it('opens the add-destination dialog from the header button', async () => {
+    vi.mocked(api.listAlertMethods).mockResolvedValue([]);
+    render(<AlertMethodsSection isAdmin />);
+    await screen.findByText(/no alert methods configured/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Discord or Telegram/ }));
+
+    expect(await screen.findByRole('dialog', { name: 'Add alert destination' })).toBeInTheDocument();
+  });
+
+  it('opens the edit dialog for a row and reloads after saving', async () => {
+    vi.mocked(api.listAlertMethods).mockResolvedValue([discordMethod]);
+    vi.mocked(api.updateAlertMethod).mockResolvedValue({ success: true });
+    render(<AlertMethodsSection isAdmin />);
+    await screen.findByText('Discord Alerts');
+
+    fireEvent.click(screen.getByLabelText('Edit Discord Alerts'));
+    expect(await screen.findByRole('dialog', { name: 'Edit Discord Alerts' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(api.updateAlertMethod).toHaveBeenCalledWith(2, expect.any(Object)));
+    await waitFor(() => expect(api.listAlertMethods).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('dialog', { name: 'Edit Discord Alerts' })).not.toBeInTheDocument();
   });
 
   it('labels ntfy rows and preserves the generic test action', async () => {
@@ -273,8 +336,8 @@ describe('AlertMethodsSection', () => {
 
     render(<AlertMethodsSection isAdmin={false} />);
 
-    expect(screen.getByRole('heading', { level: 3, name: 'ntfy Notifications' }).parentElement)
-      .toHaveTextContent(/^ntfy Notifications$/);
+    expect(screen.getByRole('heading', { level: 3, name: 'Alert Methods' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add Discord or Telegram/ })).not.toBeInTheDocument();
     expect(
       screen.getByText(/Only administrators can view or manage alert methods\./),
     ).toBeInTheDocument();

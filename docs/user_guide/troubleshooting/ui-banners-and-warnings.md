@@ -235,9 +235,10 @@ On the M3U Digest and notification screens:
 
 > SMTP is not configured. Please configure your email server in Notification Settings before sending digests.
 
-> Discord webhook is not configured. Please configure your Discord webhook in Notification Settings before enabling Discord notifications.
+> No Discord destination is enabled. Add one under Alert Methods in Notification Settings before enabling Discord notifications.
 
-Both link straight to the settings they are asking for. See
+Both link straight to the settings page they are asking about. The M3U Digest
+posts to the first enabled Discord destination in **Alert Methods**. See
 [Notifications & Alert Methods](../notifications/index.md).
 
 ## Banners that do not exist

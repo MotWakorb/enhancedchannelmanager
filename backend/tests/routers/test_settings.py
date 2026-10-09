@@ -148,8 +148,6 @@ def _mock_settings(**overrides):
         setattr(mock, key, value)
     mock.is_configured.return_value = True
     mock.is_smtp_configured.return_value = False
-    mock.is_discord_configured.return_value = False
-    mock.is_telegram_configured.return_value = False
     return mock
 
 
@@ -3055,8 +3053,10 @@ class TestSettingsAdminFieldGate:
         mock_save.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_non_admin_changing_discord_webhook_rejected(self, non_admin_client):
-        """Non-admin changing the Discord webhook (POST-SSRF sink) -> 403."""
+    async def test_non_admin_cannot_change_discord_webhook_through_settings(self, non_admin_client):
+        """GH #1026: the Discord webhook (a POST-SSRF sink) is no longer a
+        settings field, so a non-admin POSTing one changes nothing. The stored
+        legacy value is carried through untouched."""
         current = _mock_settings(discord_webhook_url="https://discord.com/api/webhooks/1/abc")
         s1, s2, s3, s4, s5 = _save_mocks()
         with patch("routers.settings.get_settings", return_value=current), \
@@ -3065,8 +3065,9 @@ class TestSettingsAdminFieldGate:
             payload["discord_webhook_url"] = "https://discord.com/api/webhooks/2/xyz"
             response = await non_admin_client.post("/api/settings", json=payload)
 
-        assert response.status_code == 403
-        mock_save.assert_not_called()
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        assert saved.discord_webhook_url == "https://discord.com/api/webhooks/1/abc"
 
     @pytest.mark.asyncio
     async def test_non_admin_changing_channel_cap_rejected(self, non_admin_client):
@@ -3532,52 +3533,65 @@ class TestSettingsSsrfOnSave:
             assert len(respx_mock.calls) == 0
 
 
-class TestSettingsDiscordWebhookOnSave:
-    """kgz3k (C): discord_webhook_url is validated against the Discord host
-    allowlist on save (POST-SSRF sink). Path is preserved (NOT _sanitize_base_url).
+class TestSettingsIgnoresRetiredNotificationFields:
+    """GH #1026: Discord / Telegram moved to Alert Methods, so POST
+    /api/settings no longer writes ``discord_webhook_url`` /
+    ``telegram_bot_token`` / ``telegram_chat_id`` (kgz3k's save-time Discord
+    allowlist now guards the alert-method create/update path instead, see
+    tests/integration/test_gh1026_per_destination_alert_routing.py). An old
+    client that still sends them changes nothing, whatever the host.
     """
 
     @pytest.mark.asyncio
-    async def test_valid_discord_webhook_saves(self, async_client):
-        current = _mock_settings()
-        s1, s2, s3, s4, s5 = _save_mocks()
-        url = "https://discord.com/api/webhooks/123456/abcdefg"
-        with patch("routers.settings.get_settings", return_value=current), \
-             s1 as mock_save, s2, s3, s4, s5:
-            payload = _full_payload(current)
-            payload["discord_webhook_url"] = url
-            response = await async_client.post("/api/settings", json=payload)
-
-        assert response.status_code == 200, response.json()
-        saved = mock_save.call_args[0][0]
-        # Path is PRESERVED (webhooks need it).
-        assert saved.discord_webhook_url == url
-
-    @pytest.mark.asyncio
-    async def test_non_discord_host_rejected(self, async_client):
-        """A non-Discord webhook host -> 400 (POST-SSRF block)."""
-        current = _mock_settings()
-        s1, s2, s3, s4, s5 = _save_mocks()
-        with patch("routers.settings.get_settings", return_value=current), \
-             s1 as mock_save, s2, s3, s4, s5:
-            payload = _full_payload(current)
-            payload["discord_webhook_url"] = "https://evil.example.com/api/webhooks/1/x"
-            response = await async_client.post("/api/settings", json=payload)
-
-        assert response.status_code == 400
-        mock_save.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_empty_discord_webhook_allowed(self, async_client):
-        """Clearing the webhook (empty) is allowed — disables Discord."""
+    @pytest.mark.parametrize("sent", [
+        "https://discord.com/api/webhooks/123456/abcdefg",
+        "https://evil.example.com/api/webhooks/1/x",
+        "",
+    ])
+    async def test_sent_webhook_is_ignored_and_stored_value_kept(self, async_client, sent):
         current = _mock_settings(discord_webhook_url="https://discord.com/api/webhooks/1/old")
         s1, s2, s3, s4, s5 = _save_mocks()
         with patch("routers.settings.get_settings", return_value=current), \
              s1 as mock_save, s2, s3, s4, s5:
             payload = _full_payload(current)
-            payload["discord_webhook_url"] = ""
+            payload["discord_webhook_url"] = sent
             response = await async_client.post("/api/settings", json=payload)
 
         assert response.status_code == 200, response.json()
         saved = mock_save.call_args[0][0]
-        assert saved.discord_webhook_url == ""
+        assert saved.discord_webhook_url == "https://discord.com/api/webhooks/1/old"
+
+    @pytest.mark.asyncio
+    async def test_sent_telegram_credentials_are_ignored(self, async_client):
+        current = _mock_settings(telegram_bot_token="", telegram_chat_id="")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["telegram_bot_token"] = "123:" + "abc"
+            payload["telegram_chat_id"] = "-100"
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        assert saved.telegram_bot_token == ""
+        assert saved.telegram_chat_id == ""
+
+    def test_shared_discord_allowlist_admits_canary_and_ptb(self):
+        """The test-discord endpoint, the alert method and the M3U digest all
+        use notification_validation's allowlist, including canary/ptb."""
+        from notification_validation import is_valid_discord_webhook
+
+        for host in ("discord.com", "discordapp.com", "canary.discord.com", "ptb.discord.com"):
+            assert is_valid_discord_webhook(f"https://{host}/api/webhooks/1/x")
+        assert not is_valid_discord_webhook("https://evil.example.com/api/webhooks/1/x")
+
+    @pytest.mark.asyncio
+    async def test_test_discord_refuses_a_non_discord_host(self, async_client):
+        response = await async_client.post(
+            "/api/settings/test-discord",
+            json={"webhook_url": "https://evil.example.com/api/webhooks/1/x"},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"success": False, "message": "Invalid Discord webhook URL format"}

@@ -1,59 +1,56 @@
 # Route Alerts to the Right Channel
 
-After this article you will be able to send different severities to
-different channels, silence the noisy ones, and predict which alerts can
-reach which channel at all.
+After this article you will be able to send different severities and
+different kinds of alert to different destinations, silence the noisy ones,
+and predict which alerts reach which destination.
 
-The three gates an alert passes are described in
+The gates an alert passes are described in
 [Notifications & Alert Methods](index.md). This article assumes you have
 read that, and covers the routing decisions that sit on top of them.
 
 ## Where routing is configured
 
-Most scheduled-task routing is configured in **Settings → Scheduled Tasks →
-Edit**. Email, Discord, and Telegram have per-task channel toggles. ntfy does
-not: after the task's master and severity gates pass, ECM considers every
-enabled ntfy alert method and applies that method's own severity and source
-filters.
+Routing is configured in two places:
+
+- **Settings → Scheduled Tasks → Edit**, per task: whether the task sends
+  external alerts at all, which severities, and which destination types.
+  Email, Discord, and Telegram have per-task channel toggles, and each
+  toggle covers every destination of that type. ntfy does not have one.
+- **Settings → Notification Settings → Alert Methods**, per destination:
+  which severities and which alert categories that destination receives.
+  Click **Edit** on its row.
 
 ![The External Alerts block of the task editor: a "Send external alerts" master checkbox, an Alert Types row with Error, Warning and Success ticked and Info unticked, and a Notification Channels row with Email, Discord and Telegram all ticked](../../images/user_guide/notifications/5-task-external-alerts.png)
 
 Defaults for a task are: external alerts on, Error, Warning and Success
-on, Info off, and all three legacy channels on. The **Notification Center** block
-above it is separate and does not gate external delivery.
+on, Info off, and all three channel types on. The **Notification Center**
+block above it is separate and does not gate external delivery.
 
-## The two dispatch paths
+## One dispatch path for every alert
 
-This is the part that explains most surprising routing behavior, and it is
-not visible anywhere in the UI.
+Every alert ECM raises goes to the destinations the same way: scheduled
+task results, per-source EPG refresh results, per-account M3U refresh
+results, stream probes, and everything else. Each alert carries one
+category (see
+[Choose what each destination receives](index.md#choose-what-each-destination-receives)),
+and each destination decides from its severities and categories whether to
+take it.
 
-ECM has two distinct ways of getting an alert out, and they support
-different channels:
+The difference between alerts is only where they start:
 
-| Alert source | Path | Channels it can reach |
-|-|-|-|
-| Scheduled task results, and anything else that raises an in-app notification | Shared Notification Settings plus Alert Methods | Discord and Telegram directly; email and ntfy by handing off to the alert-method path |
-| Per-source EPG refresh watcher, per-account M3U refresh watcher, manual and other non-scheduled stream probe results | Alert Methods | Whatever alert-method rows exist |
+- **Scheduled task alerts** pass the task's own gates first (master toggle,
+  severity, channel type), then each destination's filters.
+- **EPG refresh, M3U refresh and non-scheduled stream probe alerts** have no
+  task gates. They go straight to each destination's filters.
+- **Scheduled `stream_probe` and `failed_stream_reprobe` completion alerts**
+  are owned by TaskEngine. The task gates and each destination's **Stream
+  probes** filter apply once, so no destination receives a duplicate.
 
-The Notification Settings page creates the SMTP method named `Email` and can
-now create one or more ntfy methods. The practical consequence is:
-
-- **Scheduled task alerts** can reach email, Discord, Telegram, and every
-  enabled ntfy method. There is no per-task ntfy toggle in this release.
-- **EPG refresh, M3U refresh and non-scheduled stream probe alerts** can reach email and
-  ntfy methods, subject to each method's severity and source filters. They
-  have no Discord or Telegram alert-method row by default.
-- **Scheduled `stream_probe` and `failed_stream_reprobe` completion alerts** are
-  owned by TaskEngine. The task master and severity gates plus the
-  `probe_failures` source filter apply once, so ntfy is not duplicated.
-
-If you need those source-level alerts in Discord or Telegram, you have to
-create an alert method of that type through the API. See
-[API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) in the
-repository, and the
-per-channel notes in
-[What ECM posts to Discord](discord-webhook-customization.md#the-embed-path-and-when-it-applies)
-and [Set up the Telegram bot](telegram-bot-setup.md#the-alert-method-path).
+Older versions had two paths: Discord and Telegram were sent directly from
+one shared webhook and one shared bot, and never received EPG refresh, M3U
+refresh or manual stream-probe alerts. They do now. If a migrated Discord or
+Telegram destination is busier after upgrading, untick **EPG refreshes**,
+**M3U refreshes** or **Stream probes** on it.
 
 ## The full gate order
 
@@ -61,53 +58,83 @@ For a scheduled-task alert, in order. The first gate that blocks decides.
 
 1. **Send external alerts** on the task. Off means nothing leaves ECM.
 2. The **Alert Types** checkbox matching the fired severity.
-3. For email, Discord, or Telegram, the **Notification Channels** checkbox for that channel. ntfy has no checkbox here.
-4. That channel being **Configured** in Notification Settings, or an enabled ntfy method existing.
-5. For email and ntfy: the `notify_<severity>` opt-in on the alert
-   method. The UI creates it with info **off**, so info alerts never reach
-   those methods unless changed through the API.
-6. For email only: a non-empty recipients list.
+3. For Email, Discord, or Telegram destinations, the **Notification
+   Channels** checkbox for that type. It covers every destination of the
+   type. ntfy has no checkbox here.
+4. For each enabled destination: its own **Severities** checkbox for the
+   fired severity. Destinations created in the UI start with **Info**
+   off; destinations migrated from the old shared Discord and Telegram
+   settings start with everything on.
+5. That destination's **Alert categories**: the alert's category must be
+   ticked, and for EPG refreshes, M3U refreshes and Stream probes the extra
+   filter must let it through.
+6. The 30-second digest window, then the send.
 
-Gates 1 and 2 stop the alert everywhere. Gates 3 to 6 stop it on one
-channel while the others still fire.
+Email destinations also need SMTP configured and a non-empty recipients
+list.
 
-## Timing: Discord and Telegram are immediate; email and ntfy are buffered
+Gates 1 and 2 stop the alert everywhere. Gate 3 stops it for one type.
+Gates 4 and 5 stop it on one destination while the others still fire.
+Alerts that are not scheduled-task results start at gate 4.
 
-Discord and Telegram posts happen as the alert is raised. Email and ntfy
-alerts are buffered for 30 seconds and flushed as a group, so two alerts a
-few seconds apart may arrive as one digest with a title or subject like
-`ECM Digest (1 succeeded, 2 failed)`. The window is fixed in code.
+## Timing: every destination is batched
 
-Do not read a delayed or merged email or ntfy notification as a failure. Read
-the arrival time of the Discord or Telegram copy if you need the moment the
-alert fired.
+ECM holds alerts for 30 seconds from the first one queued, then sends each
+destination what it collected as one digest, titled like `ECM Digest (1 succeeded, 2 failed)` (an email
+subject reads like `ECM Digest: 1 success, 2 error`). A single alert in the
+window is sent on its own. This applies to Discord and Telegram as well as
+email and ntfy, and the window is fixed in code.
+
+Do not read a delayed or merged notification as a failure: it can arrive
+about 30 seconds after the event.
 
 ## Worked examples
 
-### Send only errors to Discord, everything to email
+### Errors only to one Discord channel, everything to Telegram
 
-The severity filter and the channel filter are independent lists, so a
-per-severity split needs one task setting plus a per-channel decision. ECM
-cannot express "errors to Discord, successes to email" **within a single
-task**, because the Alert Types checkboxes apply to all enabled channels at
-once.
+Each destination has its own severities, so this is a per-destination
+setting rather than a per-task one.
 
-What you can do:
+1. Under **Alert Methods**, click **Edit** on the Discord destination for
+   the errors channel (or **Add Discord or Telegram** to create it).
+2. Under **Severities**, tick only **Errors**. Click **Save changes**.
+3. Click **Edit** on the Telegram destination and tick **Errors**,
+   **Warnings**, **Successes** and **Info**. Click **Save changes**.
+4. In each task you care about, leave **Send external alerts** on, tick
+   every severity you want anyone to receive under **Alert Types**, and
+   tick **Discord** and **Telegram** under **Notification Channels**.
 
-1. Open the task and leave **Send external alerts** on.
-2. Under **Alert Types**, tick only the severities you want anyone to
-   receive at all. Anything unticked here is gone from every channel.
-3. Under **Notification Channels**, tick **Email** and **Discord**.
-4. Save.
+**Result:** errors reach both. Warnings, successes and info reach only
+Telegram. The row summaries read `Errors · all categories` and
+`All severities · all categories`.
 
-**Result:** the ticked severities go to both channels. If you genuinely
-need Discord to be errors-only while email stays verbose, split the work
-across two tasks, or accept the same severity set on both.
+The task's **Alert Types** still apply first: if a task has **Info**
+unticked, its info alerts reach neither destination. The same approach
+works for email: edit the `Email` row's severities.
+
+### Stop EPG refresh noise from one Discord destination
+
+1. Click **Edit** on the Discord destination.
+2. Under **Alert categories**, untick **EPG refreshes**. To quiet only some
+   sources instead, leave it ticked, choose **All except the selected**,
+   and pick the noisy EPG sources.
+3. Click **Save changes**.
+
+**Result:** that destination no longer receives per-source EPG refresh
+results (or no longer receives them for the sources you picked). Other
+destinations still do. The row summary reads `1 category off` or
+`1 filtered`.
+
+This does not silence the **EPG Refresh** scheduled task's own start and
+completion alerts, which are in **Scheduled task results**. To quiet that
+task on Discord, untick **Discord** under its **Notification Channels**.
 
 ### Silence success noise
 
 Successful runs are the most common source of alert fatigue, and they are
 on by default.
+
+For one task, everywhere:
 
 1. Open each task you want quieter.
 2. Under **Alert Types**, untick **Success**.
@@ -117,73 +144,101 @@ on by default.
 runs still appear in the Notification Center if **Show notifications in
 bell icon** is on, so you keep the record without the notification.
 
-There is no global control for this. It is per task, every task.
+For one destination, from every task: click **Edit** on the destination
+and untick **Successes** under **Severities**.
 
 ### Turn on info alerts for one task only
 
-1. Open the task and tick **Info** under **Alert Types**.
-2. Save.
+1. Open the task and tick **Info** under **Alert Types**. Save.
+2. On each destination that should receive them, click **Edit** and tick
+   **Info** under **Severities**. Destinations created in the UI start with
+   it off.
 
-**Result:** info alerts now reach Discord and Telegram for that task.
+**Result:** info alerts from that task reach those destinations. Other
+tasks keep **Info** unticked under their own **Alert Types**, so their info
+alerts stay home. Alerts that are not from scheduled tasks have no task
+gate, so a destination with **Info** ticked also receives their info
+alerts; untick their categories on that destination if that is too much.
 
-**They will not reach email.** The `Email` alert method the UI creates has
-its info opt-in off, and the UI offers no way to change it today; see
-[Manage the Email Alert Recipients list](email-recipients-deep-dive.md#what-the-field-is-and-what-it-creates)
-for the current gap.
+### Route one EPG source's results to a different destination
 
-### Route one EPG source's failures to a different recipient set
+Each destination's **EPG refreshes** category takes a source filter: **All**,
+**Only the selected**, or **All except the selected** EPG sources. **M3U
+refreshes** has the same filter over M3U accounts. To send one EPG source's
+results to a separate Discord channel:
 
-This is the one case the per-task toggles cannot express at all, because
-EPG and M3U refresh watchers do not run under a task's channel settings.
+1. Add a Discord destination for that channel. Under **Alert categories**,
+   set **EPG refreshes** to **Only the selected** and pick the source.
+   Untick every other category.
+2. If your main destination should no longer receive that source, edit it
+   and set **EPG refreshes** to **All except the selected** with the same
+   source.
 
-Alert methods carry an optional source filter that scopes them to specific
-EPG sources, specific M3U accounts, or a minimum probe-failure count. With
-it you can have two SMTP methods with different recipient lists, each
-listening to a different set of sources. The filter supports three modes
-per category: all sources, only the listed ones, or all except the listed
-ones.
-
-Both the second method and the filter are API-only today. The request
-shapes and the filter schema are in
-[API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) in the repository.
+To send a source's results to a different email recipient set, you still
+need a second SMTP destination, which the UI cannot create. See
+[API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods)
+in the repository.
 
 ### Stop a noisy probe from alerting until it is really bad
 
-The probe-failure category in that same filter takes a minimum failure
-count. Below the threshold, warning and error alerts are suppressed;
-completion alerts with no failures always go through. Again, API-only.
+Click **Edit** on the destination, and under **Stream probes** set *Alert on
+a probe with failures only when at least N streams failed*. A probe alert
+reporting fewer failures than that is not sent to that destination; a probe
+with no failures always goes through.
+
+The same filters can be set through the API, for scripting. This keeps EPG
+source `5` off the destination, raises the probe threshold to 3, and turns
+off Emby alerts:
+
+```json
+PATCH /api/alert-methods/12
+{
+  "alert_sources": {
+    "version": 1,
+    "epg_refresh": {"filter_mode": "all_except", "source_ids": [5]},
+    "probe_failures": {"min_failures": 3},
+    "emby": {"enabled": false}
+  }
+}
+```
+
+`alert_sources` is replaced as a whole, so include every section you want
+to keep. The full schema is in
+[API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods).
 
 ## Choosing a channel deliberately
 
 | If you want | Use |
 |-|-|
 | A durable record you can search later | Email. Every alert is a message, and the digest keeps them grouped |
-| A shared team feed | Discord. One webhook, one channel, immediate |
-| Something on your phone | Telegram for immediate delivery, or ntfy for a public or self-hosted push target |
+| A shared team feed | Discord. One destination per channel, as many channels as you like |
+| Something on your phone | Telegram, or ntfy for a public or self-hosted push target |
+| Separate feeds for different kinds of alert | Several Discord or Telegram destinations, each with its own severities and categories |
 | No external delivery, just a record in ECM | Turn **Send external alerts** off and leave **Show notifications in bell icon** on |
 
 ## When routing does not behave
 
 | Symptom | Cause to check first |
 |-|-|
-| One channel silent, others fine | That channel's per-task toggle, then its **Configured** badge |
+| One destination silent, others of the same type fine | That destination's **Enabled**, **Severities** and **Alert categories**. The row summary shows its filters |
+| Every destination of one type silent for one task | That task's **Notification Channels** toggle for the type |
 | All channels silent for one task | **Send external alerts** on that task |
 | All channels silent for one severity | The **Alert Types** checkbox for that severity |
-| Info alerts reach Discord but not email | Expected. Gate 5 above |
-| EPG or M3U refresh alerts never reach Discord | Expected. No Discord alert method exists |
+| Info alerts reach one destination but not another | Expected when **Info** is ticked on one and not the other. Gate 4 above |
+| EPG or M3U refresh alerts reach a destination you did not expect | Expected. Every destination receives them unless that category is unticked on it |
 | A scheduled task reaches ntfy even with all three channel boxes off | Expected. ntfy has no per-task channel toggle; the task master/severity gates and method filters still apply |
-| Email or ntfy arrives late or merged | Expected. The 30-second digest window |
+| Alerts arrive late or merged | Expected. The 30-second digest window, on every destination type |
 
 Dispatch decisions are logged. A task logs its full alert configuration
 before dispatching, and the dispatcher logs which channels it attempted
 and which succeeded, under `[NOTIFY-SVC]` and `[ALERTS]` prefixes. Skips
-are logged with the reason. See
+are logged with the reason, at debug level. See
 [Read the logs](../troubleshooting/read-the-logs.md).
 
 ## Going deeper
 
-- [Notifications & Alert Methods](index.md): the three gates and the
-  Notification Settings page.
+- [Notifications & Alert Methods](index.md): the gates, the alert
+  categories, and the Notification Settings page.
 - [Manage the Email Alert Recipients list](email-recipients-deep-dive.md):
   the recipients field, the digest window, and the alert method behind it.
 - [What ECM posts to Discord](discord-webhook-customization.md): message
@@ -191,7 +246,7 @@ are logged with the reason. See
 - [Set up the Telegram bot](telegram-bot-setup.md): the two fields and
   their failure modes.
 - [API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) (GitHub):
-  everything the UI cannot configure, including additional methods and source
-  filters.
+  everything the UI cannot configure, including additional SMTP methods and
+  the `alert_sources` schema.
 - [API reference → Scheduled Tasks](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#scheduled-tasks) (GitHub):
   updating per-task alert configuration without the UI.

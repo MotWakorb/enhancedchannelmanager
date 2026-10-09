@@ -1,0 +1,68 @@
+/* AlertMethodModal.css — add / edit alert destination (GH #1026). Layout only.
+   Uses ModalBase.css for: .modal-section, .modal-section-title,
+     .modal-form-group, .modal-checkbox-label, .modal-btn
+   Uses common.css for: .form-hint (outside a .modal-form-group) */
+
+/* auto-fit wraps the four checkboxes on a narrow modal without a breakpoint
+   of its own (see cssAudits/modalResponsiveBreakpoints.audit.test.ts). */
+.alert-method-severity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  gap: 0.5rem;
+}
+
+.alert-method-modal-note {
+  margin: 0 0 0.75rem;
+}
+
+.alert-category-row {
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--border-primary);
+}
+
+.alert-category-row:first-of-type {
+  border-top: none;
+}
+
+/* Meta role (from .form-hint) — the one-line explanation under a category. */
+.alert-category-description {
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary, #888);
+  margin: 0.25rem 0 0 1.5rem;
+}
+
+.alert-category-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0 1.5rem;
+}
+
+.alert-category-filter > .custom-select {
+  min-width: 14rem;
+}
+
+/* Body role, inline with the threshold input. */
+.alert-category-threshold-label {
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
+  color: var(--text-secondary, #888);
+}
+
+/* Inline number input; mirrors the .modal-form-group input chrome, which
+   cannot apply here because the label sits on the same line. Body role. */
+.alert-category-threshold {
+  width: 5rem;
+  padding: 0.35rem 0.5rem;
+  background-color: var(--input-bg, #1a1a2e);
+  border: 1px solid var(--border-secondary, #3a3a5a);
+  border-radius: var(--radius-lg);
+  color: var(--text-primary, #fff);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
+}

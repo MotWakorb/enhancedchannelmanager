@@ -161,7 +161,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.2-0043",
+    version="0.18.2-0044",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -1469,6 +1469,19 @@ async def startup_event():
     except Exception as e:
         logger.warning("[MAIN] Could not apply league strip require_delimiter heal: %s", e)
 
+    # GH #1026: move the legacy shared Discord / Telegram settings into Alert
+    # Methods rows before the task engine starts, so the first alerts already
+    # route per destination. Rows are created even when settings.json cannot
+    # be written; only clearing the legacy fields waits for a writable file.
+    # Not an Alembic data migration for the same reason as the heal above.
+    try:
+        from notification_migration import migrate_legacy_notification_settings
+        migrate_legacy_notification_settings(
+            allow_settings_write=_settings_file_allows_startup_writes,
+        )
+    except Exception as e:
+        logger.warning("[MAIN] Could not migrate legacy Discord/Telegram settings: %s", e)
+
     # Ensure US/UK/EU are in Abbreviation Tags so Title Case preserves them
     # (otherwise US -> Us). Companion repair to the tag_group_id backfill.
     try:
@@ -1853,6 +1866,14 @@ async def shutdown_event():
     prober = get_prober()
     if prober:
         await prober.stop()
+
+    # Deliver alerts still in the digest window (GH #1026). After the task
+    # engine and prober stop, so their final alerts are already queued.
+    try:
+        from alert_methods import flush_pending_alerts
+        await flush_pending_alerts()
+    except Exception as e:
+        logger.warning("[MAIN] Error flushing pending alerts: %s", e)
 
     # Shut down the CPU-bound thread pool (bd-w3z4h)
     try:

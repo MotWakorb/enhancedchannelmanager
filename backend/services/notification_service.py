@@ -73,7 +73,8 @@ async def create_notification_internal(
         action_url: Optional action URL
         metadata: Optional additional data
         send_alerts: If True (default), also dispatch to configured alert channels.
-        alert_category: Category for granular filtering ("epg_refresh", "m3u_refresh", "probe_failures")
+        alert_category: Category for granular filtering, one of
+            alert_methods.ALERT_CATEGORIES. None is filed under "other".
         entity_id: Source/account ID for filtering (EPG source ID or M3U account ID)
         channel_settings: Per-task legacy channel settings; ntfy has no per-task toggle.
 
@@ -238,17 +239,26 @@ async def _dispatch_to_alert_channels(
     entity_id: Optional[int] = None,
     channel_settings: Optional[dict] = None,
 ):
-    """Dispatch notification to configured alert channels using shared settings.
+    """Dispatch a notification to the configured alert methods.
 
-    This sends directly to Discord/Telegram/Email using the shared notification
-    settings configured in Settings > Notification Settings.
+    Every external destination (Discord, Telegram, email, ntfy) is an
+    ``AlertMethod`` row, and every alert goes through the alert manager, which
+    applies each row's severity toggles and ``alert_sources`` category filters
+    and batches deliveries into a digest (GH #1026). Before #1026 Discord and
+    Telegram were sent directly from shared settings, unfiltered.
 
     Args:
-        channel_settings: Per-task legacy channel settings. Enabled ntfy methods
-                         receive alerts without a per-task toggle.
-    """
-    import aiohttp
+        channel_settings: Per-task channel toggles (send_to_email /
+            send_to_discord / send_to_telegram). Each one covers every
+            destination of that type. ntfy has no per-task toggle, so enabled
+            ntfy methods receive any alert the task-level gates let through.
 
+    Returns:
+        ``{"email"|"discord"|"telegram"|"ntfy": None|bool}``: None when the
+        channel was not attempted, True when the alert was handed to the alert
+        manager (which may still filter it per destination), False when a
+        requested channel could not be used.
+    """
     settings = get_settings()
     results = {"email": None, "discord": None, "telegram": None, "ntfy": None}
     alert_title = title or "ECM Notification"
@@ -258,9 +268,7 @@ async def _dispatch_to_alert_channels(
     send_discord = channel_settings.get("send_to_discord", True) if channel_settings else True
     send_telegram = channel_settings.get("send_to_telegram", True) if channel_settings else True
 
-    # Generic alert methods are configured independently of the legacy global
-    # notification settings. Read enabled method types once so SMTP and ntfy can
-    # share one precisely-filtered manager dispatch.
+    # Read the enabled method types once; each per-type decision below needs it.
     enabled_method_types = set()
     try:
         from models import AlertMethod as AlertMethodModel
@@ -289,90 +297,17 @@ async def _dispatch_to_alert_channels(
     #
     # If the caller explicitly requested a channel via channel_settings (e.g. send_to_email=True),
     # we still run the branch to return a definitive False result for that channel.
-    if (
-        channel_settings is None
-        and not settings.is_smtp_configured()
-        and not settings.is_discord_configured()
-        and not settings.is_telegram_configured()
-        and not has_ntfy_method
-    ):
+    if channel_settings is None and not settings.is_smtp_configured() and not enabled_method_types:
         return results
 
+    queue_discord = send_discord and "discord" in enabled_method_types
+    queue_telegram = send_telegram and "telegram" in enabled_method_types
+
     logger.info(
-        "[NOTIFY-SVC] Dispatching alerts: type=%s title=%s channels=[email=%s(configured=%s) discord=%s(configured=%s) telegram=%s(configured=%s)]",
-        notification_type, alert_title,
-        send_email, settings.is_smtp_configured(),
-        send_discord, settings.is_discord_configured(),
-        send_telegram, settings.is_telegram_configured(),
+        "[NOTIFY-SVC] Dispatching alerts: type=%s title=%s category=%s channels=[email=%s discord=%s telegram=%s ntfy=%s]",
+        notification_type, alert_title, alert_category,
+        send_email, queue_discord, queue_telegram, has_ntfy_method,
     )
-
-    # Format message with type indicator
-    type_emoji = {"info": "ℹ️", "success": "✅", "warning": "⚠️", "error": "❌"}.get(notification_type, "📢")
-
-    # Send to Discord if configured and enabled
-    if send_discord and settings.is_discord_configured():
-        try:
-            discord_message = f"**{type_emoji} {alert_title}**\n\n{message}"
-            if metadata:
-                if "task_name" in metadata:
-                    discord_message += f"\n\n**Task:** {metadata['task_name']}"
-                if "duration_seconds" in metadata:
-                    discord_message += f"\n**Duration:** {metadata['duration_seconds']:.1f}s"
-
-            payload = {
-                "content": discord_message,
-                "username": "ECM Alerts",
-            }
-
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    settings.discord_webhook_url,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as response:
-                    if response.status == 204:
-                        results["discord"] = True
-                        logger.debug("[NOTIFY-SVC] Alert sent to Discord successfully")
-                    else:
-                        results["discord"] = False
-                        logger.warning("[NOTIFY-SVC] Discord alert failed: %s", response.status)
-        except Exception as e:
-            results["discord"] = False
-            logger.error("[NOTIFY-SVC] Failed to send Discord alert: %s", e)
-
-    # Send to Telegram if configured and enabled
-    if send_telegram and settings.is_telegram_configured():
-        try:
-            telegram_message = f"{type_emoji} <b>{alert_title}</b>\n\n{message}"
-            if metadata:
-                if "task_name" in metadata:
-                    telegram_message += f"\n\n<b>Task:</b> {metadata['task_name']}"
-                if "duration_seconds" in metadata:
-                    telegram_message += f"\n<b>Duration:</b> {metadata['duration_seconds']:.1f}s"
-
-            url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
-            payload = {
-                "chat_id": settings.telegram_chat_id,
-                "text": telegram_message,
-                "parse_mode": "HTML",
-            }
-
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as response:
-                    if response.status == 200:
-                        results["telegram"] = True
-                        logger.debug("[NOTIFY-SVC] Alert sent to Telegram successfully")
-                    else:
-                        results["telegram"] = False
-                        text = await response.text()
-                        logger.warning("[NOTIFY-SVC] Telegram alert failed: %s - %s", response.status, text)
-        except Exception as e:
-            results["telegram"] = False
-            logger.error("[NOTIFY-SVC] Failed to send Telegram alert: %s", e)
 
     # Send to Email if enabled.
     #
@@ -392,12 +327,20 @@ async def _dispatch_to_alert_channels(
                 )
 
     queue_smtp = send_email and settings.is_smtp_configured() and has_smtp_method
-    if queue_smtp or has_ntfy_method:
+    queued_channels = {
+        "email": queue_smtp,
+        "discord": queue_discord,
+        "telegram": queue_telegram,
+        "ntfy": has_ntfy_method,
+    }
+    if any(queued_channels.values()):
         try:
             # Ensure method types are registered when this service is imported
             # without main.py (tests and task workers).
+            import alert_methods_discord  # noqa: F401
             import alert_methods_ntfy  # noqa: F401
             import alert_methods_smtp  # noqa: F401
+            import alert_methods_telegram  # noqa: F401
             from alert_methods import send_alert as send_alert_via_methods
 
             await send_alert_via_methods(
@@ -410,21 +353,19 @@ async def _dispatch_to_alert_channels(
                 entity_id=entity_id,
                 channel_settings={
                     "send_to_email": queue_smtp,
-                    "send_to_discord": False,
-                    "send_to_telegram": False,
+                    "send_to_discord": queue_discord,
+                    "send_to_telegram": queue_telegram,
                     "send_to_ntfy": has_ntfy_method,
                 },
             )
-            if queue_smtp:
-                results["email"] = True
-            if has_ntfy_method:
-                results["ntfy"] = True
+            for channel, queued in queued_channels.items():
+                if queued:
+                    results[channel] = True
         except Exception as e:
-            if queue_smtp:
-                results["email"] = False
-            if has_ntfy_method:
-                results["ntfy"] = False
-            logger.error("[NOTIFY-SVC] Failed to queue generic alert methods: %s", e)
+            for channel, queued in queued_channels.items():
+                if queued:
+                    results[channel] = False
+            logger.error("[NOTIFY-SVC] Failed to queue alert methods: %s", e)
 
     # Log summary
     sent = [k for k, v in results.items() if v is True]

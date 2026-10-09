@@ -169,8 +169,6 @@ async def _run_probe_lifecycle(
     )
     settings = MagicMock()
     settings.is_smtp_configured.return_value = False
-    settings.is_discord_configured.return_value = False
-    settings.is_telegram_configured.return_value = False
 
     with patch.object(alert_methods, "_manager", manager), patch(
         "services.notification_service.get_settings", return_value=settings

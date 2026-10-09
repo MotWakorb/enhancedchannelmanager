@@ -104,6 +104,7 @@ async def create_notification(request: CreateNotificationRequest):
         title=request.title,
         message=request.message,
         source=request.source,
+        alert_category="other",
         source_id=request.source_id,
         action_label=request.action_label,
         action_url=request.action_url,
