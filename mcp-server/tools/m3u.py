@@ -585,8 +585,8 @@ def register(mcp: FastMCP):
                 summary counts.
             min_changes_threshold: Only send a digest if at least this many
                 changes occurred (>= 1).
-            send_to_discord: Also send the digest to the shared Discord
-                webhook (General Settings).
+            send_to_discord: Also send the digest to the first enabled
+                Discord alert method.
             exclude_group_patterns: Full replacement list of regex patterns
                 for groups to exclude from the digest.
             exclude_stream_patterns: Full replacement list of regex patterns

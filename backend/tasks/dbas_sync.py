@@ -577,6 +577,7 @@ class DbasSyncTask(TaskScheduler):
                 title="Cross-Instance Sync: Skipped",
                 message=message,
                 source="task_dbas_sync",
+                alert_category="dbas_sync",
                 source_id="credential_freshness",
                 send_alerts=True,
             )

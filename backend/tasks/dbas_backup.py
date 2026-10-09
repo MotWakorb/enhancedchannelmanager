@@ -762,6 +762,7 @@ class DbasBackupTask(TaskScheduler):
                 title="DBAS Backup: Skipped",
                 message=message,
                 source="task_dbas_backup",
+                alert_category="dbas_backup",
                 source_id="credential_freshness",
                 send_alerts=True,
             )
@@ -1084,6 +1085,7 @@ class DbasBackupTask(TaskScheduler):
                 title="DBAS Backup: Upload Failed",
                 message=msg,
                 source="task_dbas_backup",
+                alert_category="dbas_backup",
                 source_id="cloud_upload_%s" % target_id,
                 send_alerts=True,
             )
@@ -1121,6 +1123,7 @@ class DbasBackupTask(TaskScheduler):
                 title="DBAS Backup: Upload %s" % run_result.capitalize(),
                 message=msg,
                 source="task_dbas_backup",
+                alert_category="dbas_backup",
                 source_id="cloud_upload_run",
                 send_alerts=True,
             )

@@ -676,6 +676,7 @@ class ChannelPipelineTask(TaskScheduler):
                 title="Auto-Creation: Skipped (run-on-refresh disabled)",
                 message=msg,
                 source="auto_creation",
+                alert_category="channel_pipeline",
                 source_id="circuit_breaker",
                 send_alerts=True,
             )
@@ -721,6 +722,7 @@ class ChannelPipelineTask(TaskScheduler):
             message=f"Running {len(rule_ids)} rule{'s' if len(rule_ids) != 1 else ''} "
                     f"after M3U refresh: {', '.join(rule_names)}",
             source="auto_creation",
+            alert_category="channel_pipeline",
             source_id="m3u_refresh",
             send_alerts=False,
         )
@@ -830,6 +832,7 @@ class ChannelPipelineTask(TaskScheduler):
                     message=f"Ran {len(rule_ids)} rule(s) after M3U refresh. "
                             f"{matched}/{evaluated} streams matched.",
                     source="auto_creation",
+                    alert_category="channel_pipeline",
                     source_id="m3u_refresh",
                     send_alerts=False,
                 )
@@ -899,6 +902,7 @@ class ChannelPipelineTask(TaskScheduler):
                     ),
                     message=cap_msg,
                     source="auto_creation",
+                    alert_category="channel_pipeline",
                     source_id="capped",
                     metadata=deferral_metadata or None,
                     send_alerts=True,
@@ -991,6 +995,7 @@ class ChannelPipelineTask(TaskScheduler):
                 title="Auto-Creation: Failed",
                 message=f"Auto-creation after M3U refresh failed: {e}",
                 source="auto_creation",
+                alert_category="channel_pipeline",
                 source_id="m3u_refresh",
                 send_alerts=False,
             )
@@ -1048,6 +1053,7 @@ class ChannelPipelineTask(TaskScheduler):
                 title=title,
                 message=warning.get("message", ""),
                 source="auto_creation",
+                alert_category="channel_pipeline",
                 source_id="event_sync_auto_run",
                 send_alerts=True,
             )

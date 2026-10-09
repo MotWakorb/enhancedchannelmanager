@@ -181,6 +181,7 @@ async def _run_clear_logos(
                 title="Clear Emby Logos",
                 message=f"Clear Emby logos failed: {exc}",
                 source=_CLEAR_LOGOS_NOTIFY_SOURCE,
+                alert_category="emby",
                 source_id=str(int(time.time())),
                 metadata=_progress_meta(0, 0, 0, 0, 0, "failed", ""),
             )
@@ -196,6 +197,7 @@ async def _run_clear_logos(
             title="Clear Emby Logos",
             message=f"Clearing Emby logos… (0/{total})",
             source=_CLEAR_LOGOS_NOTIFY_SOURCE,
+            alert_category="emby",
             source_id=str(int(time.time())),
             metadata=_progress_meta(0, total, 0, 0, 0, "clearing", ""),
         )

@@ -90,7 +90,7 @@ const EXPECTED_MODAL_STYLE_FILES = [
   'channelPipeline/EventSyncAutoSyncFixDialog.css', 'channelPipeline/EventSyncReviewQueue.css',
   'channelPipeline/EventSyncRuleEditor.css',
   'channelPipeline/PipelineYamlEditor.css',
-  'channelPipeline/RuleBuilder.css', 'settings/CloudTargetsCard.css',
+  'channelPipeline/RuleBuilder.css', 'settings/AlertMethodModal.css', 'settings/CloudTargetsCard.css',
   'settings/LinkedAccountsSection.css', 'settings/NormalizationEngineSection.css',
   'settings/TagEngineSection.css', 'tabs/EPGManagerTab.css', 'tabs/LogoManagerTab.css',
   'tabs/PendingMergesPage.css', 'tabs/SettingsTab.css',

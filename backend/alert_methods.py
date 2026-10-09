@@ -19,6 +19,62 @@ logger = logging.getLogger(__name__)
 # Default digest window in seconds - alerts within this window are batched together
 DEFAULT_DIGEST_WINDOW_SECONDS = 30
 
+# Alert categories (GH #1026). Every alert carries one category, and each alert
+# method's ``alert_sources`` JSON can switch categories off for that method. A
+# category with no section in ``alert_sources`` is enabled. The first three
+# take extra filters (EPG source / M3U account lists, a probe-failure
+# threshold); the rest are plain on/off sections: ``{"enabled": false}``.
+ENTITY_FILTER_ALERT_CATEGORIES: Dict[str, str] = {
+    # category -> the alert_sources key holding its selected entity ids
+    "epg_refresh": "source_ids",
+    "m3u_refresh": "account_ids",
+}
+TOGGLE_ALERT_CATEGORIES = frozenset({
+    "task_results",
+    "channel_pipeline",
+    "dbas_backup",
+    "dbas_sync",
+    "emby",
+    "profile_conflicts",
+    "other",
+})
+ALERT_CATEGORIES = frozenset(
+    set(ENTITY_FILTER_ALERT_CATEGORIES) | {"probe_failures"} | TOGGLE_ALERT_CATEGORIES
+)
+# An alert raised without a category is filed under "other", so switching
+# "other" off really drops everything that is not in a named category.
+DEFAULT_ALERT_CATEGORY = "other"
+
+# Scheduled tasks whose result alerts belong to a feature category rather than
+# the generic "task_results". Both stream-probe schedulers share the
+# probe-failure filter.
+_TASK_ALERT_CATEGORIES: Dict[str, str] = {
+    "stream_probe": "probe_failures",
+    "failed_stream_reprobe": "probe_failures",
+    "auto_creation": "channel_pipeline",
+    "dbas_backup": "dbas_backup",
+    "dbas_restore": "dbas_backup",
+}
+
+
+def alert_category_for_task(task_id: str) -> str:
+    """The alert category for a scheduled task's start and result alerts."""
+    return _TASK_ALERT_CATEGORIES.get(task_id, "task_results")
+
+
+def truncate_text(text: str, limit: int) -> str:
+    """Trim ``text`` to at most ``limit`` characters, marking the cut with "…".
+
+    Used by methods whose upstream rejects an over-long message outright
+    (Discord embeds, Telegram's 4096-character text), so a large digest is
+    shortened instead of lost.
+    """
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
 
 class AlertMessage:
     """Represents a message to be sent through alert methods."""
@@ -332,7 +388,7 @@ class AlertMethodManager:
 
         Args:
             alert_sources_json: JSON string with filter config (or None for "send all")
-            alert_category: Category like "epg_refresh", "m3u_refresh", "probe_failures"
+            alert_category: One of ALERT_CATEGORIES, e.g. "epg_refresh" or "emby"
             entity_id: Source ID (EPG source ID or M3U account ID)
             failed_count: For probe_failures, the number of failures
 
@@ -352,40 +408,27 @@ class AlertMethodManager:
         except (json.JSONDecodeError, TypeError):
             # Invalid JSON, default to send all
             return True
+        if not isinstance(alert_sources, dict):
+            return True
 
-        # Check category-specific filtering
-        if alert_category == "epg_refresh":
-            config = alert_sources.get("epg_refresh", {})
-            if not config.get("enabled", True):
-                return False
+        # A category with no section, or an unknown category, is sent.
+        config = alert_sources.get(alert_category)
+        if not isinstance(config, dict):
+            return True
+        if not config.get("enabled", True):
+            return False
+
+        if alert_category in ENTITY_FILTER_ALERT_CATEGORIES:
             filter_mode = config.get("filter_mode", "all")
-            source_ids = config.get("source_ids", [])
+            selected_ids = config.get(ENTITY_FILTER_ALERT_CATEGORIES[alert_category], [])
 
-            if filter_mode == "all":
-                return True
-            elif filter_mode == "only_selected":
-                return entity_id in source_ids if entity_id else False
+            if filter_mode == "only_selected":
+                return entity_id in selected_ids if entity_id else False
             elif filter_mode == "all_except":
-                return entity_id not in source_ids if entity_id else True
+                return entity_id not in selected_ids if entity_id else True
+            return True
 
-        elif alert_category == "m3u_refresh":
-            config = alert_sources.get("m3u_refresh", {})
-            if not config.get("enabled", True):
-                return False
-            filter_mode = config.get("filter_mode", "all")
-            account_ids = config.get("account_ids", [])
-
-            if filter_mode == "all":
-                return True
-            elif filter_mode == "only_selected":
-                return entity_id in account_ids if entity_id else False
-            elif filter_mode == "all_except":
-                return entity_id not in account_ids if entity_id else True
-
-        elif alert_category == "probe_failures":
-            config = alert_sources.get("probe_failures", {})
-            if not config.get("enabled", True):
-                return False
+        if alert_category == "probe_failures":
             min_failures = config.get("min_failures", 1)
             # Always send success notifications (probe complete with no failures);
             # only apply min_failures threshold to warning/error notifications
@@ -393,7 +436,7 @@ class AlertMethodManager:
                 return True
             return failed_count >= min_failures
 
-        # Unknown category, send the alert
+        # A plain on/off category that is enabled
         return True
 
     async def send_alert(
@@ -419,7 +462,8 @@ class AlertMethodManager:
             notification_type: One of info, success, warning, error
             source: Source of the notification
             metadata: Additional metadata
-            alert_category: Category for granular filtering ("epg_refresh", "m3u_refresh", "probe_failures")
+            alert_category: Category for granular filtering, one of
+                ALERT_CATEGORIES. None is filed under DEFAULT_ALERT_CATEGORY.
             entity_id: Source/account ID for filtering (EPG source ID or M3U account ID)
             channel_settings: Per-task channel settings keyed by send_to_<method>.
                              If None, all channels are allowed.
@@ -429,6 +473,8 @@ class AlertMethodManager:
         """
         from database import get_session
         from models import AlertMethod as AlertMethodModel
+
+        alert_category = alert_category or DEFAULT_ALERT_CATEGORY
 
         alert_message = AlertMessage(
             title=title,
@@ -609,6 +655,26 @@ class AlertMethodManager:
 # Global manager instance
 _manager: Optional[AlertMethodManager] = None
 
+# Upper bound on the shutdown flush: each method's send has its own 10 s
+# timeout, so this only caps how long several slow destinations can hold
+# shutdown.
+SHUTDOWN_FLUSH_TIMEOUT_SECONDS = 20
+
+
+async def flush_pending_alerts() -> None:
+    """Deliver alerts still waiting in the digest window, at shutdown.
+
+    Every destination is batched since GH #1026 (Discord and Telegram used to
+    be sent immediately), so a restart inside the window would otherwise drop
+    whatever was queued. A no-op when the manager was never created.
+    """
+    if _manager is None:
+        return
+    try:
+        await asyncio.wait_for(_manager.flush_now(), timeout=SHUTDOWN_FLUSH_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        logger.warning("[ALERTS] Shutdown flush timed out after %ss; some alerts were not delivered", SHUTDOWN_FLUSH_TIMEOUT_SECONDS)
+
 
 def get_alert_manager() -> AlertMethodManager:
     """Get the global alert method manager."""
@@ -639,7 +705,7 @@ async def send_alert(
         notification_type: One of info, success, warning, error
         source: Source of the notification
         metadata: Additional metadata
-        alert_category: Category for granular filtering ("epg_refresh", "m3u_refresh", "probe_failures")
+        alert_category: Category for granular filtering, one of ALERT_CATEGORIES
         entity_id: Source/account ID for filtering (EPG source ID or M3U account ID)
         channel_settings: Per-task channel settings keyed by send_to_<method>.
                          If None, all channels are allowed.

@@ -306,17 +306,16 @@ class TestDispatchToAlertChannels:
     """Tests for _dispatch_to_alert_channels()."""
 
     @pytest.mark.asyncio
-    async def test_dispatch_skips_when_no_channels_configured(self):
-        """Does nothing when no alert channels are configured."""
+    async def test_dispatch_skips_when_no_channels_configured(self, test_session):
+        """Does nothing when no SMTP server and no alert method is configured."""
         mock_settings = MagicMock()
-        mock_settings.is_discord_configured.return_value = False
-        mock_settings.is_telegram_configured.return_value = False
         mock_settings.is_smtp_configured.return_value = False
 
-        with patch("services.notification_service.get_settings", return_value=mock_settings):
+        with patch("services.notification_service.get_settings", return_value=mock_settings), \
+             patch("services.notification_service.get_session", return_value=test_session), \
+             patch("alert_methods.send_alert", new_callable=AsyncMock) as send:
             from services.notification_service import _dispatch_to_alert_channels
 
-            # Should not raise
             results = await _dispatch_to_alert_channels(
                 title="Test",
                 message="Hello",
@@ -324,33 +323,34 @@ class TestDispatchToAlertChannels:
                 source="test",
                 metadata=None,
             )
-        assert results["email"] is None
-        assert results["discord"] is None
-        assert results["telegram"] is None
+        send.assert_not_awaited()
+        assert results == {"email": None, "discord": None, "telegram": None, "ntfy": None}
+
+    @staticmethod
+    def _add_method(test_session, method_type, config, enabled=True):
+        from models import AlertMethod
+        test_session.add(AlertMethod(
+            name=method_type.title(),
+            method_type=method_type,
+            enabled=enabled,
+            config=json.dumps(config),
+        ))
+        test_session.commit()
 
     @pytest.mark.asyncio
-    async def test_dispatch_sends_to_discord(self):
-        """Sends to Discord when configured."""
+    async def test_dispatch_queues_discord_and_telegram_methods(self, test_session):
+        """GH #1026: Discord and Telegram are alert methods, so they are queued
+        through the alert manager (which applies each row's filters) instead
+        of being posted directly from shared settings."""
         mock_settings = MagicMock()
-        mock_settings.is_discord_configured.return_value = True
-        mock_settings.is_telegram_configured.return_value = False
         mock_settings.is_smtp_configured.return_value = False
-        mock_settings.discord_webhook_url = "https://discord.com/api/webhooks/test"
-
-        # Mock the aiohttp session
-        mock_response = AsyncMock()
-        mock_response.status = 204
-        mock_session_ctx = AsyncMock()
-        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
-
-        mock_aiohttp_session = MagicMock()
-        mock_aiohttp_session.post.return_value = mock_session_ctx
-        mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
-        mock_aiohttp_session.__aexit__ = AsyncMock(return_value=False)
+        self._add_method(test_session, "discord", {"webhook_url": "https://discord.com/api/webhooks/1/x"})
+        self._add_method(test_session, "telegram", {"bot_token": "1:" + "x", "chat_id": "-1"})
 
         with patch("services.notification_service.get_settings", return_value=mock_settings), \
-             patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
+             patch("services.notification_service.get_session", return_value=test_session), \
+             patch("alert_methods.send_alert", new_callable=AsyncMock) as send, \
+             patch("aiohttp.ClientSession") as direct_http:
             from services.notification_service import _dispatch_to_alert_channels
 
             results = await _dispatch_to_alert_channels(
@@ -358,65 +358,39 @@ class TestDispatchToAlertChannels:
                 message="Hello World",
                 notification_type="success",
                 source="test",
-                metadata=None,
+                metadata={"task_name": "EPG Refresh", "duration_seconds": 12.5},
+                alert_category="task_results",
             )
 
-        # Verify Discord was called
-        mock_aiohttp_session.post.assert_called_once()
-        call_args = mock_aiohttp_session.post.call_args
-        assert call_args[0][0] == "https://discord.com/api/webhooks/test"
+        direct_http.assert_not_called()
+        send.assert_awaited_once()
+        kwargs = send.await_args.kwargs
+        assert kwargs["channel_settings"] == {
+            "send_to_email": False,
+            "send_to_discord": True,
+            "send_to_telegram": True,
+            "send_to_ntfy": False,
+        }
+        assert kwargs["alert_category"] == "task_results"
+        # Task metadata travels with the alert; the methods render it.
+        assert kwargs["metadata"] == {"task_name": "EPG Refresh", "duration_seconds": 12.5}
         assert results["discord"] is True
-
-    @pytest.mark.asyncio
-    async def test_dispatch_sends_to_telegram(self):
-        """Sends to Telegram when configured."""
-        mock_settings = MagicMock()
-        mock_settings.is_discord_configured.return_value = False
-        mock_settings.is_telegram_configured.return_value = True
-        mock_settings.is_smtp_configured.return_value = False
-        mock_settings.telegram_bot_token = "bot123"
-        mock_settings.telegram_chat_id = "chat456"
-
-        mock_response = AsyncMock()
-        mock_response.status = 200
-        mock_session_ctx = AsyncMock()
-        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
-
-        mock_aiohttp_session = MagicMock()
-        mock_aiohttp_session.post.return_value = mock_session_ctx
-        mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
-        mock_aiohttp_session.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("services.notification_service.get_settings", return_value=mock_settings), \
-             patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
-            from services.notification_service import _dispatch_to_alert_channels
-
-            results = await _dispatch_to_alert_channels(
-                title="Test",
-                message="Hello",
-                notification_type="info",
-                source="test",
-                metadata=None,
-            )
-
-        mock_aiohttp_session.post.assert_called_once()
-        call_args = mock_aiohttp_session.post.call_args
-        assert "bot123" in call_args[0][0]
         assert results["telegram"] is True
 
     @pytest.mark.asyncio
-    async def test_dispatch_respects_channel_settings(self):
-        """channel_settings can disable specific channels."""
+    async def test_dispatch_respects_channel_settings(self, test_session):
+        """Per-task toggles switch a whole method type off: with Discord and
+        Telegram disabled for the task, nothing is queued for them."""
         mock_settings = MagicMock()
-        mock_settings.is_discord_configured.return_value = True
-        mock_settings.is_telegram_configured.return_value = True
         mock_settings.is_smtp_configured.return_value = False
+        self._add_method(test_session, "discord", {"webhook_url": "https://discord.com/api/webhooks/1/x"})
+        self._add_method(test_session, "telegram", {"bot_token": "1:" + "x", "chat_id": "-1"})
 
-        with patch("services.notification_service.get_settings", return_value=mock_settings):
+        with patch("services.notification_service.get_settings", return_value=mock_settings), \
+             patch("services.notification_service.get_session", return_value=test_session), \
+             patch("alert_methods.send_alert", new_callable=AsyncMock) as send:
             from services.notification_service import _dispatch_to_alert_channels
 
-            # Disable both discord and telegram via channel_settings
             results = await _dispatch_to_alert_channels(
                 title="Test",
                 message="Hello",
@@ -424,61 +398,49 @@ class TestDispatchToAlertChannels:
                 source="test",
                 metadata=None,
                 channel_settings={
+                    "send_to_email": False,
                     "send_to_discord": False,
                     "send_to_telegram": False,
                 },
             )
 
-        # Neither should have been called since channels are disabled
-        # (no aiohttp.ClientSession should have been created)
+        send.assert_not_awaited()
         assert results["discord"] is None
         assert results["telegram"] is None
 
     @pytest.mark.asyncio
-    async def test_dispatch_includes_metadata_in_message(self):
-        """Metadata fields (task_name, duration) are included in alert message."""
+    async def test_dispatch_skips_types_without_an_enabled_method(self, test_session):
+        """A per-task Discord toggle with no enabled Discord method queues
+        nothing for Discord (and reports it as not attempted)."""
         mock_settings = MagicMock()
-        mock_settings.is_discord_configured.return_value = True
-        mock_settings.is_telegram_configured.return_value = False
         mock_settings.is_smtp_configured.return_value = False
-        mock_settings.discord_webhook_url = "https://discord.com/api/webhooks/test"
-
-        mock_response = AsyncMock()
-        mock_response.status = 204
-        mock_session_ctx = AsyncMock()
-        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_response)
-        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
-
-        mock_aiohttp_session = MagicMock()
-        mock_aiohttp_session.post.return_value = mock_session_ctx
-        mock_aiohttp_session.__aenter__ = AsyncMock(return_value=mock_aiohttp_session)
-        mock_aiohttp_session.__aexit__ = AsyncMock(return_value=False)
+        self._add_method(test_session, "discord", {"webhook_url": "https://discord.com/api/webhooks/1/x"}, enabled=False)
+        self._add_method(test_session, "telegram", {"bot_token": "1:" + "x", "chat_id": "-1"})
 
         with patch("services.notification_service.get_settings", return_value=mock_settings), \
-             patch("aiohttp.ClientSession", return_value=mock_aiohttp_session):
+             patch("services.notification_service.get_session", return_value=test_session), \
+             patch("alert_methods.send_alert", new_callable=AsyncMock) as send:
             from services.notification_service import _dispatch_to_alert_channels
 
             results = await _dispatch_to_alert_channels(
-                title="Task Complete",
-                message="EPG refresh done",
-                notification_type="success",
-                source="task",
-                metadata={"task_name": "EPG Refresh", "duration_seconds": 12.5},
+                title="Test",
+                message="Hello",
+                notification_type="info",
+                source="test",
+                metadata=None,
+                channel_settings={"send_to_email": False, "send_to_discord": True, "send_to_telegram": True},
             )
 
-        call_args = mock_aiohttp_session.post.call_args
-        payload = call_args[1]["json"]
-        assert "EPG Refresh" in payload["content"]
-        assert "12.5" in payload["content"]
-        assert results["discord"] is True
+        assert send.await_args.kwargs["channel_settings"]["send_to_discord"] is False
+        assert send.await_args.kwargs["channel_settings"]["send_to_telegram"] is True
+        assert results["discord"] is None
+        assert results["telegram"] is True
 
     @pytest.mark.asyncio
     async def test_dispatch_queues_email_via_alert_methods_when_smtp_method_configured(self, test_session):
         """Queues an SMTP alert method when email is enabled and SMTP is configured."""
         # Shared SMTP is configured, but delivery uses Alert Methods for recipients.
         mock_settings = MagicMock()
-        mock_settings.is_discord_configured.return_value = False
-        mock_settings.is_telegram_configured.return_value = False
         mock_settings.is_smtp_configured.return_value = True
 
         # Create an enabled SMTP alert method in the DB (recipients live in its config).
@@ -531,8 +493,6 @@ class TestDispatchToAlertChannels:
     async def test_dispatch_email_returns_false_when_smtp_not_configured(self):
         """Email branch returns False when shared SMTP settings are not configured."""
         mock_settings = MagicMock()
-        mock_settings.is_discord_configured.return_value = False
-        mock_settings.is_telegram_configured.return_value = False
         mock_settings.is_smtp_configured.return_value = False
 
         with patch("services.notification_service.get_settings", return_value=mock_settings), \
@@ -555,8 +515,6 @@ class TestDispatchToAlertChannels:
     async def test_dispatch_email_returns_false_when_no_enabled_smtp_method(self, test_session):
         """Email branch returns False when no enabled SMTP method exists."""
         mock_settings = MagicMock()
-        mock_settings.is_discord_configured.return_value = False
-        mock_settings.is_telegram_configured.return_value = False
         mock_settings.is_smtp_configured.return_value = True
 
         with patch("services.notification_service.get_settings", return_value=mock_settings), \
@@ -580,8 +538,6 @@ class TestDispatchToAlertChannels:
     async def test_dispatch_email_returns_false_when_send_alert_raises(self, test_session):
         """Email branch returns False when alert-method dispatch raises."""
         mock_settings = MagicMock()
-        mock_settings.is_discord_configured.return_value = False
-        mock_settings.is_telegram_configured.return_value = False
         mock_settings.is_smtp_configured.return_value = True
 
         from models import AlertMethod
@@ -619,8 +575,6 @@ class TestDispatchToAlertChannels:
     async def test_dispatch_ntfy_only_configuration_queues_generic_alert(self, test_session):
         """An enabled ntfy method bypasses legacy global-channel early returns."""
         mock_settings = MagicMock()
-        mock_settings.is_discord_configured.return_value = False
-        mock_settings.is_telegram_configured.return_value = False
         mock_settings.is_smtp_configured.return_value = False
 
         from models import AlertMethod
@@ -662,8 +616,6 @@ class TestDispatchToAlertChannels:
     @pytest.mark.asyncio
     async def test_dispatch_generic_selection_prevents_smtp_ntfy_duplicates(self, test_session):
         mock_settings = MagicMock()
-        mock_settings.is_discord_configured.return_value = False
-        mock_settings.is_telegram_configured.return_value = False
         mock_settings.is_smtp_configured.return_value = True
 
         from models import AlertMethod
@@ -693,8 +645,6 @@ class TestDispatchToAlertChannels:
     @pytest.mark.asyncio
     async def test_dispatch_skips_disabled_ntfy_method(self, test_session):
         mock_settings = MagicMock()
-        mock_settings.is_discord_configured.return_value = False
-        mock_settings.is_telegram_configured.return_value = False
         mock_settings.is_smtp_configured.return_value = False
 
         from models import AlertMethod
@@ -716,8 +666,6 @@ class TestDispatchToAlertChannels:
     @pytest.mark.asyncio
     async def test_dispatch_ntfy_exception_is_contained(self, test_session):
         mock_settings = MagicMock()
-        mock_settings.is_discord_configured.return_value = False
-        mock_settings.is_telegram_configured.return_value = False
         mock_settings.is_smtp_configured.return_value = False
 
         from models import AlertMethod

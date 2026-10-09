@@ -19,6 +19,7 @@ from typing import Optional
 from sqlalchemy import and_, or_
 
 import journal
+from alert_methods import alert_category_for_task
 from database import get_session
 from log_throttle import should_log
 from models import TaskExecution
@@ -678,7 +679,8 @@ class TaskEngine:
             title: Notification title
             message: Notification message
             result: Optional TaskResult with execution details
-            alert_category: Category for granular filtering (e.g., "probe_failures")
+            alert_category: Category for granular filtering, from
+                alert_methods.alert_category_for_task
         """
         try:
             # Import here to avoid circular imports
@@ -1227,13 +1229,8 @@ class TaskEngine:
             # Update registry
             registry.sync_to_database(task_id)
 
-            # Determine alert category for granular filtering
-            # Both stream-probe schedulers share the probe-failure source filter.
-            alert_category = (
-                "probe_failures"
-                if task_id in {"stream_probe", "failed_stream_reprobe"}
-                else None
-            )
+            # Determine alert category for granular filtering (GH #1026)
+            alert_category = alert_category_for_task(task_id)
 
             # ONE branch per TaskOutcome (bead …-fexq1). Severity is derived
             # once, in task_scheduler.task_outcome, and the Journal row, the
@@ -1439,12 +1436,8 @@ class TaskEngine:
             logger.exception("[%s] Task execution failed: %s", task_id, e)
             failure_error = getattr(e, "error_code", str(e))
 
-            # Determine alert category for granular filtering
-            alert_category = (
-                "probe_failures"
-                if task_id in {"stream_probe", "failed_stream_reprobe"}
-                else None
-            )
+            # Determine alert category for granular filtering (GH #1026)
+            alert_category = alert_category_for_task(task_id)
 
             # Log exception to journal
             log_entry(

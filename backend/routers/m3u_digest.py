@@ -34,7 +34,7 @@ class M3UDigestSettingsUpdate(BaseModel):
     include_stream_changes: Optional[bool] = None
     show_detailed_list: Optional[bool] = None  # Show detailed list vs just summary
     min_changes_threshold: Optional[int] = None
-    send_to_discord: Optional[bool] = None  # Send digest to Discord (uses shared webhook)
+    send_to_discord: Optional[bool] = None  # Send digest to the first enabled Discord alert method
     exclude_group_patterns: Optional[List[str]] = None  # Regex patterns to exclude groups
     exclude_stream_patterns: Optional[List[str]] = None  # Regex patterns to exclude streams
     account_ids: Optional[List[int]] = None  # M3U accounts to include in digest notifications; empty = all

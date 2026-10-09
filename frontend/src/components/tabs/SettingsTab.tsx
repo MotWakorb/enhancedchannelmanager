@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../../services/api';
 import * as channelPipelineApi from '../../services/channelPipelineApi';
 import { useNotifications } from '../../contexts/NotificationContext';
@@ -782,27 +782,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     recipients: '',
   });
 
-  // Shared Discord settings
-  const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
+  // Whether an enabled Discord alert method exists (GH #1026). The M3U digest
+  // posts to the first one, so its Discord toggle is gated on this. Seeded
+  // from GET /api/settings, then kept current from the Alert Methods list so
+  // adding or disabling a Discord destination updates the digest page without
+  // a reload.
   const [discordConfigured, setDiscordConfigured] = useState(false);
-  const [discordTesting, setDiscordTesting] = useState(false);
-
-  // Shared Telegram settings
-  const [telegramBotToken, setTelegramBotToken] = useState('');
-  const [telegramChatId, setTelegramChatId] = useState('');
-  const [telegramConfigured, setTelegramConfigured] = useState(false);
-  const [telegramTesting, setTelegramTesting] = useState(false);
-
-  // bead 9ej7f: GET /api/settings withholds the Discord webhook and the
-  // Telegram bot token + chat id from a caller that is not allowed to WRITE
-  // them (a non-admin, or the MCP service key). Such a caller loads a blank
-  // field alongside a `*_configured` boolean that says the integration IS set
-  // up. Remember that so the post-save badge recompute below does not read the
-  // blank field as "the operator cleared it" — which would flip the badge to
-  // Unconfigured on an unrelated preference save. An admin loads the real
-  // value, so these stay false and the badge tracks the field as before.
-  const [discordWebhookRedacted, setDiscordWebhookRedacted] = useState(false);
-  const [telegramCredentialsRedacted, setTelegramCredentialsRedacted] = useState(false);
+  const handleAlertMethodsChanged = useCallback((methods: api.AlertMethod[]) => {
+    setDiscordConfigured(methods.some((m) => m.method_type === 'discord' && m.enabled));
+  }, []);
 
   // Stream probe settings (scheduled probing is controlled by Task Engine)
   const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
@@ -952,7 +940,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     deprioritizeFailedStreams, deprioritizeBlackScreen, deprioritizeLowFps,
     failedStreamSortOrder, strikeThreshold, publicBaseUrl, smtpHost, smtpPort, smtpUser,
     smtpPassword, smtpFromEmail, smtpFromName, smtpUseTls, smtpUseSsl,
-    discordWebhookUrl, telegramBotToken, telegramChatId,
   ]);
 
   useEffect(() => {
@@ -1318,21 +1305,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setSmtpUseTls(settings.smtp_use_tls ?? true);
       setSmtpUseSsl(settings.smtp_use_ssl ?? false);
       setSmtpConfigured(settings.smtp_configured ?? false);
-      // Shared Discord settings
-      setDiscordWebhookUrl(settings.discord_webhook_url ?? '');
       setDiscordConfigured(settings.discord_configured ?? false);
-      // Shared Telegram settings
-      setTelegramBotToken(settings.telegram_bot_token ?? '');
-      setTelegramChatId(settings.telegram_chat_id ?? '');
-      setTelegramConfigured(settings.telegram_configured ?? false);
-      // bead 9ej7f: "configured, but the server sent no value" is exactly the
-      // redaction signature — the value was withheld from this caller.
-      setDiscordWebhookRedacted(
-        Boolean(settings.discord_configured) && !settings.discord_webhook_url
-      );
-      setTelegramCredentialsRedacted(
-        Boolean(settings.telegram_configured) && !settings.telegram_bot_token
-      );
       setNeedsRestart(false);
 
       // Load SMTP alert recipients from Alert Methods (used by task email alerts).
@@ -1809,11 +1782,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         smtp_from_name: smtpFromName,
         smtp_use_tls: smtpUseTls,
         smtp_use_ssl: smtpUseSsl,
-        // Shared Discord settings
-        discord_webhook_url: discordWebhookUrl,
-        // Shared Telegram settings
-        telegram_bot_token: telegramBotToken,
-        telegram_chat_id: telegramChatId,
       });
       // If server URL changed, all data was invalidated - reload the page
       if (result.server_changed) {
@@ -1825,17 +1793,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setSmtpPassword('');
       // Update SMTP configured status
       setSmtpConfigured(!!(smtpHost && smtpFromEmail));
-      // Update Discord configured status. bead 9ej7f: when the value was
-      // withheld from this caller the blank field means "the backend kept the
-      // stored webhook", not "the operator cleared it", so leave the badge
-      // alone. An admin who genuinely blanks the field still clears it.
-      if (!discordWebhookRedacted) {
-        setDiscordConfigured(!!discordWebhookUrl);
-      }
-      // Update Telegram configured status (same 9ej7f reasoning)
-      if (!telegramCredentialsRedacted) {
-        setTelegramConfigured(!!(telegramBotToken && telegramChatId));
-      }
       // Apply frontend log level immediately
       const frontendLevel = frontendLogLevel === 'WARNING' ? 'WARN' : frontendLogLevel;
       if (['DEBUG', 'INFO', 'WARN', 'ERROR'].includes(frontendLevel)) {
@@ -3764,65 +3721,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
-  // Handle Discord webhook test
-  const handleTestDiscord = async () => {
-    if (!discordWebhookUrl) {
-      notifications.error('Discord webhook URL is required', 'Discord Test');
-      return;
-    }
-
-    // Basic validation - accept discord.com, discordapp.com, and variants (canary, ptb)
-    const discordPattern = /^https:\/\/(discord\.com|discordapp\.com|canary\.discord\.com|ptb\.discord\.com)\/api\/webhooks\//;
-    if (!discordPattern.test(discordWebhookUrl)) {
-      notifications.error('Invalid Discord webhook URL format', 'Discord Test');
-      return;
-    }
-
-    setDiscordTesting(true);
-
-    try {
-      const result = await api.testDiscordWebhook(discordWebhookUrl);
-      if (result.success) {
-        notifications.success(result.message, 'Discord Test');
-      } else {
-        notifications.error(result.message, 'Discord Test');
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to test Discord webhook';
-      logger.error('Discord test error:', err);
-      notifications.error(errorMessage, 'Discord Test');
-    } finally {
-      setDiscordTesting(false);
-    }
-  };
-
-  const handleTestTelegram = async () => {
-    if (!telegramBotToken) {
-      notifications.error('Telegram bot token is required', 'Telegram Test');
-      return;
-    }
-    if (!telegramChatId) {
-      notifications.error('Telegram chat ID is required', 'Telegram Test');
-      return;
-    }
-
-    setTelegramTesting(true);
-
-    try {
-      const result = await api.testTelegramBot(telegramBotToken, telegramChatId);
-      if (result.success) {
-        notifications.success(result.message, 'Telegram Test');
-      } else {
-        notifications.error(result.message, 'Telegram Test');
-      }
-    } catch (err) {
-      logger.error('SettingsTab: failed to test Telegram bot', err);
-      notifications.error('Failed to test Telegram bot', 'Telegram Test');
-    } finally {
-      setTelegramTesting(false);
-    }
-  };
-
   const renderChannelPipelinePage = () => (
     <div className="settings-page">
       <fieldset className="settings-load-fields" disabled={settingsLoading || !settingsInitialized}>
@@ -4314,120 +4212,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       </div>
 
-      <div className="settings-section">
-        <div className="settings-section-header">
-          <span className="material-icons">discord</span>
-          <h3>Discord Webhook</h3>
-          <span className={`badge badge-sm ${discordConfigured ? 'badge-success' : ''}`}>
-            {discordConfigured ? 'Configured' : 'Unconfigured'}
-          </span>
-        </div>
-        <p className="section-description">
-          Configure a Discord webhook to receive notifications. Used by M3U Digest and other features
-          that support Discord notifications.
-        </p>
-
-        <div className="form-group-vertical">
-          <label htmlFor="discordWebhookUrl">Webhook URL</label>
-          <input
-            type="text"
-            id="discordWebhookUrl"
-            value={discordWebhookUrl}
-            onChange={(e) => setDiscordWebhookUrl(e.target.value)}
-            placeholder="https://discord.com/api/webhooks/..."
-          />
-          <p className="field-hint">
-            Create a webhook in your Discord server: Server Settings → Integrations → Webhooks → New Webhook
-          </p>
-        </div>
-
-        <div className="form-group-vertical">
-          <button
-            className="btn-test"
-            onClick={handleTestDiscord}
-            disabled={discordTesting || !discordWebhookUrl}
-          >
-            {discordTesting ? (
-              <>
-                <span className="material-icons spinning">sync</span>
-                Testing...
-              </>
-            ) : (
-              <>
-                <span className="material-icons">send</span>
-                Send Test Message
-              </>
-            )}
-          </button>
-        </div>
-
-      </div>
-
-      <div className="settings-section">
-        <div className="settings-section-header">
-          <span className="material-icons">telegram</span>
-          <h3>Telegram Bot</h3>
-          <span className={`badge badge-sm ${telegramConfigured ? 'badge-success' : ''}`}>
-            {telegramConfigured ? 'Configured' : 'Unconfigured'}
-          </span>
-        </div>
-        <p className="section-description">
-          Configure a Telegram bot to receive notifications. Used by M3U Digest and other features
-          that support Telegram notifications.
-        </p>
-
-        <div className="form-group-vertical">
-          <label htmlFor="telegramBotToken">Bot Token</label>
-          <input
-            type="password"
-            id="telegramBotToken"
-            value={telegramBotToken}
-            onChange={(e) => setTelegramBotToken(e.target.value)}
-            placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz..."
-          />
-          <p className="field-hint">
-            Create a bot via @BotFather on Telegram and copy the token
-          </p>
-        </div>
-
-        <div className="form-group-vertical">
-          <label htmlFor="telegramChatId">Chat ID</label>
-          <input
-            type="text"
-            id="telegramChatId"
-            value={telegramChatId}
-            onChange={(e) => setTelegramChatId(e.target.value)}
-            placeholder="-1001234567890"
-          />
-          <p className="field-hint">
-            Use @userinfobot or @RawDataBot to get your chat ID. For groups, use a negative number.
-          </p>
-        </div>
-
-        <div className="form-group-vertical">
-          <button
-            className="btn-test"
-            onClick={handleTestTelegram}
-            disabled={telegramTesting || !telegramBotToken || !telegramChatId}
-          >
-            {telegramTesting ? (
-              <>
-                <span className="material-icons spinning">sync</span>
-                Testing...
-              </>
-            ) : (
-              <>
-                <span className="material-icons">send</span>
-                Send Test Message
-              </>
-            )}
-          </button>
-        </div>
-
-      </div>
-
       </fieldset>
-      <AlertMethodsSection isAdmin={isAdminUser} />
+      <AlertMethodsSection isAdmin={isAdminUser} onMethodsChanged={handleAlertMethodsChanged} />
 
       <div className="settings-actions">
         <button
@@ -5240,7 +5026,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               <div className="warning-banner">
                 <span className="material-icons">warning</span>
                 <span>
-                  Discord webhook is not configured. Please configure your Discord webhook in{' '}
+                  No Discord destination is enabled. Add one under Alert Methods in{' '}
                   <button
                     className="link-button"
                     onClick={() => setActivePage('email')}
@@ -5263,7 +5049,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 />
                 <div className="checkbox-content">
                   <label htmlFor="sendToDiscord">Send digest to Discord</label>
-                  <p>Post M3U change digest to Discord using the shared webhook configured in Notification Settings.</p>
+                  <p>Post the M3U change digest to the first enabled Discord destination in Alert Methods. The digest is a scheduled report, so that destination's severity and category filters do not apply to it.</p>
                 </div>
               </div>
             </div>

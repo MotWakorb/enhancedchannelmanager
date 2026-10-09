@@ -22,8 +22,9 @@ on your behalf: name `Email`, type `smtp`, enabled. It appears in the
 **Alert Methods** list further down the same page. Saving again updates
 that same row rather than creating a second one.
 
-The row is created with four severity opt-ins baked in, and the UI gives
-you no way to change them:
+The row is created with these four severity opt-ins. Change them later with
+the **Edit** button on the `Email` row under **Alert Methods**, which also
+sets which alert categories the row receives:
 
 | Opt-in | Value the UI sets |
 |-|-|
@@ -36,8 +37,9 @@ you no way to change them:
 described in the [index](index.md#how-alerts-get-delivered-the-short-version):
 even if a task has **Info** ticked under **Alert Types**, the info alert is
 dropped at the Email method and no email is sent. Errors, warnings and
-successes are unaffected. See
-[Alert routing patterns](alert-routing-patterns.md) for the way around it.
+successes are unaffected. Tick **Info** in the `Email` row's **Edit** dialog
+if you want info alerts by email; see
+[Alert routing patterns](alert-routing-patterns.md) for the full gate order.
 
 ## The separator is a comma
 
@@ -135,9 +137,9 @@ The subject depends on how many alerts were in flight:
 
 That second case is the **digest window**. Email alerts are buffered for
 30 seconds and flushed together; alerts arriving inside the same window
-arrive as one email listing each of them. This is a property of the email
-path only. Discord and Telegram alerts are posted as they happen. The
-window is fixed in code and is not exposed as a setting.
+arrive as one email listing each of them. Every destination type is batched
+the same way, including Discord, Telegram and ntfy. The window is fixed in
+code and is not exposed as a setting.
 
 The severity labels used in the subject are `[INFO]`, `[SUCCESS]`,
 `[WARNING]` and `[ERROR]`.
@@ -186,7 +188,8 @@ answer.
 |-|-|
 | Nothing arrives for any task | The task's **Send external alerts** master toggle, then its **Email** channel toggle. See [Alert routing patterns](alert-routing-patterns.md). |
 | Badge says **Configured**, still nothing | SMTP itself. Use **Send Test Email** with your own address to separate a server problem from a routing problem. |
-| Errors arrive, info alerts never do | Expected. `notify_info` is off on the Email method the UI creates. |
+| Errors arrive, info alerts never do | Expected. `notify_info` is off on the Email method the UI creates. Tick **Info** in the `Email` row's **Edit** dialog to change it. |
+| One kind of alert never arrives | The `Email` row's **Alert categories**. The row summary reads `N categories off` or `N filtered` when any are filtered. |
 | One alert arrives describing several runs | Expected. Two or more alerts landed inside the 30-second digest window. |
 | Some recipients get mail, others do not | Your mail server or the recipient's provider is dropping it. ECM sent one message to all of them. Check `[ALERTS-SMTP]` lines in the backend log for the recipient count ECM handed over. |
 
@@ -198,10 +201,10 @@ verbatim. See [Read the logs](../troubleshooting/read-the-logs.md).
 - [Notifications & Alert Methods](index.md): the three delivery gates and
   the rest of the Notification Settings page.
 - [Alert routing patterns](alert-routing-patterns.md): sending different
-  severities to different channels, and the two dispatch paths that decide
-  which alerts can reach which channel.
+  severities and kinds of alert to different destinations, and the full
+  gate order.
 - [API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) (GitHub):
-  creating additional SMTP methods with their own recipient sets and severity
-  opt-ins, which the UI cannot do.
+  creating additional SMTP methods with their own recipient sets, which the
+  UI cannot do.
 - [M3U Digest](../settings/m3u-digest.md): the other email report, with its
   own recipients field and its own schedule.

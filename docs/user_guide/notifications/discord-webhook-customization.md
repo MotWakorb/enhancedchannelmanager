@@ -1,41 +1,56 @@
 # What ECM Posts to Discord, and What You Can Change
 
 After this article you will know the exact shape of the messages ECM sends
-to a Discord webhook, which parts of them you can influence, and which
+to a Discord destination, which parts of them you can influence, and which
 parts are fixed in code so you stop looking for a setting that does not
 exist.
 
-Setting the webhook up in the first place is covered in
-[Notifications & Alert Methods](index.md). This article picks up once it is
-saved.
+Adding a Discord destination in the first place is covered in
+[Notifications & Alert Methods](index.md#add-a-discord-destination). This
+article picks up once it is saved.
 
-## The field, and what ECM checks before storing it
+## The fields, and what ECM checks before storing them
 
-**Settings → Notification Settings → Discord Webhook** has exactly one
-field, **Webhook URL**.
+A Discord destination is one row under **Settings → Notification Settings →
+Alert Methods**, added with **Add Discord or Telegram**. Besides the name,
+severities and categories every destination has, it has two Discord fields:
+**Webhook URL** and **Post as**.
 
-![Discord Webhook section on an unconfigured instance, showing the Unconfigured badge, the empty Webhook URL field, its hint about creating a webhook in Discord, and a disabled Send Test Message button](../../images/user_guide/notifications/2-discord-webhook-unconfigured.png)
+ECM POSTs the webhook URL verbatim, so it is validated against a host
+allowlist before it is stored. Accepted hosts are `discord.com`,
+`discordapp.com`, `canary.discord.com` and `ptb.discord.com`, and the path
+must begin `/api/webhooks/`. Anything else is refused. In the dialog the
+message is:
 
-ECM POSTs this URL verbatim, so it is validated against a host allowlist
-before it is stored. Accepted hosts are `discord.com`, `discordapp.com`,
-`canary.discord.com` and `ptb.discord.com`, and the path must begin
-`/api/webhooks/`. Anything else is refused on save with:
+```text
+Webhook URL must be a discord.com webhook (https://discord.com/api/webhooks/...)
+```
+
+Through the API it is:
 
 ```text
 Invalid Discord webhook URL — must be an https webhook on discord.com / discordapp.com (e.g. https://discord.com/api/webhooks/...).
 ```
 
-An empty field is allowed and simply disables the integration.
+ECM checks the URL again before every send, so a destination restored from
+an old backup with a non-Discord URL is never posted to. The skipped send is
+logged with an `[ALERTS-DISCORD]` line.
+
+To stop posting to a destination, untick **Enabled** in its dialog or delete
+the row.
 
 Remember that a Discord webhook URL **is** a credential. Anyone holding it
 can post to that channel. Treat it like a password: do not paste it into a
-support thread, a screenshot, or an issue.
+support thread, a screenshot, or an issue. ECM never shows a saved URL
+again: the list and the API return it as `********`, and the **Edit** dialog
+starts with the box empty and the placeholder *Saved — leave blank to keep*.
 
 ## Testing before you save
 
-**Send Test Message** posts using the value currently in the field, not
-the last saved value, so you can validate a URL before committing it. The
-button stays disabled until the field has content.
+In the dialog, **Send test** posts using the URL currently typed in
+**Webhook URL**, not a saved one, so you can validate a URL before adding
+the destination. When you are adding a destination, the box must have
+content first.
 
 The test payload is **not** representative of a real alert. It is a fixed
 plain message posted under the webhook username `ECM Test`:
@@ -52,118 +67,130 @@ short, specific messages rather than raw Discord output:
 
 | What went wrong | Message |
 |-|-|
-| Field left empty | `Webhook URL is required` |
-| Host or path is not a Discord webhook | `Invalid Discord webhook URL format` |
+| Field left empty when adding | `Webhook URL is required` |
+| Host or path is not a Discord webhook | `Webhook URL must be a discord.com webhook (https://discord.com/api/webhooks/...)` |
 | Discord rejected the token | `Invalid webhook - unauthorized` |
 | Webhook deleted, or the id is wrong | `Webhook not found - may have been deleted` |
 | Too many posts too quickly | `Rate limited - try again later` |
 | Anything else | `Discord returned error: 500` (the HTTP status) |
 | ECM could not reach Discord at all | `Connection error during Discord test` |
 
-## What a real scheduled-task alert looks like
+**Testing a saved destination.** The **Send test** icon on the row, or
+**Send test** in the **Edit** dialog with the URL box left empty, uses the
+stored webhook instead. That test is a real alert-shaped embed: titled
+`ℹ️ Connection Test`, info-colored, with the footer `Source: ECM Alert
+Test`, posted under the destination's **Post as** name. It reports
+`Test message sent successfully` or `Failed to send test message`; the
+reason for a failure is in the backend log on an `[ALERTS-DISCORD]` line.
 
-This is the part most often assumed wrong. For alerts raised by scheduled
-tasks, ECM posts a **plain webhook message**, not an embed. The payload is
-a `content` string plus a `username` of `ECM Alerts`. There is no color
-bar, no title field, no footer, and no structured fields.
+## What a real alert looks like
 
-The body is assembled as:
+Every Discord alert is posted as an **embed**:
 
-```text
-**<emoji> <alert title>**
+- **Title:** a severity emoji followed by the alert title. The emoji is
+  fixed: ℹ️ for info, ✅ for success, ⚠️ for warning, ❌ for error.
+- **Description:** the alert message.
+- **Color bar:** blue for info, green for success, amber for warning, red
+  for error.
+- **Timestamp:** when the alert was raised (for a digest, when the digest
+  was assembled).
+- **Footer:** `Source: <alert source>`.
+- **Fields:** the alert's metadata, such as the task's id, name and run
+  duration for a scheduled-task alert, as inline fields named after each key
+  (for example `Task Name` or `Duration Seconds`). Values are shown as
+  stored, so a duration is a plain number of seconds. Empty values are left
+  out, and there are at most 25 fields.
 
-<alert message>
+Nothing in the alert text is escaped, so markdown characters in a task name
+or message render as Discord markdown.
 
-**Task:** <task name>
-**Duration:** 12.4s
-```
+**Digests.** Alerts queued for the same destination in one 30-second window
+(counted from the first) are combined into one embed titled like
+`ECM Digest (1 succeeded, 2 failed)`, with one line per alert in the
+description (`<emoji> <title>: <message>`), the footer
+`Source: ECM Digest`, and the color of the most severe alert in it. A single
+alert in the window is posted on its own.
 
-The emoji is chosen from the severity and is fixed: ℹ️ for info, ✅ for
-success, ⚠️ for warning, ❌ for error. The `Task` line appears whenever the
-alert carries a task name; the `Duration` line appears whenever it carries
-a run duration.
-
-Because the message is Discord markdown, the title renders bold. Nothing
-in it is escaped, so a task name containing markdown characters renders as
-markdown.
+**Long messages.** Discord rejects an embed over its size limits (6000
+characters in total). ECM trims instead: it drops metadata fields first,
+then shortens the description, marking the cut with `…`. A long digest is
+shortened rather than lost.
 
 ## What you can and cannot change
 
 | Thing | Changeable? |
 |-|-|
-| Which severities post | Yes, per task, under **Alert Types** in the task editor |
-| Whether a task posts to Discord at all | Yes, per task, under **Notification Channels** |
-| Which Discord channel receives alerts | Yes, by pointing the webhook at a different channel in Discord |
-| The webhook's display name and avatar | In Discord's own webhook settings. ECM sends `username: ECM Alerts`, which overrides the name you set in Discord |
-| Message wording, emoji, bold formatting | No. Fixed in code |
-| Embed color, title, footer, fields | Not on this path. See below |
+| Which severities post | Yes, per destination under **Severities** in its dialog, and per task under **Alert Types** in the task editor |
+| Which kinds of alert post | Yes, per destination under **Alert categories** |
+| Whether a task posts to Discord at all | Yes, per task, under **Notification Channels**. The toggle covers every Discord destination |
+| Which Discord channel receives alerts | Each destination's webhook points at one channel. Add a destination per channel |
+| The display name | **Post as** in the dialog, `ECM Alerts` by default. Leave it empty to post under the name the webhook has in Discord |
+| The avatar | In Discord's own webhook settings, or the `avatar_url` key of the destination's config through the API |
+| The embed timestamp | On by default. `include_timestamp: false` in the destination's config through the API turns it off |
+| Message wording, emoji, embed colors | No. Fixed in code |
 | Mentioning a role or user (`@here`, `<@&id>`) | No. ECM never inserts a mention and provides no field to add one |
 
+The **Edit** dialog keeps `avatar_url` and `include_timestamp` when you save,
+even though it does not show them.
+
 There is no way to make an alert ping anyone. If you need paging behavior,
-put the webhook in a channel your team has set to notify on every message,
-and use Discord's own notification settings rather than looking for an ECM
-setting.
+point a destination at a channel your team has set to notify on every
+message, and use Discord's own notification settings rather than looking for
+an ECM setting.
 
-## One webhook, shared by everything
+## Several destinations instead of one shared webhook
 
-The URL you save here is used by every ECM feature that posts to Discord:
-scheduled-task alerts, the M3U Digest, and anything added later. There is
-no per-feature webhook field in the UI, and the **M3U Digest** page links
-back to this same setting rather than offering its own.
+Each Discord destination is its own row with its own webhook, severities and
+categories, so channel routing happens in ECM: for example one destination
+that takes only errors and another that takes everything, or one that leaves
+out EPG refresh results. See
+[Alert routing patterns](alert-routing-patterns.md) for worked examples.
 
-Practically, that means channel routing is a Discord-side decision. If you
-want refresh failures and digests in different channels, the UI cannot do
-it.
+The **M3U Digest** is the exception. It posts to the first enabled Discord
+destination (the one with the lowest id) and ignores that destination's
+severity and category filters, because it is a scheduled report rather than
+an alert. See [M3U Digest](../settings/m3u-digest.md).
 
-## The embed path, and when it applies
+## If you used the old shared webhook
 
-ECM does contain a richer Discord renderer that posts a proper embed:
-title with severity emoji, description, severity color, ISO timestamp, a
-`Source:` footer, and up to 25 metadata fields. It has three optional
-settings, `username` (default `ECM Alerts`), `avatar_url`, and
-`include_timestamp` (default on).
+Older versions had a single **Discord Webhook** section shared by every
+alert. On the first start after upgrading, ECM moved a saved webhook into a
+destination named `Discord`, posting as `ECM Alerts` and receiving every
+severity, including Info, and every category. Two differences you will
+notice:
 
-That renderer runs only for a Discord **Alert Method** row, and the
-Notification Settings page never creates one. The **Alert Methods** list at
-the bottom of the page is read-only; it lists what exists and offers a test
-and a delete, not a create. The only way to get a Discord alert method
-today is to create it through the API.
+- Alerts are embeds now, not plain text messages.
+- EPG refresh, M3U refresh and manual stream-probe alerts now reach Discord
+  too. The shared webhook never received them. Untick **EPG refreshes**,
+  **M3U refreshes** or **Stream probes** on the destination if you do not
+  want them.
 
-If you do create one, the two paths coexist and behave differently:
-
-| Alert source | Path taken | Format |
-|-|-|-|
-| Scheduled task results | Shared **Webhook URL** above | Plain `content` message |
-| Per-source EPG refresh, per-account M3U refresh, manual and other non-scheduled stream probe results | Discord alert method, if one exists | Embed |
-
-A Discord alert method also brings its own per-severity opt-ins and the
-granular `alert_sources` filter, which is the only mechanism in ECM for
-routing (say) one EPG source's failures to a different webhook than
-another's. See [Alert routing patterns](alert-routing-patterns.md) for what
-that buys you and
-[API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) in the repository
-for the request shapes.
+See [Upgrading from the shared Discord webhook and Telegram
+bot](index.md#upgrading-from-the-shared-discord-webhook-and-telegram-bot)
+for what was and was not migrated.
 
 ## When alerts stop arriving
 
 | Symptom | Check |
 |-|-|
-| Test succeeds, task alerts never appear | The task's **Send external alerts** toggle and its **Discord** channel toggle |
-| Everything stopped at once | The webhook was probably deleted in Discord. Re-test; a deleted webhook reports `Webhook not found - may have been deleted` |
-| Alerts arrive late or in bursts | Not Discord. Discord posts are immediate; the batching you may be thinking of applies to email and ntfy alert methods |
-| Alerts appear under an unexpected name | Expected. ECM overrides the webhook name with `ECM Alerts` on every post |
+| Test succeeds, task alerts never appear | The task's **Send external alerts** toggle and its **Discord** channel toggle, then the destination's **Severities** and **Alert categories** |
+| One kind of alert never appears | The destination's **Alert categories**. The row summary reads `N categories off` or `N filtered` when any are filtered |
+| Everything stopped at once | The webhook was probably deleted in Discord. Click the row's **Send test**, then look for an `[ALERTS-DISCORD]` line reporting status 404 in the log |
+| Alerts arrive late or merged | Expected. Alerts queued in the same 30-second window are sent as one digest |
+| Alerts appear under an unexpected name | Expected. The destination's **Post as** value overrides the webhook's name. Clear it to use the webhook's own name |
 
-Failures on the live alert path are logged with a `[NOTIFY-SVC]` prefix and
-include the HTTP status Discord returned. See
+Failures on the live alert path are logged with an `[ALERTS-DISCORD]` prefix
+and include the destination's name and the HTTP status Discord returned. See
 [Read the logs](../troubleshooting/read-the-logs.md).
 
 ## Going deeper
 
 - [Notifications & Alert Methods](index.md): getting the webhook URL out of
-  Discord and the three gates every alert passes.
-- [Alert routing patterns](alert-routing-patterns.md): which alert sources
-  can reach Discord at all, and the worked routing examples.
+  Discord, the alert categories, and the gates every alert passes.
+- [Alert routing patterns](alert-routing-patterns.md): splitting alerts
+  across destinations, with worked examples.
 - [M3U Digest](../settings/m3u-digest.md): the other feature that posts to
-  this webhook, on its own schedule.
+  Discord, on its own schedule.
 - [API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) (GitHub):
-  creating the Discord alert method that unlocks the embed renderer.
+  the Discord config keys, including `avatar_url` and `include_timestamp`,
+  and the `alert_sources` filter.

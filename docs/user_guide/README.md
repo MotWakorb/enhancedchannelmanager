@@ -281,9 +281,9 @@ This index covers the workflow end-to-end. As the surface grows, the following d
 | Article | Purpose |
 |-|-|
 | `email-recipients-deep-dive.md` | RFC 5322 edge cases, paste normalization rules, the Alert Methods data model behind the scenes, migrating from older free-text recipient fields. |
-| `discord-webhook-customization.md` | Embed formatting, mentioning roles in alerts, channel routing strategies if you outgrow a single shared webhook. |
-| `telegram-bot-setup.md` | Step-by-step BotFather walk-through with screenshots, locating chat IDs in groups vs. channels vs. supergroups, bot privacy mode caveats. |
-| `alert-routing-patterns.md` | Worked examples: "send only errors to Discord, all severities to email," "info alerts for one task only," etc. |
+| `discord-webhook-customization.md` | Embed formatting, mentioning roles in alerts, splitting alerts across several Discord destinations. |
+| `telegram-bot-setup.md` | Step-by-step BotFather walk-through, locating chat IDs in groups vs. channels vs. supergroups, bot privacy mode caveats. |
+| `alert-routing-patterns.md` | Worked examples: "errors only to one Discord channel, everything to Telegram," "stop EPG refresh noise on one destination," "info alerts for one task only," etc. |
 
 ### Troubleshooting
 

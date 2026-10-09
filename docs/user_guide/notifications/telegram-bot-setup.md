@@ -4,24 +4,27 @@ After this article you will have a Telegram bot delivering ECM alerts to a
 chat you control, and you will know which Telegram concepts matter to ECM
 and which ones do not.
 
-The three delivery gates every alert passes are described in
+The delivery gates every alert passes are described in
 [Notifications & Alert Methods](index.md). This article covers only the two
 fields ECM needs and how to fill them correctly.
 
 ## The two fields ECM needs
 
-**Settings → Notification Settings → Telegram Bot** asks for a **Bot
-Token** and a **Chat ID**. That is the whole configuration. ECM does not
-use a Telegram user account, a phone number, an API id, or an API hash.
+A Telegram destination is one row under **Settings → Notification Settings
+→ Alert Methods**. Click **Add Discord or Telegram**, set **Type** to
+**Telegram bot**, and the dialog asks for a **Bot token** and a **Chat ID**.
+That is the whole Telegram configuration. ECM does not use a Telegram user
+account, a phone number, an API id, or an API hash.
 
-![Telegram Bot section on an unconfigured instance, showing the Unconfigured badge, an empty Bot Token field, an empty Chat ID field with their hints, and a disabled Send Test Message button](../../images/user_guide/notifications/3-telegram-bot-unconfigured.png)
+Both fields are required to add the destination. With either one empty, the
+dialog refuses with `Bot token and chat ID are required`.
 
-The **Configured** badge requires **both** fields to be non-empty. One
-without the other counts as unconfigured, and no Telegram alert is sent.
-
-The Bot Token field is a password input, so it masks what you type. The
-Chat ID field is not, because a chat id is not a secret. The token is: it
-grants full control of the bot to anyone holding it.
+The **Bot token** box is a password input, so it masks what you type. The
+token grants full control of the bot to anyone holding it. Once saved, ECM
+treats both values as secrets: the list and the API show the token and the
+chat ID as `********`, and the **Edit** dialog starts with both boxes empty
+and the placeholder *Saved — leave blank to keep*. Leave a box blank to keep
+the saved value; type in it to replace the value.
 
 ## Get the bot token
 
@@ -30,21 +33,20 @@ grants full control of the bot to anyone holding it.
    username ending in `bot`.
 3. BotFather replies with the token. It has the shape
    `<digits>:<letters, digits, underscores and hyphens>`, matching the
-   field's own placeholder `123456789:ABCdefGHIjklMNOpqrsTUVwxyz...`.
-4. Paste it into **Bot Token**.
+   field's own placeholder `123456789:ABC...`.
+4. Paste it into **Bot token**.
 
 ECM validates the shape before it will contact Telegram. A token that does
-not match `<digits>:<token>` is refused locally with
-`Invalid bot token format`, without a network call. This is a deliberate
-guard against a malformed token being used to build a request to somewhere
-other than Telegram.
-
-**Result:** the Bot Token field shows a masked value and the section badge
-still reads **Unconfigured**, because the chat id is missing.
+not match `<digits>:<token>` is refused locally, without a network call. In
+the dialog the message is `Bot token must look like 123456789:ABC...`;
+through the API it is `Invalid bot token format`. This is a deliberate guard
+against a malformed token being used to build a request to somewhere other
+than Telegram. ECM checks the token again before every send.
 
 ## Get the chat ID
 
-ECM sends to exactly one chat. Which one depends on where you want alerts.
+Each Telegram destination sends to exactly one chat. Which one depends on
+where you want alerts.
 
 **For a direct message to yourself:** message **@userinfobot** or
 **@RawDataBot**. Either replies with your numeric user id, which doubles as
@@ -55,9 +57,11 @@ your chat id. It is a positive number.
 negative, as the field's hint says. The field's placeholder,
 `-1001234567890`, shows the supergroup shape, which starts `-100`.
 
-Paste the value into **Chat ID** and click **Save Settings**.
+Paste the value into **Chat ID**, send a test (below), and click **Add
+destination**.
 
-**Result:** the badge next to **Telegram Bot** turns to **Configured**.
+**Result:** a Telegram row appears in the **Alert Methods** list, with a
+summary of the severities and categories it receives.
 
 **The bot must already be in the destination chat before it can post
 there.** Telegram will not let a bot message a group it has not joined, and
@@ -67,9 +71,11 @@ bot first. If either is missing, the test below fails with
 
 ## Send a test message
 
-**Send Test Message** uses the values currently in the form, not the last
-saved values, so you can validate a token and chat id before saving them.
-The button stays disabled until both fields have content.
+**Send test** in the dialog uses the values currently typed, not saved
+values, so you can validate a token and chat id before adding the
+destination. It needs both: with only one of them typed it refuses with
+`Enter both the bot token and the chat ID to test them, or leave both blank
+to test the saved bot.`
 
 The test posts a fixed message in Telegram's MarkdownV2 mode:
 
@@ -87,48 +93,68 @@ A success toasts `Test message sent successfully`. Failures map to:
 
 | What went wrong | Message |
 |-|-|
-| Token missing or malformed | `Invalid bot token format` |
-| Chat ID left empty | `Chat ID is required` |
+| Token or chat ID missing when adding | `Bot token and chat ID are required` |
+| Token malformed | `Bot token must look like 123456789:ABC...` |
 | Telegram rejected the token | `Invalid bot token - unauthorized` |
 | Bot is not in the chat, or the id is wrong | `Chat not found - check your chat ID` |
 | Another Telegram validation failure | `Bad request: <Telegram's description>` |
 | Too many messages too quickly | `Rate limited - try again later` |
 | ECM could not reach Telegram | `Connection error during Telegram test` |
 
-The test performs a single `sendMessage` call. It does not separately
+This test performs a single `sendMessage` call. It does not separately
 verify the bot, so a token that is well-formed but wrong fails at the
 message, not before it.
 
+**Testing a saved destination.** The **Send test** icon on the row, or
+**Send test** in the **Edit** dialog with both boxes left empty, uses the
+stored token and chat ID. That test calls `getMe` first, so it can tell a
+bad token from a bad chat:
+
+| Outcome | Message |
+|-|-|
+| Sent | `Test message sent successfully via @<bot username>` |
+| Telegram rejected the token | `Bot verification failed: <Telegram's description>` |
+| Token is good, the chat is not | `Bot @<bot username> verified but failed to send a message to the configured chat. Check the chat ID and that the bot is in that chat.` |
+
 ## What a real alert looks like
 
-Scheduled-task alerts are sent with `parse_mode: HTML` and are assembled
-as:
+Alerts are sent with `parse_mode: HTML` by default and are assembled as:
 
 ```text
 <emoji> <b><alert title></b>
 
 <alert message>
 
-<b>Task:</b> <task name>
-<b>Duration:</b> 12.4s
+<b><Metadata Key>:</b> <value>
+
+<i>📍 <alert source> | 🕐 <YYYY-MM-DD HH:MM:SS> UTC</i>
 ```
 
 The emoji is fixed by severity: ℹ️ for info, ✅ for success, ⚠️ for
-warning, ❌ for error. The `Task` and `Duration` lines appear only when the
-alert carries those values.
+warning, ❌ for error. The metadata lines carry details such as a scheduled
+task's id, name and run duration, one line per key, labeled with the key
+(for example `Task Name`), up to 25 lines. They appear only when the alert
+carries metadata.
 
-Nothing in the alert wording is configurable, and there is no field
-anywhere in ECM for a message template, a silent-notification flag, or a
-link-preview setting on this path.
+The title, message and metadata are HTML-escaped, so `<`, `>` or `&` in a
+task name, a source name, or an error string does not break the message.
 
-**One caveat worth knowing.** On this path the alert title and message are
-inserted into HTML without escaping. If a task name, a source name, or an
-error string contains `<`, `>` or `&`, Telegram can reject the whole
-message as malformed HTML. The alert is then simply missing, and the
-backend log records the rejection with a `[NOTIFY-SVC] Telegram alert
-failed` line carrying Telegram's own description. If Telegram alerts go
-missing only for particular failures, check the log for that line before
-suspecting the token.
+**Digests.** Alerts queued for the same destination in one 30-second window
+(counted from the first) are combined into one message titled like
+`ECM Digest (1 succeeded, 2 failed)`, with one line per alert. A single
+alert in the window is sent on its own.
+
+**Long messages.** Telegram rejects a message longer than 4096 characters.
+ECM caps the title, metadata and source and trims the message body to fit,
+marking the cut with `…`, so a long digest is shortened rather than lost.
+
+Nothing in the alert wording is configurable. Three optional settings exist
+on a Telegram destination, with no field in the dialog: `parse_mode`
+(`HTML`, `Markdown` or `MarkdownV2`), `disable_notification` for a silent
+post, and `disable_web_page_preview` (on by default). Set them in the
+destination's config through the
+[API](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods);
+the **Edit** dialog keeps them when you save.
 
 ## Telegram concepts that do not apply to ECM
 
@@ -136,53 +162,48 @@ Worth stating plainly, because they cost time to chase:
 
 - **Privacy mode makes no difference.** BotFather's privacy setting
   controls which messages a bot can *read* in a group. ECM never reads
-  anything: the only Telegram endpoints it calls are `sendMessage` and, on
-  one code path, `getMe`. Leave privacy mode at its default.
+  anything: the only Telegram endpoints it calls are `sendMessage` and, when
+  testing a saved destination, `getMe`. Leave privacy mode at its default.
 - **Topics and threads are not addressable.** ECM sends a plain
   `sendMessage` carrying a chat id and no thread id, so it cannot target a
   specific topic in a forum-style group.
-- **One chat only.** There is one Chat ID field. To fan out to several
-  chats, use a group rather than trying to list ids.
+- **One chat per destination.** Each Telegram destination has one Chat ID
+  field. To reach several chats, add one destination per chat, or use a
+  group rather than trying to list ids.
 
-## The alert-method path
+## If you used the old shared Telegram bot
 
-As with Discord, ECM contains a second, richer Telegram renderer used by a
-Telegram **Alert Method** row. It escapes the message properly, supports
-`parse_mode` (`HTML`, `Markdown` or `MarkdownV2`), `disable_notification`
-for a silent post, and `disable_web_page_preview`. Its connection test also
-calls `getMe` first, so it can report the bot's username and distinguish a
-bad token from a bad chat id.
+Older versions had a single **Telegram Bot** section shared by every alert.
+On the first start after upgrading, ECM moved a saved token and chat ID into
+a destination named `Telegram`, receiving every severity, including Info,
+and every category. It now also receives EPG refresh, M3U refresh and manual
+stream-probe alerts, which the shared bot never did. Untick those categories
+with **Edit** if you do not want them.
 
-The Notification Settings page never creates such a row, and the **Alert
-Methods** list at the bottom of that page is read-only: it lists, tests and
-deletes, but does not create. Creating a Telegram alert method is an API
-operation today. See
-[API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) in the repository.
-
-Note the split if you do create one: scheduled-task alerts still go out
-over the shared **Bot Token** and **Chat ID** above, while per-source EPG
-refresh, per-account M3U refresh and manual or other non-scheduled stream
-probe alerts go through the alert method. Scheduled stream-probe completion
-alerts remain on the scheduled-task path. [Alert routing
-patterns](alert-routing-patterns.md) explains why.
+A token without a chat ID (or the other way round), or a malformed token,
+was not migrated, because it could never have delivered anything. Add the
+destination again. See [Upgrading from the shared Discord webhook and
+Telegram
+bot](index.md#upgrading-from-the-shared-discord-webhook-and-telegram-bot).
 
 ## When alerts stop arriving
 
 | Symptom | Check |
 |-|-|
-| Test succeeds, task alerts never appear | The task's **Send external alerts** toggle and its **Telegram** channel toggle |
+| Test succeeds, task alerts never appear | The task's **Send external alerts** toggle and its **Telegram** channel toggle, then the destination's **Severities** and **Alert categories** |
 | Test fails with `Chat not found` | The bot is not in the chat, or the id lost its leading `-` |
 | It worked, then stopped | The bot was removed from the group, or the token was revoked in BotFather |
-| Only some alerts arrive | Likely the unescaped-HTML caveat above. Look for `[NOTIFY-SVC] Telegram alert failed` in the log |
+| Only some alerts arrive | The destination's **Severities** and **Alert categories**; the row summary shows any filtering. Then look for `[ALERTS-TELEGRAM]` lines in the log, which carry Telegram's own description of a rejection |
+| Alerts arrive late or merged | Expected. Alerts queued in the same 30-second window are sent as one digest |
 
 See [Read the logs](../troubleshooting/read-the-logs.md) for getting at
 those lines.
 
 ## Going deeper
 
-- [Notifications & Alert Methods](index.md): the three gates, and the rest
-  of the Notification Settings page.
+- [Notifications & Alert Methods](index.md): the delivery gates, the alert
+  categories, and the rest of the Notification Settings page.
 - [Alert routing patterns](alert-routing-patterns.md): choosing which
-  severities and which tasks reach Telegram.
+  severities, which kinds of alert, and which tasks reach Telegram.
 - [API reference → Alert Methods](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#alert-methods) (GitHub): the
   Telegram alert method and its optional settings.

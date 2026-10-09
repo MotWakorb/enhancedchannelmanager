@@ -723,7 +723,12 @@ This is a test email from Enhanced Channel Manager.
         is_test: bool = False,
     ) -> bool:
         """
-        Send digest to Discord using shared webhook from settings.
+        Send digest to the first enabled Discord alert method.
+
+        Since GH #1026 every Discord destination is an Alert Methods row (the
+        shared settings webhook was migrated into one). The digest goes to the
+        lowest-id enabled Discord method, and bypasses that method's severity
+        and category filters: it is a scheduled report, not an alert.
 
         Args:
             changes: List of M3UChangeLog entries
@@ -733,42 +738,34 @@ This is a test email from Enhanced Channel Manager.
         Returns True if message was sent successfully.
         """
         import aiohttp
-        from config import get_settings
+        from notification_validation import is_valid_discord_webhook
 
-        settings = get_settings()
         webhook_url = None
-
-        # Try shared webhook from General Settings first
-        if settings.is_discord_configured():
-            webhook_url = settings.discord_webhook_url
-        else:
-            # Fall back to first enabled Discord alert method
+        try:
+            from database import get_session as get_db_session
+            from models import AlertMethod
+            import json
+            db = get_db_session()
             try:
-                from database import get_session as get_db_session
-                from models import AlertMethod
-                import json
-                db = get_db_session()
-                try:
-                    method = db.query(AlertMethod).filter(
-                        AlertMethod.method_type == "discord",
-                        AlertMethod.enabled == True,
-                    ).first()
-                    if method:
-                        config = json.loads(method.config) if isinstance(method.config, str) else method.config
-                        webhook_url = config.get("webhook_url")
-                        logger.info("[%s] Using Discord webhook from alert method '%s'", self.task_id, method.name)
-                finally:
-                    db.close()
-            except Exception as e:
-                logger.warning("[%s] Failed to look up Discord alert method: %s", self.task_id, e)
+                method = db.query(AlertMethod).filter(
+                    AlertMethod.method_type == "discord",
+                    AlertMethod.enabled == True,
+                ).order_by(AlertMethod.id).first()
+                if method:
+                    config = json.loads(method.config) if isinstance(method.config, str) else method.config
+                    webhook_url = config.get("webhook_url")
+                    logger.info("[%s] Using Discord webhook from alert method '%s'", self.task_id, method.name)
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning("[%s] Failed to look up Discord alert method: %s", self.task_id, e)
 
         if not webhook_url:
-            logger.warning("[%s] No Discord webhook configured (checked General Settings and Alert Methods)", self.task_id)
+            logger.warning("[%s] No enabled Discord alert method configured", self.task_id)
             return False
 
-        # Validate webhook URL format
-        if not webhook_url.startswith("https://discord.com/api/webhooks/") and \
-           not webhook_url.startswith("https://discordapp.com/api/webhooks/"):
+        # Validate webhook URL format (the shared Discord host allowlist)
+        if not is_valid_discord_webhook(webhook_url):
             logger.error("[%s] Invalid Discord webhook URL format", self.task_id)
             return False
 

@@ -182,10 +182,7 @@ const settingsBase = {
   smtp_use_tls: true,
   smtp_use_ssl: false,
   discord_configured: false,
-  discord_webhook_url: '',
   telegram_configured: false,
-  telegram_bot_token: '',
-  telegram_chat_id: '',
   mcp_api_key_configured: false,
   telemetry_client_errors_enabled: true,
   // Dedup fields under test (BD-K / bd-ugzn4)

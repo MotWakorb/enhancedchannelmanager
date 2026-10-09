@@ -118,7 +118,7 @@ const SECTION_DEFINITIONS = [
   {
     id: 'email', label: 'Notification Settings', icon: 'notifications',
     group: 'Notifications & Reports',
-    description: 'Configure notification channels (Email, Discord, Telegram) for alerts and reports.',
+    description: 'Configure email delivery and alert destinations (Discord, Telegram, email, ntfy), and choose which alerts each destination receives.',
   },
   {
     id: 'm3u-digest', label: 'M3U Digest', icon: 'mail',

@@ -1210,13 +1210,9 @@ export interface SettingsResponse {
   smtp_from_name: string;
   smtp_use_tls: boolean;
   smtp_use_ssl: boolean;
-  // Shared Discord settings
-  discord_configured: boolean;  // Whether shared Discord webhook is configured
-  discord_webhook_url: string;
-  // Shared Telegram settings
-  telegram_configured: boolean;  // Whether shared Telegram bot is configured
-  telegram_bot_token: string;
-  telegram_chat_id: string;
+  // Whether an enabled Discord / Telegram alert method exists (GH #1026)
+  discord_configured: boolean;
+  telegram_configured: boolean;
   // Stream preview mode: "passthrough", "transcode", or "video_only"
   stream_preview_mode: StreamPreviewMode;
   stream_user_agent?: StreamUserAgent;
@@ -1386,11 +1382,6 @@ export async function saveSettings(settings: {
   smtp_from_name?: string;  // Optional - From display name, defaults to "ECM Alerts"
   smtp_use_tls?: boolean;  // Optional - Use TLS, defaults to true
   smtp_use_ssl?: boolean;  // Optional - Use SSL, defaults to false
-  // Shared Discord settings
-  discord_webhook_url?: string;  // Optional - Discord webhook URL
-  // Shared Telegram settings
-  telegram_bot_token?: string;  // Optional - Telegram bot token
-  telegram_chat_id?: string;  // Optional - Telegram chat ID
   stream_preview_mode?: StreamPreviewMode;  // Optional - Stream preview mode, defaults to "passthrough"
   stream_user_agent?: StreamUserAgent;
   // Auto-creation pipeline exclusion settings
@@ -5020,6 +5011,29 @@ export async function restoreDbasBackupSaved(
 
 // ── Alert Methods API ───────────────────────────────────────────────
 
+/** How an EPG-source / M3U-account category picks which entities alert. */
+export type AlertSourceFilterMode = 'all' | 'only_selected' | 'all_except';
+
+/**
+ * One category section of an alert method's `alert_sources` (GH #1026).
+ * A missing section, or a missing `enabled`, means enabled. `source_ids`
+ * belongs to `epg_refresh`, `account_ids` to `m3u_refresh` and
+ * `min_failures` to `probe_failures`.
+ */
+export interface AlertSourceSection {
+  enabled?: boolean;
+  filter_mode?: AlertSourceFilterMode;
+  source_ids?: number[];
+  account_ids?: number[];
+  min_failures?: number;
+}
+
+/** Per-method category filters, keyed by category. `null` = send everything. */
+export interface AlertSources {
+  version?: number;
+  [category: string]: AlertSourceSection | number | undefined;
+}
+
 export interface AlertMethod {
   id: number;
   name: string;
@@ -5030,6 +5044,7 @@ export interface AlertMethod {
   notify_success: boolean;
   notify_warning: boolean;
   notify_error: boolean;
+  alert_sources?: AlertSources | null;
 }
 
 export interface AlertMethodCreateRequest {
@@ -5041,18 +5056,23 @@ export interface AlertMethodCreateRequest {
   notify_success?: boolean;
   notify_warning?: boolean;
   notify_error?: boolean;
-  alert_sources?: Record<string, unknown> | null;
+  alert_sources?: AlertSources | null;
 }
 
 export interface AlertMethodUpdateRequest {
   name?: string;
+  /**
+   * Replaces the stored config. For Discord and Telegram a blank or masked
+   * webhook URL / bot token / chat id keeps the stored value; omit `config`
+   * entirely to change only the name, toggles or filters.
+   */
   config?: Record<string, unknown>;
   enabled?: boolean;
   notify_info?: boolean;
   notify_success?: boolean;
   notify_warning?: boolean;
   notify_error?: boolean;
-  alert_sources?: Record<string, unknown> | null;
+  alert_sources?: AlertSources | null;
 }
 
 export async function listAlertMethods(): Promise<AlertMethod[]> {

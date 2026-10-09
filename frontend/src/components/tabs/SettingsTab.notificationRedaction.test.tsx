@@ -1,23 +1,18 @@
 /**
- * bead 9ej7f — the Notification Settings page must survive a REDACTED read of
- * the shared Discord webhook and Telegram bot token.
+ * GH #1026 (supersedes bead 9ej7f's page half) — Discord and Telegram are
+ * Alert Methods destinations, not Notification Settings fields.
  *
- * GET /api/settings now withholds `discord_webhook_url`, `telegram_bot_token`
- * and `telegram_chat_id` from a caller that is not allowed to write them (an
- * ordinary non-admin, or the static MCP service key), returning "" alongside
- * the `discord_configured` / `telegram_configured` booleans that say the
- * integration IS set up. The backend keeps the stored value on such a caller's
- * save, so the credential cannot be wiped by the round trip.
- *
- * The frontend half of that contract is the badge: `handleSave` used to
- * recompute "Configured" straight from the form field, so a non-admin saving
- * an unrelated preference watched a live integration report itself
- * Unconfigured. These tests pin both directions.
+ * bead 9ej7f made this page survive a REDACTED read of the shared Discord
+ * webhook and Telegram bot token. #1026 moved both into alert-method rows, so
+ * GET /api/settings no longer carries them at all and the page no longer
+ * renders or saves them. These tests pin that: no credential inputs, no
+ * credential keys in the save payload, and the Alert Methods section is
+ * wired to keep the page's Discord state current.
  *
  * Follows the isolated-render pattern of ./SettingsTab.digest.test.tsx.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
@@ -86,8 +81,12 @@ vi.mock('../settings/BackupRestoreSection', () => ({
 vi.mock('../settings/MCPSettingsSection', () => ({
   MCPSettingsSection: () => <div data-testid="stub-mcp" />,
 }));
+const alertMethodsSectionProps = vi.hoisted(() => ({ current: null as null | Record<string, unknown> }));
 vi.mock('../settings/AlertMethodsSection', () => ({
-  AlertMethodsSection: () => <div data-testid="stub-alert-methods" />,
+  AlertMethodsSection: (props: Record<string, unknown>) => {
+    alertMethodsSectionProps.current = props;
+    return <div data-testid="stub-alert-methods" />;
+  },
 }));
 vi.mock('../ScheduledTasksSection', () => ({
   ScheduledTasksSection: () => <div data-testid="stub-scheduled-tasks" />,
@@ -118,14 +117,7 @@ vi.mock('../CustomSelect', () => ({
 import * as api from '../../services/api';
 import { SettingsTab } from './SettingsTab';
 
-const WEBHOOK = 'https://discord.com/api/webhooks/1/abcdefghijklmnop';
-// Telegram issues `<bot id>:<exactly 35 characters>`. The 35 characters here
-// are just the alphabet followed by digits, and the value is assembled from
-// parts so no token-shaped literal exists on any single line. Same convention
-// as `docs/pytest_conventions.md`: keep the real SHAPE, look like
-// nothing.
-const BOT_TOKEN = '123456789:' + 'AAEabcdefghijklmno' + 'pqrstuvwxyz012345';
-const CHAT_ID = '-1001234567890';
+const RETIRED_KEYS = ['discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id'];
 
 const settingsBase = {
   configured: true,
@@ -201,10 +193,7 @@ const settingsBase = {
   smtp_use_tls: true,
   smtp_use_ssl: false,
   discord_configured: false,
-  discord_webhook_url: '',
   telegram_configured: false,
-  telegram_bot_token: '',
-  telegram_chat_id: '',
   mcp_api_key_configured: false,
   telemetry_client_errors_enabled: true,
   dedup_threshold: 0.80,
@@ -230,19 +219,15 @@ function renderOnNotifications() {
   return render(<SettingsTab onSaved={vi.fn()} initialSettingsPage="email" />);
 }
 
-function badgeFor(heading: string): HTMLElement {
-  const header = screen.getByRole('heading', { name: heading }).parentElement!;
-  return within(header).getByText(/Configured|Unconfigured/);
-}
-
 async function saveSettingsPage() {
   fireEvent.click(screen.getByRole('button', { name: /Save Settings/i }));
   await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
 }
 
-describe('SettingsTab notification credentials — redacted read (bead 9ej7f)', () => {
+describe('SettingsTab notification destinations live in Alert Methods (GH #1026)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    alertMethodsSectionProps.current = null;
     vi.mocked(api.saveSettings).mockResolvedValue({ status: 'ok', configured: true, server_changed: false });
     vi.mocked(api.getChannelProfiles).mockResolvedValue([]);
     vi.mocked(api.listAlertMethods).mockResolvedValue([]);
@@ -250,78 +235,43 @@ describe('SettingsTab notification credentials — redacted read (bead 9ej7f)', 
     vi.mocked(api.getStreams).mockResolvedValue({ count: 0, next: null, previous: null, results: [] });
   });
 
-  it('renders empty credential fields when the server redacted them', async () => {
+  it('renders no Discord or Telegram credential fields', async () => {
     vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
       discord_configured: true,
-      discord_webhook_url: '',
       telegram_configured: true,
-      telegram_bot_token: '',
-      telegram_chat_id: '',
     }));
 
     renderOnNotifications();
 
-    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
-    await waitFor(() => {
-      expect(screen.getByLabelText('Webhook URL')).toHaveValue('');
-    });
-    expect(screen.getByLabelText('Bot Token')).toHaveValue('');
-    expect(screen.getByLabelText('Chat ID')).toHaveValue('');
+    await waitFor(() => expect(screen.getByTestId('stub-alert-methods')).toBeInTheDocument());
+    expect(screen.queryByRole('heading', { name: 'Discord Webhook' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Telegram Bot' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Webhook URL')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Bot Token')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Chat ID')).not.toBeInTheDocument();
   });
 
-  it('keeps the Configured badges after a save when the values were redacted', async () => {
-    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
-      discord_configured: true,
-      discord_webhook_url: '',
-      telegram_configured: true,
-      telegram_bot_token: '',
-      telegram_chat_id: '',
-    }));
-
-    renderOnNotifications();
-    await waitFor(() => expect(badgeFor('Discord Webhook')).toHaveTextContent('Configured'));
-
-    await saveSettingsPage();
-
-    await waitFor(() => expect(badgeFor('Discord Webhook')).toHaveTextContent('Configured'));
-    expect(badgeFor('Telegram Bot')).toHaveTextContent('Configured');
-  });
-
-  it('still clears the badge when a caller that CAN see the value blanks it', async () => {
-    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
-      discord_configured: true,
-      discord_webhook_url: WEBHOOK,
-      telegram_configured: true,
-      telegram_bot_token: BOT_TOKEN,
-      telegram_chat_id: CHAT_ID,
-    }));
-
-    renderOnNotifications();
-    await waitFor(() => expect(screen.getByLabelText('Webhook URL')).toHaveValue(WEBHOOK));
-
-    fireEvent.change(screen.getByLabelText('Webhook URL'), { target: { value: '' } });
-    await saveSettingsPage();
-
-    await waitFor(() => expect(badgeFor('Discord Webhook')).toHaveTextContent('Unconfigured'));
-  });
-
-  it('sends the untouched (empty) values back so the backend can preserve them', async () => {
-    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
-      discord_configured: true,
-      discord_webhook_url: '',
-      telegram_configured: true,
-      telegram_bot_token: '',
-      telegram_chat_id: '',
-    }));
+  it('never sends the retired credential keys on save', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({ discord_configured: true }));
 
     renderOnNotifications();
     await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
 
     await saveSettingsPage();
 
-    const payload = vi.mocked(api.saveSettings).mock.calls[0][0];
-    expect(payload.discord_webhook_url).toBe('');
-    expect(payload.telegram_bot_token).toBe('');
-    expect(payload.telegram_chat_id).toBe('');
+    const payload = vi.mocked(api.saveSettings).mock.calls[0][0] as Record<string, unknown>;
+    for (const key of RETIRED_KEYS) {
+      expect(payload).not.toHaveProperty(key);
+    }
+  });
+
+  it('wires the Alert Methods section for admins and listens for changes', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings());
+
+    renderOnNotifications();
+
+    await waitFor(() => expect(alertMethodsSectionProps.current).not.toBeNull());
+    expect(alertMethodsSectionProps.current?.isAdmin).toBe(true);
+    expect(typeof alertMethodsSectionProps.current?.onMethodsChanged).toBe('function');
   });
 });

@@ -86,6 +86,7 @@ export const MODAL_OVERLAY_MANIFEST: readonly ModalOverlayManifestEntry[] = [
   { identity: 'components/channelPipeline/PipelineYamlEditor.tsx#1', owner: 'overlay', role: 'dialog', modal: 'true', name: 'named', relation: 'root', family: 'channel-pipeline-confirm', focus: 'managed-helper' },
   { identity: 'components/channelPipeline/PipelineYamlEditor.tsx#2', owner: 'overlay', role: 'dialog', modal: 'true', name: 'named', relation: 'root', family: 'channel-pipeline-confirm', focus: 'managed-helper' },
   { identity: 'components/channelPipeline/RuleBuilder.tsx#1', owner: 'descendant', role: 'alertdialog', modal: 'true', name: 'named', relation: 'root', family: 'channel-pipeline-confirm', focus: 'debt' },
+  { identity: 'components/settings/AlertMethodModal.tsx#1', owner: 'overlay', role: 'dialog', modal: 'true', name: 'named', relation: 'root', family: 'settings-alert-methods', focus: 'managed-helper' },
   { identity: 'components/settings/CloudTargetEditor.tsx#1', owner: 'overlay', role: 'dialog', modal: 'true', name: 'named', relation: 'root', family: 'settings-cloud', focus: 'managed-helper' },
   { identity: 'components/settings/CloudTargetsCard.tsx#1', owner: 'overlay', role: 'dialog', modal: 'true', name: 'named', relation: 'root', family: 'settings-cloud', focus: 'managed-helper' },
   { identity: 'components/settings/LinkedAccountsSection.tsx#1', owner: 'overlay', role: 'dialog', modal: 'true', name: 'named', relation: 'root', family: 'settings-linked', focus: 'managed-helper' },

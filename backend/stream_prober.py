@@ -749,6 +749,7 @@ class StreamProber:
                 source_id=str(int(time.time())),
                 metadata=metadata,
                 send_alerts=send_alerts,
+                alert_category="probe_failures",
             )
             if result and "id" in result:
                 self._probe_notification_id = result["id"]

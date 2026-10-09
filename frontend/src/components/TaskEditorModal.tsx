@@ -683,7 +683,9 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                     </div>
                   </div>
                   <div className="alert-subsection">
-                    <div className="alert-subsection-label">Notification Channels</div>
+                    {/* GH #1026: each toggle covers every Alert Methods
+                        destination of that type; ntfy has no per-task toggle. */}
+                    <div className="alert-subsection-label">Notification Channels (all destinations of each type)</div>
                     <div className="alert-type-toggles">
                       <label className="alert-toggle">
                         <input

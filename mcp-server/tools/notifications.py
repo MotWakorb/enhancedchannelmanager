@@ -138,8 +138,9 @@ def register(mcp: FastMCP):
         come back as ``********`` and no credential VALUE reaches this tool.
 
         The response is still operator configuration rather than public data:
-        it carries the non-credential config keys, which for Telegram includes
-        the destination ``chat_id`` and for SMTP the recipient list. This tool
+        it carries the non-credential config keys, which for SMTP include the
+        recipient list (the Telegram ``chat_id`` is masked too since GH #1026,
+        as GET /api/settings withheld it while it lived there). This tool
         prints only the name, id, type, enabled flag and severity filters, and
         deliberately does NOT print ``config``. Keep it that way, and do not
         echo a raw response from this endpoint into a transcript.

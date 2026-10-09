@@ -1079,7 +1079,7 @@ export interface M3UDigestSettings {
   include_stream_changes: boolean;
   show_detailed_list: boolean;
   min_changes_threshold: number;
-  send_to_discord: boolean;  // Send digest to Discord (uses shared webhook from General Settings)
+  send_to_discord: boolean;  // Send digest to the first enabled Discord alert method
   exclude_group_patterns: string[];  // Regex patterns to exclude groups from digest
   exclude_stream_patterns: string[];  // Regex patterns to exclude streams from digest
   // M3U account IDs to include in digest NOTIFICATIONS (GH #496). DB change

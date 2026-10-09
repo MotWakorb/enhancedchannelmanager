@@ -221,6 +221,11 @@ async def import_ecm_settings(
         save_settings(settings)
         cat.updated += applied
         logger.info("[DBAS-ECM-SETTINGS] Applied %d ECM setting(s).", applied)
+        # GH #1026: an archive from before Discord / Telegram moved to Alert
+        # Methods carries the legacy shared fields; move them now rather than
+        # leave them unused until the next restart.
+        from notification_migration import migrate_after_settings_restore
+        migrate_after_settings_restore()
     return applied
 
 

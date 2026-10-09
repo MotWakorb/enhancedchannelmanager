@@ -74,6 +74,7 @@ import { EventSyncAutoSyncFixDialog } from '../components/channelPipeline/EventS
 import { EventSyncReviewQueue } from '../components/channelPipeline/EventSyncReviewQueue'
 import { EventSyncRuleEditor } from '../components/channelPipeline/EventSyncRuleEditor'
 import { RuleBuilder } from '../components/channelPipeline/RuleBuilder'
+import { AlertMethodModal } from '../components/settings/AlertMethodModal'
 import { CloudTargetEditor } from '../components/settings/CloudTargetEditor'
 import { CloudTargetsCard } from '../components/settings/CloudTargetsCard'
 import { LinkedAccountsSection } from '../components/settings/LinkedAccountsSection'
@@ -582,6 +583,10 @@ const RENDERERS = {
         streamName="BBC One HD (London)"
       />
     ),
+  },
+
+  'alert-method-editor': {
+    render: () => <AlertMethodModal method={null} onClose={stub.noop} onSaved={stub.noop} />,
   },
 
   'cloud-target-editor': {
