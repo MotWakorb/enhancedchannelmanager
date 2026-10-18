@@ -93,8 +93,9 @@ mako==1.4.1
     # via alembic
 markupsafe==3.0.3
     # via mako
-multidict==6.7.1
+multidict==6.9.1
     # via
+    #   -r backend/requirements.in
     #   aiohttp
     #   yarl
 packaging==26.3
