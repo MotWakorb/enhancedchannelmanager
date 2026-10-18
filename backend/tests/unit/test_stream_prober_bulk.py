@@ -18,6 +18,7 @@ import stream_prober as stream_prober_module
 
 from stream_prober import StreamProber
 from smart_sort_evaluator import PointRule
+from security.stream_outbound import ValidatedSubprocessInput
 
 
 def _make_prober(client, **kwargs):
@@ -217,9 +218,8 @@ async def test_bulk_cancellation_reaps_active_resdet_and_cancels_lock_waiters(tm
 
 
 async def _allowed_relay_for_bulk(_url, **_kwargs):
-    yield SimpleNamespace(
+    yield ValidatedSubprocessInput(
         argument="http://127.0.0.1:1234/resource/0",
-        response=None,
         is_http_relay=True,
     )
 

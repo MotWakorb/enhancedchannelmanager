@@ -251,6 +251,8 @@ A rules-based automation engine for channel creation, stream merging, and lifecy
 ### Stream Health & Probing
 Automated stream probing with configurable schedules, batch sizes, retry logic, and rate limit detection. Profile-aware probing distributes connections across M3U profiles. Results drive smart stream sorting by resolution, bitrate, framerate, video codec, and M3U priority with configurable ordering for deprioritized stream categories. Black screen detection identifies streams showing dark/blank content, and low FPS detection flags streams below a configurable threshold (5/10/15/20 FPS). Both are deprioritized in Smart Sort. A strikeout system tracks consecutive failures for bulk cleanup.
 
+Probe startup has a separate deadline covering DNS and redirects. Eligible transient provider failures share the configured metadata-probe retry budget. If optional black-screen sampling cannot reach the provider, successful metadata and bitrate results are retained without clearing the previous black-screen finding. Policy refusals still fail the probe.
+
 ### Logo Manager
 Browse, search, upload, and assign logos to channels. Supports URL import and file upload to Dispatcharr with usage tracking and pagination.
 
@@ -270,6 +272,8 @@ First-run setup wizard, local auth with bcrypt hashing, Dispatcharr SSO, account
 In-app notification bell with history, active task pinning, and external alert methods (Discord webhooks, Telegram bots, SMTP email, ntfy) with digest batching and source filtering.
 
 ## MCP Server (Claude Integration)
+
+The MCP sidecar bounds stateful HTTP sessions: idle sessions expire after 30 minutes, and at most 10,000 sessions are retained. An expired session returns 404 and the client must initialize again; open GET streams and in-progress requests keep a session active.
 
 ECM includes an MCP (Model Context Protocol) server: an optional sidecar container that exposes ECM's functionality to Claude — **Claude Desktop**, **Claude Code**, or any MCP-capable client — so you can manage your install in plain language instead of clicking through the UI. **130 tools across 14 domains** (channels, channel groups, streams, M3U accounts, EPG sources, channel pipeline, scheduled tasks, stats, system/backup, notifications, profiles, normalization, deduplication, Emby integration), plus an `overview` resource that gives Claude a one-shot snapshot of your install.
 

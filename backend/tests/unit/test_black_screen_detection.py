@@ -1,7 +1,6 @@
 """Tests for black screen detection feature in StreamProber."""
 import asyncio
 from contextlib import asynccontextmanager
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -9,6 +8,7 @@ import pytest
 pytestmark = pytest.mark.usefixtures("vlc_stream_user_agent")
 
 from models import StreamStats
+from security.stream_outbound import ValidatedSubprocessInput
 from stream_prober import StreamProber, smart_sort_streams
 
 
@@ -16,7 +16,7 @@ from stream_prober import StreamProber, smart_sort_streams
 def _allow_synthetic_subprocess_destination():
     @asynccontextmanager
     async def allowed(url, **_kwargs):
-        yield SimpleNamespace(argument=url, response=None, is_http_relay=False)
+        yield ValidatedSubprocessInput(argument=url)
 
     with patch("stream_prober.validated_subprocess_input", allowed):
         yield
@@ -63,6 +63,7 @@ class TestDetectBlackScreen:
     def _make_mock_process(self, stderr_output):
         """Create a mock process that works with asyncio.wait_for."""
         mock_process = AsyncMock()
+        mock_process.returncode = 0
 
         async def mock_communicate():
             return (b"", stderr_output)

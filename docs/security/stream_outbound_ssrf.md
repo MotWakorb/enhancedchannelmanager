@@ -75,6 +75,56 @@ redirect protocols. ECM validates their literal or resolved destination under
 the configured LAN policy immediately before every spawn and retry. Other
 direct schemes are rejected.
 
+### Probe startup budgets and optional sampling
+
+Metadata and resdet relay acquisition have a wall-clock startup deadline equal
+to the configured probe timeout; black-screen acquisition has a separate
+30-second deadline. These deadlines include DNS validation and the entire
+initial redirect chain, before subprocess spawn. Cancelling a DNS worker stops
+awaiting its result; it cannot stop an OS resolver already running in a thread.
+That discarded result cannot start a provider request.
+
+Each of these subprocess phases passes finite HTTPX connect/write/pool budgets
+of 10 seconds. Metadata and resdet read inactivity budgets are the configured
+probe timeout plus 5 seconds; black-screen reads use the sample duration plus
+30 seconds. They apply to initial and later HLS resources. Startup and read
+budgets are separate from the subprocess's sample/decode limit, so relay
+acquisition does not consume the intended sample duration.
+
+Metadata probing shares the existing retry count and delay between retryable
+subprocess diagnostics and provider HTTP 500/502/503/504/520 or
+connection/read/write drops and remote protocol failures. Each retry closes the
+previous relay before waiting, and independently validates a fresh destination.
+HTTP 401/403/404, other non-selected statuses, timeouts, policy denials and
+cancellations do not trigger retries, including failures of later HLS resources.
+
+The owned validated subprocess input retains typed relay failure provenance for
+initial body reads and later segments, keys and nested manifests. Probes settle
+relay response handlers and check this state before classifying subprocess exit,
+metadata or brightness output (including a zero exit with partial output). A
+policy refusal takes precedence over an earlier resource network failure;
+nonretryable failures take precedence over transient ones. The loopback error
+response remains generic, or aborts an already-started body; preview cleanup does not raise raw
+provider exceptions into its streaming response handler. These seams and the
+independent startup watchdog assertions are covered by
+`test_stream_probe_relay_failures.py`.
+
+Expected optional black-screen HTTP/network/DNS inability returns unknown
+(`None`); successful metadata and measured bitrate are saved, the success resets
+failure strikes, and the prior black-screen flag is retained. Policy denials,
+cancellations, configuration errors and process-spawn errors still propagate.
+Nonzero FFmpeg exits discard even nonempty partial brightness samples. Logs use
+failure types or numeric exit codes, not provider exception text.
+
+The relay cancels a handler when its local consumer disconnects, including while
+the provider is stalled. Only expected downstream reset/broken-pipe writes are
+suppressed; upstream errors and cancellation retain their semantics. The handler
+closes its initial upstream response/context immediately on completion or quit,
+rather than retaining it until the subprocess relay context ends. Regression
+coverage in `backend/tests/unit/test_stream_probe_relay_failures.py` uses real
+loopback consumers and the real relay with a pinned fake provider transport,
+plus isolated in-memory persistence tests.
+
 ## Probe failure diagnostics
 
 A failed probe reports its cause without reporting the provider URL. ffmpeg and

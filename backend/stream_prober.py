@@ -23,6 +23,8 @@ import safe_regex
 import httpx
 from security.ssrf import DNSResolutionError, SchemeDowngrade, SSRFError
 from security.stream_outbound import (
+    RETRYABLE_STREAM_HTTP_STATUSES,
+    is_retryable_stream_failure,
     stream_request,
     validated_subprocess_input,
 )
@@ -57,6 +59,13 @@ NETWORK_FAILURE_MARKERS = (
 
 class ProbeNetworkRouteError(RuntimeError):
     """An upstream connection failure whose raw diagnostic must stay private."""
+
+
+class _TransientProbeError(RuntimeError):
+    """A retryable subprocess diagnostic, without provider text."""
+
+
+PROBE_RETRYABLE_HTTP_STATUSES = RETRYABLE_STREAM_HTTP_STATUSES
 
 
 class ResolutionDetectionError(RuntimeError):
@@ -1204,12 +1213,39 @@ class StreamProber:
             return self._save_probe_result(stream_id, name, None, "failed", public_error)
 
     async def _run_ffprobe(self, url: str, _retry_attempt: int = 0, *, user_agent: str | None = None) -> dict:
-        """Run ffprobe and parse JSON output."""
+        """Share one retry budget between relay startup and subprocess failures."""
         if user_agent is None:
             user_agent = await StreamUserAgentResolver(self.client).resolve()
+        for attempt in range(_retry_attempt, self.probe_retry_count + 1):
+            try:
+                return await self._run_ffprobe_once(url, user_agent=user_agent)
+            except (httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadError,
+                    httpx.WriteError, httpx.RemoteProtocolError, _TransientProbeError) as exc:
+                retryable = isinstance(exc, _TransientProbeError) or is_retryable_stream_failure(exc)
+                if not retryable or attempt >= self.probe_retry_count:
+                    if isinstance(exc, _TransientProbeError):
+                        raise RuntimeError("ffprobe failed: [REDACTED diagnostic]") from None
+                    raise
+                # The per-attempt relay context has already closed before delay.
+                logger.info(
+                    "[STREAM-PROBE] Transient provider error (%s) — retry %s/%s in %ss",
+                    type(exc).__name__, attempt + 1, self.probe_retry_count, self.probe_retry_delay,
+                )
+                await asyncio.sleep(self.probe_retry_delay)
+        raise RuntimeError("ffprobe retry budget exhausted")
+
+    @staticmethod
+    def _subprocess_http_timeout(read_timeout: float) -> httpx.Timeout:
+        """Finite inactivity budgets; not a limit on the full media sample."""
+        return httpx.Timeout(connect=10.0, read=read_timeout, write=10.0, pool=10.0)
+
+    async def _run_ffprobe_once(self, url: str, *, user_agent: str) -> dict:
+        """Acquire a fresh validated relay, run ffprobe and parse JSON output."""
         headers = {"User-Agent": user_agent}
         async with validated_subprocess_input(
-            url, headers=headers, scheme_downgrade=PROBE_SCHEME_DOWNGRADE
+            url, headers=headers, scheme_downgrade=PROBE_SCHEME_DOWNGRADE,
+            timeout=self._subprocess_http_timeout(self.probe_timeout + 5.0),
+            startup_timeout=self.probe_timeout,
         ) as subprocess_input:
             cmd = [
                 "ffprobe",
@@ -1246,7 +1282,10 @@ class StreamProber:
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
+                await subprocess_input.raise_for_relay_failure()
                 raise
+
+            await subprocess_input.raise_for_relay_failure()
 
         if process.returncode != 0:
             # Classify the complete diagnostic only after removing the exact
@@ -1264,10 +1303,10 @@ class StreamProber:
             # invalid data (corrupt stream) — these won't succeed on retry and just
             # waste semaphore time.
             transient_patterns = ("5XX", "500", "502", "503", "520", "Input/output error", "Stream ends prematurely", "Connection reset", "Broken pipe")
-            if any(p in error_text for p in transient_patterns) and "404" not in error_text and _retry_attempt < self.probe_retry_count:
-                logger.info("[STREAM-PROBE] Transient provider error — retry %s/%s in %ss", _retry_attempt + 1, self.probe_retry_count, self.probe_retry_delay)
-                await asyncio.sleep(self.probe_retry_delay)
-                return await self._run_ffprobe(url, _retry_attempt=_retry_attempt + 1, user_agent=user_agent)
+            if any(p in error_text for p in transient_patterns) and not any(
+                status in error_text for status in ("401", "403", "404")
+            ):
+                raise _TransientProbeError("ffprobe failed: [REDACTED diagnostic]")
 
             if any(marker in error_text.lower() for marker in NETWORK_FAILURE_MARKERS):
                 raise ProbeNetworkRouteError("Provider connection failed")
@@ -1326,7 +1365,9 @@ class StreamProber:
         with tempfile.TemporaryDirectory(prefix="ecm-resdet-") as directory:
             frame_path = Path(directory) / "frame.y4m"
             async with validated_subprocess_input(
-                url, headers=headers, scheme_downgrade=PROBE_SCHEME_DOWNGRADE
+                url, headers=headers, scheme_downgrade=PROBE_SCHEME_DOWNGRADE,
+                timeout=self._subprocess_http_timeout(self.probe_timeout + 5.0),
+                startup_timeout=self.probe_timeout,
             ) as subprocess_input:
                 ffmpeg = await asyncio.create_subprocess_exec(
                     "/usr/bin/timeout",
@@ -1371,9 +1412,15 @@ class StreamProber:
                         "resdet returned an invalid frame",
                     )
                 except asyncio.TimeoutError:
+                    await subprocess_input.raise_for_relay_failure()
                     raise ResolutionDetectionError(
                         "resdet resolution detection timed out"
                     ) from None
+                except ResolutionDetectionError:
+                    await subprocess_input.raise_for_relay_failure()
+                    raise
+
+                await subprocess_input.raise_for_relay_failure()
 
             if ffmpeg.returncode in (124, 137):
                 raise ResolutionDetectionError("resdet resolution detection timed out")
@@ -1562,6 +1609,21 @@ class StreamProber:
     BLACK_SCREEN_YAVG_THRESHOLD = 20
 
     async def _detect_black_screen(self, url: str, *, user_agent: str | None = None, stream_id: int | None = None) -> Optional[bool]:
+        """Optional sampling: network inability is unknown, not probe failure."""
+        if user_agent is None:
+            user_agent = await StreamUserAgentResolver(self.client).resolve(stream_id=stream_id)
+        try:
+            return await self._detect_black_screen_sample(url, user_agent=user_agent)
+        except (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError,
+                httpx.HTTPStatusError, asyncio.TimeoutError, DNSResolutionError) as exc:
+            # DNS inability is distinct from SSRF policy refusal. Do not catch
+            # SSRFError, cancellation, configuration or process-spawn failures.
+            logger.warning(
+                "[STREAM-PROBE] Black screen detection unavailable (%s)", type(exc).__name__
+            )
+            return None
+
+    async def _detect_black_screen_sample(self, url: str, *, user_agent: str) -> Optional[bool]:
         """Detect dark/black screens by measuring average brightness (YAVG) via signalstats.
 
         Uses ffmpeg signalstats to compute per-frame average luma (YAVG).
@@ -1584,8 +1646,6 @@ class StreamProber:
         wait_for a generous grace window so cold-start false-timeouts don't
         flip streams to "clean".
         """
-        if user_agent is None:
-            user_agent = await StreamUserAgentResolver(self.client).resolve(stream_id=stream_id)
         headers = {"User-Agent": user_agent}
         # Grace window: sample duration + ample headroom for cold-start
         # buffering, connection setup, and ffmpeg startup. The previous 15-s
@@ -1594,7 +1654,9 @@ class StreamProber:
         total_timeout = self.black_screen_sample_duration + 30
 
         async with validated_subprocess_input(
-            url, headers=headers, scheme_downgrade=PROBE_SCHEME_DOWNGRADE
+            url, headers=headers, scheme_downgrade=PROBE_SCHEME_DOWNGRADE,
+            timeout=self._subprocess_http_timeout(total_timeout),
+            startup_timeout=30.0,
         ) as subprocess_input:
             cmd = [
                 "ffmpeg",
@@ -1627,11 +1689,19 @@ class StreamProber:
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
+                await subprocess_input.raise_for_relay_failure()
                 logger.warning(
                     "[STREAM-PROBE] Black screen detection timed out after %ss",
                     total_timeout,
                 )
                 return None
+            await subprocess_input.raise_for_relay_failure()
+        if process.returncode != 0:
+            logger.warning(
+                "[STREAM-PROBE] Black screen detection exited abnormally (exit=%s)",
+                process.returncode,
+            )
+            return None
         output = stderr.decode()
         yavg_values = re.findall(r'lavfi\.signalstats\.YAVG=([\d.]+)', output)
         if not yavg_values:

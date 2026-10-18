@@ -1,8 +1,8 @@
 from contextlib import asynccontextmanager
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from security.stream_outbound import ValidatedSubprocessInput
 
 pytestmark = pytest.mark.usefixtures("vlc_stream_user_agent")
 
@@ -20,7 +20,7 @@ SYNTHETIC_URL = "http://provider.invalid/account/token/stream.ts"
 def _allow_synthetic_subprocess_destination():
     @asynccontextmanager
     async def allowed(url, **_kwargs):
-        yield SimpleNamespace(argument=url, response=None, is_http_relay=False)
+        yield ValidatedSubprocessInput(argument=url)
 
     with patch("stream_prober.validated_subprocess_input", allowed):
         yield

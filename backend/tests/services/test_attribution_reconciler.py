@@ -106,7 +106,7 @@ def test_malformed_trusted_network_log_does_not_retain_input(caplog):
         if record.name == "services.attribution_reconciler"
     ]
     assert [record.getMessage() for record in records] == [
-        "[ATTR-RECONCILE] Skipping unparsable trusted-network entry"
+        "[ATTR-RECONCILE] Skipping unparsable trusted-network entry at index 0"
     ]
     assert all(sensitive_value not in repr(record.args) for record in records)
     assert all(sensitive_value not in JsonFormatter().format(record) for record in records)

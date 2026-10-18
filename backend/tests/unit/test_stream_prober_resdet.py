@@ -4,7 +4,6 @@ import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,6 +12,7 @@ import stream_prober as stream_prober_module
 pytestmark = pytest.mark.usefixtures("vlc_stream_user_agent")
 
 from config import DispatcharrSettings
+from security.stream_outbound import ValidatedSubprocessInput
 from stream_prober import (
     RELAY_PROTOCOL_WHITELIST,
     RESDET_FRAME_MAX_BYTES,
@@ -138,9 +138,8 @@ def _process(*, returncode=0, stdout=b""):
 
 @asynccontextmanager
 async def _allowed_relay(_url, **_kwargs):
-    yield SimpleNamespace(
+    yield ValidatedSubprocessInput(
         argument="http://127.0.0.1:1234/resource/0",
-        response=None,
         is_http_relay=True,
     )
 

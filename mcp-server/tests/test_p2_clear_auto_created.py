@@ -2,8 +2,8 @@
 
 Covers the empty-group_ids safety fix:
 - empty group_ids without all_groups=True must be rejected locally (no backend call)
-- all_groups=True with no group_ids clears everything and reports it correctly
-- a non-empty group_ids list clears just those groups and reports the correct count
+- all_groups=True retains its request shape (the real backend rejects missing group_ids)
+- a non-empty group_ids list clears flags in those groups and reports the count
 """
 import re
 
@@ -97,7 +97,7 @@ class TestClearAutoCreatedEmptyGroupIds:
 
 
 class TestClearAutoCreatedAllGroupsFlag:
-    """all_groups=True clears all and reports it correctly."""
+    """Legacy all_groups request shape with a synthetic successful response."""
 
     @pytest.mark.asyncio
     async def test_all_groups_true_sends_request_and_reports_scope(self):
@@ -206,7 +206,7 @@ class TestClearAutoCreatedSpecificGroups:
         assert mock_client.call_endpoint.await_args_list[-1] == call(
             ENDPOINTS["channels_clear_auto_created"], body={"group_ids": [10, 20, 30]}
         )
-        assert text == "Cleared 7 auto-created channels in 3 groups."
+        assert text == "Cleared auto-created flags from 7 channel(s) in 3 groups. No channels were deleted."
         # Scope must say "3 groups" (not "all groups")
         assert "3" in text, (
             f"Expected count 3 in result for 3-group call, got: {text!r}"
@@ -253,7 +253,7 @@ class TestClearAutoCreatedSpecificGroups:
         assert mock_client.call_endpoint.await_args_list[-1] == call(
             ENDPOINTS["channels_clear_auto_created"], body={"group_ids": [5]}
         )
-        assert "Cleared 3 auto-created channels in 1 group." == text, (
+        assert "Cleared auto-created flags from 3 channel(s) in 1 group. No channels were deleted." == text, (
             f"Expected exact clear wording, got: {text!r}"
         )
         # Should NOT say "all groups"
@@ -319,7 +319,7 @@ class TestClearAutoCreatedSpecificGroups:
         assert mock_client.call_endpoint.await_args_list[-1] == call(
             ENDPOINTS["channels_clear_auto_created"], body={"group_ids": [100, 200]}
         )
-        assert "Cleared 5 auto-created channels in 2 groups." == text, (
+        assert "Cleared auto-created flags from 5 channel(s) in 2 groups. No channels were deleted." == text, (
             f"Expected exact clear wording for 2-group call, got: {text!r}"
         )
         assert "all groups" not in text.lower(), (

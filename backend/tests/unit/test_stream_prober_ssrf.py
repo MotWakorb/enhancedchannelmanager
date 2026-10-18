@@ -1,7 +1,6 @@
 """SSRF prevalidation for subprocess-backed stream probing (04c0u.6)."""
 
 from contextlib import asynccontextmanager
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -10,7 +9,7 @@ import pytest
 pytestmark = pytest.mark.usefixtures("vlc_stream_user_agent")
 
 from security.ssrf import SSRFError, SSRFMode, ResolvedTarget
-from security.stream_outbound import SSRFPinnedTransport, validate_stream_subprocess_url
+from security.stream_outbound import SSRFPinnedTransport, ValidatedSubprocessInput, validate_stream_subprocess_url
 from security.stream_outbound import validated_subprocess_input as real_subprocess_input
 from stream_prober import StreamProber
 
@@ -86,7 +85,7 @@ async def test_ffprobe_validates_immediately_before_every_spawn_and_retry():
     @asynccontextmanager
     async def allowed(url, **_kwargs):
         validations.append(url)
-        yield SimpleNamespace(argument=url, response=None, is_http_relay=False)
+        yield ValidatedSubprocessInput(argument=url)
 
     with patch("stream_prober.validated_subprocess_input", allowed), \
          patch(
@@ -111,7 +110,7 @@ async def test_ffprobe_retry_redirect_to_metadata_is_denied_before_retry_spawn()
         nonlocal attempts
         attempts += 1
         if attempts == 1:
-            yield SimpleNamespace(argument=candidate, response=None, is_http_relay=False)
+            yield ValidatedSubprocessInput(argument=candidate)
             return
         async with real_subprocess_input(candidate, **kwargs) as value:
             yield value
@@ -149,9 +148,8 @@ async def test_ffprobe_retry_redirect_to_metadata_is_denied_before_retry_spawn()
 async def test_http_relay_subprocess_uses_only_relay_and_crypto_protocols(method):
     @asynccontextmanager
     async def relayed(_url, **_kwargs):
-        yield SimpleNamespace(
+        yield ValidatedSubprocessInput(
             argument="http://127.0.0.1:1234/resource/0",
-            response=None,
             is_http_relay=True,
         )
 

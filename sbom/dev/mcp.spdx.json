@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "mcp-0.18.2-0020",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0020/mcp-e8e4c04d3d915309812fd679e04e0c56b6a2936f9eae10098c010bc6bb327327",
+  "name": "mcp-0.18.2-0045",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0045/mcp-f6f3be0fe19f44df484b2224a124e1c72866d566fe629d375e2c1cc399298a67",
   "creationInfo": {
-    "created": "2026-09-06T07:20:04Z",
+    "created": "2026-10-18T09:58:51Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-mcp",
       "name": "enhanced-channel-manager-mcp",
-      "versionInfo": "0.18.2-0020",
+      "versionInfo": "0.18.2-0045",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -359,9 +359,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-mcp-1.29.0",
+      "SPDXID": "SPDXRef-Package-pypi-mcp-1.30.0",
       "name": "mcp",
-      "versionInfo": "1.29.0",
+      "versionInfo": "1.30.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -372,7 +372,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/mcp@1.29.0"
+          "referenceLocator": "pkg:pypi/mcp@1.30.0"
         }
       ]
     },
@@ -485,9 +485,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-pyjwt-2.13.0",
+      "SPDXID": "SPDXRef-Package-pypi-pyjwt-2.15.1",
       "name": "pyjwt",
-      "versionInfo": "2.13.0",
+      "versionInfo": "2.15.1",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -498,7 +498,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/pyjwt@2.13.0"
+          "referenceLocator": "pkg:pypi/pyjwt@2.15.1"
         }
       ]
     },
@@ -888,7 +888,7 @@
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-mcp-1.29.0",
+      "spdxElementId": "SPDXRef-Package-pypi-mcp-1.30.0",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },
@@ -923,7 +923,7 @@
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-pyjwt-2.13.0",
+      "spdxElementId": "SPDXRef-Package-pypi-pyjwt-2.15.1",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },

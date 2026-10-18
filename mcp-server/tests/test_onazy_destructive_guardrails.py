@@ -328,7 +328,9 @@ class TestClearAutoCreatedToken:
         assert _mutation_calls(mock_client) == []
 
     @pytest.mark.asyncio
-    async def test_all_groups_correct_token_clears(self):
+    async def test_all_groups_correct_token_forwards_existing_request(self):
+        # Synthetic success for the legacy wire shape. The real backend
+        # rejects omitted group_ids; hbjuu's route test pins that limit.
         mcp = _register("channels")
         mock_client = AsyncMock()
 
@@ -338,7 +340,7 @@ class TestClearAutoCreatedToken:
                     {"id": 11, "name": "A", "auto_created": True, "channel_group_id": 1},
                     {"id": 12, "name": "B", "auto_created": True, "channel_group_id": 2},
                 ])
-            return {"deleted": 2}
+            return {"updated_count": 2}
 
         mock_client.call_endpoint.side_effect = _side
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
@@ -350,7 +352,8 @@ class TestClearAutoCreatedToken:
         muts = _mutation_calls(mock_client)
         assert len(muts) == 1
         assert muts[0].args[0].name == "channels_clear_auto_created"
-        assert "Cleared 2" in _text(result)
+        assert muts[0].kwargs == {"body": {}}
+        assert "Cleared auto-created flags from 2 channel(s)" in _text(result)
 
     @pytest.mark.asyncio
     async def test_all_groups_always_gated_even_when_empty(self):

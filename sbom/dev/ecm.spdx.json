@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "ecm-0.18.2-0020",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0020/ecm-651ea82a107e62e8b9e14f37c08003ad5ff47a0b793bef3ca2ace3ec63f56fa9",
+  "name": "ecm-0.18.2-0045",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0045/ecm-b6ec9e6979f1630ae18be4dbfe14d7725c19e8ddd174f6e627705dd5543f4147",
   "creationInfo": {
-    "created": "2026-09-06T07:20:04Z",
+    "created": "2026-10-18T09:58:51Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-ecm",
       "name": "enhanced-channel-manager",
-      "versionInfo": "0.18.2-0020",
+      "versionInfo": "0.18.2-0045",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2667,9 +2667,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-brace-expansion-5.0.9",
+      "SPDXID": "SPDXRef-Package-npm-brace-expansion-5.0.12",
       "name": "brace-expansion",
-      "versionInfo": "5.0.9",
+      "versionInfo": "5.0.12",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2680,7 +2680,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/brace-expansion@5.0.9"
+          "referenceLocator": "pkg:npm/brace-expansion@5.0.12"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -6068,9 +6068,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-source-map-js-1.2.1",
+      "SPDXID": "SPDXRef-Package-npm-source-map-js-1.2.2",
       "name": "source-map-js",
-      "versionInfo": "1.2.1",
+      "versionInfo": "1.2.2",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -6081,7 +6081,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/source-map-js@1.2.1"
+          "referenceLocator": "pkg:npm/source-map-js@1.2.2"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -6562,9 +6562,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-undici-7.29.0",
+      "SPDXID": "SPDXRef-Package-npm-undici-7.30.1",
       "name": "undici",
-      "versionInfo": "7.29.0",
+      "versionInfo": "7.30.1",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -6575,7 +6575,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/undici@7.29.0"
+          "referenceLocator": "pkg:npm/undici@7.30.1"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -7760,9 +7760,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-multidict-6.7.1",
+      "SPDXID": "SPDXRef-Package-pypi-multidict-6.9.1",
       "name": "multidict",
-      "versionInfo": "6.7.1",
+      "versionInfo": "6.9.1",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7773,7 +7773,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/multidict@6.7.1"
+          "referenceLocator": "pkg:pypi/multidict@6.9.1"
         }
       ]
     },
@@ -7940,9 +7940,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-pyjwt-2.13.0",
+      "SPDXID": "SPDXRef-Package-pypi-pyjwt-2.15.1",
       "name": "pyjwt",
-      "versionInfo": "2.13.0",
+      "versionInfo": "2.15.1",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7953,7 +7953,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/pyjwt@2.13.0"
+          "referenceLocator": "pkg:pypi/pyjwt@2.15.1"
         }
       ]
     },
@@ -8318,9 +8318,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-urllib3-2.7.0",
+      "SPDXID": "SPDXRef-Package-pypi-urllib3-2.8.0",
       "name": "urllib3",
-      "versionInfo": "2.7.0",
+      "versionInfo": "2.8.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8331,7 +8331,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/urllib3@2.7.0"
+          "referenceLocator": "pkg:pypi/urllib3@2.8.0"
         }
       ]
     },
@@ -9351,7 +9351,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-brace-expansion-5.0.9",
+      "spdxElementId": "SPDXRef-Package-npm-brace-expansion-5.0.12",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10071,7 +10071,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-source-map-js-1.2.1",
+      "spdxElementId": "SPDXRef-Package-npm-source-map-js-1.2.2",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10191,7 +10191,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-undici-7.29.0",
+      "spdxElementId": "SPDXRef-Package-npm-undici-7.30.1",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10491,7 +10491,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-multidict-6.7.1",
+      "spdxElementId": "SPDXRef-Package-pypi-multidict-6.9.1",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10541,7 +10541,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-pyjwt-2.13.0",
+      "spdxElementId": "SPDXRef-Package-pypi-pyjwt-2.15.1",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10646,7 +10646,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-urllib3-2.7.0",
+      "spdxElementId": "SPDXRef-Package-pypi-urllib3-2.8.0",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },

@@ -452,13 +452,13 @@ def _resolve_emby_server_ip(base_url: str) -> str | None:
     except ValueError:
         # Malformed URL — log once at WARN; an unreachable WARN cadence
         # would be alarming and the operator can only fix this once.
-        logger.warning("[EMBY] Could not parse emby_base_url=%r", base_url)
+        logger.warning("[EMBY] Could not parse emby_base_url")
         return None
 
     host = parsed.hostname
     if not host:
         logger.warning(
-            "[EMBY] emby_base_url=%r has no extractable hostname", base_url,
+            "[EMBY] emby_base_url has no extractable hostname",
         )
         return None
 

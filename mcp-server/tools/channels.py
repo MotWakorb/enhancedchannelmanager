@@ -12,11 +12,10 @@ logger = logging.getLogger(__name__)
 
 
 async def _enumerate_auto_created_ids(client, group_ids: list[int] | None) -> list[int]:
-    """Resolve the channel ids that ``clear_auto_created`` would delete.
+    """Resolve channel IDs whose auto-created flags would be cleared.
 
     Pages ``GET /api/channels`` and keeps only ``auto_created`` channels. When
-    ``group_ids`` is given, restricts to those groups (the backend list endpoint
-    filters by a single ``channel_group`` per call, so we page per group);
+    ``group_ids`` is given, filters each page to those groups;
     otherwise enumerates every group (all_groups). Used to compute the W2 confirm
     token over the *server-resolved* target set so a drift since the preview is
     detected.
@@ -1037,14 +1036,18 @@ def register(mcp: FastMCP):
         all_groups: bool = False,
         confirm_token: str | None = None,
     ) -> str:
-        """Clear channels that were created by the auto-creation pipeline.
+        """Clear auto-created flags, converting matching channels to manual channels.
+
+        Sets auto_created=False and auto_created_by=None. This operation
+        does not delete channels or remove their stream assignments.
 
         Requires explicit intent to avoid accidental system-wide clears:
 
-        * To clear specific groups: pass a non-empty ``group_ids`` list (and
+        * To clear flags in specific groups: pass a non-empty ``group_ids`` list (and
           leave ``all_groups`` at its default of ``False``).
-        * To clear ALL auto-created channels across every group: pass
-          ``all_groups=True`` (and leave ``group_ids`` unset or ``None``).
+        * ``all_groups=True`` enumerates flags across every group, but the current
+          backend requires explicit group_ids and rejects the empty apply body.
+          Use a non-empty ``group_ids`` list to apply, with ``all_groups=False``.
 
         Passing an empty ``group_ids=[]`` without ``all_groups=True`` is
         rejected — an empty list is ambiguous and the backend returns HTTP 400
@@ -1053,20 +1056,19 @@ def register(mcp: FastMCP):
 
         CONFIRM-TOKEN GATING (bd-onazy / bd-p8fx9): this is ALWAYS a two-call
         operation. The first call (no ``confirm_token``) ENUMERATES the
-        auto-created channels that would be deleted, returns a preview (count +
-        first ~10 names + a ``confirm_token`` derived from the resolved id set),
-        and deletes NOTHING. Re-invoke with that token echoed back to execute.
+        channels whose flags would be cleared, returns a preview (count +
+        first 10 channel IDs + a ``confirm_token`` derived from the resolved id set),
+        and changes nothing. Re-invoke with that token echoed back to execute.
         The token is recomputed from the CURRENT resolved set; if channels were
         added/removed since the preview, the supplied token is stale and the call
         is REFUSED with a fresh token. The ``all_groups=True`` path is gated
-        regardless of count; the per-group path forces the token once more than
-        the group soft cap (default 10) of groups is targeted.
+        regardless of count, as is the per-group path.
 
         Args:
-            group_ids: Non-empty list of group IDs to clear. Mutually exclusive
-                       with ``all_groups=True``.
-            all_groups: Set to ``True`` to clear auto-created channels across
-                        ALL groups. Mutually exclusive with ``group_ids``.
+            group_ids: Non-empty list of group IDs whose channel flags to clear.
+                       Mutually exclusive with ``all_groups=True``.
+            all_groups: Enumerate ALL groups for preview; apply requires explicit
+                        group_ids. Mutually exclusive with ``group_ids``.
             confirm_token: Echo back the token from the preview to execute.
         """
         # --- Input validation (local, before any backend call) ---------------
@@ -1075,18 +1077,18 @@ def register(mcp: FastMCP):
         if all_groups and has_group_ids:
             return (
                 "Error: cannot pass both all_groups=True and a non-empty group_ids — "
-                "these are contradictory. Use all_groups=True to clear all groups, "
-                "or group_ids=[...] to clear specific groups."
+                "these are contradictory. Use group_ids=[...] to clear auto-created "
+                "flags in specific groups."
             )
 
         if not all_groups and not has_group_ids:
             # Covers: group_ids=None, group_ids=[], or neither argument supplied.
             return (
                 "Error: no target specified. Provide either:\n"
-                "  - group_ids=[<id>, ...] to clear specific groups, or\n"
-                "  - all_groups=True to clear auto-created channels across ALL groups.\n"
-                "An empty group_ids=[] is not accepted — use all_groups=True for a "
-                "system-wide clear."
+                "  - group_ids=[<id>, ...] to clear auto-created flags in specific groups, or\n"
+                "  - all_groups=True to preview flags across ALL groups.\n"
+                "An empty group_ids=[] is not accepted; the backend requires explicit "
+                "group_ids to apply."
             )
 
         # --- Backend call -----------------------------------------------------
@@ -1095,9 +1097,8 @@ def register(mcp: FastMCP):
 
             # --- W2/W4 confirm-token gate ------------------------------------
             # Enumerate the resolved target ids so the token is over the exact
-            # set the backend would delete (TOCTOU-safe). The per-group path
-            # routes to the always-gated behaviour once its group soft cap is
-            # exceeded, but we gate every path for safety on this destructive op.
+            # set whose flags would be cleared. Keep every path token-gated:
+            # clearing provenance remains in the existing destructive tier.
             target_ids = await _enumerate_auto_created_ids(
                 client, None if all_groups else list(group_ids or [])
             )
@@ -1105,48 +1106,47 @@ def register(mcp: FastMCP):
                 token = _guardrails.derive_token(target_ids)
                 scope = "all groups" if all_groups else f"{len(group_ids or [])} group(s)"
                 stale = (
-                    " (the token you supplied did not match — the set of "
-                    "auto-created channels changed since the preview)"
+                    " (the token you supplied did not match: it is invalid, expired, "
+                    "already used, or the target set changed)"
                 ) if confirm_token else ""
+                next_step = (
+                    f"Preview confirm_token='{token}'{stale}. "
+                    "The current backend requires explicit group_ids to apply; "
+                    "use group_ids=[...] with all_groups=False and request a new preview."
+                    if all_groups else
+                    f"Re-invoke with confirm_token='{token}' to clear flags{stale}."
+                )
                 return (
-                    f"About to clear {len(target_ids)} auto-created channels "
+                    f"Preview: clear auto-created flags from {len(target_ids)} channel(s) "
                     f"across {scope}: {target_ids[:10]}"
                     f"{f' (+{len(target_ids) - 10} more)' if len(target_ids) > 10 else ''}. "
-                    f"Re-invoke with confirm_token='{token}' to clear{stale}."
+                    "No channels will be deleted. "
+                    f"{next_step}"
                 )
 
             if all_groups:
-                # all_groups=True path: the backend requires at least one group_id
-                # (it returns 400 for an empty list), so for the all-groups case we
-                # rely on the caller passing all_groups=True with no group_ids.
-                # The backend endpoint only accepts group_ids, so we need to fetch
-                # all group IDs and pass them, OR we accept that the backend returns
-                # 400 for an empty list.
-                # Since the backend requires non-empty group_ids, forward without
-                # the field and let the backend enforce its own validation; in
-                # practice callers using all_groups=True should know this means
-                # a separate lookup. For safety we do NOT forward group_ids=[].
-                # We send no group_ids key — let the backend handle the omission,
-                # or the caller should supply all group IDs explicitly.
+                # Retain the existing request contract. The current backend
+                # rejects this omitted group_ids field (422); discovery and
+                # preview direct callers to explicit groups (bead hbjuu).
                 result = await client.call_endpoint(
                     ENDPOINTS["channels_clear_auto_created"],
                     body={},
                 )
-                deleted = result.get("deleted", result.get("updated_count", result.get("count", 0)))
-                return f"Cleared {deleted} auto-created channels across all groups."
+                updated = result.get("deleted", result.get("updated_count", result.get("count", 0)))
+                return f"Cleared auto-created flags from {updated} channel(s) across all groups. No channels were deleted."
             else:
                 # Specific groups path (has_group_ids is True)
                 result = await client.call_endpoint(
                     ENDPOINTS["channels_clear_auto_created"],
                     body={"group_ids": group_ids},
                 )
-                deleted = result.get("deleted", result.get("updated_count", result.get("count", 0)))
+                updated = result.get("deleted", result.get("updated_count", result.get("count", 0)))
                 n = len(group_ids)
                 group_word = "group" if n == 1 else "groups"
-                return f"Cleared {deleted} auto-created channels in {n} {group_word}."
+                return f"Cleared auto-created flags from {updated} channel(s) in {n} {group_word}. No channels were deleted."
         except Exception as e:
             logger.error("[MCP] clear_auto_created failed: %s", e)
-            return f"Error clearing auto-created channels: {e}"
+            return f"Error clearing auto-created flags: {e}"
 
     @mcp.tool()
     async def find_duplicate_channels(channel_ids: list[int] | None = None) -> str:

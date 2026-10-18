@@ -393,6 +393,13 @@ def _classify_logo_create_failure(response: httpx.Response) -> str:
     return "error"
 
 
+class _TimeoutDefault:
+    """Distinguish an omitted timeout from explicitly unbounded None."""
+
+
+_CLIENT_TIMEOUT_DEFAULT = _TimeoutDefault()
+
+
 class DispatcharrClient:
     """API client for Dispatcharr with JWT authentication."""
 
@@ -533,6 +540,12 @@ class DispatcharrClient:
         request, so it passes ``retry_on_401=False`` and takes the 401 as its
         answer. Ordinary callers leave it on: they hold a long-lived client
         whose access token legitimately expires mid-session.
+
+        An omitted timeout inherits the HTTPX client's configured timeout
+        (30s by default), except EPG grid requests which default to 120s.
+        Explicit floats, httpx.Timeout objects, and None (unbounded) survive
+        both token-refresh and rate-limit retries. These are transport-phase
+        budgets, not a total deadline covering authentication and retries.
         """
         # Clear-text-logging hygiene (bead 0i2vt.13): NEVER log ``path`` at any
         # sink in this method. ``path`` is attacker-influenced/credential-tainted
@@ -561,10 +574,11 @@ class DispatcharrClient:
         else:
             headers["Authorization"] = f"Bearer {self.access_token}"
 
-        # Use extended timeout for EPG grid endpoint (large channel counts)
-        request_timeout = kwargs.pop("timeout", None)
-        if request_timeout is None and path == "/api/epg/grid/":
+        # Omit the keyword to inherit HTTPX's client default. Explicit None
+        # disables timeouts, including on the EPG grid endpoint.
+        if "timeout" not in kwargs and path == "/api/epg/grid/":
             request_timeout = 120.0  # 2 minutes for filtered EPG grid data
+            kwargs["timeout"] = request_timeout
             logger.debug("[DISPATCHARR] Using extended timeout (%ss) for EPG grid request", request_timeout)
 
         try:
@@ -582,7 +596,6 @@ class DispatcharrClient:
                     method,
                     f"{self.base_url}{path}",
                     headers=headers,
-                    timeout=request_timeout,
                     **kwargs,
                 )
 
@@ -2281,7 +2294,9 @@ class DispatcharrClient:
         return response.json()
 
     async def get_version(
-        self, timeout: Optional[float] = None, retry_on_401: bool = True
+        self,
+        timeout: float | httpx.Timeout | None | _TimeoutDefault = _CLIENT_TIMEOUT_DEFAULT,
+        retry_on_401: bool = True,
     ) -> dict:
         """Return Dispatcharr's self-reported version.
 
@@ -2292,20 +2307,19 @@ class DispatcharrClient:
         undeterminable version means, and for the connection test that is
         "stay silent".
 
-        ``timeout`` is forwarded to :meth:`_request` as a per-request override.
-        The connection test passes a short one (5s): the operator is watching a
-        button spin, and an advisory is never worth making them wait for. Note
-        that ``timeout=None`` means "no override supplied", and ``_request``
-        forwards that ``None`` straight to httpx — which reads it as *no
-        timeout*, not "use the client default" (pre-existing, tracked as
-        ``enhancedchannelmanager-6imr3``). Every caller today passes a value.
+        Omitting timeout inherits the HTTPX client's configured timeout
+        (30s by default). An explicit float or httpx.Timeout overrides its
+        transport-phase budgets; explicit None disables them. This is not
+        a total operation deadline. The connection test passes a short override
+        (5s) because an advisory is not worth a long wait.
 
         ``retry_on_401=False`` forbids :meth:`_request`'s refresh-and-retry
         branch, which can otherwise spend one of Dispatcharr's 3/min logins.
         Best-effort callers pass it; see :meth:`_request`.
         """
+        kwargs = {} if timeout is _CLIENT_TIMEOUT_DEFAULT else {"timeout": timeout}
         response = await self._request(
-            "GET", "/api/core/version/", timeout=timeout, retry_on_401=retry_on_401
+            "GET", "/api/core/version/", retry_on_401=retry_on_401, **kwargs
         )
         response.raise_for_status()
         return response.json()
