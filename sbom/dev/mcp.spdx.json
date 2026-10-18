@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "mcp-0.18.2-0045",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0045/mcp-79bfa1c0a8f1303619cb462927c7ba0faeed7c4b0be41154b9471d653e310810",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0045/mcp-2cb8c43ff843b5bc2e94bdaa3312790eba19edaae969818e216445f12a15971c",
   "creationInfo": {
-    "created": "2026-10-18T08:59:29Z",
+    "created": "2026-10-18T09:52:17Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],
@@ -359,9 +359,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-mcp-1.29.0",
+      "SPDXID": "SPDXRef-Package-pypi-mcp-1.30.0",
       "name": "mcp",
-      "versionInfo": "1.29.0",
+      "versionInfo": "1.30.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -372,7 +372,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/mcp@1.29.0"
+          "referenceLocator": "pkg:pypi/mcp@1.30.0"
         }
       ]
     },
@@ -888,7 +888,7 @@
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-mcp-1.29.0",
+      "spdxElementId": "SPDXRef-Package-pypi-mcp-1.30.0",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },

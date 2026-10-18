@@ -10,7 +10,8 @@
 # but it is a code change, not a currency bump, and is tracked as its own bead
 # (enhancedchannelmanager-wiezs). Lift the cap there, not in a dependency
 # sweep -- an unpinned jump fails at import time.
-mcp[cli]>=1.27.2,<2
+# 1.30.0 bounds stateful Streamable HTTP sessions (CVE-2026-59951).
+mcp[cli]>=1.30.0,<2
 httpx>=0.28.0
 uvicorn[standard]>=0.32.0
 pydantic>=2.10.0

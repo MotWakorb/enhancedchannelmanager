@@ -273,6 +273,8 @@ In-app notification bell with history, active task pinning, and external alert m
 
 ## MCP Server (Claude Integration)
 
+The MCP sidecar bounds stateful HTTP sessions: idle sessions expire after 30 minutes, and at most 10,000 sessions are retained. An expired session returns 404 and the client must initialize again; open GET streams and in-progress requests keep a session active.
+
 ECM includes an MCP (Model Context Protocol) server: an optional sidecar container that exposes ECM's functionality to Claude — **Claude Desktop**, **Claude Code**, or any MCP-capable client — so you can manage your install in plain language instead of clicking through the UI. **130 tools across 14 domains** (channels, channel groups, streams, M3U accounts, EPG sources, channel pipeline, scheduled tasks, stats, system/backup, notifications, profiles, normalization, deduplication, Emby integration), plus an `overview` resource that gives Claude a one-shot snapshot of your install.
 
 Everything Claude does runs against your live ECM through the API — it's the same operations the UI performs, just driven by conversation. Mutating actions report the resulting state back (e.g. the new channel's group and number) so you can confirm the change took effect.
