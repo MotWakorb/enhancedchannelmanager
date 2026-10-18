@@ -499,14 +499,14 @@ def _parse_networks(cidrs: list[str]) -> list[ipaddress._BaseNetwork]:
     unaffected because ranking is a soft hint).
     """
     networks: list[ipaddress._BaseNetwork] = []
-    for raw in cidrs or []:
+    for idx, raw in enumerate(cidrs or []):
         token = (raw or "").strip()
         if not token:
             continue
         try:
             networks.append(ipaddress.ip_network(token, strict=False))
         except ValueError:
-            logger.debug("[ATTR-RECONCILE] Skipping unparsable trusted-network entry")
+            logger.debug("[ATTR-RECONCILE] Skipping unparsable trusted-network entry at index %d", idx)
     return networks
 
 

@@ -17,6 +17,10 @@ from task_scheduler import TaskScheduler, ScheduleConfig, ScheduleType
 
 logger = logging.getLogger(__name__)
 
+# Only explicitly removed product tasks are retired. Unknown IDs retain their
+# state and warning, and a registered implementation takes precedence.
+_RETIRED_TASK_IDS = frozenset({"export_publish"})
+
 
 def auto_creation_parent_enabled() -> Optional[bool]:
     """Whether the ``auto_creation`` PARENT ``scheduled_tasks.enabled`` gate is on.
@@ -167,6 +171,14 @@ class TaskRegistry:
         try:
             session = get_session()
             try:
+                retired = _RETIRED_TASK_IDS.difference(self._tasks)
+                retired_changed = set()
+                for model in (ScheduledTask, TaskSchedule):
+                    for row in session.query(model).filter(model.task_id.in_(retired)).all():
+                        if row.enabled or row.next_run_at is not None:
+                            row.enabled = False
+                            row.next_run_at = None
+                            retired_changed.add(row.task_id)
                 db_tasks = session.query(ScheduledTask).all()
 
                 for db_task in db_tasks:
@@ -218,7 +230,7 @@ class TaskRegistry:
                         # Ensure non-manual tasks have a TaskSchedule entry
                         if instance.schedule_config.schedule_type != ScheduleType.MANUAL:
                             self._create_default_task_schedule(session, instance)
-                    else:
+                    elif db_task.task_id not in retired:
                         logger.warning("[TASK-REGISTRY] Task %s in DB but not registered", db_task.task_id)
 
                 # Create instances for registered tasks not in DB. The row
@@ -234,8 +246,13 @@ class TaskRegistry:
                         logger.debug("[TASK-REGISTRY] Created default config for task: %s", task_id)
 
                 session.commit()
+                for task_id in sorted(retired_changed):
+                    logger.info("[TASK-REGISTRY] Disabled retired task %s and its schedules; saved configuration and history retained", task_id)
                 self._initialized = True
                 logger.info("[TASK-REGISTRY] Synced %s tasks from database", len(self._instances))
+            except Exception:
+                session.rollback()
+                raise
             finally:
                 session.close()
         except Exception as e:

@@ -988,7 +988,7 @@ async def login(
     client_ip = _client_address(request)
 
     if user is None:
-        logger.warning("[AUTH] Login attempt for nonexistent user: %s from %s", login_request.username, client_ip)
+        logger.warning("[AUTH] Login attempt for nonexistent user: %s from %s", _log_safe_agent(login_request.username), client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
@@ -1002,7 +1002,7 @@ async def login(
 
     # If no local identity, check if user was created with local auth_provider (legacy)
     if not has_local_identity and user.auth_provider != "local":
-        logger.warning("[AUTH] Non-local user attempted local login: %s from %s", login_request.username, client_ip)
+        logger.warning("[AUTH] Non-local user attempted local login: %s from %s", _log_safe_agent(login_request.username), client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Please use your configured authentication provider to log in",
@@ -1010,7 +1010,7 @@ async def login(
 
     # Verify password
     if not user.password_hash or not verify_password(login_request.password, user.password_hash):
-        logger.warning("[AUTH] Failed login attempt for user: %s from %s", login_request.username, client_ip)
+        logger.warning("[AUTH] Failed login attempt for user: %s from %s", _log_safe_agent(login_request.username), client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
@@ -1022,7 +1022,7 @@ async def login(
 
     # Check if user is active
     if not user.is_active:
-        logger.warning("[AUTH] Login attempt for disabled user: %s from %s", login_request.username, client_ip)
+        logger.warning("[AUTH] Login attempt for disabled user: %s from %s", _log_safe_agent(login_request.username), client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User account is disabled",
@@ -1284,7 +1284,7 @@ _LOGGED_AGENT_CHARS = 80
 
 
 def _log_safe_agent(value: Optional[str]) -> str:
-    """Render a caller-supplied User-Agent as a single safe log field.
+    """Render a caller-supplied User-Agent or username as a safe log field.
 
     Unlike an address, a User-Agent is free-form, so there is no shape to
     validate it against and the defence has to be applied to the value
@@ -2079,7 +2079,7 @@ async def dispatcharr_login(
             )
     except DispatcharrRateLimitError as e:
         client_ip = _client_address(request)
-        logger.warning("[AUTH] Dispatcharr rate-limited login for user: %s from %s", login_request.username, client_ip)
+        logger.warning("[AUTH] Dispatcharr rate-limited login for user: %s from %s", _log_safe_agent(login_request.username), client_ip)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(e),
@@ -2087,14 +2087,14 @@ async def dispatcharr_login(
         )
     except DispatcharrNetworkPolicyError as e:
         client_ip = _client_address(request)
-        logger.error("[AUTH] Dispatcharr network policy rejected login for user: %s from %s", login_request.username, client_ip)
+        logger.error("[AUTH] Dispatcharr network policy rejected login for user: %s from %s", _log_safe_agent(login_request.username), client_ip)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=str(e),
         )
     except DispatcharrAuthenticationError as e:
         client_ip = _client_address(request)
-        logger.warning("[AUTH] Dispatcharr auth failed for user: %s from %s", login_request.username, client_ip)
+        logger.warning("[AUTH] Dispatcharr auth failed for user: %s from %s", _log_safe_agent(login_request.username), client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e),

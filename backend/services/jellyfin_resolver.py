@@ -412,13 +412,13 @@ def _resolve_jellyfin_server_ip(base_url: str) -> str | None:
     try:
         parsed = urlparse(base_url)
     except ValueError:
-        logger.warning("[JELLYFIN] Could not parse jellyfin_base_url=%r", base_url)
+        logger.warning("[JELLYFIN] Could not parse jellyfin_base_url")
         return None
 
     host = parsed.hostname
     if not host:
         logger.warning(
-            "[JELLYFIN] jellyfin_base_url=%r has no extractable hostname", base_url,
+            "[JELLYFIN] jellyfin_base_url has no extractable hostname",
         )
         return None
 

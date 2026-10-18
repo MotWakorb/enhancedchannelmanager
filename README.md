@@ -251,6 +251,8 @@ A rules-based automation engine for channel creation, stream merging, and lifecy
 ### Stream Health & Probing
 Automated stream probing with configurable schedules, batch sizes, retry logic, and rate limit detection. Profile-aware probing distributes connections across M3U profiles. Results drive smart stream sorting by resolution, bitrate, framerate, video codec, and M3U priority with configurable ordering for deprioritized stream categories. Black screen detection identifies streams showing dark/blank content, and low FPS detection flags streams below a configurable threshold (5/10/15/20 FPS). Both are deprioritized in Smart Sort. A strikeout system tracks consecutive failures for bulk cleanup.
 
+Probe startup has a separate deadline covering DNS and redirects. Eligible transient provider failures share the configured metadata-probe retry budget. If optional black-screen sampling cannot reach the provider, successful metadata and bitrate results are retained without clearing the previous black-screen finding. Policy refusals still fail the probe.
+
 ### Logo Manager
 Browse, search, upload, and assign logos to channels. Supports URL import and file upload to Dispatcharr with usage tracking and pagination.
 

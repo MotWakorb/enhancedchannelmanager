@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 import secrets
 from typing import AsyncIterator, Callable, Mapping
@@ -47,6 +47,54 @@ from security.ssrf import (
 # Two short retries only for EAI_AGAIN: 100ms then 200ms. Validation runs in a
 # worker thread; every successful answer still passes the complete SSRF policy.
 DNS_RETRY_DELAYS = (0.1, 0.2)
+RETRYABLE_STREAM_HTTP_STATUSES = frozenset({500, 502, 503, 504, 520})
+
+
+def is_retryable_stream_failure(exc: Exception) -> bool:
+    """Provider failures eligible for the metadata probe's shared retry budget."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in RETRYABLE_STREAM_HTTP_STATUSES
+    return isinstance(exc, (httpx.ConnectError, httpx.ReadError, httpx.WriteError,
+                            httpx.RemoteProtocolError))
+
+
+def _preferred_stream_failure(primary: Exception, secondary: Exception) -> Exception:
+    """Keep policy refusals first, then nonretryable failures, then transients."""
+    def policy_refusal(error):
+        return isinstance(error, SSRFError) and not isinstance(error, DNSResolutionError)
+
+    if policy_refusal(primary):
+        return primary
+    if policy_refusal(secondary) or (
+        is_retryable_stream_failure(primary) and not is_retryable_stream_failure(secondary)
+    ):
+        return secondary
+    return primary
+
+
+@asynccontextmanager
+async def _stream_cleanup(close):
+    """Close owned resources without replacing a primary refusal/cancellation.
+
+    Regression: test_primary_refusal_survives_cleanup_failure covers startup,
+    initial bodies and later resources with simultaneous HTTP cleanup failures.
+    """
+    primary = None
+    try:
+        yield
+    except BaseException as exc:
+        primary = exc
+        raise
+    finally:
+        try:
+            with anyio.CancelScope(shield=True):
+                await close()
+        except (SSRFError, httpx.HTTPError) as secondary:
+            if primary is None:
+                raise
+            if isinstance(primary, (SSRFError, httpx.HTTPError)):
+                raise _preferred_stream_failure(primary, secondary) from None
+            # Cancellation and programming errors retain their original cause.
 
 
 async def _validate_with_dns_retry(validator, *args, **kwargs):
@@ -158,11 +206,12 @@ async def stream_request(
     pinned_transport = transport or SSRFPinnedTransport(
         scheme_downgrade=scheme_downgrade
     )
-    async with httpx.AsyncClient(
+    client = httpx.AsyncClient(
         timeout=timeout,
         follow_redirects=False,
         transport=pinned_transport,
-    ) as client:
+    )
+    async with _stream_cleanup(client.aclose):
         current_url = url
         current_headers = dict(headers or {})
         from_url: str | None = None
@@ -190,11 +239,9 @@ async def stream_request(
                 from_url, current_url = current_url, next_url
                 continue
 
-            try:
+            async with _stream_cleanup(response.aclose):
                 response.extensions["ssrf_logical_url"] = current_url
                 yield response
-            finally:
-                await response.aclose()
             return
 
 
@@ -204,6 +251,22 @@ class ValidatedSubprocessInput:
 
     argument: str
     is_http_relay: bool = False
+    _relay: _LocalStreamRelay | None = field(default=None, repr=False, compare=False)
+
+    async def raise_for_relay_failure(self) -> None:
+        """Settle handlers before trusting decoder output, then raise typed failure.
+
+        Explicitly consumed by probes; preview cleanup must not expose upstream
+        exception messages through its streaming response exception handler.
+        """
+        if self._relay is not None:
+            try:
+                with anyio.CancelScope(shield=True):
+                    await self._relay.close()
+            except (SSRFError, httpx.HTTPError) as exc:
+                self._relay._record_failure(exc)
+            if self._relay.failure is not None:
+                raise self._relay.failure
 
 
 _HLS_URI_RE = re.compile(r'URI="([^"]+)"')
@@ -233,7 +296,13 @@ class _LocalStreamRelay:
         self._runner: web.AppRunner | None = None
         self._initial_context = None
         self._initial_response = None
+        self.failure: Exception | None = None
         self._initial_token = self._register(url)
+
+    def _record_failure(self, exc: Exception) -> None:
+        # Keep one typed cause, with policy > nonretryable > transient. Concurrent
+        # resource fetches must not let a 503 hide a later denial or timeout.
+        self.failure = exc if self.failure is None else _preferred_stream_failure(self.failure, exc)
 
     def _register(self, url: str) -> str:
         existing = self._tokens_by_target.get(url)
@@ -280,7 +349,11 @@ class _LocalStreamRelay:
 
         app = web.Application()
         app.router.add_get("/resource/{token}", self._handle)
-        self._runner = web.AppRunner(app, access_log=None, shutdown_timeout=1.0)
+        # A consumer may quit while the provider is stalled between chunks.
+        # Cancel that handler too, so upstream cleanup need not wait for a read.
+        self._runner = web.AppRunner(
+            app, access_log=None, shutdown_timeout=1.0, handler_cancellation=True
+        )
         await self._runner.setup()
         site = web.TCPSite(self._runner, "127.0.0.1", 0)
         await site.start()
@@ -338,10 +411,22 @@ class _LocalStreamRelay:
             status=response.status_code,
             headers={"Content-Type": content_type or "application/octet-stream"},
         )
-        await downstream.prepare(request)
+        request["_ecm_relay_downstream"] = downstream
+        try:
+            await downstream.prepare(request)
+        except (ConnectionResetError, BrokenPipeError):
+            return downstream
         async for chunk in response.aiter_bytes(chunk_size=65536):
-            await downstream.write(chunk)
-        await downstream.write_eof()
+            # Only downstream writes are suppressed. An upstream read failure
+            # or cancellation must retain its own failure/cleanup semantics.
+            try:
+                await downstream.write(chunk)
+            except (ConnectionResetError, BrokenPipeError):
+                return downstream
+        try:
+            await downstream.write_eof()
+        except (ConnectionResetError, BrokenPipeError):
+            return downstream
         return downstream
 
     async def _handle(self, request: web.Request):
@@ -349,10 +434,14 @@ class _LocalStreamRelay:
         url = self._targets.get(token)
         if url is None:
             raise web.HTTPNotFound()
-        if token == self._initial_token and self._initial_response is not None:
-            response, self._initial_response = self._initial_response, None
-            return await self._serve(request, response, url)
         try:
+            if token == self._initial_token and self._initial_response is not None:
+                response, self._initial_response = self._initial_response, None
+                context, self._initial_context = self._initial_context, None
+                # Ownership moves to this handler. Retain the serve failure
+                # even if response/client cleanup fails at the same time.
+                async with _stream_cleanup(lambda: context.__aexit__(None, None, None)):
+                    return await self._serve(request, response, url)
             async with stream_request(
                 url,
                 headers=self._headers_for(url),
@@ -362,6 +451,16 @@ class _LocalStreamRelay:
                 response.raise_for_status()
                 return await self._serve(request, response, url)
         except (SSRFError, httpx.HTTPError) as exc:
+            # Keep provenance private, before sending the generic loopback error.
+            self._record_failure(exc)
+            downstream = request.get("_ecm_relay_downstream")
+            if downstream is not None and downstream.prepared:
+                # Headers already went out: abort the partial body rather than
+                # injecting a second HTTP response into its chunked payload.
+                downstream.force_close()
+                if request.transport is not None:
+                    request.transport.close()
+                return downstream
             raise web.HTTPBadGateway(text="Upstream stream resource denied") from exc
 
 
@@ -371,6 +470,7 @@ async def validated_subprocess_input(
     *,
     headers: Mapping[str, str] | None = None,
     timeout: httpx.Timeout | float | None = None,
+    startup_timeout: float | None = None,
     scheme_downgrade: SchemeDowngrade = SchemeDowngrade.REFUSE,
 ) -> AsyncIterator[ValidatedSubprocessInput]:
     """Resolve redirects before spawn and expose HTTP through a loopback relay.
@@ -381,25 +481,30 @@ async def validated_subprocess_input(
 
     ``scheme_downgrade`` defaults to REFUSE and is forwarded to the relay's
     redirect validation. Provider probes and direct stream previews opt in.
+
+    ``startup_timeout`` bounds the complete acquisition (DNS and redirects
+    included), separately from HTTP inactivity timeouts and media sampling.
+    Cancelling a worker-thread DNS lookup stops awaiting it, not the OS lookup;
+    its result is discarded and cannot initiate a provider connection.
     """
 
     scheme = urlsplit(url).scheme.lower()
     if scheme not in {"http", "https"}:
-        await _validate_with_dns_retry(validate_stream_subprocess_url, url)
+        await asyncio.wait_for(
+            _validate_with_dns_retry(validate_stream_subprocess_url, url),
+            timeout=startup_timeout,
+        )
         yield ValidatedSubprocessInput(argument=url)
         return
 
     relay = _LocalStreamRelay(url, headers, timeout, scheme_downgrade)
-    try:
-        relay_url = await relay.start()
+    # Startup can fail after acquiring upstream but before yield. Retain that
+    # primary outcome while closing owned resources, including cancellation.
+    async with _stream_cleanup(relay.close):
+        relay_url = await asyncio.wait_for(relay.start(), timeout=startup_timeout)
         yield ValidatedSubprocessInput(
-            argument=relay_url, is_http_relay=True
+            argument=relay_url, is_http_relay=True, _relay=relay
         )
-    finally:
-        # Startup can be cancelled after acquiring upstream but before yield.
-        # The caller cannot resume this exhausted context manager's cleanup.
-        with anyio.CancelScope(shield=True):
-            await relay.close()
 
 
 

@@ -528,13 +528,13 @@ def _resolve_plex_server_ip(base_url: str) -> str | None:
     try:
         parsed = urlparse(base_url)
     except ValueError:
-        logger.warning("[PLEX] Could not parse plex_base_url=%r", base_url)
+        logger.warning("[PLEX] Could not parse plex_base_url")
         return None
 
     host = parsed.hostname
     if not host:
         logger.warning(
-            "[PLEX] plex_base_url=%r has no extractable hostname", base_url,
+            "[PLEX] plex_base_url has no extractable hostname",
         )
         return None
 

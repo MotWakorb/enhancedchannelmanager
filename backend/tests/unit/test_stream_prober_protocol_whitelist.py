@@ -16,7 +16,6 @@ Neither is a user-supplied URL scheme, so they do not widen the attack
 surface relative to the original threat model.
 """
 from contextlib import asynccontextmanager
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -24,6 +23,7 @@ import pytest
 pytestmark = pytest.mark.usefixtures("vlc_stream_user_agent")
 
 from stream_prober import FFPROBE_PROTOCOL_WHITELIST, StreamProber
+from security.stream_outbound import ValidatedSubprocessInput
 
 
 EXPECTED_WHITELIST = "http,https,tls,crypto,tcp,udp,rtp,rtmp,pipe"
@@ -33,7 +33,7 @@ EXPECTED_WHITELIST = "http,https,tls,crypto,tcp,udp,rtp,rtmp,pipe"
 def _allow_synthetic_subprocess_destination():
     @asynccontextmanager
     async def allowed(url, **_kwargs):
-        yield SimpleNamespace(argument=url, response=None, is_http_relay=False)
+        yield ValidatedSubprocessInput(argument=url)
 
     with patch("stream_prober.validated_subprocess_input", allowed):
         yield

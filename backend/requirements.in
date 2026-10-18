@@ -39,13 +39,16 @@ bcrypt>=4.0.0
 slowapi>=0.1.9
 # HS256 JWT signing/validation. Keep this independent of josepy, which is the
 # ACME JOSE implementation below and serves a different protocol.
-pyjwt>=2.10.0
+# GH1024: security fixes through 2.15.0 plus padded-signature compatibility.
+pyjwt>=2.15.1
 # Floored at 48.0.1 to clear GHSA-537c-gmf6-5ccf (v0.18.0 release-scan blocker).
 cryptography>=50.0.0
 
 # TLS/ACME (Let's Encrypt)
 josepy>=1.14.0
 boto3>=1.34.0  # AWS Route53 DNS provider
+# Existing botocore dependency: retain the security-fixed compatible 2.x line.
+urllib3>=2.8.0,<3
 
 pytz>=2024.1
 sqlalchemy>=2.0.0
