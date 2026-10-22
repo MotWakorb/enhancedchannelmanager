@@ -278,6 +278,7 @@ def smart_sort_streams(
     stream_sort_point_rules: tuple[PointRule, ...] = (),
     stream_metadata_known_ids: set[int] | None = None,
     deprioritize_low_bitrate: bool = False,
+    deprioritize_unstable: bool = False,
 ) -> list[int]:
     """
     Pure function — sort stream IDs by quality/priority criteria.
@@ -326,7 +327,7 @@ def smart_sort_streams(
     if m3u_account_priorities is None:
         m3u_account_priorities = {}
     if failed_stream_sort_order is None:
-        failed_stream_sort_order = ["failed", "black_screen", "low_fps", "low_bitrate"]
+        failed_stream_sort_order = ["failed", "black_screen", "low_fps", "low_bitrate", "unstable"]
 
     active_criteria = [
         criterion
@@ -466,6 +467,9 @@ class StreamProber:
         _resdet_lock_path: Path = RESDET_PIPELINE_LOCK_PATH,
         low_bitrate_threshold: float = 1.0,
         deprioritize_low_bitrate: bool = False,
+        playback_reconnect_threshold: float = 4.0,
+        playback_start_failure_threshold: int = 2,
+        deprioritize_unstable: bool = False,
     ):
         self.client = client
         self.probe_timeout = probe_timeout
@@ -488,6 +492,13 @@ class StreamProber:
         if not math.isfinite(low_bitrate_threshold) or low_bitrate_threshold <= 0:
             raise ValueError("low_bitrate_threshold must be positive and finite")
         self.low_bitrate_threshold = low_bitrate_threshold
+        self.deprioritize_unstable = deprioritize_unstable
+        if not math.isfinite(playback_reconnect_threshold) or playback_reconnect_threshold <= 0:
+            raise ValueError("playback_reconnect_threshold must be positive and finite")
+        self.playback_reconnect_threshold = playback_reconnect_threshold
+        if playback_start_failure_threshold < 1:
+            raise ValueError("playback_start_failure_threshold must be at least 1")
+        self.playback_start_failure_threshold = playback_start_failure_threshold
         self.black_screen_detection_enabled = black_screen_detection_enabled
         self.low_fps_threshold = max(1, min(60, low_fps_threshold))  # Clamp 1-60
         self.black_screen_sample_duration = max(3, min(30, black_screen_sample_duration))  # Clamp 3-30
@@ -515,10 +526,11 @@ class StreamProber:
         self.failed_stream_sort_order = (
             failed_stream_sort_order
             if failed_stream_sort_order is not None
-            else ["failed", "black_screen", "low_fps", "low_bitrate"]
+            else ["failed", "black_screen", "low_fps", "low_bitrate", "unstable"]
         )
-        if "low_bitrate" not in self.failed_stream_sort_order:
-            self.failed_stream_sort_order = [*self.failed_stream_sort_order, "low_bitrate"]
+        for category in ("low_bitrate", "unstable"):
+            if category not in self.failed_stream_sort_order:
+                self.failed_stream_sort_order = [*self.failed_stream_sort_order, category]
         self.stream_sort_strategy = stream_sort_strategy
         self.stream_sort_point_rules = tuple(stream_sort_point_rules)
         self._probe_cancelled = False  # Controls cancellation of in-progress probe
@@ -622,6 +634,7 @@ class StreamProber:
         stream_sort_strategy: str = None,
         stream_sort_point_rules: tuple[PointRule, ...] = None,
         deprioritize_low_bitrate: bool = None,
+        deprioritize_unstable: bool = None,
     ) -> None:
         """Update the sort settings.
 
@@ -651,8 +664,11 @@ class StreamProber:
             self.deprioritize_low_fps = deprioritize_low_fps
         if deprioritize_low_bitrate is not None:
             self.deprioritize_low_bitrate = deprioritize_low_bitrate
-        if "low_bitrate" not in self.failed_stream_sort_order:
-            self.failed_stream_sort_order = [*self.failed_stream_sort_order, "low_bitrate"]
+        if deprioritize_unstable is not None:
+            self.deprioritize_unstable = deprioritize_unstable
+        for category in ("low_bitrate", "unstable"):
+            if category not in self.failed_stream_sort_order:
+                self.failed_stream_sort_order = [*self.failed_stream_sort_order, category]
         if stream_sort_strategy is not None:
             self.stream_sort_strategy = stream_sort_strategy
         if stream_sort_point_rules is not None:
@@ -681,6 +697,7 @@ class StreamProber:
             "deprioritize_black_screen": self.deprioritize_black_screen,
             "deprioritize_low_fps": self.deprioritize_low_fps,
             "deprioritize_low_bitrate": self.deprioritize_low_bitrate,
+            "deprioritize_unstable": self.deprioritize_unstable,
             "failed_stream_sort_order": tuple(self.failed_stream_sort_order),
             "stream_sort_strategy": self.stream_sort_strategy,
             "stream_sort_point_rules": tuple(self.stream_sort_point_rules),
@@ -1832,6 +1849,48 @@ class StreamProber:
             raise
         finally:
             session.close()
+
+    PLAYBACK_MIN_EXPOSURE_SECONDS = 600
+
+    def classify_unstable(
+        self,
+        playback_seconds: int | None,
+        playback_reconnects: int | None,
+        playback_start_failures: int | None,
+    ) -> bool | None:
+        """Tri-state verdict: repeated failed starts flag outright, otherwise the window
+        reconnect rate decides once the minimum exposure is reached."""
+        if (playback_start_failures or 0) >= self.playback_start_failure_threshold:
+            return True
+        seconds = playback_seconds or 0
+        if seconds < self.PLAYBACK_MIN_EXPOSURE_SECONDS:
+            return None
+        rate = (playback_reconnects or 0) / seconds * 3600
+        return rate >= self.playback_reconnect_threshold
+
+    def reclassify_unstable(self) -> int:
+        """Re-derive is_unstable for every row after a threshold change. Returns rows changed."""
+        changed = 0
+        session = get_session()
+        try:
+            rows = session.query(StreamStats).filter(
+                (StreamStats.playback_seconds > 0) | (StreamStats.playback_start_failures > 0)
+            ).all()
+            for stats in rows:
+                verdict = self.classify_unstable(
+                    stats.playback_seconds, stats.playback_reconnects, stats.playback_start_failures
+                )
+                if verdict != stats.is_unstable:
+                    stats.is_unstable = verdict
+                    changed += 1
+            session.commit()
+        except Exception as e:
+            logger.error("[STREAM-PROBE] Failed to reclassify unstable streams: %s", e)
+            session.rollback()
+            raise
+        finally:
+            session.close()
+        return changed
 
     def _is_low_bitrate(self, data: Optional[dict], measured_bitrate: Optional[int]) -> bool:
         """Classify fresh probe inputs, never retained database quality fields."""
@@ -3947,7 +4006,10 @@ class StreamProber:
                 "deprioritize_black_screen": self.deprioritize_black_screen,
                 "deprioritize_low_fps": self.deprioritize_low_fps,
                 "deprioritize_low_bitrate": self.deprioritize_low_bitrate,
+                "deprioritize_unstable": self.deprioritize_unstable,
                 "low_bitrate_threshold": self.low_bitrate_threshold,
+                "playback_reconnect_threshold": self.playback_reconnect_threshold,
+                "playback_start_failure_threshold": self.playback_start_failure_threshold,
             } if reordered_channels else None,
         }
 
@@ -4173,6 +4235,9 @@ def ensure_prober() -> Optional[StreamProber]:
             deprioritize_low_fps=settings.deprioritize_low_fps,
             deprioritize_low_bitrate=settings.deprioritize_low_bitrate,
             low_bitrate_threshold=settings.low_bitrate_threshold,
+            deprioritize_unstable=settings.deprioritize_unstable,
+            playback_reconnect_threshold=settings.playback_reconnect_threshold,
+            playback_start_failure_threshold=settings.playback_start_failure_threshold,
             black_screen_detection_enabled=settings.black_screen_detection_enabled,
             black_screen_sample_duration=settings.black_screen_sample_duration,
             low_fps_threshold=settings.low_fps_threshold,

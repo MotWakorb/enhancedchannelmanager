@@ -480,10 +480,13 @@ class SettingsRequest(BaseModel):
     low_fps_threshold: int = 20  # FPS below this value is considered "low FPS" (5, 10, 15, or 20)
     low_bitrate_threshold: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     deprioritize_low_bitrate: bool = False
+    playback_reconnect_threshold: float = Field(default=4.0, gt=0, allow_inf_nan=False)
+    playback_start_failure_threshold: int = Field(default=2, ge=1)
+    deprioritize_unstable: bool = False
     deprioritize_failed_streams: bool = True  # When enabled, failed/timeout/pending streams sort to bottom
     deprioritize_black_screen: bool = True  # When disabled, black screen streams sort by quality stats
     deprioritize_low_fps: bool = True  # When disabled, low FPS streams sort by quality stats
-    failed_stream_sort_order: list[str] = ["failed", "black_screen", "low_fps", "low_bitrate"]  # Order of deprioritized categories (first = sorted higher)
+    failed_stream_sort_order: list[str] = ["failed", "black_screen", "low_fps", "low_bitrate", "unstable"]  # Order of deprioritized categories (first = sorted higher)
     strike_threshold: int = 3  # Consecutive failures before flagging stream (0 = disabled)
     normalization_settings: Optional[NormalizationSettings] = None  # User-configurable normalization tags
     normalize_on_channel_create: bool = False  # Default state for normalization toggle when creating channels
@@ -635,6 +638,9 @@ class SettingsResponse(BaseModel):
     low_fps_threshold: int  # FPS below this value is considered "low FPS"
     low_bitrate_threshold: float = 1.0
     deprioritize_low_bitrate: bool = False
+    playback_reconnect_threshold: float = 4.0
+    playback_start_failure_threshold: int = 2
+    deprioritize_unstable: bool = False
     deprioritize_failed_streams: bool  # When enabled, failed/timeout/pending streams sort to bottom
     deprioritize_black_screen: bool = True  # When disabled, black screen streams sort by quality stats
     deprioritize_low_fps: bool = True  # When disabled, low FPS streams sort by quality stats
@@ -905,6 +911,9 @@ async def get_current_settings(
         low_fps_threshold=settings.low_fps_threshold,
         low_bitrate_threshold=settings.low_bitrate_threshold,
         deprioritize_low_bitrate=settings.deprioritize_low_bitrate,
+        playback_reconnect_threshold=settings.playback_reconnect_threshold,
+        playback_start_failure_threshold=settings.playback_start_failure_threshold,
+        deprioritize_unstable=settings.deprioritize_unstable,
         deprioritize_failed_streams=settings.deprioritize_failed_streams,
         deprioritize_black_screen=settings.deprioritize_black_screen,
         deprioritize_low_fps=settings.deprioritize_low_fps,
@@ -1236,6 +1245,9 @@ async def update_settings(
         low_fps_threshold=request.low_fps_threshold,
         low_bitrate_threshold=(request.low_bitrate_threshold if "low_bitrate_threshold" in request.model_fields_set else current_settings.low_bitrate_threshold),
         deprioritize_low_bitrate=(request.deprioritize_low_bitrate if "deprioritize_low_bitrate" in request.model_fields_set else current_settings.deprioritize_low_bitrate),
+        playback_reconnect_threshold=(request.playback_reconnect_threshold if "playback_reconnect_threshold" in request.model_fields_set else current_settings.playback_reconnect_threshold),
+        playback_start_failure_threshold=(request.playback_start_failure_threshold if "playback_start_failure_threshold" in request.model_fields_set else current_settings.playback_start_failure_threshold),
+        deprioritize_unstable=(request.deprioritize_unstable if "deprioritize_unstable" in request.model_fields_set else current_settings.deprioritize_unstable),
         deprioritize_failed_streams=request.deprioritize_failed_streams,
         deprioritize_black_screen=request.deprioritize_black_screen,
         deprioritize_low_fps=request.deprioritize_low_fps,
@@ -1489,6 +1501,7 @@ async def update_settings(
             new_settings.m3u_account_priorities != current_settings.m3u_account_priorities or
             new_settings.failed_stream_sort_order != current_settings.failed_stream_sort_order or
             new_settings.deprioritize_low_bitrate != current_settings.deprioritize_low_bitrate or
+            new_settings.deprioritize_unstable != current_settings.deprioritize_unstable or
             new_settings.deprioritize_black_screen != current_settings.deprioritize_black_screen or
             new_settings.deprioritize_low_fps != current_settings.deprioritize_low_fps):
         prober = get_prober()
@@ -1501,6 +1514,7 @@ async def update_settings(
                 deprioritize_black_screen=new_settings.deprioritize_black_screen,
                 deprioritize_low_fps=new_settings.deprioritize_low_fps,
                 deprioritize_low_bitrate=new_settings.deprioritize_low_bitrate,
+                deprioritize_unstable=new_settings.deprioritize_unstable,
                 stream_sort_strategy=new_settings.stream_sort_strategy,
                 stream_sort_point_rules=stream_sort_point_rules_for_evaluator(new_settings),
             )
@@ -1528,6 +1542,14 @@ async def update_settings(
         prober = get_prober()
         if prober:
             prober.low_bitrate_threshold = new_settings.low_bitrate_threshold
+
+    if (new_settings.playback_reconnect_threshold != current_settings.playback_reconnect_threshold
+            or new_settings.playback_start_failure_threshold != current_settings.playback_start_failure_threshold):
+        prober = get_prober()
+        if prober:
+            prober.playback_reconnect_threshold = new_settings.playback_reconnect_threshold
+            prober.playback_start_failure_threshold = new_settings.playback_start_failure_threshold
+            prober.reclassify_unstable()
 
     prober = get_prober()
     if prober:
@@ -2410,6 +2432,9 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
                 deprioritize_low_fps=settings.deprioritize_low_fps,
                 deprioritize_low_bitrate=settings.deprioritize_low_bitrate,
                 low_bitrate_threshold=settings.low_bitrate_threshold,
+                deprioritize_unstable=settings.deprioritize_unstable,
+                playback_reconnect_threshold=settings.playback_reconnect_threshold,
+                playback_start_failure_threshold=settings.playback_start_failure_threshold,
                 black_screen_detection_enabled=settings.black_screen_detection_enabled,
                 black_screen_sample_duration=settings.black_screen_sample_duration,
                 low_fps_threshold=settings.low_fps_threshold,

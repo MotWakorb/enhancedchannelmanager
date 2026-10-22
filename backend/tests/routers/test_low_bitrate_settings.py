@@ -30,7 +30,7 @@ async def test_settings_persist_live_apply_and_preserve_on_omit(async_client, tm
         assert response.status_code == 200
         assert response.json()["low_bitrate_threshold"] == 0.5
         assert response.json()["deprioritize_low_bitrate"] is True
-        assert response.json()["failed_stream_sort_order"] == ["low_bitrate", "failed", "low_fps", "black_screen"]
+        assert response.json()["failed_stream_sort_order"] == ["low_bitrate", "failed", "low_fps", "black_screen", "unstable"]
     finally:
         config.clear_settings_cache()
 
