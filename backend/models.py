@@ -290,6 +290,8 @@ class StreamStats(Base):
     playback_reconnects = Column(Integer, default=0, server_default=sa_text("0"), nullable=False)
     playback_start_failures = Column(Integer, default=0, server_default=sa_text("0"), nullable=False)
     last_playback_probed = Column(DateTime, nullable=True)
+    # NULL while unclassified: below the minimum exposure and below the start-failure threshold.
+    is_unstable = Column(Boolean, nullable=True, default=None)
 
     __table_args__ = (
         Index("idx_stream_stats_stream_id", stream_id),
@@ -324,6 +326,7 @@ class StreamStats(Base):
             "playback_reconnects": self.playback_reconnects or 0,
             "playback_start_failures": self.playback_start_failures or 0,
             "last_playback_probed": self.last_playback_probed.isoformat() + "Z" if self.last_playback_probed else None,
+            "is_unstable": self.is_unstable,
         }
 
     def __repr__(self):

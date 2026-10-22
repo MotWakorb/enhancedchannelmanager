@@ -1864,6 +1864,8 @@ class TestSmartBootstrapFastPath:
                     "playback_reconnects INTEGER NOT NULL DEFAULT 0",
                     "playback_start_failures INTEGER NOT NULL DEFAULT 0",
                     "last_playback_probed DATETIME",
+                    # 0058: nullable playback-stability flag.
+                    "is_unstable BOOLEAN",
                 ):
                     conn.execute(text(
                         f"ALTER TABLE stream_stats ADD COLUMN {column_ddl}"

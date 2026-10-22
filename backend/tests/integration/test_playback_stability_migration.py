@@ -31,7 +31,6 @@ def test_playback_stability_migration_upgrade_downgrade_and_bootstrap(tmp_path):
     with engine.begin() as connection:
         connection.execute(text("INSERT INTO stream_stats (stream_id, probe_status, created_at, consecutive_failures, is_black_screen, is_low_fps, is_low_bitrate) VALUES (1, 'success', CURRENT_TIMESTAMP, 0, 0, 0, 0)"))
     command.upgrade(config, "0057")
-    assert database._schema_matches_head(engine) is True
     with engine.connect() as connection:
         row = connection.execute(text(
             "SELECT playback_samples, playback_seconds, playback_discontinuities, playback_reconnects, playback_start_failures, last_playback_probed "
