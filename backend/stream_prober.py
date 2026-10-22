@@ -2223,6 +2223,48 @@ class StreamProber:
             # Return empty dict on failure - allows probes to proceed (fail-open)
             return {}
 
+    async def _load_m3u_account_profiles(self) -> tuple[dict, dict]:
+        """Rebuild the profile maps that connection-aware probing reads.
+
+        Sets ``_profile_to_account_map``, ``_account_profiles`` and
+        ``_profile_max_streams`` from Dispatcharr's M3U accounts.
+
+        Returns:
+            ``(m3u_accounts_map, m3u_max_streams)``: account id -> name and
+            account id -> account-level max_streams. Both are empty, as are the
+            profile maps, when the accounts cannot be fetched.
+        """
+        logger.info("[STREAM-PROBE] Fetching M3U accounts...")
+        m3u_accounts_map = {}  # id -> name
+        m3u_max_streams = {}   # id -> max_streams
+        self._profile_to_account_map = {}  # profile_id -> account_id
+        self._account_profiles = {}  # account_id -> [sorted list of active profile dicts]
+        self._profile_max_streams = {}  # profile_id -> max_streams
+        try:
+            m3u_accounts = await self.client.get_m3u_accounts()
+            for account in m3u_accounts:
+                account_id = account["id"]
+                m3u_accounts_map[account_id] = account.get("name", f"M3U {account_id}")
+                # Build profile-to-account map and profile lists
+                account_profiles = []
+                for profile in account.get("profiles", []):
+                    self._profile_to_account_map[profile["id"]] = account_id
+                    self._profile_max_streams[profile["id"]] = profile.get("max_streams", 0)
+                    if profile.get("is_active", True):
+                        account_profiles.append(profile)
+                # Sort profiles: default first, then by ID
+                account_profiles.sort(key=lambda p: (not p.get("is_default", False), p["id"]))
+                self._account_profiles[account_id] = account_profiles
+                # Use the account-level max_streams as the cap
+                m3u_max_streams[account_id] = account.get("max_streams", 0)
+            logger.info("[STREAM-PROBE] Found %s M3U accounts, %s profiles mapped, "
+                       "%s active profiles",
+                       len(m3u_accounts_map), len(self._profile_to_account_map),
+                       sum(len(v) for v in self._account_profiles.values()))
+        except Exception as e:
+            logger.warning("[STREAM-PROBE] Failed to fetch M3U accounts: %s", e)
+        return m3u_accounts_map, m3u_max_streams
+
     async def _get_profile_active_connections(self) -> dict[int, int]:
         """
         Fetch current active connection counts per profile.
@@ -2932,35 +2974,7 @@ class StreamProber:
                 }
 
             # Fetch M3U accounts to map account IDs to names and max_streams
-            logger.info("[STREAM-PROBE] Fetching M3U accounts...")
-            m3u_accounts_map = {}  # id -> name
-            m3u_max_streams = {}   # id -> max_streams
-            self._profile_to_account_map = {}  # profile_id -> account_id
-            self._account_profiles = {}  # account_id -> [sorted list of active profile dicts]
-            self._profile_max_streams = {}  # profile_id -> max_streams
-            try:
-                m3u_accounts = await self.client.get_m3u_accounts()
-                for account in m3u_accounts:
-                    account_id = account["id"]
-                    m3u_accounts_map[account_id] = account.get("name", f"M3U {account_id}")
-                    # Build profile-to-account map and profile lists
-                    account_profiles = []
-                    for profile in account.get("profiles", []):
-                        self._profile_to_account_map[profile["id"]] = account_id
-                        self._profile_max_streams[profile["id"]] = profile.get("max_streams", 0)
-                        if profile.get("is_active", True):
-                            account_profiles.append(profile)
-                    # Sort profiles: default first, then by ID
-                    account_profiles.sort(key=lambda p: (not p.get("is_default", False), p["id"]))
-                    self._account_profiles[account_id] = account_profiles
-                    # Use the account-level max_streams as the cap
-                    m3u_max_streams[account_id] = account.get("max_streams", 0)
-                logger.info("[STREAM-PROBE] Found %s M3U accounts, %s profiles mapped, "
-                           "%s active profiles",
-                           len(m3u_accounts_map), len(self._profile_to_account_map),
-                           sum(len(v) for v in self._account_profiles.values()))
-            except Exception as e:
-                logger.warning("[STREAM-PROBE] Failed to fetch M3U accounts: %s", e)
+            m3u_accounts_map, m3u_max_streams = await self._load_m3u_account_profiles()
 
             # Fetch all streams
             logger.info("[STREAM-PROBE] Fetching stream details...")
