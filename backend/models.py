@@ -279,6 +279,17 @@ class StreamStats(Base):
     is_black_screen = Column(Boolean, default=False, nullable=False)  # Black screen detected during probe
     is_low_fps = Column(Boolean, default=False, nullable=False)  # Low FPS detected during probe (< 20 FPS)
     is_low_bitrate = Column(Boolean, default=False, server_default=sa_text("0"), nullable=False)
+    # Playback Probe window: JSON list of the last complete samples
+    # ({at, seconds, discontinuities, reconnects}) and denormalised window sums
+    # for a later Smart Sort input. Reconnects count in-place reconnects only;
+    # discontinuities are informational. playback_start_failures counts
+    # failed starts since the last complete sample.
+    playback_samples = Column(Text, nullable=True)
+    playback_seconds = Column(Integer, default=0, server_default=sa_text("0"), nullable=False)
+    playback_discontinuities = Column(Integer, default=0, server_default=sa_text("0"), nullable=False)
+    playback_reconnects = Column(Integer, default=0, server_default=sa_text("0"), nullable=False)
+    playback_start_failures = Column(Integer, default=0, server_default=sa_text("0"), nullable=False)
+    last_playback_probed = Column(DateTime, nullable=True)
 
     __table_args__ = (
         Index("idx_stream_stats_stream_id", stream_id),
@@ -308,6 +319,11 @@ class StreamStats(Base):
             "is_black_screen": self.is_black_screen or False,
             "is_low_fps": self.is_low_fps or False,
             "is_low_bitrate": self.is_low_bitrate or False,
+            "playback_seconds": self.playback_seconds or 0,
+            "playback_discontinuities": self.playback_discontinuities or 0,
+            "playback_reconnects": self.playback_reconnects or 0,
+            "playback_start_failures": self.playback_start_failures or 0,
+            "last_playback_probed": self.last_playback_probed.isoformat() + "Z" if self.last_playback_probed else None,
         }
 
     def __repr__(self):
