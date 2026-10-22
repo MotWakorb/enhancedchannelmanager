@@ -332,6 +332,112 @@ class TestProbeGuard:
         assert result.error == "CANCELLED"
         assert prober._probing_in_progress is False
 
+    async def test_scan_first_blocks_playback_probe_and_releases_guard(self, env, monkeypatch):
+        from tasks import black_screen_scan
+
+        monkeypatch.setattr(black_screen_scan, "get_session", lambda: env["session"])
+        env["session"].add(StreamStats(stream_id=101, stream_name="NPO 1 HD", probe_status="success"))
+        env["session"].commit()
+        prober = _make_prober(streams=[LEAD])
+        fetching = asyncio.Event()
+        resume = asyncio.Event()
+
+        async def blocked_fetch():
+            fetching.set()
+            await resume.wait()
+            return []
+
+        prober._fetch_all_streams = blocked_fetch
+        scan = black_screen_scan.BlackScreenScanTask()
+        scan.set_prober(prober)
+        scan_run = asyncio.create_task(scan.execute())
+        await asyncio.wait_for(fetching.wait(), timeout=5)
+
+        result = await _make_task(prober).execute()
+        assert result.error == "ALREADY_RUNNING"
+        assert not env["marker"].exists()
+
+        resume.set()
+        scan_result = await asyncio.wait_for(scan_run, timeout=5)
+        assert scan_result.success is True
+        assert prober._probing_in_progress is False
+
+    async def test_cancel_probe_stops_black_screen_scan(self, env, monkeypatch):
+        from tasks import black_screen_scan
+
+        monkeypatch.setattr(black_screen_scan, "get_session", lambda: env["session"])
+        env["session"].add(StreamStats(stream_id=101, stream_name="NPO 1 HD", probe_status="success"))
+        env["session"].commit()
+        prober = _make_prober()
+        prober._fetch_all_streams = AsyncMock(return_value=[LEAD])
+        detecting = asyncio.Event()
+        resume = asyncio.Event()
+
+        async def blocked_detect(url, stream_id=None):
+            detecting.set()
+            await resume.wait()
+            return False
+
+        prober._detect_black_screen = blocked_detect
+        scan = black_screen_scan.BlackScreenScanTask()
+        scan.set_prober(prober)
+        scan_run = asyncio.create_task(scan.execute())
+        await asyncio.wait_for(detecting.wait(), timeout=5)
+
+        assert prober.cancel_probe()["status"] == "cancelling"
+        resume.set()
+        scan_result = await asyncio.wait_for(scan_run, timeout=5)
+
+        assert scan_result.error == "CANCELLED"
+        assert prober._probing_in_progress is False
+
+    async def test_scan_failure_releases_guard(self, env, monkeypatch):
+        from tasks import black_screen_scan
+
+        monkeypatch.setattr(black_screen_scan, "get_session", lambda: env["session"])
+        env["session"].add(StreamStats(stream_id=101, stream_name="NPO 1 HD", probe_status="success"))
+        env["session"].commit()
+        prober = _make_prober(streams=[LEAD])
+        prober._fetch_all_streams = AsyncMock(side_effect=httpx.ConnectError("down"))
+        scan = black_screen_scan.BlackScreenScanTask()
+        scan.set_prober(prober)
+
+        with pytest.raises(httpx.ConnectError):
+            await scan.execute()
+        assert prober._probing_in_progress is False
+
+    async def test_pause_holds_black_screen_scan_until_resume(self, env, monkeypatch):
+        from tasks import black_screen_scan
+
+        monkeypatch.setattr(black_screen_scan, "get_session", lambda: env["session"])
+        env["session"].add(StreamStats(stream_id=101, stream_name="NPO 1 HD", probe_status="success"))
+        env["session"].commit()
+        prober = _make_prober()
+        fetching = asyncio.Event()
+        resume = asyncio.Event()
+
+        async def blocked_fetch():
+            fetching.set()
+            await resume.wait()
+            return [LEAD]
+
+        prober._fetch_all_streams = blocked_fetch
+        prober._detect_black_screen = AsyncMock(return_value=False)
+        scan = black_screen_scan.BlackScreenScanTask()
+        scan.set_prober(prober)
+        scan_run = asyncio.create_task(scan.execute())
+        await asyncio.wait_for(fetching.wait(), timeout=5)
+
+        assert prober.pause_probe()["status"] == "paused"
+        resume.set()
+        await asyncio.sleep(0.5)
+        prober._detect_black_screen.assert_not_awaited()
+
+        prober.resume_probe()
+        scan_result = await asyncio.wait_for(scan_run, timeout=5)
+        assert scan_result.success is True
+        prober._detect_black_screen.assert_awaited_once()
+
     async def test_task_cancellation_releases_guard(self, env, monkeypatch):
         _probed(env, 101)
         monkeypatch.setenv("FAKE_FFMPEG_SLEEP", "30")
@@ -383,6 +489,43 @@ class TestProbeGuard:
 
         assert prober.probe_guard_cancelled(first) is True
         assert prober.probe_guard_cancelled(second) is False
+
+    async def test_force_reset_stops_black_screen_scan_after_reacquire(self, env, monkeypatch):
+        from tasks import black_screen_scan
+
+        monkeypatch.setattr(black_screen_scan, "get_session", lambda: env["session"])
+        env["session"].add_all([
+            StreamStats(stream_id=101, stream_name="NPO 1 HD", probe_status="success"),
+            StreamStats(stream_id=102, stream_name="NPO 1 FHD", probe_status="success"),
+        ])
+        env["session"].commit()
+        prober = _make_prober()
+        prober._fetch_all_streams = AsyncMock(return_value=[LEAD, BACKUP])
+        detecting = asyncio.Event()
+        resume = asyncio.Event()
+        detected = []
+
+        async def blocked_detect(url, stream_id=None):
+            detected.append(stream_id)
+            detecting.set()
+            await resume.wait()
+            return False
+
+        prober._detect_black_screen = blocked_detect
+        scan = black_screen_scan.BlackScreenScanTask()
+        scan.set_prober(prober)
+        scan._max_concurrent_override = 1
+        scan_run = asyncio.create_task(scan.execute())
+        await asyncio.wait_for(detecting.wait(), timeout=5)
+
+        prober.force_reset_probe_state()
+        assert prober.try_acquire_probe_guard() is not None
+        resume.set()
+        scan_result = await asyncio.wait_for(scan_run, timeout=5)
+
+        assert scan_result.error == "CANCELLED"
+        assert len(detected) == 1
+        assert prober._probing_in_progress is True
 
     async def test_set_prober_mid_sample_keeps_run_on_its_prober(self, env, monkeypatch):
         _probed(env, 101)
