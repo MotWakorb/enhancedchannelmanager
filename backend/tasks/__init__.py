@@ -18,6 +18,7 @@ from tasks.popularity_calculation import PopularityCalculationTask
 from tasks.channel_pipeline import ChannelPipelineTask
 from tasks.dummy_epg_refresh import DummyEPGRefreshTask
 from tasks.black_screen_scan import BlackScreenScanTask
+from tasks.playback_probe import PlaybackProbeTask
 from tasks.yaml_backup import YamlBackupTask
 from tasks.dbas_backup import DbasBackupTask
 from tasks.dbas_restore import DbasRestoreTask
@@ -38,6 +39,7 @@ __all__ = [
     "ChannelPipelineTask",
     "DummyEPGRefreshTask",
     "BlackScreenScanTask",
+    "PlaybackProbeTask",
     "YamlBackupTask",
     "DbasBackupTask",
     "DbasRestoreTask",

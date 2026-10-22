@@ -1686,6 +1686,13 @@ async def startup_event():
                     logger.info("[MAIN] Connected StreamProber to BlackScreenScanTask")
                 else:
                     logger.warning("[MAIN] BlackScreenScanTask not found in registry")
+
+                playback_probe_task = registry.get_task_instance("playback_probe")
+                if playback_probe_task:
+                    playback_probe_task.set_prober(prober)
+                    logger.info("[MAIN] Connected StreamProber to PlaybackProbeTask")
+                else:
+                    logger.warning("[MAIN] PlaybackProbeTask not found in registry")
             except Exception as e:
                 logger.warning("[MAIN] Failed to connect prober to task: %s", e)
     except Exception as e:

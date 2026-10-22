@@ -2311,7 +2311,8 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
     """Stop and rebuild the BandwidthTracker / StreamProber singletons from the
     CURRENT ``get_client()``, rewire their notification callbacks, and
     reconnect the prober-dependent task instances (``stream_probe``,
-    ``failed_stream_reprobe``, ``black_screen_scan``) to the fresh prober.
+    ``failed_stream_reprobe``, ``black_screen_scan``, ``playback_probe``) to
+    the fresh prober.
 
     Extracted from ``restart_services()`` (bd-snryv) so ``update_settings()``
     can call the same rebuild-and-rewire logic automatically when a
@@ -2437,6 +2438,7 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
                     "epg_event_probe",
                     "failed_stream_reprobe",
                     "black_screen_scan",
+                    "playback_probe",
                 ):
                     task_instance = registry.get_task_instance(tid)
                     if task_instance:

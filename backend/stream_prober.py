@@ -524,6 +524,7 @@ class StreamProber:
         self._probe_cancelled = False  # Controls cancellation of in-progress probe
         self._probe_paused = False  # Controls pausing of in-progress probe
         self._probing_in_progress = False
+        self._probe_guard_token: Optional[object] = None  # Owner of a try_acquire_probe_guard claim
         self._bulk_probe_tasks: set[asyncio.Task] = set()
         # Progress tracking for probe all streams
         self._probe_progress_total = 0
@@ -1052,6 +1053,43 @@ class StreamProber:
             task.cancel()
         logger.info("[STREAM-PROBE] StreamProber stopped")
 
+    def try_acquire_probe_guard(self) -> Optional[object]:
+        """Claim the shared probing guard for a task that opens provider connections.
+
+        Returns an owner token, or None when another probe or scan already
+        holds the guard. The caller passes the token to ``release_probe_guard``
+        in ``finally``. While held, the guard is visible to ``cancel_probe``,
+        ``pause_probe`` and ``force_reset_probe_state``, so holders stop when
+        ``probe_guard_cancelled`` returns True and wait while ``_probe_paused``
+        is set.
+        """
+        if self._probing_in_progress:
+            return None
+        self._probing_in_progress = True
+        self._probe_cancelled = False
+        self._probe_paused = False
+        self._probe_guard_token = object()
+        return self._probe_guard_token
+
+    def release_probe_guard(self, token: object) -> None:
+        """Release the guard if ``token`` still owns it.
+
+        ``force_reset_probe_state`` revokes the current token, so a stale
+        holder finishing late cannot release a later holder's guard.
+        """
+        if token is not None and token is self._probe_guard_token:
+            self._probe_guard_token = None
+            self._probing_in_progress = False
+
+    def probe_guard_cancelled(self, token: object) -> bool:
+        """True when the holder of ``token`` must stop.
+
+        That is when a cancel is pending, or when ``token`` no longer owns the
+        guard because ``force_reset_probe_state`` revoked it; a later acquire
+        clears ``_probe_cancelled`` but cannot make a revoked token current.
+        """
+        return self._probe_cancelled or token is not self._probe_guard_token
+
     def cancel_probe(self) -> dict:
         """Cancel an in-progress probe operation.
 
@@ -1109,6 +1147,7 @@ class StreamProber:
         logger.warning("[STREAM-PROBE] Force resetting probe state (was_in_progress=%s)", was_in_progress)
 
         self._probing_in_progress = False
+        self._probe_guard_token = None  # A stale holder's release becomes a no-op
         self._probe_cancelled = True  # Signal any running probe to stop
         self._probe_paused = False  # Reset paused state
         self._probe_progress_status = "idle"
