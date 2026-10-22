@@ -68,6 +68,7 @@ def test_migration_0052_adds_and_round_trips_retention_index(tmp_path):
                 "playback_reconnects INTEGER NOT NULL DEFAULT 0",
                 "playback_start_failures INTEGER NOT NULL DEFAULT 0",
                 "last_playback_probed DATETIME",
+                "is_unstable BOOLEAN",
             ):
                 conn.execute(text(f"ALTER TABLE stream_stats ADD COLUMN {column_ddl}"))
             conn.execute(text(

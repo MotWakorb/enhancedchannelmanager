@@ -27,6 +27,7 @@ def test_low_bitrate_migration_upgrade_downgrade_and_bootstrap(tmp_path):
             "playback_reconnects INTEGER NOT NULL DEFAULT 0",
             "playback_start_failures INTEGER NOT NULL DEFAULT 0",
             "last_playback_probed DATETIME",
+            "is_unstable BOOLEAN",
         ):
             connection.execute(text(f"ALTER TABLE stream_stats ADD COLUMN {column_ddl}"))
     assert database._schema_matches_head(engine) is True
