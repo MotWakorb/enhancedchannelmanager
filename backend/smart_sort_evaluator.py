@@ -291,7 +291,7 @@ def sort_streams_by_priority(
                 deprioritize_black_screen=deprioritize_black_screen,
                 deprioritize_low_fps=deprioritize_low_fps,
                 deprioritize_low_bitrate=deprioritize_low_bitrate,
-        deprioritize_unstable=deprioritize_unstable,
+                deprioritize_unstable=deprioritize_unstable,
             ),
         )
     ]
@@ -399,7 +399,7 @@ def sort_streams(
             deprioritize_black_screen=deprioritize_black_screen,
             deprioritize_low_fps=deprioritize_low_fps,
             deprioritize_low_bitrate=deprioritize_low_bitrate,
-        deprioritize_unstable=deprioritize_unstable,
+            deprioritize_unstable=deprioritize_unstable,
             failed_stream_sort_order=failed_stream_sort_order,
         )
     raise ValueError(f"Unknown Smart Sort strategy: {strategy!r}")

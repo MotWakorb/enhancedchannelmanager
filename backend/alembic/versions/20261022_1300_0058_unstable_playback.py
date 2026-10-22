@@ -12,12 +12,15 @@ branch_labels = None
 depends_on = None
 
 
+def _existing_columns() -> set[str]:
+    return {column["name"] for column in sa.inspect(op.get_bind()).get_columns("stream_stats")}
+
+
 def upgrade() -> None:
-    columns = {column["name"] for column in sa.inspect(op.get_bind()).get_columns("stream_stats")}
-    if "is_unstable" not in columns:
+    if "is_unstable" not in _existing_columns():
         op.add_column("stream_stats", sa.Column("is_unstable", sa.Boolean(), nullable=True))
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("stream_stats") as batch_op:
-        batch_op.drop_column("is_unstable")
+    if "is_unstable" in _existing_columns():
+        op.drop_column("stream_stats", "is_unstable")
