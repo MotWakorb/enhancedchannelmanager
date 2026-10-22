@@ -1,12 +1,12 @@
 # Scheduled Tasks
 
-Scheduled Tasks, under **Upkeep** in the Settings navigation, lists every
-recurring job ECM can run and gives each one the same set of controls: a
-status badge, Run Now, Edit, and an expandable History panel. On the
-instance this was written against, there are 17 tasks: EPG Refresh, M3U
-Refresh, M3U Change Monitor, Database Cleanup, Stream Probe, M3U Change
-Digest, Popularity Calculation, Auto-Create Channels, Dummy EPG Refresh,
-Re-probe Failed Streams, Struck Stream Cleanup, Black Screen Scan, YAML
+Scheduled Tasks, under **Upkeep** in the Settings navigation, lists
+every recurring job ECM can run and gives each one the same set of
+controls: a status badge, Run Now, Edit, and an expandable History
+panel. ECM ships 18 tasks: EPG Refresh, M3U Refresh, M3U Change Monitor,
+Database Cleanup, Stream Probe, M3U Change Digest, Popularity
+Calculation, Auto-Create Channels, Dummy EPG Refresh, Re-probe Failed
+Streams, Struck Stream Cleanup, Black Screen Scan, Playback Probe, YAML
 Backup, Stats v2 Rollup & Prune, DBAS Backup, DBAS Restore, and Journal
 Noise Purge. Because every task shares the same card layout, the tasks
 below are generic. They apply to whichever task you're looking at.
@@ -90,6 +90,7 @@ manual-only task just means nobody has run it yet, not that it's failing.
 | Re-probe Failed Streams | Re-probe only streams that previously failed or timed out. |
 | Struck Stream Cleanup | Remove struck-out streams from channels. See [Maintenance](maintenance.md#strike-rule) for the strike threshold. |
 | Black Screen Scan | Scan already-probed streams for black screens without re-probing them. |
+| Playback Probe | Play the lead stream of your most-watched channels for a few minutes each. Counts in-place reconnects (ffmpeg `Will reconnect at` with a non-zero offset) and failed starts; timestamp discontinuities are recorded for information only. Starts a sample only on an M3U login with a free connection and skips channels someone is watching. It aborts the sample within one status poll (about 5 s) when a viewer starts on the same account; it narrows, not closes, the race in #1032. Pause takes effect between streams. A stream must have been probed once (Stream Probe) before Playback Probe records anything for it. Samples that fail, end early or hit the deadline are not stored; only complete samples and failed starts change the stored values. The run holds the shared probe guard for its whole duration (about top_channels x sample_minutes), so a scheduled Stream Probe or Re-probe that collides is skipped with "already in progress"; a manual probe reset stops a running Playback Probe or Black Screen Scan. |
 | YAML Backup | Export ECM configuration as YAML to `/config/backups/`. See [Backup & Restore](../backup-restore/index.md). |
 | Stats v2 Rollup & Prune | Aggregate the previous day's telemetry into daily rollups, then prune raw rows past the retention window. |
 | DBAS Backup | Build a redacted, sealed backup artifact. See [Backup & Restore](../backup-restore/index.md). |
