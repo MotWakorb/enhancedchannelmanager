@@ -298,9 +298,9 @@ class PlaybackProbeTask(TaskScheduler):
                     sample_seconds=sample_seconds, account_id=account_id, baseline=baseline,
                 )
                 if sample.outcome == "complete":
-                    self._record_sample(stream_id, sample)
+                    self._record_sample(stream_id, sample, prober)
                 elif sample.outcome == "failed_start":
-                    self._record_start_failure(stream_id)
+                    self._record_start_failure(stream_id, prober)
             except Exception as e:
                 detail = operator_safe_detail(e) or "Playback sample failed"
                 logger.warning("[%s] Playback sample failed for stream %s: %s", self.task_id, stream_id, detail)
@@ -604,17 +604,20 @@ class PlaybackProbeTask(TaskScheduler):
         finally:
             session.close()
 
-    def _record_start_failure(self, stream_id: int) -> None:
+    def _record_start_failure(self, stream_id: int, prober) -> None:
         """Count a failed start without touching the sample window."""
         session = get_session()
         try:
             stats = session.query(StreamStats).filter_by(stream_id=stream_id).one()
             stats.playback_start_failures = (stats.playback_start_failures or 0) + 1
+            stats.is_unstable = prober.classify_unstable(
+                stats.playback_seconds, stats.playback_reconnects, stats.playback_start_failures
+            )
             session.commit()
         finally:
             session.close()
 
-    def _record_sample(self, stream_id: int, sample: PlaybackSample) -> None:
+    def _record_sample(self, stream_id: int, sample: PlaybackSample, prober) -> None:
         """Append a complete sample to the stream's window, refresh the sums
         and clear the start-failure count."""
         now = datetime.utcnow()
@@ -635,6 +638,9 @@ class PlaybackProbeTask(TaskScheduler):
             stats.playback_reconnects = sum(s["reconnects"] for s in window)
             stats.playback_start_failures = 0
             stats.last_playback_probed = now
+            stats.is_unstable = prober.classify_unstable(
+                stats.playback_seconds, stats.playback_reconnects, stats.playback_start_failures
+            )
             session.commit()
         finally:
             session.close()

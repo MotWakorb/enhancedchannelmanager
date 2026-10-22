@@ -842,3 +842,85 @@ class TestSampleWindow:
 
         result = await _make_task(_make_prober(), playback_retest_days=7).execute()
         assert [s["id"] for s in result.details["sampled_streams"]] == [101]
+
+    def test_complete_sample_sets_is_unstable(self, env):
+        prober = _make_prober()
+        prober.playback_reconnect_threshold = 4.0
+        env["session"].add(StreamStats(
+            stream_id=101, stream_name="NPO 1 HD",
+            playback_samples=json.dumps([
+                {"at": "2026-10-20T01:00:00Z", "seconds": 300, "discontinuities": 1, "reconnects": 0},
+                {"at": "2026-10-21T01:00:00Z", "seconds": 300, "discontinuities": 1, "reconnects": 0},
+            ]),
+        ))
+        env["session"].commit()
+        task = _make_task(prober)
+        other = _make_prober()
+        other.playback_reconnect_threshold = 100.0
+        task.set_prober(other)  # the prober passed to _record_sample decides, not the installed one
+
+        task._record_sample(101, playback_probe.PlaybackSample(
+            outcome="complete", seconds=300, discontinuities=4, reconnects=2,
+        ), prober)
+        row = env["session"].query(StreamStats).filter_by(stream_id=101).one()
+        assert row.playback_seconds == 900
+        assert row.playback_reconnects == 2
+        assert row.is_unstable is True  # 2 reconnects over 900 s = 8 per hour, threshold 4
+
+    async def test_incomplete_sample_leaves_is_unstable_untouched(self, env, monkeypatch):
+        monkeypatch.setenv("FAKE_FFMPEG_SLEEP", "30")
+        # Stored data would classify as stable; the stored flag must survive the aborted sample.
+        env["session"].add(StreamStats(
+            stream_id=101, stream_name="NPO 1 HD", is_unstable=True,
+            playback_samples=json.dumps([
+                {"at": "2026-10-20T01:00:00Z", "seconds": 450, "discontinuities": 0, "reconnects": 0},
+                {"at": "2026-10-21T01:00:00Z", "seconds": 450, "discontinuities": 0, "reconnects": 0},
+            ]),
+            playback_seconds=900, playback_reconnects=0,
+        ))
+        env["session"].commit()
+        prober = _make_prober(
+            accounts=[{"id": 1, "name": "Provider", "max_streams": 2, "profiles": []}], streams=[LEAD],
+        )
+        prober.client.get_channel_stats = _status_sequence(
+            [], [{"channel_id": "uuid-other", "m3u_profile_id": 1}],
+        )
+        result = await asyncio.wait_for(_make_task(prober).execute(), timeout=10)
+
+        assert result.details["incomplete_streams"] == [{"id": 101, "name": "NPO 1 HD", "reason": "viewer"}]
+        row = env["session"].query(StreamStats).filter_by(stream_id=101).one()
+        assert row.is_unstable is True
+
+    def test_discontinuities_never_set_is_unstable(self, env):
+        prober = _make_prober()
+        prober.playback_reconnect_threshold = 4.0
+        env["session"].add(StreamStats(
+            stream_id=101, stream_name="NPO 1 HD",
+            playback_samples=json.dumps([
+                {"at": "2026-10-20T01:00:00Z", "seconds": 300, "discontinuities": 40, "reconnects": 0},
+                {"at": "2026-10-21T01:00:00Z", "seconds": 300, "discontinuities": 40, "reconnects": 0},
+            ]),
+        ))
+        env["session"].commit()
+
+        _make_task(prober)._record_sample(101, playback_probe.PlaybackSample(
+            outcome="complete", seconds=300, discontinuities=26, reconnects=0,
+        ), prober)
+        row = env["session"].query(StreamStats).filter_by(stream_id=101).one()
+        assert row.playback_discontinuities == 106
+        assert row.is_unstable is False
+
+    def test_repeated_failed_starts_set_is_unstable(self, env):
+        prober = _make_prober()
+        prober.playback_start_failure_threshold = 2
+        _probed(env, 101)
+        task = _make_task(prober)
+
+        task._record_start_failure(101, prober)
+        row = env["session"].query(StreamStats).filter_by(stream_id=101).one()
+        assert row.is_unstable is None
+
+        task._record_start_failure(101, prober)
+        row = env["session"].query(StreamStats).filter_by(stream_id=101).one()
+        assert row.playback_start_failures == 2
+        assert row.is_unstable is True
