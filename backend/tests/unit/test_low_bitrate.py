@@ -97,7 +97,7 @@ def test_defaults_and_saved_custom_order():
     settings = DispatcharrSettings(failed_stream_sort_order=["low_fps", "failed", "black_screen"])
     assert settings.low_bitrate_threshold == 1.0
     assert settings.deprioritize_low_bitrate is False
-    assert settings.failed_stream_sort_order == ["low_fps", "failed", "black_screen", "low_bitrate"]
+    assert settings.failed_stream_sort_order == ["low_fps", "failed", "black_screen", "low_bitrate", "unstable"]
     assert not any(rule.criterion == "low_bitrate" for rule in settings.stream_sort_point_rules)
 
 

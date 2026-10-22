@@ -113,7 +113,7 @@ describe('resdet resolution setting (6cyl3 / GH #618)', () => {
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
     const payload = vi.mocked(api.saveSettings).mock.calls[0][0];
     expect(payload.deprioritize_low_bitrate).toBe(true);
-    expect(payload.failed_stream_sort_order).toEqual(['low_fps', 'failed', 'black_screen', 'low_bitrate']);
+    expect(payload.failed_stream_sort_order).toEqual(['low_fps', 'failed', 'black_screen', 'low_bitrate', 'unstable']);
   });
 
   it('opens the low bitrate history bucket without changing the success count', async () => {

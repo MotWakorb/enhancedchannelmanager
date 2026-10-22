@@ -2436,6 +2436,7 @@ class ChannelPipelineEngine:
                                     deprioritize_black_screen=settings.deprioritize_black_screen,
                                     deprioritize_low_fps=settings.deprioritize_low_fps,
                                     deprioritize_low_bitrate=settings.deprioritize_low_bitrate,
+                                    deprioritize_unstable=settings.deprioritize_unstable,
                                 )
                                 reason = health_deprioritization_reason(
                                     facts,
@@ -7063,6 +7064,7 @@ def _pipeline_stream_facts(
     black_screen = stats.get("is_black_screen") if stats else None
     low_fps = stats.get("is_low_fps") if stats else None
     low_bitrate = stats.get("is_low_bitrate") if stats else None
+    unstable = stats.get("is_unstable") if stats else None
     m3u_account_id = stream_m3u_map.get(stream_id)
     metadata_known = (
         stream_metadata_known_ids is None
@@ -7110,6 +7112,7 @@ def _pipeline_stream_facts(
         black_screen=black_screen if type(black_screen) is bool else None,
         low_fps=low_fps if type(low_fps) is bool else None,
         low_bitrate=low_bitrate if type(low_bitrate) is bool else None,
+        unstable=unstable if type(unstable) is bool else None,
     )
 
 
@@ -7206,6 +7209,7 @@ def _smart_sort_streams(
         deprioritize_black_screen=deprioritize_black_screen,
         deprioritize_low_fps=deprioritize_low_fps,
         deprioritize_low_bitrate=getattr(settings, "deprioritize_low_bitrate", False),
+        deprioritize_unstable=getattr(settings, "deprioritize_unstable", False),
         failed_stream_sort_order=fail_order,
     )
 

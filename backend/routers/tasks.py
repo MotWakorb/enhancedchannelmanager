@@ -364,6 +364,38 @@ TASK_PARAMETER_SCHEMAS = {
             },
         ],
     },
+    "playback_probe": {
+        "description": "Play top watched channels' streams and count in-place reconnects and failed starts",
+        "parameters": [
+            {
+                "name": "top_channels",
+                "type": "number",
+                "label": "Top Channels",
+                "description": "Number of most-watched channels (by watch time) to sample",
+                "default": 10,
+                "min": 1,
+                "max": 100,
+            },
+            {
+                "name": "sample_minutes",
+                "type": "number",
+                "label": "Sample Length (minutes)",
+                "description": "How long to play each stream; streams are sampled one at a time",
+                "default": 5,
+                "min": 1,
+                "max": 30,
+            },
+            {
+                "name": "playback_retest_days",
+                "type": "number",
+                "label": "Retest After (days)",
+                "description": "Also sample a channel's other streams when their last playback sample is older than this",
+                "default": 7,
+                "min": 1,
+                "max": 90,
+            },
+        ],
+    },
     "yaml_backup": {
         "description": "YAML backup parameters",
         "parameters": [

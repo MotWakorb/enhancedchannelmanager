@@ -224,6 +224,7 @@ def _prober_stream_facts(
     )
     low_fps = getattr(stat, "is_low_fps", None) if stats_available else None
     low_bitrate = getattr(stat, "is_low_bitrate", None) if stats_available else None
+    unstable = getattr(stat, "is_unstable", None) if stats_available else None
     return StreamFacts(
         stream_id=stream_id,
         probe_succeeded=status == "success",
@@ -257,6 +258,7 @@ def _prober_stream_facts(
         black_screen=black_screen if type(black_screen) is bool else None,
         low_fps=low_fps if type(low_fps) is bool else None,
         low_bitrate=low_bitrate if type(low_bitrate) is bool else None,
+        unstable=unstable if type(unstable) is bool else None,
     )
 
 
@@ -278,6 +280,7 @@ def smart_sort_streams(
     stream_sort_point_rules: tuple[PointRule, ...] = (),
     stream_metadata_known_ids: set[int] | None = None,
     deprioritize_low_bitrate: bool = False,
+    deprioritize_unstable: bool = False,
 ) -> list[int]:
     """
     Pure function — sort stream IDs by quality/priority criteria.
@@ -326,7 +329,7 @@ def smart_sort_streams(
     if m3u_account_priorities is None:
         m3u_account_priorities = {}
     if failed_stream_sort_order is None:
-        failed_stream_sort_order = ["failed", "black_screen", "low_fps", "low_bitrate"]
+        failed_stream_sort_order = ["failed", "black_screen", "low_fps", "low_bitrate", "unstable"]
 
     active_criteria = [
         criterion
@@ -368,6 +371,7 @@ def smart_sort_streams(
         deprioritize_black_screen=deprioritize_black_screen,
         deprioritize_low_fps=deprioritize_low_fps,
         deprioritize_low_bitrate=deprioritize_low_bitrate,
+        deprioritize_unstable=deprioritize_unstable,
         failed_stream_sort_order=failed_stream_sort_order,
     )
 
@@ -415,6 +419,7 @@ def _priority_deprioritized_streams(
             deprioritize_black_screen=sort_settings["deprioritize_black_screen"],
             deprioritize_low_fps=sort_settings["deprioritize_low_fps"],
             deprioritize_low_bitrate=sort_settings.get("deprioritize_low_bitrate", False),
+            deprioritize_unstable=sort_settings.get("deprioritize_unstable", False),
         )
         reason = health_deprioritization_reason(
             facts, category, getattr(stat, "probe_status", None)
@@ -466,6 +471,9 @@ class StreamProber:
         _resdet_lock_path: Path = RESDET_PIPELINE_LOCK_PATH,
         low_bitrate_threshold: float = 1.0,
         deprioritize_low_bitrate: bool = False,
+        playback_reconnect_threshold: float = 4.0,
+        playback_start_failure_threshold: int = 2,
+        deprioritize_unstable: bool = False,
     ):
         self.client = client
         self.probe_timeout = probe_timeout
@@ -488,6 +496,13 @@ class StreamProber:
         if not math.isfinite(low_bitrate_threshold) or low_bitrate_threshold <= 0:
             raise ValueError("low_bitrate_threshold must be positive and finite")
         self.low_bitrate_threshold = low_bitrate_threshold
+        self.deprioritize_unstable = deprioritize_unstable
+        if not math.isfinite(playback_reconnect_threshold) or playback_reconnect_threshold <= 0:
+            raise ValueError("playback_reconnect_threshold must be positive and finite")
+        self.playback_reconnect_threshold = playback_reconnect_threshold
+        if playback_start_failure_threshold < 1:
+            raise ValueError("playback_start_failure_threshold must be at least 1")
+        self.playback_start_failure_threshold = playback_start_failure_threshold
         self.black_screen_detection_enabled = black_screen_detection_enabled
         self.low_fps_threshold = max(1, min(60, low_fps_threshold))  # Clamp 1-60
         self.black_screen_sample_duration = max(3, min(30, black_screen_sample_duration))  # Clamp 3-30
@@ -515,15 +530,17 @@ class StreamProber:
         self.failed_stream_sort_order = (
             failed_stream_sort_order
             if failed_stream_sort_order is not None
-            else ["failed", "black_screen", "low_fps", "low_bitrate"]
+            else ["failed", "black_screen", "low_fps", "low_bitrate", "unstable"]
         )
-        if "low_bitrate" not in self.failed_stream_sort_order:
-            self.failed_stream_sort_order = [*self.failed_stream_sort_order, "low_bitrate"]
+        for category in ("low_bitrate", "unstable"):
+            if category not in self.failed_stream_sort_order:
+                self.failed_stream_sort_order = [*self.failed_stream_sort_order, category]
         self.stream_sort_strategy = stream_sort_strategy
         self.stream_sort_point_rules = tuple(stream_sort_point_rules)
         self._probe_cancelled = False  # Controls cancellation of in-progress probe
         self._probe_paused = False  # Controls pausing of in-progress probe
         self._probing_in_progress = False
+        self._probe_guard_token: Optional[object] = None  # Owner of a try_acquire_probe_guard claim
         self._bulk_probe_tasks: set[asyncio.Task] = set()
         # Progress tracking for probe all streams
         self._probe_progress_total = 0
@@ -621,6 +638,7 @@ class StreamProber:
         stream_sort_strategy: str = None,
         stream_sort_point_rules: tuple[PointRule, ...] = None,
         deprioritize_low_bitrate: bool = None,
+        deprioritize_unstable: bool = None,
     ) -> None:
         """Update the sort settings.
 
@@ -650,8 +668,11 @@ class StreamProber:
             self.deprioritize_low_fps = deprioritize_low_fps
         if deprioritize_low_bitrate is not None:
             self.deprioritize_low_bitrate = deprioritize_low_bitrate
-        if "low_bitrate" not in self.failed_stream_sort_order:
-            self.failed_stream_sort_order = [*self.failed_stream_sort_order, "low_bitrate"]
+        if deprioritize_unstable is not None:
+            self.deprioritize_unstable = deprioritize_unstable
+        for category in ("low_bitrate", "unstable"):
+            if category not in self.failed_stream_sort_order:
+                self.failed_stream_sort_order = [*self.failed_stream_sort_order, category]
         if stream_sort_strategy is not None:
             self.stream_sort_strategy = stream_sort_strategy
         if stream_sort_point_rules is not None:
@@ -680,6 +701,7 @@ class StreamProber:
             "deprioritize_black_screen": self.deprioritize_black_screen,
             "deprioritize_low_fps": self.deprioritize_low_fps,
             "deprioritize_low_bitrate": self.deprioritize_low_bitrate,
+            "deprioritize_unstable": self.deprioritize_unstable,
             "failed_stream_sort_order": tuple(self.failed_stream_sort_order),
             "stream_sort_strategy": self.stream_sort_strategy,
             "stream_sort_point_rules": tuple(self.stream_sort_point_rules),
@@ -1052,6 +1074,43 @@ class StreamProber:
             task.cancel()
         logger.info("[STREAM-PROBE] StreamProber stopped")
 
+    def try_acquire_probe_guard(self) -> Optional[object]:
+        """Claim the shared probing guard for a task that opens provider connections.
+
+        Returns an owner token, or None when another probe or scan already
+        holds the guard. The caller passes the token to ``release_probe_guard``
+        in ``finally``. While held, the guard is visible to ``cancel_probe``,
+        ``pause_probe`` and ``force_reset_probe_state``, so holders stop when
+        ``probe_guard_cancelled`` returns True and wait while ``_probe_paused``
+        is set.
+        """
+        if self._probing_in_progress:
+            return None
+        self._probing_in_progress = True
+        self._probe_cancelled = False
+        self._probe_paused = False
+        self._probe_guard_token = object()
+        return self._probe_guard_token
+
+    def release_probe_guard(self, token: object) -> None:
+        """Release the guard if ``token`` still owns it.
+
+        ``force_reset_probe_state`` revokes the current token, so a stale
+        holder finishing late cannot release a later holder's guard.
+        """
+        if token is not None and token is self._probe_guard_token:
+            self._probe_guard_token = None
+            self._probing_in_progress = False
+
+    def probe_guard_cancelled(self, token: object) -> bool:
+        """True when the holder of ``token`` must stop.
+
+        That is when a cancel is pending, or when ``token`` no longer owns the
+        guard because ``force_reset_probe_state`` revoked it; a later acquire
+        clears ``_probe_cancelled`` but cannot make a revoked token current.
+        """
+        return self._probe_cancelled or token is not self._probe_guard_token
+
     def cancel_probe(self) -> dict:
         """Cancel an in-progress probe operation.
 
@@ -1109,6 +1168,7 @@ class StreamProber:
         logger.warning("[STREAM-PROBE] Force resetting probe state (was_in_progress=%s)", was_in_progress)
 
         self._probing_in_progress = False
+        self._probe_guard_token = None  # A stale holder's release becomes a no-op
         self._probe_cancelled = True  # Signal any running probe to stop
         self._probe_paused = False  # Reset paused state
         self._probe_progress_status = "idle"
@@ -1794,6 +1854,48 @@ class StreamProber:
         finally:
             session.close()
 
+    PLAYBACK_MIN_EXPOSURE_SECONDS = 600
+
+    def classify_unstable(
+        self,
+        playback_seconds: int | None,
+        playback_reconnects: int | None,
+        playback_start_failures: int | None,
+    ) -> bool | None:
+        """Tri-state verdict: repeated failed starts flag outright, otherwise the window
+        reconnect rate decides once the minimum exposure is reached."""
+        if (playback_start_failures or 0) >= self.playback_start_failure_threshold:
+            return True
+        seconds = playback_seconds or 0
+        if seconds < self.PLAYBACK_MIN_EXPOSURE_SECONDS:
+            return None
+        rate = (playback_reconnects or 0) / seconds * 3600
+        return rate >= self.playback_reconnect_threshold
+
+    def reclassify_unstable(self) -> int:
+        """Re-derive is_unstable for every row after a threshold change. Returns rows changed."""
+        changed = 0
+        session = get_session()
+        try:
+            rows = session.query(StreamStats).filter(
+                (StreamStats.playback_seconds > 0) | (StreamStats.playback_start_failures > 0)
+            ).all()
+            for stats in rows:
+                verdict = self.classify_unstable(
+                    stats.playback_seconds, stats.playback_reconnects, stats.playback_start_failures
+                )
+                if verdict != stats.is_unstable:
+                    stats.is_unstable = verdict
+                    changed += 1
+            session.commit()
+        except Exception as e:
+            logger.error("[STREAM-PROBE] Failed to reclassify unstable streams: %s", e)
+            session.rollback()
+            raise
+        finally:
+            session.close()
+        return changed
+
     def _is_low_bitrate(self, data: Optional[dict], measured_bitrate: Optional[int]) -> bool:
         """Classify fresh probe inputs, never retained database quality fields."""
         if not data:
@@ -2222,6 +2324,48 @@ class StreamProber:
             logger.warning("[STREAM-PROBE] Failed to fetch M3U connection counts: %s", e)
             # Return empty dict on failure - allows probes to proceed (fail-open)
             return {}
+
+    async def _load_m3u_account_profiles(self) -> tuple[dict, dict]:
+        """Rebuild the profile maps that connection-aware probing reads.
+
+        Sets ``_profile_to_account_map``, ``_account_profiles`` and
+        ``_profile_max_streams`` from Dispatcharr's M3U accounts.
+
+        Returns:
+            ``(m3u_accounts_map, m3u_max_streams)``: account id -> name and
+            account id -> account-level max_streams. Both are empty, as are the
+            profile maps, when the accounts cannot be fetched.
+        """
+        logger.info("[STREAM-PROBE] Fetching M3U accounts...")
+        m3u_accounts_map = {}  # id -> name
+        m3u_max_streams = {}   # id -> max_streams
+        self._profile_to_account_map = {}  # profile_id -> account_id
+        self._account_profiles = {}  # account_id -> [sorted list of active profile dicts]
+        self._profile_max_streams = {}  # profile_id -> max_streams
+        try:
+            m3u_accounts = await self.client.get_m3u_accounts()
+            for account in m3u_accounts:
+                account_id = account["id"]
+                m3u_accounts_map[account_id] = account.get("name", f"M3U {account_id}")
+                # Build profile-to-account map and profile lists
+                account_profiles = []
+                for profile in account.get("profiles", []):
+                    self._profile_to_account_map[profile["id"]] = account_id
+                    self._profile_max_streams[profile["id"]] = profile.get("max_streams", 0)
+                    if profile.get("is_active", True):
+                        account_profiles.append(profile)
+                # Sort profiles: default first, then by ID
+                account_profiles.sort(key=lambda p: (not p.get("is_default", False), p["id"]))
+                self._account_profiles[account_id] = account_profiles
+                # Use the account-level max_streams as the cap
+                m3u_max_streams[account_id] = account.get("max_streams", 0)
+            logger.info("[STREAM-PROBE] Found %s M3U accounts, %s profiles mapped, "
+                       "%s active profiles",
+                       len(m3u_accounts_map), len(self._profile_to_account_map),
+                       sum(len(v) for v in self._account_profiles.values()))
+        except Exception as e:
+            logger.warning("[STREAM-PROBE] Failed to fetch M3U accounts: %s", e)
+        return m3u_accounts_map, m3u_max_streams
 
     async def _get_profile_active_connections(self) -> dict[int, int]:
         """
@@ -2932,35 +3076,7 @@ class StreamProber:
                 }
 
             # Fetch M3U accounts to map account IDs to names and max_streams
-            logger.info("[STREAM-PROBE] Fetching M3U accounts...")
-            m3u_accounts_map = {}  # id -> name
-            m3u_max_streams = {}   # id -> max_streams
-            self._profile_to_account_map = {}  # profile_id -> account_id
-            self._account_profiles = {}  # account_id -> [sorted list of active profile dicts]
-            self._profile_max_streams = {}  # profile_id -> max_streams
-            try:
-                m3u_accounts = await self.client.get_m3u_accounts()
-                for account in m3u_accounts:
-                    account_id = account["id"]
-                    m3u_accounts_map[account_id] = account.get("name", f"M3U {account_id}")
-                    # Build profile-to-account map and profile lists
-                    account_profiles = []
-                    for profile in account.get("profiles", []):
-                        self._profile_to_account_map[profile["id"]] = account_id
-                        self._profile_max_streams[profile["id"]] = profile.get("max_streams", 0)
-                        if profile.get("is_active", True):
-                            account_profiles.append(profile)
-                    # Sort profiles: default first, then by ID
-                    account_profiles.sort(key=lambda p: (not p.get("is_default", False), p["id"]))
-                    self._account_profiles[account_id] = account_profiles
-                    # Use the account-level max_streams as the cap
-                    m3u_max_streams[account_id] = account.get("max_streams", 0)
-                logger.info("[STREAM-PROBE] Found %s M3U accounts, %s profiles mapped, "
-                           "%s active profiles",
-                           len(m3u_accounts_map), len(self._profile_to_account_map),
-                           sum(len(v) for v in self._account_profiles.values()))
-            except Exception as e:
-                logger.warning("[STREAM-PROBE] Failed to fetch M3U accounts: %s", e)
+            m3u_accounts_map, m3u_max_streams = await self._load_m3u_account_profiles()
 
             # Fetch all streams
             logger.info("[STREAM-PROBE] Fetching stream details...")
@@ -3894,7 +4010,10 @@ class StreamProber:
                 "deprioritize_black_screen": self.deprioritize_black_screen,
                 "deprioritize_low_fps": self.deprioritize_low_fps,
                 "deprioritize_low_bitrate": self.deprioritize_low_bitrate,
+                "deprioritize_unstable": self.deprioritize_unstable,
                 "low_bitrate_threshold": self.low_bitrate_threshold,
+                "playback_reconnect_threshold": self.playback_reconnect_threshold,
+                "playback_start_failure_threshold": self.playback_start_failure_threshold,
             } if reordered_channels else None,
         }
 
@@ -4120,6 +4239,9 @@ def ensure_prober() -> Optional[StreamProber]:
             deprioritize_low_fps=settings.deprioritize_low_fps,
             deprioritize_low_bitrate=settings.deprioritize_low_bitrate,
             low_bitrate_threshold=settings.low_bitrate_threshold,
+            deprioritize_unstable=settings.deprioritize_unstable,
+            playback_reconnect_threshold=settings.playback_reconnect_threshold,
+            playback_start_failure_threshold=settings.playback_start_failure_threshold,
             black_screen_detection_enabled=settings.black_screen_detection_enabled,
             black_screen_sample_duration=settings.black_screen_sample_duration,
             low_fps_threshold=settings.low_fps_threshold,

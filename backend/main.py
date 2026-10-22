@@ -1590,6 +1590,9 @@ async def startup_event():
                 deprioritize_low_fps=settings.deprioritize_low_fps,
                 deprioritize_low_bitrate=settings.deprioritize_low_bitrate,
                 low_bitrate_threshold=settings.low_bitrate_threshold,
+                deprioritize_unstable=settings.deprioritize_unstable,
+                playback_reconnect_threshold=settings.playback_reconnect_threshold,
+                playback_start_failure_threshold=settings.playback_start_failure_threshold,
                 black_screen_detection_enabled=settings.black_screen_detection_enabled,
                 black_screen_sample_duration=settings.black_screen_sample_duration,
                 low_fps_threshold=settings.low_fps_threshold,
@@ -1686,6 +1689,13 @@ async def startup_event():
                     logger.info("[MAIN] Connected StreamProber to BlackScreenScanTask")
                 else:
                     logger.warning("[MAIN] BlackScreenScanTask not found in registry")
+
+                playback_probe_task = registry.get_task_instance("playback_probe")
+                if playback_probe_task:
+                    playback_probe_task.set_prober(prober)
+                    logger.info("[MAIN] Connected StreamProber to PlaybackProbeTask")
+                else:
+                    logger.warning("[MAIN] PlaybackProbeTask not found in registry")
             except Exception as e:
                 logger.warning("[MAIN] Failed to connect prober to task: %s", e)
     except Exception as e:

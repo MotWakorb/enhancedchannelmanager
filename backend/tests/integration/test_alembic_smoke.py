@@ -1856,6 +1856,20 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE stream_stats "
                     "ADD COLUMN is_low_bitrate BOOLEAN NOT NULL DEFAULT 0"
                 ))
+                # 0057: Playback Probe window columns on stream_stats.
+                for column_ddl in (
+                    "playback_samples TEXT",
+                    "playback_seconds INTEGER NOT NULL DEFAULT 0",
+                    "playback_discontinuities INTEGER NOT NULL DEFAULT 0",
+                    "playback_reconnects INTEGER NOT NULL DEFAULT 0",
+                    "playback_start_failures INTEGER NOT NULL DEFAULT 0",
+                    "last_playback_probed DATETIME",
+                    # 0058: nullable playback-stability flag.
+                    "is_unstable BOOLEAN",
+                ):
+                    conn.execute(text(
+                        f"ALTER TABLE stream_stats ADD COLUMN {column_ddl}"
+                    ))
 
             # Sanity: alembic_version is still at 0005 (create_all does not
             # touch the version row), but every model table is now present.

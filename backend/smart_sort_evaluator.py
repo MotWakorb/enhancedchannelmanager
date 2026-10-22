@@ -29,15 +29,17 @@ _BOOLEAN_CRITERIA = {
     "black_screen": "black_screen",
     "low_fps": "low_fps",
     "low_bitrate": "low_bitrate",
+    "unstable": "unstable",
 }
 _STREAM_METADATA_CRITERIA = frozenset(
     {"m3u_priority", "custom_streams", "catchup"}
 )
-_DEFAULT_HEALTH_RANK = {"failed": 0, "black_screen": 1, "low_fps": 2, "low_bitrate": 3}
+_DEFAULT_HEALTH_RANK = {"failed": 0, "black_screen": 1, "low_fps": 2, "low_bitrate": 3, "unstable": 4}
 _HEALTH_REASON_LABELS = {
     "black_screen": "black screen",
     "low_fps": "low FPS",
     "low_bitrate": "low bitrate",
+    "unstable": "unstable playback",
     "failed": "failed",
     "timeout": "timed out",
     "pending": "pending",
@@ -80,6 +82,7 @@ class StreamFacts:
     black_screen: bool | None = None
     low_fps: bool | None = None
     low_bitrate: bool | None = None
+    unstable: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -156,6 +159,7 @@ def health_deprioritization_category(
     deprioritize_black_screen: bool,
     deprioritize_low_fps: bool,
     deprioritize_low_bitrate: bool = False,
+    deprioritize_unstable: bool = False,
 ) -> str | None:
     """Return the canonical Priority health category used before criteria."""
     if strategy != "priority" or not deprioritize_failed:
@@ -168,6 +172,8 @@ def health_deprioritization_category(
         return "low_fps"
     if deprioritize_low_bitrate and facts.low_bitrate is True:
         return "low_bitrate"
+    if deprioritize_unstable and facts.unstable is True:
+        return "unstable"
     return None
 
 
@@ -201,6 +207,7 @@ def _health_bucket(
     deprioritize_black_screen: bool,
     deprioritize_low_fps: bool,
     deprioritize_low_bitrate: bool,
+    deprioritize_unstable: bool,
 ) -> int | None:
     category = health_deprioritization_category(
         facts,
@@ -209,6 +216,7 @@ def _health_bucket(
         deprioritize_black_screen=deprioritize_black_screen,
         deprioritize_low_fps=deprioritize_low_fps,
         deprioritize_low_bitrate=deprioritize_low_bitrate,
+        deprioritize_unstable=deprioritize_unstable,
     )
     if category is None:
         return None
@@ -224,6 +232,7 @@ def _priority_sort_key(
     deprioritize_black_screen: bool,
     deprioritize_low_fps: bool,
     deprioritize_low_bitrate: bool,
+    deprioritize_unstable: bool,
 ) -> tuple:
     """Build the legacy lexicographic key with an ascending-ID final tie."""
     bucket = _health_bucket(
@@ -233,6 +242,7 @@ def _priority_sort_key(
         deprioritize_black_screen=deprioritize_black_screen,
         deprioritize_low_fps=deprioritize_low_fps,
         deprioritize_low_bitrate=deprioritize_low_bitrate,
+        deprioritize_unstable=deprioritize_unstable,
     )
     include_probe_facts = facts.probe_succeeded or bucket is not None
     criterion_key = tuple(
@@ -255,6 +265,7 @@ def sort_streams_by_priority(
     deprioritize_black_screen: bool = True,
     deprioritize_low_fps: bool = True,
     deprioritize_low_bitrate: bool = False,
+    deprioritize_unstable: bool = False,
     failed_stream_sort_order: Iterable[str] | None = None,
 ) -> list[int]:
     """Sort normalized facts using current priority-mode semantics."""
@@ -262,10 +273,11 @@ def sort_streams_by_priority(
     fail_order = (
         list(failed_stream_sort_order)
         if failed_stream_sort_order is not None
-        else ["failed", "black_screen", "low_fps", "low_bitrate"]
+        else ["failed", "black_screen", "low_fps", "low_bitrate", "unstable"]
     )
-    if "low_bitrate" not in fail_order:
-        fail_order.append("low_bitrate")
+    for category in ("low_bitrate", "unstable"):
+        if category not in fail_order:
+            fail_order.append(category)
     failed_rank = {category: index for index, category in enumerate(fail_order)}
     return [
         facts.stream_id
@@ -279,6 +291,7 @@ def sort_streams_by_priority(
                 deprioritize_black_screen=deprioritize_black_screen,
                 deprioritize_low_fps=deprioritize_low_fps,
                 deprioritize_low_bitrate=deprioritize_low_bitrate,
+                deprioritize_unstable=deprioritize_unstable,
             ),
         )
     ]
@@ -372,6 +385,7 @@ def sort_streams(
     deprioritize_black_screen: bool = True,
     deprioritize_low_fps: bool = True,
     deprioritize_low_bitrate: bool = False,
+    deprioritize_unstable: bool = False,
     failed_stream_sort_order: Iterable[str] | None = None,
 ) -> list[int]:
     """Dispatch normalized facts through the explicitly selected strategy."""
@@ -385,6 +399,7 @@ def sort_streams(
             deprioritize_black_screen=deprioritize_black_screen,
             deprioritize_low_fps=deprioritize_low_fps,
             deprioritize_low_bitrate=deprioritize_low_bitrate,
+            deprioritize_unstable=deprioritize_unstable,
             failed_stream_sort_order=failed_stream_sort_order,
         )
     raise ValueError(f"Unknown Smart Sort strategy: {strategy!r}")

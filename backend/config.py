@@ -466,7 +466,7 @@ _STREAM_SORT_NUMERIC_CRITERIA = frozenset(
     {"resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"}
 )
 _STREAM_SORT_BOOLEAN_CRITERIA = frozenset(
-    {"custom_streams", "catchup", "failed", "black_screen", "low_fps", "low_bitrate"}
+    {"custom_streams", "catchup", "failed", "black_screen", "low_fps", "low_bitrate", "unstable"}
 )
 _STREAM_SORT_ORDERED_OPERATORS = frozenset({"eq", "ne", "gt", "gte", "lt", "lte"})
 StreamSortStrategy = Literal["priority", "points"]
@@ -722,6 +722,11 @@ class DispatcharrSettings(BaseModel):
     low_fps_threshold: int = 20  # FPS below this value is considered "low FPS" (5, 10, 15, or 20)
     low_bitrate_threshold: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     deprioritize_low_bitrate: bool = False
+    # In-place reconnects per played hour at or above which Playback Probe marks a stream unstable.
+    playback_reconnect_threshold: float = Field(default=4.0, gt=0, allow_inf_nan=False)
+    # Consecutive failed playback starts that mark a stream unstable regardless of exposure.
+    playback_start_failure_threshold: int = Field(default=2, ge=1)
+    deprioritize_unstable: bool = False
     deprioritize_failed_streams: bool = True
     # Per-category deprioritization overrides.  When False the category's
     # streams are sorted by their actual quality stats instead of being
@@ -730,13 +735,16 @@ class DispatcharrSettings(BaseModel):
     deprioritize_black_screen: bool = True
     deprioritize_low_fps: bool = True
     # Order of deprioritized stream categories (first = sorted higher among deprioritized)
-    # Valid values: "failed", "black_screen", "low_fps", "low_bitrate"
-    failed_stream_sort_order: list[str] = ["failed", "black_screen", "low_fps", "low_bitrate"]
+    # Valid values: "failed", "black_screen", "low_fps", "low_bitrate", "unstable"
+    failed_stream_sort_order: list[str] = ["failed", "black_screen", "low_fps", "low_bitrate", "unstable"]
 
     @field_validator("failed_stream_sort_order")
     @classmethod
-    def append_low_bitrate_category(cls, value: list[str]) -> list[str]:
-        return value if "low_bitrate" in value else [*value, "low_bitrate"]
+    def append_health_categories(cls, value: list[str]) -> list[str]:
+        for category in ("low_bitrate", "unstable"):
+            if category not in value:
+                value = [*value, category]
+        return value
 
     # Strike rule - flag streams with consecutive probe failures (0 = disabled)
     strike_threshold: int = 3

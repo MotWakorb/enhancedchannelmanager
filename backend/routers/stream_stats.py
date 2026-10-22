@@ -467,6 +467,7 @@ async def compute_sort(request: ComputeSortRequest):
             deprioritize_black_screen=getattr(settings, 'deprioritize_black_screen', True),
             deprioritize_low_fps=getattr(settings, 'deprioritize_low_fps', True),
             deprioritize_low_bitrate=settings.deprioritize_low_bitrate,
+            deprioritize_unstable=settings.deprioritize_unstable,
             failed_stream_sort_order=getattr(settings, 'failed_stream_sort_order', None),
             channel_name=f"channel-{ch.channel_id}",
             custom_stream_ids=custom_stream_ids,
