@@ -1098,7 +1098,7 @@ export type SortCriterion = 'resolution' | 'bitrate' | 'framerate' | 'video_code
 export type SortEnabledMap = Record<SortCriterion, boolean>;
 
 // Deprioritized stream categories for ordering within the "failed" group
-export type FailedStreamCategory = 'failed' | 'black_screen' | 'low_fps' | 'low_bitrate';
+export type FailedStreamCategory = 'failed' | 'black_screen' | 'low_fps' | 'low_bitrate' | 'unstable';
 
 export type StreamSortStrategy = 'priority' | 'points';
 export type StreamSortPointCriterion = SortCriterion | FailedStreamCategory;
@@ -1191,6 +1191,9 @@ export interface SettingsResponse {
   low_fps_threshold: number;  // FPS below this value is considered "low FPS"
   low_bitrate_threshold?: number;
   deprioritize_low_bitrate?: boolean;
+  playback_reconnect_threshold?: number;
+  playback_start_failure_threshold?: number;
+  deprioritize_unstable?: boolean;
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
   deprioritize_black_screen: boolean;  // When disabled, black screen streams sort by quality stats
   deprioritize_low_fps: boolean;  // When disabled, low FPS streams sort by quality stats
@@ -1370,6 +1373,9 @@ export async function saveSettings(settings: {
   low_fps_threshold?: number;  // Optional - FPS below this value is considered "low FPS", defaults to 20
   low_bitrate_threshold?: number;
   deprioritize_low_bitrate?: boolean;
+  playback_reconnect_threshold?: number;
+  playback_start_failure_threshold?: number;
+  deprioritize_unstable?: boolean;
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
   deprioritize_black_screen?: boolean;  // Optional - deprioritize black screen streams, defaults to true
   deprioritize_low_fps?: boolean;  // Optional - deprioritize low FPS streams, defaults to true

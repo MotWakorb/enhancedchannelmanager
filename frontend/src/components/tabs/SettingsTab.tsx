@@ -74,9 +74,10 @@ const FAILED_CATEGORY_CONFIG: Record<FailedStreamCategory, { icon: string; label
   black_screen: { icon: 'videocam_off', label: 'Black Screen', description: 'Probe OK but no video content' },
   low_fps: { icon: 'slow_motion_video', label: 'Low FPS', description: 'Below FPS threshold' },
   low_bitrate: { icon: 'speed', label: 'Low Bitrate', description: 'Below resolution-based bitrate threshold' },
+  unstable: { icon: 'sync_problem', label: 'Unstable Playback', description: 'Frequent in-place reconnects in Playback Probe' },
 };
 
-const DEFAULT_FAILED_STREAM_ORDER: FailedStreamCategory[] = ['failed', 'black_screen', 'low_fps', 'low_bitrate'];
+const DEFAULT_FAILED_STREAM_ORDER: FailedStreamCategory[] = ['failed', 'black_screen', 'low_fps', 'low_bitrate', 'unstable'];
 
 // Emby channel-logo image types for the Clear Logos control (GH #475, bd-v9tp7).
 // Defined locally (not read from the api module at render time) so the
@@ -113,6 +114,7 @@ const ALL_POINT_CRITERIA: StreamSortPointCriterion[] = [
   'black_screen',
   'low_fps',
   'low_bitrate',
+  'unstable',
 ];
 
 const POINT_CRITERION_CONFIG: Record<StreamSortPointCriterion, PointCriterionConfig> = {
@@ -128,6 +130,7 @@ const POINT_CRITERION_CONFIG: Record<StreamSortPointCriterion, PointCriterionCon
   black_screen: { label: 'Black Screen', input: 'boolean', defaultValue: true, defaultOperator: 'eq', valueLabel: 'Matches when' },
   low_fps: { label: 'Low FPS', input: 'boolean', defaultValue: true, defaultOperator: 'eq', valueLabel: 'Matches when' },
   low_bitrate: { label: 'Low Bitrate', input: 'boolean', defaultValue: true, defaultOperator: 'eq', valueLabel: 'Matches when' },
+  unstable: { label: 'Unstable Playback', input: 'boolean', defaultValue: true, defaultOperator: 'eq', valueLabel: 'Matches when' },
 };
 
 const POINT_CRITERION_OPTIONS = ALL_POINT_CRITERIA.map((criterion) => ({
@@ -675,6 +678,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [deprioritizeBlackScreen, setDeprioritizeBlackScreen] = useState(true);
   const [deprioritizeLowFps, setDeprioritizeLowFps] = useState(true);
   const [deprioritizeLowBitrate, setDeprioritizeLowBitrate] = useState(false);
+  const [deprioritizeUnstable, setDeprioritizeUnstable] = useState(false);
   const [failedStreamSortOrder, setFailedStreamSortOrder] = useState<FailedStreamCategory[]>(DEFAULT_FAILED_STREAM_ORDER);
   const [strikeThreshold, setStrikeThreshold] = useState(3);
 
@@ -821,6 +825,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [blackScreenSampleDuration, setBlackScreenSampleDuration] = useState(5);
   const [lowFpsThreshold, setLowFpsThreshold] = useState(20);
   const [lowBitrateThreshold, setLowBitrateThreshold] = useState(1.0);
+  const [playbackReconnectThreshold, setPlaybackReconnectThreshold] = useState(4);
+  const [playbackStartFailureThreshold, setPlaybackStartFailureThreshold] = useState(2);
   const [streamFetchPageLimit, setStreamFetchPageLimit] = useState(200);
   const [probingAll, setProbingAll] = useState(false);
   const [probeProgress, setProbeProgress] = useState<{
@@ -947,6 +953,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     probeRetryCount, probeRetryDelay, blackScreenDetectionEnabled,
     blackScreenSampleDuration, lowFpsThreshold, streamFetchPageLimit,
     lowBitrateThreshold, deprioritizeLowBitrate,
+    playbackReconnectThreshold, playbackStartFailureThreshold, deprioritizeUnstable,
     streamSortPriority, streamSortEnabled, streamSortStrategy, streamSortPointRules,
     m3uAccountPriorities,
     deprioritizeFailedStreams, deprioritizeBlackScreen, deprioritizeLowFps,
@@ -1291,6 +1298,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setBlackScreenSampleDuration(settings.black_screen_sample_duration ?? 5);
       setLowFpsThreshold(settings.low_fps_threshold ?? 20);
       setLowBitrateThreshold(settings.low_bitrate_threshold ?? 1.0);
+      setPlaybackReconnectThreshold(settings.playback_reconnect_threshold ?? 4);
+      setPlaybackStartFailureThreshold(settings.playback_start_failure_threshold ?? 2);
       setStreamFetchPageLimit(settings.stream_fetch_page_limit ?? 200);
       // Merge saved criteria with any new criteria that may have been added in updates
       const merged = mergeSortCriteria(settings.stream_sort_priority, settings.stream_sort_enabled);
@@ -1304,8 +1313,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setDeprioritizeBlackScreen(settings.deprioritize_black_screen ?? true);
       setDeprioritizeLowFps(settings.deprioritize_low_fps ?? true);
       setDeprioritizeLowBitrate(settings.deprioritize_low_bitrate ?? false);
+      setDeprioritizeUnstable(settings.deprioritize_unstable ?? false);
       const failedOrder = settings.failed_stream_sort_order ?? DEFAULT_FAILED_STREAM_ORDER;
-      setFailedStreamSortOrder(failedOrder.includes('low_bitrate') ? failedOrder : [...failedOrder, 'low_bitrate']);
+      const withHealth = (['low_bitrate', 'unstable'] as FailedStreamCategory[]).reduce(
+        (order, category) => (order.includes(category) ? order : [...order, category]), failedOrder);
+      setFailedStreamSortOrder(withHealth);
       setStrikeThreshold(settings.strike_threshold ?? 3);
       setPublicBaseUrl(settings.public_base_url ?? '');
       // Shared SMTP settings
@@ -1670,6 +1682,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       notifications.error('Low bitrate threshold must be positive and finite');
       return;
     }
+    if (!Number.isFinite(playbackReconnectThreshold) || playbackReconnectThreshold <= 0) {
+      notifications.error('Playback reconnect threshold must be positive and finite');
+      return;
+    }
+    if (!Number.isInteger(playbackStartFailureThreshold) || playbackStartFailureThreshold < 1) {
+      notifications.error('Playback start-failure threshold must be a whole number of at least 1');
+      return;
+    }
     // Check if password-auth fields have changed (only meaningful in password mode)
     const authChanged = url !== originalUrl || username !== originalUsername;
 
@@ -1784,6 +1804,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         low_fps_threshold: lowFpsThreshold,
         low_bitrate_threshold: lowBitrateThreshold,
         deprioritize_low_bitrate: deprioritizeLowBitrate,
+        playback_reconnect_threshold: playbackReconnectThreshold,
+        playback_start_failure_threshold: playbackStartFailureThreshold,
+        deprioritize_unstable: deprioritizeUnstable,
         stream_fetch_page_limit: streamFetchPageLimit,
         stream_sort_priority: streamSortPriority,
         stream_sort_strategy: streamSortStrategy,
@@ -3410,6 +3433,19 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   Off by default. In Priority mode, move low-bitrate streams below working streams
                   when Deprioritize Failed Streams is enabled. Classification remains visible when off.
                   In Points mode, use an explicit Low Bitrate rule instead.
+                </p>
+              </div>
+
+              <div className="form-group">
+                <label className="checkbox-label">
+                  <input type="checkbox" checked={deprioritizeUnstable}
+                    onChange={(e) => setDeprioritizeUnstable(e.target.checked)} />
+                  <span>Deprioritize Unstable Streams</span>
+                </label>
+                <p className="form-hint">
+                  Off by default. In Priority mode, move streams that Playback Probe marked unstable below
+                  working streams when Deprioritize Failed Streams is enabled. In Points mode, use an
+                  explicit Unstable Playback rule instead.
                 </p>
               </div>
 
@@ -5624,6 +5660,27 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               <input id="lowBitrateThreshold" type="number" step="any" min="0"
                 value={Number.isFinite(lowBitrateThreshold) ? lowBitrateThreshold : ''}
                 onChange={(e) => setLowBitrateThreshold(e.target.valueAsNumber)} />
+            </div>
+            <div className="form-group-vertical">
+              <label htmlFor="playbackReconnectThreshold">Playback reconnect threshold (per played hour)</label>
+              <span className="form-description">
+                Playback Probe marks a stream unstable when its in-place reconnects per played hour,
+                over the last three samples, reach this value. Streams with under 10 minutes sampled stay unclassified unless they fail to start repeatedly.
+                Changing it re-classifies every sampled stream.
+              </span>
+              <input id="playbackReconnectThreshold" type="number" step="any" min="0"
+                value={Number.isFinite(playbackReconnectThreshold) ? playbackReconnectThreshold : ''}
+                onChange={(e) => setPlaybackReconnectThreshold(e.target.valueAsNumber)} />
+            </div>
+            <div className="form-group-vertical">
+              <label htmlFor="playbackStartFailureThreshold">Playback start-failure threshold</label>
+              <span className="form-description">
+                Consecutive Playback Probe samples that failed to start before the stream is marked unstable,
+                regardless of how long it has been sampled. A completed sample resets the count.
+              </span>
+              <input id="playbackStartFailureThreshold" type="number" step="1" min="1"
+                value={Number.isFinite(playbackStartFailureThreshold) ? playbackStartFailureThreshold : ''}
+                onChange={(e) => setPlaybackStartFailureThreshold(e.target.valueAsNumber)} />
             </div>
 
           </div>

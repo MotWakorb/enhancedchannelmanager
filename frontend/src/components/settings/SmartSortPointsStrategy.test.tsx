@@ -85,6 +85,7 @@ const ALL_POINT_RULES: api.StreamSortPointRule[] = [
   { criterion: 'black_screen', operator: 'eq', value: true, points: -30 },
   { criterion: 'low_fps', operator: 'eq', value: true, points: -20 },
   { criterion: 'low_bitrate', operator: 'eq', value: false, points: 10 },
+  { criterion: 'unstable', operator: 'eq', value: false, points: 10 },
 ];
 
 function makeSettings(overrides: Partial<SettingsResponse> = {}): SettingsResponse {
@@ -273,13 +274,14 @@ describe('Smart Sort Priority and Points strategies', () => {
       'black_screen',
       'low_fps',
       'low_bitrate',
+      'unstable',
     ]);
 
     const orderedOperators = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte'];
     for (let ruleNumber = 1; ruleNumber <= 6; ruleNumber += 1) {
       expect(optionValues(ruleControl(ruleNumber, 'Operator'))).toEqual(orderedOperators);
     }
-    for (let ruleNumber = 7; ruleNumber <= 11; ruleNumber += 1) {
+    for (let ruleNumber = 7; ruleNumber <= 13; ruleNumber += 1) {
       expect(optionValues(ruleControl(ruleNumber, 'Operator'))).toEqual(['eq']);
     }
 
