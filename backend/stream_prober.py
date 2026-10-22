@@ -224,6 +224,7 @@ def _prober_stream_facts(
     )
     low_fps = getattr(stat, "is_low_fps", None) if stats_available else None
     low_bitrate = getattr(stat, "is_low_bitrate", None) if stats_available else None
+    unstable = getattr(stat, "is_unstable", None) if stats_available else None
     return StreamFacts(
         stream_id=stream_id,
         probe_succeeded=status == "success",
@@ -257,6 +258,7 @@ def _prober_stream_facts(
         black_screen=black_screen if type(black_screen) is bool else None,
         low_fps=low_fps if type(low_fps) is bool else None,
         low_bitrate=low_bitrate if type(low_bitrate) is bool else None,
+        unstable=unstable if type(unstable) is bool else None,
     )
 
 
@@ -369,6 +371,7 @@ def smart_sort_streams(
         deprioritize_black_screen=deprioritize_black_screen,
         deprioritize_low_fps=deprioritize_low_fps,
         deprioritize_low_bitrate=deprioritize_low_bitrate,
+        deprioritize_unstable=deprioritize_unstable,
         failed_stream_sort_order=failed_stream_sort_order,
     )
 
@@ -416,6 +419,7 @@ def _priority_deprioritized_streams(
             deprioritize_black_screen=sort_settings["deprioritize_black_screen"],
             deprioritize_low_fps=sort_settings["deprioritize_low_fps"],
             deprioritize_low_bitrate=sort_settings.get("deprioritize_low_bitrate", False),
+            deprioritize_unstable=sort_settings.get("deprioritize_unstable", False),
         )
         reason = health_deprioritization_reason(
             facts, category, getattr(stat, "probe_status", None)
