@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "ecm-0.18.2-0045",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0045/ecm-b6ec9e6979f1630ae18be4dbfe14d7725c19e8ddd174f6e627705dd5543f4147",
+  "name": "ecm-0.18.2-0046",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0046/ecm-466babd38ef75d7dcbd18b3d75048b230980c17bbdffda631dcf41e3b8055d27",
   "creationInfo": {
-    "created": "2026-10-18T09:58:51Z",
+    "created": "2026-10-23T07:02:21Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-ecm",
       "name": "enhanced-channel-manager",
-      "versionInfo": "0.18.2-0045",
+      "versionInfo": "0.18.2-0046",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -6676,9 +6676,9 @@
       "comment": "node_modules is not copied into the published image; this package's code reaches the image only insofar as the bundler emitted it into /app/static."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-vite-8.2.2",
+      "SPDXID": "SPDXRef-Package-npm-vite-8.2.4",
       "name": "vite",
-      "versionInfo": "8.2.2",
+      "versionInfo": "8.2.4",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -6689,7 +6689,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/vite@8.2.2"
+          "referenceLocator": "pkg:npm/vite@8.2.4"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -7087,9 +7087,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-oci-python.3.12-slim-2c941e860699",
-      "name": "python:3.12-slim",
-      "versionInfo": "sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a",
+      "SPDXID": "SPDXRef-Package-oci-python.3.12-slim-trixie-a0f57064cbdc",
+      "name": "python:3.12-slim-trixie",
+      "versionInfo": "sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7099,7 +7099,7 @@
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a"
+          "checksumValue": "a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704"
         }
       ],
       "comment": "Final base image of the published container. Its own OS package set is NOT enumerated by this document, and the Dockerfile applies OS security upgrades on top of it at build time.",
@@ -7107,7 +7107,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:oci/python@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a?repository_url=docker.io%2Flibrary%2Fpython&tag=3.12-slim"
+          "referenceLocator": "pkg:oci/python@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704?repository_url=docker.io%2Flibrary%2Fpython&tag=3.12-slim-trixie"
         }
       ]
     },
@@ -7148,9 +7148,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-aiohttp-3.14.3",
+      "SPDXID": "SPDXRef-Package-pypi-aiohttp-3.14.5",
       "name": "aiohttp",
-      "versionInfo": "3.14.3",
+      "versionInfo": "3.14.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7161,7 +7161,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/aiohttp@3.14.3"
+          "referenceLocator": "pkg:pypi/aiohttp@3.14.5"
         }
       ]
     },
@@ -7328,9 +7328,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-certifi-2026.7.22",
+      "SPDXID": "SPDXRef-Package-pypi-certifi-2026.10.19",
       "name": "certifi",
-      "versionInfo": "2026.7.22",
+      "versionInfo": "2026.10.19",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7341,7 +7341,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/certifi@2026.7.22"
+          "referenceLocator": "pkg:pypi/certifi@2026.10.19"
         }
       ]
     },
@@ -8426,9 +8426,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-yarl-1.24.5",
+      "SPDXID": "SPDXRef-Package-pypi-yarl-1.25.1",
       "name": "yarl",
-      "versionInfo": "1.24.5",
+      "versionInfo": "1.25.1",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8439,7 +8439,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/yarl@1.24.5"
+          "referenceLocator": "pkg:pypi/yarl@1.25.1"
         }
       ]
     }
@@ -8728,7 +8728,7 @@
     {
       "spdxElementId": "SPDXRef-Package-ecm",
       "relationshipType": "CONTAINS",
-      "relatedSpdxElement": "SPDXRef-Package-oci-python.3.12-slim-2c941e860699"
+      "relatedSpdxElement": "SPDXRef-Package-oci-python.3.12-slim-trixie-a0f57064cbdc"
     },
     {
       "spdxElementId": "SPDXRef-Package-ecm",
@@ -10216,7 +10216,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-vite-8.2.2",
+      "spdxElementId": "SPDXRef-Package-npm-vite-8.2.4",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10321,7 +10321,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-aiohttp-3.14.3",
+      "spdxElementId": "SPDXRef-Package-pypi-aiohttp-3.14.5",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10371,7 +10371,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-certifi-2026.7.22",
+      "spdxElementId": "SPDXRef-Package-pypi-certifi-2026.10.19",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10676,7 +10676,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-yarl-1.24.5",
+      "spdxElementId": "SPDXRef-Package-pypi-yarl-1.25.1",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
