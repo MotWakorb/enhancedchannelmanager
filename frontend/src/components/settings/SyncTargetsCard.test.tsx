@@ -293,6 +293,133 @@ describe('SyncTargetsCard', () => {
     });
   });
 
+  it.each(['name', 'base URL', 'credentials', 'authentication', 'TLS', 'Schedules Direct password'])(
+    'saving an edit to %s revokes only that target preview until a new preview succeeds',
+    async (field) => {
+      const otherTarget = { ...TARGET, id: 9, name: 'Bedroom B' };
+      let resolveUpdate!: (target: api.SyncTarget) => void;
+      (api.updateSyncTarget as Mock).mockReturnValueOnce(new Promise((resolve) => {
+        resolveUpdate = resolve;
+      }));
+      (api.runTask as Mock).mockResolvedValue({ success: true });
+      await renderCard([TARGET, otherTarget], true);
+      fireEvent.click(await screen.findByTestId('sync-target-preview-7'));
+      expect(await screen.findByTestId('sync-target-apply-7')).toBeEnabled();
+      fireEvent.click(screen.getByTestId('sync-target-preview-9'));
+      expect(await screen.findByTestId('sync-target-apply-9')).toBeEnabled();
+
+      fireEvent.click(screen.getByTestId('sync-target-edit-7'));
+      switch (field) {
+        case 'name':
+          fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: 'Renamed B' } });
+          break;
+        case 'base URL':
+          fireEvent.change(screen.getByLabelText(/base url/i), {
+            target: { value: 'https://corrected-b.example.com' },
+          });
+          break;
+        case 'credentials':
+          fireEvent.change(screen.getByLabelText(/^username$/i), { target: { value: 'admin' } });
+          fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'new-secret' } });
+          break;
+        case 'authentication':
+          fireEvent.change(screen.getByLabelText(/authentication/i), { target: { value: 'api_key' } });
+          fireEvent.change(screen.getByLabelText(/api key/i), { target: { value: 'new-key' } });
+          break;
+        case 'TLS':
+          fireEvent.click(screen.getByRole('checkbox'));
+          break;
+        case 'Schedules Direct password':
+          fireEvent.change(screen.getByLabelText(/schedules direct password/i), {
+            target: { value: 'new-sd-secret' },
+          });
+          break;
+      }
+      fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+      expect(api.updateSyncTarget).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId('sync-target-apply-7')).not.toBeInTheDocument();
+      expect(screen.getByTestId('sync-target-preview-7')).toBeDisabled();
+      expect(screen.getByTestId('sync-target-apply-9')).toBeEnabled();
+
+      const updated = { ...TARGET, ...(api.updateSyncTarget as Mock).mock.calls[0][1] };
+      mockTargets([updated, otherTarget]);
+      resolveUpdate(updated);
+      await waitFor(() => expect(screen.queryByLabelText(/base url/i)).not.toBeInTheDocument());
+      expect(await screen.findByTestId('sync-target-preview-7')).toBeEnabled();
+      expect(screen.queryByTestId('sync-target-apply-7')).not.toBeInTheDocument();
+      expect(screen.getByTestId('sync-target-apply-9')).toBeEnabled();
+
+      (api.runTask as Mock).mockResolvedValueOnce({ success: false, message: 'Preview failed' });
+      fireEvent.click(screen.getByTestId('sync-target-preview-7'));
+      await waitFor(() => expect(notify.error).toHaveBeenCalledWith('Preview failed', 'Sync Preview (dry run)'));
+      expect(screen.queryByTestId('sync-target-apply-7')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('sync-target-preview-7'));
+      expect(await screen.findByTestId('sync-target-apply-7')).toBeEnabled();
+      expect(api.runTask).toHaveBeenCalledTimes(4);
+      expect(api.runTask).toHaveBeenLastCalledWith('dbas_sync_7', undefined, {
+        sync_target_id: 7,
+        confirm_apply: false,
+      });
+    },
+  );
+
+  it('waits for a preview started with the edit form open before allowing Save', async () => {
+    let resolvePreview!: (result: { success: boolean }) => void;
+    (api.runTask as Mock).mockReturnValueOnce(new Promise((resolve) => {
+      resolvePreview = resolve;
+    }));
+    (api.updateSyncTarget as Mock).mockResolvedValue(TARGET);
+    await renderCard();
+    fireEvent.click(await screen.findByTestId('sync-target-edit-7'));
+    fireEvent.change(screen.getByLabelText(/base url/i), {
+      target: { value: 'https://corrected-b.example.com' },
+    });
+    fireEvent.click(screen.getByTestId('sync-target-preview-7'));
+
+    const save = screen.getByRole('button', { name: /save changes/i });
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(api.updateSyncTarget).not.toHaveBeenCalled();
+    resolvePreview({ success: true });
+    await waitFor(() => expect(save).toBeEnabled());
+    expect(screen.getByTestId('sync-target-apply-7')).toBeInTheDocument();
+    fireEvent.click(save);
+    await waitFor(() => expect(screen.queryByLabelText(/base url/i)).not.toBeInTheDocument());
+    expect(await screen.findByTestId('sync-target-preview-7')).toBeEnabled();
+    expect(screen.queryByTestId('sync-target-apply-7')).not.toBeInTheDocument();
+  });
+
+  it('keeps the preview authorization when an edit is cancelled without saving', async () => {
+    (api.runTask as Mock).mockResolvedValue({ success: true });
+    await renderCard();
+    fireEvent.click(await screen.findByTestId('sync-target-preview-7'));
+    expect(await screen.findByTestId('sync-target-apply-7')).toBeEnabled();
+    fireEvent.click(screen.getByTestId('sync-target-edit-7'));
+    fireEvent.change(screen.getByLabelText(/base url/i), {
+      target: { value: 'https://discarded.example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    expect(screen.getByTestId('sync-target-apply-7')).toBeEnabled();
+    expect(api.updateSyncTarget).not.toHaveBeenCalled();
+  });
+
+  it('does not restore stale Apply authorization when saving an edit fails', async () => {
+    (api.runTask as Mock).mockResolvedValue({ success: true });
+    (api.updateSyncTarget as Mock).mockRejectedValueOnce(new Error('Connection lost'));
+    await renderCard();
+    fireEvent.click(await screen.findByTestId('sync-target-preview-7'));
+    expect(await screen.findByTestId('sync-target-apply-7')).toBeEnabled();
+    fireEvent.click(screen.getByTestId('sync-target-edit-7'));
+    fireEvent.change(screen.getByLabelText(/base url/i), {
+      target: { value: 'https://corrected-b.example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(notify.error).toHaveBeenCalledWith('Connection lost', 'Cross-Instance Sync'));
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeEnabled();
+    expect(screen.queryByTestId('sync-target-apply-7')).not.toBeInTheDocument();
+  });
+
   it('shows the insecure-TLS warning badge when a target has insecure=true (nngkg)', async () => {
     await renderCard([{ ...TARGET, insecure: true }]);
     await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());

@@ -250,6 +250,7 @@ export function SyncTargetsCard() {
    */
   const handleSave = useCallback(async () => {
     if (!form.name.trim() || !form.baseUrl.trim() || saving) return;
+    if (editing && busyIds.has(editing.id)) return;
 
     const credentials: Record<string, string> =
       form.authMode === 'api_key'
@@ -287,6 +288,13 @@ export function SyncTargetsCard() {
         if (form.schedulesDirectPassword !== '') {
           payload.schedules_direct_password = form.schedulesDirectPassword;
         }
+        // Revoke before the request: even a failed response may follow a saved
+        // edit. Covered by the preview/edit/save regressions in SyncTargetsCard.test.tsx.
+        setPreviewedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(editing.id);
+          return next;
+        });
         await api.updateSyncTarget(editing.id, payload);
         notifications.success(
           credentialsComplete
@@ -320,7 +328,7 @@ export function SyncTargetsCard() {
     } finally {
       setSaving(false);
     }
-  }, [form, saving, editing, notifications, loadTargets, closeForm]);
+  }, [form, saving, editing, busyIds, notifications, loadTargets, closeForm]);
 
   const handleToggleEnabled = useCallback(
     async (target: api.SyncTarget) => {
@@ -553,7 +561,7 @@ export function SyncTargetsCard() {
         <div className="stc-target-list">
           {targets.map((target) => {
             const kind = outcomeKind(target.last_outcome);
-            const busy = busyIds.has(target.id);
+            const busy = busyIds.has(target.id) || (saving && editing?.id === target.id);
             const previewed = previewedIds.has(target.id);
             return (
               <div
@@ -823,7 +831,10 @@ export function SyncTargetsCard() {
             <button
               type="button"
               className="btn-primary"
-              disabled={saving || !form.name.trim() || !form.baseUrl.trim()}
+              disabled={
+                saving || !form.name.trim() || !form.baseUrl.trim() ||
+                (editing !== null && busyIds.has(editing.id))
+              }
               onClick={handleSave}
             >
               <span className="material-icons">
