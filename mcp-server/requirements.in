@@ -13,6 +13,9 @@
 # 1.30.0 bounds stateful Streamable HTTP sessions (CVE-2026-59951).
 mcp[cli]>=1.30.0,<2
 httpx>=0.28.0
+# Remove compromised emSign ECC Root CA - G3; retain unaffected trust anchors.
+# GHSA-6q48-6c7w-9gw2 (2026.10.18 removed additional unaffected roots).
+certifi>=2026.10.19
 uvicorn[standard]>=0.32.0
 pydantic>=2.10.0
 # 1.0.1 fixes CVE-2026-48710 (malformed Host poisoning request.url.path).

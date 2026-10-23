@@ -13,7 +13,7 @@ RUN npm run build
 
 # Build Python dependencies in a separate stage to reduce peak memory
 # ARM64 needs build tools + Rust for packages like cryptography
-FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS python-builder
+FROM python:3.12-slim-trixie@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704 AS python-builder
 
 COPY --from=ghcr.io/astral-sh/uv:latest@sha256:e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1 /uv /usr/local/bin/uv
 
@@ -32,7 +32,7 @@ RUN uv venv /opt/venv \
     && uv pip install --python /opt/venv/bin/python --no-cache -r /tmp/requirements.txt
 
 # Build resdet from a pinned source commit for both supported image architectures.
-FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS resdet-builder
+FROM python:3.12-slim-trixie@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704 AS resdet-builder
 COPY scripts/generate_sbom.py scripts/build_resdet.py sbom/native-dependencies.json /tmp/
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -42,7 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && python /tmp/build_resdet.py --manifest /tmp/native-dependencies.json --work-dir /tmp/resdet-work --output-dir /tmp/resdet-output
 
 # Production image
-FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
+FROM python:3.12-slim-trixie@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
 
 # Build args - MUST be declared early in the stage to receive build arg
 ARG GIT_COMMIT=unknown

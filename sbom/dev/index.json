@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "version": "0.18.2-0045",
-  "created": "2026-10-18T09:58:51Z",
+  "version": "0.18.2-0046",
+  "created": "2026-10-23T07:02:21Z",
   "kind": "source-manifest",
   "channel": "dev",
   "permanent": false,
@@ -24,11 +24,11 @@
     ]
   },
   "sources": {
-    "Dockerfile": "sha256:ab00a994d742aeb87d3bb28bce7d1d7d1a3fd5c14ca85ee74425c05a37af4472",
-    "backend/requirements.txt": "sha256:bd2358ef1dd6e69f43e6eebec8018d7e6f1fe00b372c1e6cf2fa21fbedd7e3d3",
-    "frontend/package-lock.json": "sha256:05e3cad0ecfd5f00205c511c7945088b42ecace008e62fe2b81a21b47296f38e",
+    "Dockerfile": "sha256:9d1fd2429499e98e2b9aaeb7c94ea80c8db8080e607d5974bb4c8e31f7759b6e",
+    "backend/requirements.txt": "sha256:d29a8e9a20ba95172040c0a28abe00b0ee67f49c2994b44f0fd5827c7f3e90ff",
+    "frontend/package-lock.json": "sha256:91730c9a3a2baa1c8815d7fb2b092f665a107ddc621f978b03e1fb00863ca7a2",
     "mcp-server/Dockerfile": "sha256:58e90f5183dbf0e42069e3b752690a3f049721c1baa18f33f36aa9819433781c",
-    "mcp-server/requirements.txt": "sha256:c7c231cfed5a2bed8e92c0a19f7c8e79abd6a12dcb615aad60603c68e9123784",
+    "mcp-server/requirements.txt": "sha256:e38a267821c14c21a46b4455942a70f1f9a6de03d5710b502abb56ef81454681",
     "sbom/native-dependencies.json": "sha256:530f7498262e5c38541513e01ca12b4f6964b61b80273f75ec8956ff5e17a82a"
   },
   "documents": [
@@ -60,7 +60,7 @@
           ]
         ]
       },
-      "sha256": "b49c751a6d3be2b6d20e5fb8d3400d536e8467cacaad2850e873bcb76f9a8999"
+      "sha256": "108f67750f971e6d1e59889c43eeb16a8a1718aadfcd4dcb4422f6ede3758af8"
     },
     {
       "path": "mcp.spdx.json",
@@ -71,7 +71,7 @@
         "packages": [],
         "relationships": []
       },
-      "sha256": "493341acce49e75e087131e3f850cfc21b360b84dd13a77ac7cc97a97727ca84"
+      "sha256": "71c649221e8712a12e54a5d61b121cfbc0682ca1c0f7f2a87a685e8020d3e1c0"
     }
   ]
 }

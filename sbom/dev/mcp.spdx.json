@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "mcp-0.18.2-0045",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0045/mcp-f6f3be0fe19f44df484b2224a124e1c72866d566fe629d375e2c1cc399298a67",
+  "name": "mcp-0.18.2-0046",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0046/mcp-1f7a970fa473a64164a26c30f6203e6f8850d594887a7ddc9186a6192bc94539",
   "creationInfo": {
-    "created": "2026-10-18T09:58:51Z",
+    "created": "2026-10-23T07:02:21Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-mcp",
       "name": "enhanced-channel-manager-mcp",
-      "versionInfo": "0.18.2-0045",
+      "versionInfo": "0.18.2-0046",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -125,9 +125,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-certifi-2026.7.22",
+      "SPDXID": "SPDXRef-Package-pypi-certifi-2026.10.19",
       "name": "certifi",
-      "versionInfo": "2026.7.22",
+      "versionInfo": "2026.10.19",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -138,7 +138,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/certifi@2026.7.22"
+          "referenceLocator": "pkg:pypi/certifi@2026.10.19"
         }
       ]
     },
@@ -823,7 +823,7 @@
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-certifi-2026.7.22",
+      "spdxElementId": "SPDXRef-Package-pypi-certifi-2026.10.19",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },
