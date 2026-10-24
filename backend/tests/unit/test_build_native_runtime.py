@@ -6,9 +6,12 @@ import hashlib
 import importlib.util
 import io
 import json
+import ssl
 import sys
 import tarfile
+from http.client import IncompleteRead
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -755,3 +758,260 @@ def test_go_sdk_download_rejects_untrusted_redirect(builder, tmp_path, monkeypat
     monkeypatch.setattr(builder, "urlopen", lambda *_a, **_k: response)
     with pytest.raises(builder.BuildError, match="official publisher"):
         builder.fetch_input(_arm_go_descriptor(), tmp_path / "archive", None)
+
+
+def _transport_input():
+    data = b"original exact pinned offline transport fixture"
+    return data, {
+        "url": "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz",
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "size": len(data),
+    }
+
+
+def _transport_response(data, url):
+    response = io.BytesIO(data)
+    response.url = url
+    return response
+
+
+class _InterruptedTransport(io.BytesIO):
+    def __init__(self, url, error):
+        super().__init__(b"owned partial bytes that must not survive")
+        self.url = url
+        self.error = error
+        self.read_count = 0
+
+    def read(self, size=-1):
+        self.read_count += 1
+        if self.read_count > 1:
+            raise self.error
+        return super().read(size)
+
+
+def test_fetch_reset_then_partial_timeout_then_exact_verified_bytes(
+    builder, tmp_path, monkeypatch, capsys
+):
+    data, item = _transport_input()
+    destination = tmp_path / "archive"
+    sibling = tmp_path / "not-owned"
+    sibling.write_bytes(b"preserve")
+    calls, waits = [], []
+
+    def open_url(url, *, timeout):
+        calls.append((url, timeout))
+        assert not destination.exists(), "owned partial destination was not removed"
+        if len(calls) == 1:
+            raise URLError(ConnectionResetError("Connection reset by peer"))
+        if len(calls) == 2:
+            return _InterruptedTransport(url, TimeoutError("timed out"))
+        return _transport_response(data, url)
+
+    monkeypatch.setattr(builder, "urlopen", open_url)
+    monkeypatch.setattr("time.sleep", waits.append)
+    builder.fetch_input(item, destination, None)
+    assert calls == [(item["url"], 120)] * 3
+    assert waits == [1, 2]
+    assert destination.read_bytes() == data and sibling.read_bytes() == b"preserve"
+    text = capsys.readouterr().out
+    assert item["url"] in text
+    assert all(f"{attempt}/3" in text for attempt in [1, 2, 3])
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ConnectionResetError("reset"),
+        TimeoutError("timeout"),
+        URLError(TimeoutError("timeout")),
+        IncompleteRead(b"partial", 100),
+        *[
+            HTTPError(
+                "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz",
+                code,
+                "transient",
+                {},
+                None,
+            )
+            for code in [429, 500, 502, 503, 504]
+        ],
+    ],
+)
+def test_fetch_transient_exhaustion_is_exactly_three_attempts(
+    builder, tmp_path, monkeypatch, error
+):
+    _data, item = _transport_input()
+    calls, waits = [], []
+
+    def open_url(url, *, timeout):
+        calls.append((url, timeout))
+        raise error
+
+    monkeypatch.setattr(builder, "urlopen", open_url)
+    monkeypatch.setattr("time.sleep", waits.append)
+    with pytest.raises(builder.BuildError, match="3/3") as failure:
+        builder.fetch_input(item, tmp_path / "archive", None)
+    assert item["url"] in str(failure.value)
+    assert str(error) in str(failure.value)
+    assert len(calls) == 3 and waits == [1, 2]
+    assert not (tmp_path / "archive").exists()
+
+
+def test_fetch_exhausted_partial_reads_remove_only_owned_destination(
+    builder, tmp_path, monkeypatch
+):
+    _data, item = _transport_input()
+    destination = tmp_path / "archive"
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_bytes(b"untouched")
+    calls, waits = [], []
+
+    def open_url(url, **_kwargs):
+        calls.append(url)
+        assert not destination.exists()
+        return _InterruptedTransport(url, ConnectionResetError("reset during read"))
+
+    monkeypatch.setattr(builder, "urlopen", open_url)
+    monkeypatch.setattr("time.sleep", waits.append)
+    with pytest.raises(builder.BuildError, match="3/3"):
+        builder.fetch_input(item, destination, None)
+    assert calls == [item["url"]] * 3 and waits == [1, 2]
+    assert not destination.exists() and sentinel.read_bytes() == b"untouched"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        HTTPError(
+            "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz", 404, "missing", {}, None
+        ),
+        HTTPError(
+            "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz", 403, "denied", {}, None
+        ),
+        HTTPError(
+            "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz",
+            501,
+            "unsupported",
+            {},
+            None,
+        ),
+        URLError(ssl.SSLCertVerificationError("untrusted certificate")),
+        URLError("permanent unknown failure"),
+        PermissionError("local file permissions"),
+    ],
+)
+def test_fetch_permanent_or_identity_transport_errors_never_retry(
+    builder, tmp_path, monkeypatch, error
+):
+    _data, item = _transport_input()
+    calls = []
+
+    def open_url(url, **_kwargs):
+        calls.append(url)
+        raise error
+
+    monkeypatch.setattr(builder, "urlopen", open_url)
+    monkeypatch.setattr(
+        "time.sleep", lambda *_a: pytest.fail("permanent failure retried")
+    )
+    with pytest.raises(builder.BuildError) as failure:
+        builder.fetch_input(item, tmp_path / "archive", None)
+    assert calls == [item["url"]]
+    assert item["url"] in str(failure.value) and "1/3" in str(failure.value)
+
+
+@pytest.mark.parametrize("failure", ["checksum", "size", "publisher", "https"])
+def test_fetch_successful_transport_identity_mismatch_never_retries(
+    builder, tmp_path, monkeypatch, failure
+):
+    data, item = _transport_input()
+    url = item["url"]
+    if failure == "checksum":
+        data = b"wrong bytes"
+    elif failure == "size":
+        item["size"] += 1
+    elif failure == "publisher":
+        item = _arm_go_descriptor()
+        url = "https://untrusted.invalid/go.tar.gz"
+    else:
+        url = "http://ffmpeg.org/untrusted"
+    calls = []
+    monkeypatch.setattr(
+        builder,
+        "urlopen",
+        lambda source, **_k: calls.append(source) or _transport_response(data, url),
+    )
+    monkeypatch.setattr(
+        "time.sleep", lambda *_a: pytest.fail("identity mismatch retried")
+    )
+    with pytest.raises(builder.BuildError):
+        builder.fetch_input(item, tmp_path / "archive", None)
+    assert calls == [item["url"]]
+
+
+def test_fetch_corrupt_cache_has_zero_network_and_zero_waits(
+    builder, tmp_path, monkeypatch
+):
+    _data, item = _transport_input()
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / item["sha256"]).write_bytes(b"corrupt cache")
+    monkeypatch.setattr(
+        builder,
+        "urlopen",
+        lambda *_a, **_k: pytest.fail("cache corruption fetched a replacement"),
+    )
+    monkeypatch.setattr(
+        "time.sleep", lambda *_a: pytest.fail("cache corruption retried")
+    )
+    with pytest.raises(builder.BuildError, match="checksum"):
+        builder.fetch_input(item, tmp_path / "archive", cache)
+
+
+@pytest.mark.parametrize("kind", ["file", "symlink", "dangling-symlink"])
+def test_fetch_does_not_truncate_or_remove_a_preexisting_destination(
+    builder, tmp_path, monkeypatch, kind
+):
+    data, item = _transport_input()
+    destination = tmp_path / "archive"
+    target = tmp_path / "not-owned"
+    if kind == "file":
+        destination.write_bytes(b"not owned by this fetch")
+    else:
+        if kind == "symlink":
+            target.write_bytes(b"not owned by this fetch")
+        destination.symlink_to(target)
+    monkeypatch.setattr(
+        builder, "urlopen", lambda *_a, **_k: _transport_response(data, item["url"])
+    )
+    monkeypatch.setattr(
+        "time.sleep", lambda *_a: pytest.fail("local destination failure retried")
+    )
+    with pytest.raises(builder.BuildError):
+        builder.fetch_input(item, destination, None)
+    if kind == "dangling-symlink":
+        assert destination.is_symlink() and not target.exists()
+    else:
+        assert destination.read_bytes() == b"not owned by this fetch"
+
+
+@pytest.mark.parametrize("redirect", [False, True])
+def test_fetch_preserves_exact_official_go_redirect_rule(
+    builder, tmp_path, monkeypatch, redirect
+):
+    data, item = _transport_input()
+    item["url"] = _arm_go_descriptor()["url"]
+    final_url = (
+        "https://dl.google.com/go/" + item["url"].rsplit("/", 1)[1]
+        if redirect
+        else item["url"]
+    )
+    monkeypatch.setattr(
+        builder, "urlopen", lambda *_a, **_k: _transport_response(data, final_url)
+    )
+    monkeypatch.setattr(
+        "time.sleep", lambda *_a: pytest.fail("successful download retried")
+    )
+    destination = tmp_path / "archive"
+    builder.fetch_input(item, destination, None)
+    assert destination.read_bytes() == data

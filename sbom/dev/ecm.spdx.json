@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "ecm-0.18.2-0047",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0047/ecm-7a46dc3b8489cf947700a63d02b40a80f50fd6d846c3bf0d179c59a74379c0d8",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0047/ecm-59f621c1cbe316f58aa41344bd00061cc7f4a4ebbd1071905921b6f48b5dd554",
   "creationInfo": {
-    "created": "2026-10-24T11:08:36Z",
+    "created": "2026-10-24T12:00:51Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],
@@ -7047,9 +7047,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-zod-4.4.3",
+      "SPDXID": "SPDXRef-Package-npm-zod-4.6.6",
       "name": "zod",
-      "versionInfo": "4.4.3",
+      "versionInfo": "4.6.6",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7060,7 +7060,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/zod@4.4.3"
+          "referenceLocator": "pkg:npm/zod@4.6.6"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -10359,7 +10359,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-zod-4.4.3",
+      "spdxElementId": "SPDXRef-Package-npm-zod-4.6.6",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },

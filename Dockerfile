@@ -38,6 +38,11 @@ RUN case "$(uname -m)" in \
     && zypper --non-interactive install --no-recommends /tmp/runtime-rpms/*.rpm \
         $(cat /tmp/runtime-packages.txt) python312 python312-base shadow coreutils bash timezone ca-certificates \
     && zypper clean --all
+# Selectively distrust compromised G3 even while an architecture's Mozilla RPM lags.
+# Keep SUSE/admin anchors and regenerate every distribution compatibility store.
+COPY docker/trust/emsign-ecc-root-ca-g3.pem /etc/pki/trust/blocklist/ecm-emsign-ecc-g3.pem
+RUN python3.12 -c "import hashlib, ssl; from pathlib import Path; assert hashlib.sha256(ssl.PEM_cert_to_DER_cert(Path('/etc/pki/trust/blocklist/ecm-emsign-ecc-g3.pem').read_text())).hexdigest() == '86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b'" \
+    && update-ca-certificates
 COPY --from=native-builder /tmp/native-output/root/ /
 RUN ldconfig \
     && for package in gcc gcc-c++ make go1.26 go1.27 libcjson1 libsndfile1; do \
@@ -107,6 +112,8 @@ COPY docker/python-third-party/notices/ /usr/share/doc/ecm/python-third-party/
 COPY docker/python-third-party/sources/ /usr/share/ecm/sources/python/
 COPY docker/python-third-party/component-manifest.json docker/python-third-party/SOURCE-AVAILABILITY.txt /usr/share/doc/ecm/python-third-party/
 COPY docker/python-third-party/artifact-index/ /usr/share/doc/ecm/python-third-party/artifact-index/
+COPY docker/trust/ /usr/share/ecm/sources/trust/
+COPY Dockerfile /usr/share/ecm/sources/trust/Dockerfile
 
 # Create config and TLS directories with proper permissions
 # Convert entrypoint line endings (handles Windows CRLF -> Unix LF)

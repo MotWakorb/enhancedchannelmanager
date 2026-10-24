@@ -774,6 +774,72 @@ class TestStopClient:
         assert response.status_code == 200
 
 
+class TestStopIdentifiers:
+    """Stop IDs are literal tokens, never URL syntax (CodeQL #2045)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "suffix,method", [("stop", "stop_channel"), ("stop-client", "stop_client")]
+    )
+    @pytest.mark.parametrize(
+        "channel_id",
+        ["42", "12345678-1234-1234-1234-123456789abc", "legacy_Channel-42", "A" * 1024],
+    )
+    async def test_preserves_safe_string_identifiers(
+        self, async_client, suffix, method, channel_id
+    ):
+        mock_client = AsyncMock()
+        getattr(mock_client, method).return_value = {"status": "stopped"}
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.post(
+                f"/api/stats/channels/{channel_id}/{suffix}"
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "stopped"}
+        getattr(mock_client, method).assert_awaited_once_with(channel_id)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "suffix,method", [("stop", "stop_channel"), ("stop-client", "stop_client")]
+    )
+    @pytest.mark.parametrize(
+        "encoded_id",
+        [
+            "..%3Fsynthetic%3D1",
+            "42%3Fsynthetic%3D1",
+            "42%23synthetic",
+            "%252f",
+            "%255c",
+            "42%5Cother",
+            "42.other",
+            "42%25other",
+            "42%00other",
+            "42%0Aother",
+            "42%0Dother",
+            "42%09other",
+            "42%7Fother",
+            "42%20other",
+            "%C3%A9",
+        ],
+    )
+    async def test_rejects_url_syntax_before_calling_stop(
+        self, async_client, suffix, method, encoded_id
+    ):
+        mock_client = AsyncMock()
+        getattr(mock_client, method).return_value = {"status": "stopped"}
+
+        with patch("routers.stats.get_client", return_value=mock_client):
+            response = await async_client.post(
+                f"/api/stats/channels/{encoded_id}/{suffix}"
+            )
+
+        assert response.status_code == 422, response.text
+        mock_client.stop_channel.assert_not_awaited()
+        mock_client.stop_client.assert_not_awaited()
+
+
 class TestBandwidthStats:
     """Tests for GET /api/stats/bandwidth."""
 

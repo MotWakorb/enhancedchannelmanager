@@ -20,7 +20,10 @@ import subprocess
 import sys
 import tarfile
 import threading
+import time
+from http.client import IncompleteRead
 from pathlib import Path, PurePosixPath
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 BASE = "registry.opensuse.org/opensuse/tumbleweed@sha256:c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55"
@@ -377,34 +380,70 @@ def run(command: list[str], *, cwd: Path, env: dict[str, str]) -> str:
         raise BuildError(f"native command unavailable: {command[0]}") from exc
 
 
+def _transient_fetch_error(error: Exception) -> bool:
+    if isinstance(error, HTTPError):
+        return error.code in {429, 500, 502, 503, 504}
+    if isinstance(error, URLError):
+        error = error.reason
+    return isinstance(error, (ConnectionResetError, TimeoutError, IncompleteRead))
+
+
 def fetch_input(item: dict, destination: Path, cache: Path | None) -> None:
     cached = cache / item["sha256"] if cache else None
     if cached and cached.exists():
         _require(sha256(cached) == item["sha256"], "cached input checksum mismatch")
-        shutil.copyfile(cached, destination)
+        with cached.open("rb") as source, destination.open("xb") as output:
+            shutil.copyfileobj(source, output)
+        context = f"{item['url']} (cache)"
     else:
         _require(item["url"].startswith("https://"), "source URL must use HTTPS")
-        with (
-            urlopen(item["url"], timeout=120) as response,
-            destination.open("wb") as output,
-        ):
-            _require(
-                response.url.startswith("https://"), "source redirect must use HTTPS"
-            )
-            if item["url"].startswith("https://go.dev/dl/"):
-                _require(
-                    response.url
-                    in [
-                        item["url"],
-                        "https://dl.google.com/go/" + item["url"].rsplit("/", 1)[1],
-                    ],
-                    "Go download redirected outside official publisher",
+        _require(
+            not destination.exists() and not destination.is_symlink(),
+            f"fetch destination already exists: {destination}",
+        )
+        for attempt in range(1, 4):
+            context = f"{item['url']} (attempt {attempt}/3)"
+            print(f"fetch {context}", flush=True)
+            owned = False
+            try:
+                with urlopen(item["url"], timeout=120) as response:
+                    _require(
+                        response.url.startswith("https://"),
+                        "source redirect must use HTTPS",
+                    )
+                    if item["url"].startswith("https://go.dev/dl/"):
+                        _require(
+                            response.url
+                            in [
+                                item["url"],
+                                "https://dl.google.com/go/"
+                                + item["url"].rsplit("/", 1)[1],
+                            ],
+                            "Go download redirected outside official publisher",
+                        )
+                    with destination.open("xb") as output:
+                        owned = True
+                        shutil.copyfileobj(response, output)
+                break
+            except (OSError, IncompleteRead, BuildError) as exc:
+                if owned:
+                    destination.unlink()
+                if isinstance(exc, HTTPError):
+                    exc.close()
+                if not _transient_fetch_error(exc) or attempt == 3:
+                    raise BuildError(f"fetch failed: {context}: {exc}") from exc
+                print(
+                    f"fetch failed: {context}: {exc}; retry in {attempt}s", flush=True
                 )
-            shutil.copyfileobj(response, output)
-    _require(sha256(destination) == item["sha256"], "source/RPM checksum mismatch")
+                time.sleep(attempt)
+    _require(
+        sha256(destination) == item["sha256"],
+        f"source/RPM checksum mismatch: {context}",
+    )
     if "size" in item:
         _require(
-            destination.stat().st_size == item["size"], "pinned input size mismatch"
+            destination.stat().st_size == item["size"],
+            f"pinned input size mismatch: {context}",
         )
 
 

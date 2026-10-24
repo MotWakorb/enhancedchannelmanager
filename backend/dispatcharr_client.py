@@ -163,6 +163,20 @@ _CORE_SETTINGS_MAX_PAGES = 20
 _EPG_DATA_BYTES_PER_RESULT = 2048
 _EPG_DATA_MIN_RESPONSE_BYTES = 1024 * 1024
 
+
+def validate_stop_identifier(identifier: int | str) -> str:
+    """Keep numeric IDs, UUIDs and legacy tokens in one literal URL segment.
+
+    Pinned by tests/unit/test_dispatcharr_stop_identifiers.py and the stats
+    router's TestStopIdentifiers. Do not decode, strip or truncate identifiers.
+    """
+    if isinstance(identifier, int) and not isinstance(identifier, bool):
+        identifier = str(identifier)
+    if not isinstance(identifier, str) or re.fullmatch(r"[A-Za-z0-9_-]+", identifier) is None:
+        raise ValueError("Invalid stop identifier")
+    return identifier
+
+
 # ---------------------------------------------------------------------------
 # Dispatcharr version advisory (ADR-014 option c, bead ax0kf)
 #
@@ -2345,14 +2359,16 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
-    async def stop_channel(self, channel_id: int) -> dict:
+    async def stop_channel(self, channel_id: int | str) -> dict:
         """Stop a channel and release all associated resources."""
+        channel_id = validate_stop_identifier(channel_id)
         response = await self._request("POST", f"/proxy/ts/stop/{channel_id}")
         response.raise_for_status()
         return response.json() if response.content else {"success": True}
 
-    async def stop_client(self, channel_id: int) -> dict:
+    async def stop_client(self, channel_id: int | str) -> dict:
         """Stop a specific client connection."""
+        channel_id = validate_stop_identifier(channel_id)
         response = await self._request("POST", f"/proxy/ts/stop_client/{channel_id}")
         response.raise_for_status()
         return response.json() if response.content else {"success": True}

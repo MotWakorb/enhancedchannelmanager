@@ -171,8 +171,15 @@ coverage extension, and none was pulled or rebuilt.
 Required check 28, `native_source_and_artifact_integrity`, checks the running
 image's fixed delivery paths, not a source-builder's installed package graph:
 
-The runtime receipt retains the checked RPM source index and native-build record,
-including their file hashes, under `source_bindings`. This preserves the actual
+The runtime receipt retains the checked RPM source index, native-build record and
+`native-sources.json` object, including their **raw-file** SHA-256 hashes, under
+`source_bindings`. `native_sources_sha256` must equal the producer's
+`source_files_sha256`; it is not a canonical/reformatted JSON digest. The bound
+`ffmpeg_config_log` retains the actual complete text, path, hash and byte size,
+matching its source-index entry. This is compiler-argument evidence for **manual**
+review of the non-`CHECKED` condition, not an automatic keyword verdict: configure
+diagnostic/test mentions of `CHECKED` do not establish selected compiler flags.
+This preserves the actual
 per-architecture source/package/artifact correspondence for advisory review in
 CI's 14-day evidence artifact; it is not an advisory disposition or attestation.
 
@@ -192,6 +199,13 @@ CI's 14-day evidence artifact; it is not an advisory disposition or attestation.
 - `/usr/share/ecm/provenance/native-sources.json`: `sources/...` paths map to
   `/usr/share/ecm/sources/owned/...`; all source/recipe files must be indexed and
   hash/size-match, including the build helper, patches and patched-source index.
+  The sole reviewed upstream alias, `gosu/.dockerignore -> .gitignore`, is allowed
+  only at that exact path with that exact relative target, resolving to the
+  contained indexed regular `gosu/.gitignore` with matching hash/size. The producer
+  omits aliases from its regular-file index, so only this validated alias is
+  omitted from the regular-file set comparison. All other source aliases,
+  directory links, escapes and omissions remain rejected; RPM, Python and recipe
+  paths gain no general link allowance.
 - `/usr/share/ecm/sources/resdet/resdet.tar.gz`: full archive SHA-256 must equal
   the **delivered** `native-dependencies.json` pin. The actual pinned build script
   and SBOM/config helper must accompany it. Existing resdet behavioral checks
@@ -213,6 +227,22 @@ CI's 14-day evidence artifact; it is not an advisory disposition or attestation.
   Only hashes/ELF headers/metadata are read; extensions are never imported by
   this check and no network access or wheel downloads are needed. The recorded
   archive hashes bind approved attribution, not a fresh archive download check.
+
+`filesystem_name_search` adds receipt-bound **name-only evidence**, not a 29th
+check or an advisory disposition. It traverses the complete running-image rootfs,
+including `/app`, `/opt/venv` and copied/unowned paths, excluding and recording only
+`/proc`, `/sys`, `/dev` (virtual filesystems) and `/native-image` (external fixture
+mount). It records nonzero path count, deterministic path/type/link-target digest,
+case-insensitive selectors, matching paths, all symlink names/targets, successful
+completion and an empty error list. Directory symlinks are never followed; any
+scandir/stat/readlink error fails check 28 instead of returning partial evidence.
+Selectors cover `cjson`, `libsndfile`/`sndfile`/`sf_open`, Perl-prefixed names,
+`Archive/Tar.pm`/`Archive/Tar/` and `.pm` providers, and `libtiff`/`tiffcrop`.
+Both path names and symlink targets are searched. No archive payload or arbitrary
+file/binary contents are searched or opened. Matches are data for review (including
+false positives such as syntax-highlighter filenames); empty matches are **not
+universal static-code absence proof**. Existing shared FFmpeg configuration and
+approved native-wheel hashes retain their separate, bounded attribution scope.
 
 The helper streams hashes; it does **not** extract or parse RPM/tar payloads,
 execute delivered sources, fetch anything, or repeat GPG verification. Signature,

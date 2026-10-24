@@ -22,9 +22,11 @@ from pathlib import Path
 
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SEVERITIES = {"UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"}
-# Recorded integration report: 212 RPM entries, including six distinct keys.
-# Do not lower this completeness baseline to make a smaller inventory pass.
+# Recorded amd64 integration report: 212 RPM entries, including six distinct keys.
+# Native ARM CI has 211: its complete graph lacks only amd64's libnuma1 provider.
+# Keep architecture-specific observed floors, not a globally reduced baseline.
 MIN_OS_PACKAGES = 212
+MIN_OS_PACKAGES_BY_ARCH = {"amd64": MIN_OS_PACKAGES, "arm64": 211}
 # Reviewed upstream-version sanity floors from RPM Version fields, not an RPM
 # EVR/advisory solver. Release fields remain separate; source-built FFmpeg has
 # no RPM floor here and must satisfy the runtime gate's exact source/build pin.
@@ -173,9 +175,10 @@ def check_report(
         failures.append("missing/ambiguous openSUSE Tumbleweed RPM scan")
     else:
         packages = os_results[0].get("Packages")
-        if not isinstance(packages, list) or len(packages) < MIN_OS_PACKAGES:
+        minimum = MIN_OS_PACKAGES_BY_ARCH.get(architecture, MIN_OS_PACKAGES)
+        if not isinstance(packages, list) or len(packages) < minimum:
             failures.append(
-                f"complete OS inventory requires at least {MIN_OS_PACKAGES} packages"
+                f"complete OS inventory requires at least {minimum} packages"
             )
         if not isinstance(packages, list):
             packages = []

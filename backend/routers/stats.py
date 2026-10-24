@@ -21,7 +21,7 @@ from bandwidth_tracker import (
 )
 from cache import get_cache
 from database import get_session
-from dispatcharr_client import get_client
+from dispatcharr_client import get_client, validate_stop_identifier
 from models import SessionTelemetry, UniqueClientConnection, User
 from observability import get_metric
 from routers.streams import _get_stream_channel_index
@@ -1138,6 +1138,10 @@ async def get_system_events(
 @router.post("/channels/{channel_id}/stop")
 async def stop_channel(channel_id: str):
     """Stop a channel and release all associated resources."""
+    try:
+        channel_id = validate_stop_identifier(channel_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid stop identifier") from None
     logger.debug("[STATS] POST /api/stats/channels/%s/stop", channel_id)
     client = get_client()
     try:
@@ -1155,6 +1159,10 @@ async def stop_channel(channel_id: str):
 @router.post("/channels/{channel_id}/stop-client")
 async def stop_client(channel_id: str):
     """Stop a specific client connection."""
+    try:
+        channel_id = validate_stop_identifier(channel_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid stop identifier") from None
     logger.debug("[STATS] POST /api/stats/channels/%s/stop-client", channel_id)
     client = get_client()
     try:

@@ -7,6 +7,7 @@ FFmpeg source/build identity remains the parent runtime gate's responsibility.
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -84,6 +85,40 @@ def _evidence(arch="amd64"):
     return report, identity, scanner
 
 
+def _recorded_arm_evidence():
+    report, identity, scanner = _evidence("arm64")
+    delta = json.loads((FIXTURE.parent / "arm64-delta.json").read_text())
+    packages = report["Results"][0]["Packages"]
+    packages[:] = [p for p in packages if p["Name"] not in delta["removed_names"]]
+    overrides = {p["Name"]: p for p in delta["overrides"]}
+    for package in packages:
+        package.update(overrides.get(package["Name"], {}))
+    encoded = json.dumps(packages, sort_keys=True, separators=(",", ":")).encode()
+    assert hashlib.sha256(encoded).hexdigest() == delta["projection_sha256"]
+    assert len(packages) == delta["package_count"] == 211
+    report["Metadata"]["OS"]["Name"] = delta["os_version"]
+    return report, identity, scanner
+
+
+def test_real_arm_inventory_does_not_require_the_amd64_only_numa_provider(scan):
+    report, identity, scanner = _recorded_arm_evidence()
+    packages = report["Results"][0]["Packages"]
+    assert not any(p["Name"] == "libnuma1" for p in packages)
+    assert scan.MIN_OS_PACKAGES_BY_ARCH == {"amd64": 212, "arm64": 211}
+    assert scan.check_report(report, identity, scanner, "arm64") == []
+
+
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
+def test_each_architecture_rejects_its_own_truncated_complete_inventory(scan, arch):
+    report, identity, scanner = (
+        _evidence() if arch == "amd64" else _recorded_arm_evidence()
+    )
+    report["Results"][0]["Packages"].pop()
+    failures = scan.check_report(report, identity, scanner, arch)
+    minimum = 212 if arch == "amd64" else 211
+    assert f"complete OS inventory requires at least {minimum} packages" in failures
+
+
 @pytest.mark.parametrize("arch", ["amd64", "arm64"])
 def test_complete_recorded_inventory_and_unsuppressed_findings_are_accepted(scan, arch):
     report, identity, scanner = _evidence(arch)
@@ -107,12 +142,17 @@ def test_complete_recorded_inventory_and_unsuppressed_findings_are_accepted(scan
 
 
 @pytest.mark.parametrize("name", NATIVE_PACKAGES)
-def test_missing_native_identity_cannot_be_hidden_by_inventory_padding(scan, name):
-    report, identity, scanner = _evidence()
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
+def test_missing_native_identity_cannot_be_hidden_by_inventory_padding(
+    scan, name, arch
+):
+    report, identity, scanner = (
+        _evidence() if arch == "amd64" else _recorded_arm_evidence()
+    )
     package = next(p for p in report["Results"][0]["Packages"] if p["Name"] == name)
     package["Name"] = "unrelated-replacement"
     assert f"missing/outdated expected native package {name}" in scan.check_report(
-        report, identity, scanner, "amd64"
+        report, identity, scanner, arch
     )
 
 
@@ -194,19 +234,22 @@ def test_high_finding_in_an_additional_analyzer_cannot_be_ignored(scan):
 
 @pytest.mark.parametrize("result_index", [0, 1, 2], ids=["rpm", "python", "go"])
 @pytest.mark.parametrize("severity", ["HIGH", "CRITICAL"])
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
 @pytest.mark.parametrize(
     "status", ["fixed", "affected", "will_not_fix", "not_affected"]
 )
 def test_any_high_or_critical_fails_even_unfixed_or_marked_not_affected(
-    scan, result_index, severity, status
+    scan, result_index, severity, status, arch
 ):
-    report, identity, scanner = _evidence()
+    report, identity, scanner = (
+        _evidence() if arch == "amd64" else _recorded_arm_evidence()
+    )
     finding = copy.deepcopy(report["Results"][2]["Vulnerabilities"][0])
     finding.update(Severity=severity, Status=status, FixedVersion="")
     report["Results"][result_index]["Vulnerabilities"] = [finding]
     assert (
         f"{severity} {finding['VulnerabilityID']} in {finding['PkgName']}"
-        in scan.check_report(report, identity, scanner, "amd64")
+        in scan.check_report(report, identity, scanner, arch)
     )
 
 

@@ -72,6 +72,7 @@ import argparse
 import hashlib
 import json
 import re
+import ssl
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -145,6 +146,17 @@ SUSE_RUNTIME_INVENTORY_RUN = (
     "rpm -qa --qf '%{NAME}\\t%{VERSION}\\t%{RELEASE}\\t%{ARCH}\\t%{VENDOR}\\t"
     "%{SOURCERPM}\\t%{LICENSE}\\n' > /tmp/runtime-inventory.tsv"
 )
+SUSE_CA_BLACKLIST_COPY = (
+    "docker/trust/emsign-ecc-root-ca-g3.pem "
+    "/etc/pki/trust/blocklist/ecm-emsign-ecc-g3.pem"
+)
+SUSE_CA_BLACKLIST_RUN = (
+    'python3.12 -c "import hashlib, ssl; from pathlib import Path; assert '
+    "hashlib.sha256(ssl.PEM_cert_to_DER_cert("
+    "Path('/etc/pki/trust/blocklist/ecm-emsign-ecc-g3.pem').read_text())).hexdigest() "
+    "== '86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b'\" "
+    "&& update-ca-certificates"
+)
 SUSE_SOURCE_BUILDER_RUN = (
     "rpm -q --qf '%{DESCRIPTION}\\n' gpg-pubkey-29b700a4 > /tmp/suse.asc && "
     "python3.12 /tmp/collect_native_sources.py --inventory /tmp/runtime-inventory.tsv "
@@ -186,6 +198,8 @@ SUSE_SOURCE_DELIVERY = [
     ("COPY", "docker/python-third-party/sources/ /usr/share/ecm/sources/python/"),
     ("COPY", "docker/python-third-party/component-manifest.json docker/python-third-party/SOURCE-AVAILABILITY.txt /usr/share/doc/ecm/python-third-party/"),
     ("COPY", "docker/python-third-party/artifact-index/ /usr/share/doc/ecm/python-third-party/artifact-index/"),
+    ("COPY", "docker/trust/ /usr/share/ecm/sources/trust/"),
+    ("COPY", "Dockerfile /usr/share/ecm/sources/trust/Dockerfile"),
 ]
 
 # SPDX 2.3 section 6.5 requires a new namespace when a document is updated.
@@ -681,6 +695,8 @@ def _validate_suse_stages(stages: list[dict[str, Any]], source: str) -> None:
         ("COPY", "--from=native-builder /tmp/native-output/runtime-packages.txt /tmp/runtime-packages.txt"),
         ("COPY", "--from=native-builder /tmp/native/packman.asc /tmp/packman.asc"),
         ("RUN", SUSE_RUNTIME_RUN),
+        ("COPY", SUSE_CA_BLACKLIST_COPY),
+        ("RUN", SUSE_CA_BLACKLIST_RUN),
         ("COPY", "--from=native-builder /tmp/native-output/root/ /"),
         ("RUN", SUSE_RUNTIME_INVENTORY_RUN),
     ])
@@ -983,12 +999,26 @@ def _runtime_native_inputs(root: Path, sources: dict[str, str]) -> list[dict[str
             "purl": f"{purl}@{entry['version']}", "license": NOASSERTION,
             "downloadLocation": entry["url"], "sha256": entry["sha256"],
         })
-    native_root = root / "docker/native"
-    for path in sorted(native_root.rglob("*")):
-        if path.is_symlink():
-            raise SbomError(f"native source input must not be a symlink: {path}")
-        if path.is_file():
-            sources[path.relative_to(root).as_posix()] = sha256_file(path)
+    for directory in ("docker/native", "docker/trust"):
+        native_root = root / directory
+        if native_root.is_symlink():
+            raise SbomError(f"native source input must not be a symlink: {native_root}")
+        for path in sorted(native_root.rglob("*")):
+            if path.is_symlink():
+                raise SbomError(f"native source input must not be a symlink: {path}")
+            if path.is_file():
+                sources[path.relative_to(root).as_posix()] = sha256_file(path)
+    certificate = _read_text(root / "docker/trust/emsign-ecc-root-ca-g3.pem")
+    try:
+        der = ssl.PEM_cert_to_DER_cert(certificate)
+    except ValueError as exc:
+        raise SbomError("SUSE blacklist requires the exact compromised G3 certificate") from exc
+    if (
+        certificate.count("-----BEGIN CERTIFICATE-----") != 1
+        or hashlib.sha256(der).hexdigest()
+        != "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b"
+    ):
+        raise SbomError("SUSE blacklist requires the exact compromised G3 certificate")
     for relative in ("scripts/build_native_runtime.py", "scripts/collect_native_sources.py"):
         path = root / relative
         if path.is_symlink():

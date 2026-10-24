@@ -13,6 +13,7 @@ import hashlib
 import importlib.util
 import json
 import shutil
+import ssl
 from pathlib import Path
 from urllib.parse import parse_qsl
 
@@ -212,6 +213,7 @@ def generated(sbom, tree: Path) -> Path:
 def suse_tree(tree: Path) -> Path:
     _write(tree / "Dockerfile", SUSE_DOCKERFILE)
     shutil.copytree(ROOT / "docker/native", tree / "docker/native")
+    shutil.copytree(ROOT / "docker/trust", tree / "docker/trust")
     for name in ("build_native_runtime.py", "collect_native_sources.py"):
         destination = tree / "scripts" / name
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -862,6 +864,7 @@ def test_suse_native_source_inputs_are_fingerprinted_and_identities_come_from_ma
     index = json.loads(rendered["index.json"])
     expected = {path.relative_to(suse_tree).as_posix() for path in (suse_tree / "docker/native").rglob("*") if path.is_file()}
     expected.update({"scripts/build_native_runtime.py", "scripts/collect_native_sources.py"})
+    expected.update(path.relative_to(suse_tree).as_posix() for path in (suse_tree / "docker/trust").rglob("*") if path.is_file())
     assert expected <= index["sources"].keys()
     for path in expected:
         assert index["sources"][path] == "sha256:" + sbom.sha256_file(suse_tree / path)
@@ -882,6 +885,7 @@ def test_suse_native_source_inputs_are_fingerprinted_and_identities_come_from_ma
     "docker/native/manifest.json", "docker/native/ffmpeg.args",
     "docker/native/patches/CVE-2026-107696.patch", "docker/native/packman.asc",
     "scripts/build_native_runtime.py", "scripts/collect_native_sources.py",
+    "docker/trust/emsign-ecc-root-ca-g3.pem", "docker/trust/README.md",
 ])
 def test_suse_native_input_edits_invalidate_source_sbom(sbom, suse_tree, path):
     directory = suse_tree / "sbom/v9.9.9"
@@ -913,6 +917,30 @@ def test_suse_native_manifest_base_must_match_the_reviewed_graph(sbom, suse_tree
     manifest["base_image"] = SUSE_IMAGE[:-1] + "0"
     _write(path, json.dumps(manifest))
     with pytest.raises(sbom.SbomError, match="reviewed SUSE base"):
+        sbom.render(suse_tree, "9.9.9", CREATED)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "corrupt", "wrong-root", "extra-root", "symlink"])
+def test_suse_blacklist_requires_exact_certificate_bytes(sbom, suse_tree, mutation):
+    target = suse_tree / "docker/trust/emsign-ecc-root-ca-g3.pem"
+    if mutation == "missing":
+        target.unlink()
+    elif mutation == "corrupt":
+        target.write_text("not a certificate\n")
+    elif mutation == "wrong-root":
+        # A real unaffected G1 certificate must never become the blocklist entry.
+        context = ssl.create_default_context(cafile=ROOT / "docker/python-third-party/sources/certifi-2026.10.19-cacert.pem")
+        der = next(cert for cert in context.get_ca_certs(binary_form=True) if hashlib.sha256(cert).hexdigest()
+                   == "40f6af0346a99aa1cd1d555a4e9cce62c7f9634603ee406615833dc8c8d00367")
+        target.write_text(ssl.DER_cert_to_PEM_cert(der))
+    elif mutation == "extra-root":
+        target.write_text(target.read_text() * 2)
+    else:
+        original = target.read_bytes()
+        target.unlink()
+        (suse_tree / "root.pem").write_bytes(original)
+        target.symlink_to("../../root.pem")
+    with pytest.raises(sbom.SbomError):
         sbom.render(suse_tree, "9.9.9", CREATED)
 
 

@@ -47,6 +47,15 @@ RECORDED = json.loads(r"""{
     "vendor":"http://packman.links2linux.de"}]
 }""")
 FIELDS = ("name", "version", "release", "arch", "vendor", "sourcerpm", "license")
+# Actual eight-line production-owned-source-symlinks.json, final d6a9995f image.
+RECORDED_GOSU_ALIAS = json.loads("""[
+  {
+    "path": "gosu/.dockerignore",
+    "target": ".gitignore",
+    "resolved": "/usr/share/ecm/sources/owned/gosu/.gitignore",
+    "file": true
+  }
+]""")
 
 
 def digest(data):
@@ -194,8 +203,21 @@ def image(tmp_path, gate, monkeypatch):
         {"path": w["path"], "sha256": w["after_sha256"]} for w in patch["witnesses"]
     ]
     document(tmp_path, f"{OWNED}/ffmpeg-patched-source-files.json", tree)
-    put(tmp_path, f"{OWNED}/ffmpeg-config.log", "synthetic configure log")
+    # Compact final d6a9995f production-source-records/ffmpeg-config.log projection
+    # (lines 1, 4984, 6774, 16541). The real 701726-byte log is SHA256
+    # 6cafbf4d79893b6ebb8ba8e33a6a07fd7bc7baec8cc215d6fcc5c694c5b99c31;
+    # these excerpts get their own temp-tree hash, not that full-file identity.
+    put(
+        tmp_path,
+        f"{OWNED}/ffmpeg-config.log",
+        "# ./configure --prefix=/usr/local --libdir=/usr/local/lib64 "
+        "--enable-shared --disable-static --disable-autodetect\n"
+        "CFLAGS=-O2\nCPPFLAGS=\n"
+        "gcc -O2 -c -o /tmp/ffconf.zPDVzPll/test.o /tmp/ffconf.zPDVzPll/test.c\n",
+    )
     put(tmp_path, f"{OWNED}/gosu/main.go", "package main\nfunc main() {}\n")
+    put(tmp_path, f"{OWNED}/gosu/.gitignore", ".git\nSHA256SUMS*\ngosu*\n")
+    (tmp_path / OWNED / "gosu/.dockerignore").symlink_to(".gitignore")
     artifacts = []
     for name in ("ffmpeg", "ffprobe", "gosu"):
         put(tmp_path, "usr/local/bin/" + name, "synthetic " + name).chmod(0o755)
@@ -245,7 +267,7 @@ def image(tmp_path, gate, monkeypatch):
             "size": path.stat().st_size,
         }
         for path in sorted((tmp_path / OWNED).rglob("*"))
-        if path.is_file()
+        if path.is_file() and not path.is_symlink()
     ]
     source_list = document(tmp_path, f"{PROOF}/native-sources.json", files)
     record = {
@@ -549,8 +571,270 @@ def test_complete_delivery_binds_live_rpm_database_and_actual_paths(gate, image)
     record = root / PROOF / "native-build.json"
     assert bindings["native_build"] == json.loads(record.read_text())
     assert bindings["native_build_sha256"] == digest(record.read_bytes())
+    listing = root / PROOF / "native-sources.json"
+    assert bindings["native_sources"] == json.loads(listing.read_text())
+    assert bindings["native_sources_sha256"] == digest(listing.read_bytes())
+    assert (
+        bindings["native_sources_sha256"]
+        == bindings["native_build"]["source_files_sha256"]
+    )
+    log = root / OWNED / "ffmpeg-config.log"
+    evidence = bindings["ffmpeg_config_log"]
+    entry = next(
+        item
+        for item in bindings["native_sources"]
+        if item["path"] == "sources/ffmpeg-config.log"
+    )
+    assert evidence["text"] == log.read_text()
+    assert evidence["sha256"] == entry["sha256"] == digest(log.read_bytes())
+    assert evidence["size"] == entry["size"] == log.stat().st_size
+    assert evidence["path"] == "/" + OWNED + "/ffmpeg-config.log"
+    assert "manual" in evidence["scope"]
+    assert result["filesystem_name_search"]["path_count"] > 0
     assert calls, "source-builder inventory must not replace the live RPM query"
     assert "not a vulnerability scan" in result["scope"]
+
+
+def test_recorded_gosu_archive_alias_is_bound_to_its_indexed_regular_target(
+    gate, image
+):
+    root = image[0]
+    observed = RECORDED_GOSU_ALIAS[0]
+    alias = root / OWNED / observed["path"]
+    assert str(alias.readlink()) == observed["target"]
+    assert "/" + str(alias.resolve().relative_to(root)) == observed["resolved"]
+    assert alias.is_file() is observed["file"]
+    assert (
+        digest(alias.read_bytes())
+        == "dd47fb280cd0361438fec1c5d57868984459d86652127d13a2e7e4bbe6142f6e"
+    )
+    result = gate.native_source_and_artifact_integrity(root)[
+        "native_source_and_artifact_integrity"
+    ]
+    entries = result["source_bindings"]["native_sources"]
+    assert not any(item["path"] == "sources/gosu/.dockerignore" for item in entries)
+    target = next(item for item in entries if item["path"] == "sources/gosu/.gitignore")
+    assert target["sha256"] == digest(alias.read_bytes()) and target["size"] == 23
+    assert {
+        "path": "/" + OWNED + "/gosu/.dockerignore",
+        "target": ".gitignore",
+    } in result["filesystem_name_search"]["symlinks"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "outside_path",
+        "absolute_target",
+        "sibling_alias",
+        "wrong_target",
+        "broken_link",
+        "unindexed_target",
+        "directory_target",
+    ],
+)
+def test_reviewed_gosu_alias_does_not_allow_other_source_links(gate, image, mutation):
+    root, _, record, _ = image
+    alias = root / OWNED / "gosu/.dockerignore"
+    target = root / OWNED / "gosu/.gitignore"
+    if mutation == "outside_path":
+        alias.rename(root / OWNED / "recipe/.dockerignore")
+    elif mutation == "sibling_alias":
+        alias.with_name(".dockerignore-copy").symlink_to(".gitignore")
+    elif mutation == "unindexed_target":
+        listing = root / PROOF / "native-sources.json"
+        entries = [
+            item
+            for item in json.loads(listing.read_text())
+            if item["path"] != "sources/gosu/.gitignore"
+        ]
+        listing.write_text(json.dumps(entries))
+        record["source_files_sha256"] = digest(listing.read_bytes())
+        document(root, f"{PROOF}/native-build.json", record)
+    elif mutation == "directory_target":
+        target.unlink()
+        target.mkdir()
+    else:
+        alias.unlink()
+        alias.symlink_to(
+            str(target)
+            if mutation == "absolute_target"
+            else "main.go"
+            if mutation == "wrong_target"
+            else ".missing"
+        )
+    with pytest.raises((AssertionError, OSError)):
+        gate.native_source_and_artifact_integrity(root)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "check_cpp_condition CHECKED\n1 #ifdef CHECKED\n#error configure diagnostic\n",
+        "CFLAGS=-O2\nCPPFLAGS=-DCHECKED\ngcc -DCHECKED -c test.c\n",
+    ],
+)
+def test_config_log_is_bound_manual_evidence_not_a_checked_keyword_judgment(
+    gate, image, text
+):
+    root, _, record, _ = image
+    log = put(root, f"{OWNED}/ffmpeg-config.log", text)
+    listing = root / PROOF / "native-sources.json"
+    entries = json.loads(listing.read_text())
+    entry = next(
+        item for item in entries if item["path"] == "sources/ffmpeg-config.log"
+    )
+    entry.update(sha256=digest(log.read_bytes()), size=log.stat().st_size)
+    listing.write_text(json.dumps(entries))
+    record["source_files_sha256"] = digest(listing.read_bytes())
+    document(root, f"{PROOF}/native-build.json", record)
+    result = gate.native_source_and_artifact_integrity(root)[
+        "native_source_and_artifact_integrity"
+    ]
+    assert result["source_bindings"]["ffmpeg_config_log"]["text"] == text
+
+
+@pytest.mark.parametrize(
+    "mutation", ["raw_index_hash", "config_hash", "config_size", "config_read"]
+)
+def test_config_log_evidence_cannot_replace_source_index_correspondence(
+    gate, image, monkeypatch, mutation
+):
+    root, _, record, _ = image
+    listing = root / PROOF / "native-sources.json"
+    if mutation == "config_read":
+        real_read = Path.read_bytes
+
+        def denied(path):
+            if path == root / OWNED / "ffmpeg-config.log":
+                raise PermissionError("config log read denied")
+            return real_read(path)
+
+        monkeypatch.setattr(Path, "read_bytes", denied)
+    else:
+        entries = json.loads(listing.read_text())
+        entry = next(
+            item for item in entries if item["path"] == "sources/ffmpeg-config.log"
+        )
+        if mutation == "config_hash":
+            entry["sha256"] = "0" * 64
+        elif mutation == "config_size":
+            entry["size"] += 1
+        listing.write_text(json.dumps(entries))
+        if mutation != "raw_index_hash":
+            record["source_files_sha256"] = digest(listing.read_bytes())
+            document(root, f"{PROOF}/native-build.json", record)
+    with pytest.raises((AssertionError, PermissionError)):
+        gate.native_source_and_artifact_integrity(root)
+
+
+def test_filesystem_name_evidence_includes_copied_providers_and_symlinks(
+    gate, tmp_path
+):
+    paths = {
+        "cjson": ["app/copied/cJSON_helper.c", "opt/venv/lib/libcjson.so"],
+        "libsndfile": [
+            "app/plugins/SNDFILE.py",
+            "unowned/sf_open",
+            "opt/venv/lib/libsndfile.so.1",
+        ],
+        "perl_archive_tar": [
+            "usr/bin/perl5",
+            "app/copied/Archive/Tar.pm",
+            "unowned/copied.pm",
+        ],
+        "libtiff": ["opt/venv/lib/libtiff.so.6", "unowned/TIFFCROP"],
+    }
+    for names in paths.values():
+        for name in names:
+            put(tmp_path, name, "names only, do not read file contents")
+    put(tmp_path, "app/ffmpeg/tiff.c", "own TIFF codec is not automatically libtiff")
+    archive = put(
+        tmp_path,
+        "usr/share/sources/opaque.tar.gz",
+        b"Archive/Tar.pm libcjson libsndfile libtiff",
+    )
+    for name in ("proc", "sys", "dev", "native-image"):
+        put(tmp_path, f"{name}/hidden/cjson", "excluded mount content")
+    outside = tmp_path.parent / (tmp_path.name + "-external")
+    put(outside, "cjson-must-not-be-walked", "external")
+    (tmp_path / "app/external").symlink_to(outside, target_is_directory=True)
+    (tmp_path / "app/provider-alias").symlink_to("/usr/lib/libcjson.so.1")
+    result = gate._filesystem_names(tmp_path)
+    assert (
+        result["status"] == "COMPLETE"
+        and result["errors"] == []
+        and result["exit_status"] == 0
+    )
+    assert result["path_count"] == 27
+    assert set(result["excluded"]) == {"/proc", "/sys", "/dev", "/native-image"}
+    assert set(result["observed_exclusions"]) == set(result["excluded"])
+    assert set(result["patterns"]) == set(paths)
+    for family, names in paths.items():
+        assert {"/" + name for name in names} <= set(result["matches"][family])
+    matches = {name for names in result["matches"].values() for name in names}
+    assert "/app/provider-alias" in matches
+    assert "/app/ffmpeg/tiff.c" not in matches
+    assert "/" + str(archive.relative_to(tmp_path)) not in matches
+    assert not any("hidden" in name or "must-not-be-walked" in name for name in matches)
+    assert {"path": "/app/external", "target": str(outside)} in result["symlinks"]
+    assert {
+        "path": "/app/provider-alias",
+        "target": "/usr/lib/libcjson.so.1",
+    } in result["symlinks"]
+    assert re.fullmatch(r"[0-9a-f]{64}", result["inventory_sha256"])
+    assert "not universal" in result["scope"]
+    # Name search must never open regular files, including source archives.
+
+
+@pytest.mark.parametrize("failure", ["scandir", "stat", "readlink"])
+def test_filesystem_name_evidence_propagates_all_walk_read_errors(
+    gate, tmp_path, monkeypatch, failure
+):
+    put(tmp_path, "app/entry", "data")
+    (tmp_path / "alias").symlink_to("app")
+    if failure == "scandir":
+        monkeypatch.setattr(
+            gate.os,
+            "scandir",
+            lambda *a: (_ for _ in ()).throw(PermissionError("walk denied")),
+        )
+    elif failure == "readlink":
+        monkeypatch.setattr(
+            gate.os,
+            "readlink",
+            lambda *a: (_ for _ in ()).throw(OSError("readlink failed")),
+        )
+    else:
+        real_stat = gate.os.DirEntry.stat
+
+        def denied(entry, *args, **kwargs):
+            if entry.name == "entry":
+                raise OSError("entry stat failed")
+            return real_stat(entry, *args, **kwargs)
+
+        monkeypatch.setattr(gate.os.DirEntry, "stat", denied)
+    with pytest.raises(OSError):
+        gate._filesystem_names(tmp_path)
+
+
+def test_filesystem_name_evidence_cannot_pass_with_empty_scope(gate, tmp_path):
+    with pytest.raises(AssertionError, match="empty"):
+        gate._filesystem_names(tmp_path)
+
+
+def test_filesystem_name_search_does_not_open_regular_files(
+    gate, tmp_path, monkeypatch
+):
+    put(tmp_path, "app/Archive/Tar.pm", "data")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("name-only evidence must not read file contents")
+
+    monkeypatch.setattr(Path, "open", forbidden)
+    assert gate._filesystem_names(tmp_path)["matches"]["perl_archive_tar"] == [
+        "/app/Archive/Tar.pm"
+    ]
 
 
 def test_changed_live_rpm_database_cannot_reuse_recorded_inventory(

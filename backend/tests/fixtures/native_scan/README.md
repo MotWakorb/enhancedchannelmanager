@@ -16,9 +16,19 @@ the literal string `"None"` as their RPM architecture, not JSON null.
 Image config/rootfs digests are replaced with independent `sha256:aaa…` and
 `sha256:bbb…` placeholders; tests supply a separate `sha256:ccc…` manifest
 placeholder. These and synthetic scanner DB timestamps are **unit-only**,
-not candidate evidence or publication attestation. The arm64 test remaps
-the recorded x86_64 package architecture as a synthetic contract exercise,
-not a recorded arm64 scan.
+not candidate evidence or publication attestation. The original arm64 mapping
+test is synthetic. `arm64-delta.json` additionally records the actual first native
+ARM CI RPM inventory as a lossless delta from this fixture. Its complete projected
+package array is checked against the canonical SHA-256 of all five recorded
+fields in the real 211-row report. The source report/manifest identities are
+retained in that delta; unit-only config/rootfs subjects remain separate.
+
+That real ARM graph has 205 software RPMs and six keys; amd64 has 206 and six.
+The only missing package name is the amd64-specific `libnuma1` provider. Required
+codec identities/floors remain checked on both architectures. Completeness floors
+are therefore 212 for amd64 and 211 for arm64; each rejects a truncated inventory,
+and both retain unconditional raw High/Critical failure, including Go findings.
+This is not a globally reduced floor or permission to trim supported inputs.
 
 Custom FFmpeg 8 source/build pins and required-owned-artifact/source binding
 are checked separately by the parent runtime gate. FFmpeg is absent from

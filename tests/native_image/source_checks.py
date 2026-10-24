@@ -10,6 +10,7 @@ import json
 import os
 import platform
 import re
+import stat
 import subprocess
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
@@ -282,9 +283,28 @@ def _owned(root, architecture):
             entry["sha256"],
             entry["size"],
         )
-    assert {"sources/" + name for name in _files(directory)} == paths, (
-        "owned source omission"
-    )
+    actual_sources = set()
+    for path in directory.rglob("*"):
+        name = str(path.relative_to(directory))
+        if name == "gosu/.dockerignore" and path.is_symlink():
+            # Reviewed upstream archive alias, omitted by the producer's regular-
+            # file index. Bind it to the exact indexed target, not an allow-links
+            # policy for sources, recipe assets, RPMs or Python trees.
+            assert os.readlink(path) == ".gitignore", "unreviewed gosu alias target"
+            target = _file(directory, "gosu/.gitignore")
+            assert path.resolve(strict=True) == target
+            witness = next(
+                (item for item in entries if item["path"] == "sources/gosu/.gitignore"),
+                None,
+            )
+            assert witness is not None, "unindexed gosu alias target"
+            _hash(path, witness["sha256"], witness["size"])
+            continue
+        _path(directory, name)
+        assert path.is_dir() or path.is_file(), "nonregular owned source entry"
+        if path.is_file():
+            actual_sources.add("sources/" + name)
+    assert actual_sources == paths, "owned source omission"
     for name, expected in (
         ("ffmpeg-8.1.3.tar.xz", recipe["ffmpeg"]["sha256"]),
         ("ffmpeg-8.1.3.tar.xz.asc", recipe["ffmpeg"]["signature"]["sha256"]),
@@ -519,6 +539,82 @@ def _python_artifacts(root, architecture):
     return len(installed), len(distributions), len(expected_files)
 
 
+def _filesystem_names(root):
+    """Complete name/metadata traversal only; no contents or symlink following."""
+    assert stat.S_ISDIR(root.lstat().st_mode), "search root must be a directory"
+    excluded = {
+        "/proc": "virtual proc filesystem",
+        "/sys": "virtual sys filesystem",
+        "/dev": "virtual device filesystem",
+        "/native-image": "external read-only gate fixture mount",
+    }
+    patterns = {
+        "cjson": r"cjson",
+        "libsndfile": r"libsndfile|sndfile|sf_open",
+        "perl_archive_tar": r"(^|/)perl[^/]*(/|$)|(^|/)archive/tar(\.pm|/|$)|\.pm$",
+        "libtiff": r"libtiff|tiffcrop",
+    }
+    selectors = {
+        name: re.compile(pattern, re.IGNORECASE) for name, pattern in patterns.items()
+    }
+    matches = {name: [] for name in patterns}
+    pending, symlinks, observed = [root], [], []
+    count, inventory = 0, hashlib.sha256()
+    while pending:
+        # Unlike os.walk's optional error handler / is_dir probes, every scandir,
+        # lstat-equivalent and readlink error propagates. Never publish partial data.
+        with os.scandir(pending.pop()) as entries:
+            for entry in sorted(entries, key=lambda item: item.name):
+                path = Path(entry.path)
+                name = "/" + str(path.relative_to(root))
+                if name in excluded:
+                    observed.append(name)
+                    continue
+                mode = entry.stat(follow_symlinks=False).st_mode
+                target = os.readlink(path) if stat.S_ISLNK(mode) else None
+                kind = (
+                    "symlink"
+                    if target is not None
+                    else "directory"
+                    if stat.S_ISDIR(mode)
+                    else "file"
+                    if stat.S_ISREG(mode)
+                    else "other"
+                )
+                row = {"path": name, "type": kind}
+                if target is not None:
+                    row["target"] = target
+                    symlinks.append({"path": name, "target": target})
+                elif stat.S_ISDIR(mode):
+                    pending.append(path)
+                count += 1
+                inventory.update(
+                    (
+                        json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n"
+                    ).encode()
+                )
+                for family, selector in selectors.items():
+                    if selector.search(name) or (
+                        target is not None and selector.search(target)
+                    ):
+                        matches[family].append(name)
+    assert count > 0, "empty filesystem name-search scope"
+    return {
+        "status": "COMPLETE",
+        "exit_status": 0,
+        "errors": [],
+        "method": "Python os.scandir, stat(follow_symlinks=False), readlink; case-insensitive path and symlink-target regex search",
+        "scope": "Complete running-image rootfs names, including /app, /opt/venv and copied/unowned providers, except the four stated mounts. Names inside compressed archives and file contents are not searched. Matches are review data, not CVE judgments; nonmatches are not universal static-component absence proof.",
+        "excluded": excluded,
+        "observed_exclusions": sorted(observed),
+        "path_count": count,
+        "inventory_sha256": inventory.hexdigest(),
+        "patterns": patterns,
+        "matches": {name: sorted(paths) for name, paths in matches.items()},
+        "symlinks": sorted(symlinks, key=lambda row: row["path"]),
+    }
+
+
 def native_source_and_artifact_integrity(root=Path("/")):
     """Root is solely a temp-tree unit seam; production always checks `/`."""
     root = Path(root).resolve(strict=True)
@@ -530,6 +626,37 @@ def native_source_and_artifact_integrity(root=Path("/")):
     python_sources = _python(root, "sources", "usr/share/ecm/sources/python")
     python_notices = _python(root, "notices", "usr/share/doc/ecm/python-third-party")
     installed, native_distributions, native_elfs = _python_artifacts(root, architecture)
+    # Preserve checked small inputs, not reconstructed/canonical JSON hashes.
+    bindings = {}
+    for name, path in (
+        ("rpm_index", "usr/share/ecm/sources/rpm/index.json"),
+        ("native_build", "usr/share/ecm/provenance/native-build.json"),
+        ("native_sources", "usr/share/ecm/provenance/native-sources.json"),
+    ):
+        bindings[name] = _json(root, path)
+        bindings[name + "_sha256"] = sha256(_file(root, path))
+    assert (
+        bindings["native_sources_sha256"]
+        == bindings["native_build"]["source_files_sha256"]
+    )
+    log_name = "usr/share/ecm/sources/owned/ffmpeg-config.log"
+    data = _file(root, log_name).read_bytes()
+    log_hash = hashlib.sha256(data).hexdigest()
+    entry = next(
+        item
+        for item in bindings["native_sources"]
+        if item["path"] == "sources/ffmpeg-config.log"
+    )
+    assert log_hash == entry["sha256"] and len(data) == entry["size"], (
+        "config log/source index mismatch"
+    )
+    bindings["ffmpeg_config_log"] = {
+        "path": "/" + log_name,
+        "sha256": log_hash,
+        "size": len(data),
+        "text": data.decode("utf-8"),
+        "scope": "Bound compiler-argument context for manual review of the non-CHECKED condition; diagnostic/test mentions are not a flag judgment or advisory clearance.",
+    }
     return {
         "native_source_and_artifact_integrity": {
             "architecture": architecture,
@@ -541,21 +668,8 @@ def native_source_and_artifact_integrity(root=Path("/")):
             "python_installed_distributions": installed,
             "python_native_distributions": native_distributions,
             "python_native_ELFs": native_elfs,
-            # Preserve the checked per-architecture inputs in CI's runtime
-            # receipt so advisory/source joins do not rely on a local prototype
-            # or require downloading the complete multi-gigabyte image again.
-            "source_bindings": {
-                "rpm_index": _json(root, "usr/share/ecm/sources/rpm/index.json"),
-                "rpm_index_sha256": sha256(
-                    _file(root, "usr/share/ecm/sources/rpm/index.json")
-                ),
-                "native_build": _json(
-                    root, "usr/share/ecm/provenance/native-build.json"
-                ),
-                "native_build_sha256": sha256(
-                    _file(root, "usr/share/ecm/provenance/native-build.json")
-                ),
-            },
+            "source_bindings": bindings,
+            "filesystem_name_search": _filesystem_names(root),
             "scope": "Delivered bytes, live RPM correspondence and architecture-specific Python attribution; trusted source-builder authentication is not repeated; not a vulnerability scan. Custom binaries require separate advisory review. Only this running image architecture is verified; no ARM execution is inferred from x86 data.",
         }
     }
