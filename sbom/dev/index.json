@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "version": "0.18.2-0047",
-  "created": "2026-10-23T08:07:41Z",
+  "created": "2026-10-24T11:08:36Z",
   "kind": "source-manifest",
   "channel": "dev",
   "permanent": false,
@@ -15,34 +15,55 @@
       "Python distributions pinned in the image's requirements.txt, with versions",
       "npm packages resolved in frontend/package-lock.json, with versions (ECM only)",
       "Direct source-built native dependencies declared in sbom/native-dependencies.json",
-      "Base and build images referenced by digest in the Dockerfile"
+      "Base and build images referenced by digest in the Dockerfile",
+      "Source-built FFmpeg/gosu identities from docker/native/manifest.json; native recipe assets and builder/source-collector bytes are fingerprinted"
     ],
     "excludes": [
-      "Operating-system packages inside the base images (apt/apk); the Dockerfiles also run `apt-get upgrade` / `apk upgrade` at build time, so the installed OS package set is not derivable from the source tree at all",
+      "Operating-system RPM packages resolved at build time by zypper are not enumerated by this source-manifest SBOM; use the runtime image inventory",
       "Transitive native libraries vendored inside Python wheels",
       "Published subject image digest: no release image exists when this document is cut"
     ]
   },
   "sources": {
-    "Dockerfile": "sha256:facd59eb53ee94f8e3a07caf918d8aba9880c9e771e9988832ecae40647a7050",
-    "backend/requirements.txt": "sha256:d29a8e9a20ba95172040c0a28abe00b0ee67f49c2994b44f0fd5827c7f3e90ff",
+    "Dockerfile": "sha256:55d8cb9d3e4c263fda7ce4c12588660807ca7eb0208d8a7db267823c50a2237d",
+    "backend/requirements.txt": "sha256:7fbaf818e6617efc2bbd54e07af7ef5a7eac300712ad7b29fa5c6b4ada17a2bf",
+    "docker/native/README.md": "sha256:86a33034cf6d4b9b7f6611ed40a7b0cd971598c46fd732eba0d0bc44e073852f",
+    "docker/native/ffmpeg-release.asc": "sha256:397b3becedcd5a98769967ff1ff8501ddc89f8368b8f766e4701377d7dbaabe5",
+    "docker/native/ffmpeg.args": "sha256:8815506c9fd2a54139123c49a3b4c06facfb06008b125662aff3b7dc323ab8d3",
+    "docker/native/manifest.json": "sha256:de91b41ea81123a4af8eb9ca8cd526ed6560f4f53e2e3152de42f2edf0cb7db9",
+    "docker/native/packman.asc": "sha256:9ad00d51db9644a12945ce780f5e013eaa1d72d5d212b040d296925b9aec50c7",
+    "docker/native/patches/CVE-2026-107696.patch": "sha256:7518b281a719aa41c5cdd1f259eaf38f6b1e3fb28c09ec254c441abbaad69095",
     "frontend/package-lock.json": "sha256:91730c9a3a2baa1c8815d7fb2b092f665a107ddc621f978b03e1fb00863ca7a2",
     "mcp-server/Dockerfile": "sha256:58e90f5183dbf0e42069e3b752690a3f049721c1baa18f33f36aa9819433781c",
-    "mcp-server/requirements.txt": "sha256:e38a267821c14c21a46b4455942a70f1f9a6de03d5710b502abb56ef81454681",
-    "sbom/native-dependencies.json": "sha256:530f7498262e5c38541513e01ca12b4f6964b61b80273f75ec8956ff5e17a82a"
+    "mcp-server/requirements.txt": "sha256:de79f8bc7af6839295f4dfcb225e063fec46e841035468d17eaf84f48324833f",
+    "sbom/native-dependencies.json": "sha256:530f7498262e5c38541513e01ca12b4f6964b61b80273f75ec8956ff5e17a82a",
+    "scripts/build_native_runtime.py": "sha256:c5393cf13e319845431399a50617fc9459cc658a0c3a7a778c7ecad121de9bb6",
+    "scripts/collect_native_sources.py": "sha256:0ef8ce572ca000a07d799f8bc78104e0ad15cff193e08b4739219b3f5c8afe55"
   },
   "documents": [
     {
       "path": "ecm.spdx.json",
       "subject": "ecm",
-      "packages": 447,
-      "relationships": 448,
+      "packages": 449,
+      "relationships": 450,
       "nativeGraph": {
         "packages": [
+          "SPDXRef-Package-native-ffmpeg-8.1.3",
+          "SPDXRef-Package-native-gosu-1.19",
           "SPDXRef-Package-native-kissfft-131.1.0",
           "SPDXRef-Package-native-resdet-2.4.3"
         ],
         "relationships": [
+          [
+            "SPDXRef-Package-ecm",
+            "CONTAINS",
+            "SPDXRef-Package-native-ffmpeg-8.1.3"
+          ],
+          [
+            "SPDXRef-Package-ecm",
+            "CONTAINS",
+            "SPDXRef-Package-native-gosu-1.19"
+          ],
           [
             "SPDXRef-Package-ecm",
             "CONTAINS",
@@ -60,7 +81,7 @@
           ]
         ]
       },
-      "sha256": "b9e15b0fea44867420e1fbe9b850103916e742e83ac9b619203ccfad27fbcbfe"
+      "sha256": "3f70bdcdd423365b9a46d0368534f5b570c2ab0f1bffab952838d8b6cf188fd2"
     },
     {
       "path": "mcp.spdx.json",
@@ -71,7 +92,7 @@
         "packages": [],
         "relationships": []
       },
-      "sha256": "e819cf3e8fa118de0f329f82cb302a37a353cddafd9a111a26a433c3c14d17a9"
+      "sha256": "3aef96ba65673021dfa8c3a03192d661f7948b7cfa7a1aa933c3f27277fb69ce"
     }
   ]
 }

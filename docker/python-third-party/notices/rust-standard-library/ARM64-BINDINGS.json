@@ -1,0 +1,330 @@
+{
+  "scope": "Actual expected ARM binaries identify these exact commits; existing release-global notice payload hashes were checked, not inferred from x86 identities.",
+  "bindings": [
+    {
+      "distribution": "bcrypt",
+      "actual_ARM_commit": "1159e78c4747b02ef996e55082b704c09b970588",
+      "actual_ARM_version_strings": [
+        "rustc version 1.90.0 (1159e78c4 2025-09-14)"
+      ],
+      "notice_release": "1.90.0",
+      "existing_exact_recovery_receipt": "rust-library-notices/resolution.json",
+      "notice_files": [
+        {
+          "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/COPYRIGHT-library.html",
+          "sha256": "025c0dd1236493fcd5b6386b68453852e6528722bd5f8dce5949e94d225e7a60"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/Unicode-3.0.txt",
+          "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/CC-BY-SA-4.0.txt",
+          "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/OFL-1.1.txt",
+          "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/GCC-exception-3.1.txt",
+          "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/NCSA.txt",
+          "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/ISC.txt",
+          "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/MIT.txt",
+          "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/BSD-2-Clause.txt",
+          "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/LLVM-exception.txt",
+          "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/GPL-3.0-or-later.txt",
+          "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/GPL-2.0-only.txt",
+          "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af"
+        }
+      ],
+      "new_toolchain_notice_download_required": false,
+      "reason": "Actual ARM full compiler commit and release match the previously authenticated release-global library notice, whose text hashes were checked. No x86 compiler identity was assumed."
+    },
+    {
+      "distribution": "cryptography",
+      "actual_ARM_commit": "48a229ceaefd4985c50990b14116b6d856af0985",
+      "actual_ARM_version_strings": [
+        "rustc version 1.98.1 (48a229cea 2026-09-01)"
+      ],
+      "notice_release": "1.98.1",
+      "existing_exact_recovery_receipt": "updates/cryptography-50.0.2/changed-notice-recovery.json",
+      "notice_files": [
+        {
+          "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/COPYRIGHT-library.html",
+          "sha256": "68129500b616d5838629e68f55ff3aed5e096dacf60ce9eb41bbe599a563afa6"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/Unicode-3.0.txt",
+          "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/CC-BY-SA-4.0.txt",
+          "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/OFL-1.1.txt",
+          "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/GCC-exception-3.1.txt",
+          "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/NCSA.txt",
+          "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/ISC.txt",
+          "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/MIT.txt",
+          "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/BSD-2-Clause.txt",
+          "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/LLVM-exception.txt",
+          "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/GPL-3.0-or-later.txt",
+          "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/GPL-2.0-only.txt",
+          "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af"
+        }
+      ],
+      "new_toolchain_notice_download_required": false,
+      "reason": "Actual ARM full compiler commit and release match the previously authenticated release-global library notice, whose text hashes were checked. No x86 compiler identity was assumed."
+    },
+    {
+      "distribution": "hypothesis",
+      "actual_ARM_commit": "8bab26f4f68e0e26f0bb7960be334d5b520ea452",
+      "actual_ARM_version_strings": [
+        "rustc version 1.97.1 (8bab26f4f 2026-07-14)"
+      ],
+      "notice_release": "1.97.1",
+      "existing_exact_recovery_receipt": "rust-library-notices/resolution.json",
+      "notice_files": [
+        {
+          "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/COPYRIGHT-library.html",
+          "sha256": "0a65bb747c49c7bb816cbc7188319bd6e4e8d08091c1190b8a3c0971c47968ed"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/Unicode-3.0.txt",
+          "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/CC-BY-SA-4.0.txt",
+          "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/OFL-1.1.txt",
+          "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/GCC-exception-3.1.txt",
+          "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/NCSA.txt",
+          "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/ISC.txt",
+          "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/MIT.txt",
+          "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/BSD-2-Clause.txt",
+          "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/LLVM-exception.txt",
+          "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/GPL-3.0-or-later.txt",
+          "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/GPL-2.0-only.txt",
+          "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af"
+        }
+      ],
+      "new_toolchain_notice_download_required": false,
+      "reason": "Actual ARM full compiler commit and release match the previously authenticated release-global library notice, whose text hashes were checked. No x86 compiler identity was assumed."
+    },
+    {
+      "distribution": "pydantic-core",
+      "actual_ARM_commit": "59807616e1fa2540724bfbac14d7976d7e4a3860",
+      "actual_ARM_version_strings": [
+        "rustc version 1.95.0 (59807616e 2026-04-14)"
+      ],
+      "notice_release": "1.95.0",
+      "existing_exact_recovery_receipt": "rust-library-notices/resolution.json",
+      "notice_files": [
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/COPYRIGHT-library.html",
+          "sha256": "90567e2718bf7fd65a71a3a43c5596488e80e5f51ed02bfea6fec54458b5f3d1"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/Unicode-3.0.txt",
+          "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/CC-BY-SA-4.0.txt",
+          "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/OFL-1.1.txt",
+          "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GCC-exception-3.1.txt",
+          "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/NCSA.txt",
+          "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/ISC.txt",
+          "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/MIT.txt",
+          "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/BSD-2-Clause.txt",
+          "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/LLVM-exception.txt",
+          "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GPL-3.0-or-later.txt",
+          "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GPL-2.0-only.txt",
+          "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af"
+        }
+      ],
+      "new_toolchain_notice_download_required": false,
+      "reason": "Actual ARM full compiler commit and release match the previously authenticated release-global library notice, whose text hashes were checked. No x86 compiler identity was assumed."
+    },
+    {
+      "distribution": "watchfiles",
+      "actual_ARM_commit": "59807616e1fa2540724bfbac14d7976d7e4a3860",
+      "actual_ARM_version_strings": [
+        "rustc version 1.95.0 (59807616e 2026-04-14)"
+      ],
+      "notice_release": "1.95.0",
+      "existing_exact_recovery_receipt": "rust-library-notices/resolution.json",
+      "notice_files": [
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/COPYRIGHT-library.html",
+          "sha256": "90567e2718bf7fd65a71a3a43c5596488e80e5f51ed02bfea6fec54458b5f3d1"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/Unicode-3.0.txt",
+          "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/CC-BY-SA-4.0.txt",
+          "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/OFL-1.1.txt",
+          "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GCC-exception-3.1.txt",
+          "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/NCSA.txt",
+          "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/ISC.txt",
+          "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/MIT.txt",
+          "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/BSD-2-Clause.txt",
+          "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/LLVM-exception.txt",
+          "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GPL-3.0-or-later.txt",
+          "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2"
+        },
+        {
+          "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GPL-2.0-only.txt",
+          "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af"
+        }
+      ],
+      "new_toolchain_notice_download_required": false,
+      "reason": "Actual ARM full compiler commit and release match the previously authenticated release-global library notice, whose text hashes were checked. No x86 compiler identity was assumed."
+    }
+  ]
+}

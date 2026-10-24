@@ -1,0 +1,498 @@
+{
+  "scope": "Genuine release-global Rust Standard Library notice payloads; notice carrier is not wheel platform-parity evidence.",
+  "authority": "TLS official static.rust-lang.org manifests and sidecar SHA-256; archive digest verified end-to-end. No detached signature or reproducible-build verification is claimed.",
+  "carrier_rationale": "Linux compiler archives would make aggregate downloads exceed 350MB. Exact-release aarch64-apple-darwin compiler archives carry the release-global COPYRIGHT-library.html. Exact-commit generator main.rs trims in-tree metadata to library and scans all library workspace Cargo metadata; cargo_metadata.rs has no target/platform filter. This is a notice carrier only, not an audit of Darwin, a Darwin wheel, or Linux/arm64 parity.",
+  "toolchains": [
+    {
+      "commit": "1159e78c4747b02ef996e55082b704c09b970588",
+      "release": "1.90.0",
+      "owners": [
+        {
+          "distribution": "bcrypt",
+          "native_path": "bcrypt/_bcrypt.abi3.so"
+        }
+      ],
+      "archive_url": "https://static.rust-lang.org/dist/2025-09-18/rustc-1.90.0-aarch64-apple-darwin.tar.xz",
+      "archive_sha256": "89551c0ba1cc6d0312aebc4a6cafe4497223217ea8e87c81f6afbe127dfaeeb6",
+      "carrier_target": "aarch64-apple-darwin",
+      "manifest_binding": {
+        "commit": "1159e78c4747b02ef996e55082b704c09b970588",
+        "release": "1.90.0",
+        "manifest_url": "https://static.rust-lang.org/dist/channel-rust-1.90.0.toml",
+        "manifest_sha256_url": "https://static.rust-lang.org/dist/channel-rust-1.90.0.toml.sha256",
+        "manifest_sha256": "489c19f20d331765ab2835661eb546de90f6446a107a8db83045e7371e45cae2",
+        "official_manifest_hash_matches": true,
+        "manifest_payload_bytes": 949065,
+        "compiler_archive_url": "https://static.rust-lang.org/dist/2025-09-18/rustc-1.90.0-x86_64-unknown-linux-gnu.tar.xz",
+        "compiler_archive_sha256": "48c2a42de9e92fcae8c24568f5fe40d5734696a6f80e83cc6d46eef1a78f13c9",
+        "compiler_archive_bytes_head": 82519204,
+        "manifest_release_date": "2025-09-18",
+        "binding": {
+          "native_release_matches_exact_commit_src_version": true,
+          "official_versioned_std_matches_native_release_commit_date": true,
+          "channel_rustc_git_commit_hash": "1159e78c4747b02ef996e55082b704c09b970588",
+          "channel_rustc_git_commit_matches": true,
+          "channel_rustc_version": "1.90.0 (1159e78c4 2025-09-14)",
+          "channel_version_matches_native_marker": true
+        }
+      },
+      "payloads": [
+        {
+          "archive_member": "rustc-1.90.0-aarch64-apple-darwin/rustc/share/doc/rust/COPYRIGHT-library.html",
+          "path": "rust-library-notices/1159e78c4747b02ef996e55082b704c09b970588/COPYRIGHT-library.html",
+          "candidate_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/COPYRIGHT-library.html",
+          "sha256": "025c0dd1236493fcd5b6386b68453852e6528722bd5f8dce5949e94d225e7a60",
+          "size": 360726
+        },
+        {
+          "archive_member": "rustc-1.90.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/Apache-2.0.txt",
+          "path": "rust-library-notices/1159e78c4747b02ef996e55082b704c09b970588/licenses/Apache-2.0.txt",
+          "candidate_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "size": 10280
+        },
+        {
+          "archive_member": "rustc-1.90.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/Unicode-3.0.txt",
+          "path": "rust-library-notices/1159e78c4747b02ef996e55082b704c09b970588/licenses/Unicode-3.0.txt",
+          "candidate_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/Unicode-3.0.txt",
+          "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443",
+          "size": 1995
+        },
+        {
+          "archive_member": "rustc-1.90.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/CC-BY-SA-4.0.txt",
+          "path": "rust-library-notices/1159e78c4747b02ef996e55082b704c09b970588/licenses/CC-BY-SA-4.0.txt",
+          "candidate_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/CC-BY-SA-4.0.txt",
+          "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2",
+          "size": 20137
+        },
+        {
+          "archive_member": "rustc-1.90.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/OFL-1.1.txt",
+          "path": "rust-library-notices/1159e78c4747b02ef996e55082b704c09b970588/licenses/OFL-1.1.txt",
+          "candidate_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/OFL-1.1.txt",
+          "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd",
+          "size": 4016
+        },
+        {
+          "archive_member": "rustc-1.90.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/GCC-exception-3.1.txt",
+          "path": "rust-library-notices/1159e78c4747b02ef996e55082b704c09b970588/licenses/GCC-exception-3.1.txt",
+          "candidate_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/GCC-exception-3.1.txt",
+          "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54",
+          "size": 3320
+        },
+        {
+          "archive_member": "rustc-1.90.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/NCSA.txt",
+          "path": "rust-library-notices/1159e78c4747b02ef996e55082b704c09b970588/licenses/NCSA.txt",
+          "candidate_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/NCSA.txt",
+          "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630",
+          "size": 1676
+        },
+        {
+          "archive_member": "rustc-1.90.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/ISC.txt",
+          "path": "rust-library-notices/1159e78c4747b02ef996e55082b704c09b970588/licenses/ISC.txt",
+          "candidate_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/ISC.txt",
+          "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381",
+          "size": 730
+        },
+        {
+          "archive_member": "rustc-1.90.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/MIT.txt",
+          "path": "rust-library-notices/1159e78c4747b02ef996e55082b704c09b970588/licenses/MIT.txt",
+          "candidate_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/MIT.txt",
+          "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0",
+          "size": 1078
+        },
+        {
+          "archive_member": "rustc-1.90.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/BSD-2-Clause.txt",
+          "path": "rust-library-notices/1159e78c4747b02ef996e55082b704c09b970588/licenses/BSD-2-Clause.txt",
+          "candidate_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/BSD-2-Clause.txt",
+          "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df",
+          "size": 1267
+        },
+        {
+          "archive_member": "rustc-1.90.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/LLVM-exception.txt",
+          "path": "rust-library-notices/1159e78c4747b02ef996e55082b704c09b970588/licenses/LLVM-exception.txt",
+          "candidate_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/LLVM-exception.txt",
+          "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+          "size": 919
+        },
+        {
+          "archive_member": "rustc-1.90.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/GPL-3.0-or-later.txt",
+          "path": "rust-library-notices/1159e78c4747b02ef996e55082b704c09b970588/licenses/GPL-3.0-or-later.txt",
+          "candidate_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/GPL-3.0-or-later.txt",
+          "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2",
+          "size": 34795
+        },
+        {
+          "archive_member": "rustc-1.90.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/GPL-2.0-only.txt",
+          "path": "rust-library-notices/1159e78c4747b02ef996e55082b704c09b970588/licenses/GPL-2.0-only.txt",
+          "candidate_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/GPL-2.0-only.txt",
+          "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af",
+          "size": 17642
+        }
+      ]
+    },
+    {
+      "commit": "59807616e1fa2540724bfbac14d7976d7e4a3860",
+      "release": "1.95.0",
+      "owners": [
+        {
+          "distribution": "pydantic-core",
+          "native_path": "pydantic_core/_pydantic_core.cpython-312-x86_64-linux-gnu.so"
+        },
+        {
+          "distribution": "watchfiles",
+          "native_path": "watchfiles/_rust_notify.cpython-312-x86_64-linux-gnu.so"
+        }
+      ],
+      "archive_url": "https://static.rust-lang.org/dist/2026-04-16/rustc-1.95.0-aarch64-apple-darwin.tar.xz",
+      "archive_sha256": "149e85a285b6eba58eb6c8bdf7deb1b93763890598e62cb635a712e3a8454f04",
+      "carrier_target": "aarch64-apple-darwin",
+      "manifest_binding": {
+        "commit": "59807616e1fa2540724bfbac14d7976d7e4a3860",
+        "release": "1.95.0",
+        "manifest_url": "https://static.rust-lang.org/dist/channel-rust-1.95.0.toml",
+        "manifest_sha256_url": "https://static.rust-lang.org/dist/channel-rust-1.95.0.toml.sha256",
+        "manifest_sha256": "821ff14e4c4a1cbe1e8915f35aff0a3fbbdf8d293ad48ab8f31e3b0440c581f9",
+        "official_manifest_hash_matches": true,
+        "manifest_payload_bytes": 848433,
+        "compiler_archive_url": "https://static.rust-lang.org/dist/2026-04-16/rustc-1.95.0-x86_64-unknown-linux-gnu.tar.xz",
+        "compiler_archive_sha256": "8426a3d170a5879f5682f5fbdd024a1779b3951e7baba685af2d6dc32a6dfc15",
+        "compiler_archive_bytes_head": 80351960,
+        "manifest_release_date": "2026-04-16",
+        "binding": {
+          "native_release_matches_exact_commit_src_version": true,
+          "official_versioned_std_matches_native_release_commit_date": true,
+          "channel_rustc_git_commit_hash": "59807616e1fa2540724bfbac14d7976d7e4a3860",
+          "channel_rustc_git_commit_matches": true,
+          "channel_rustc_version": "1.95.0 (59807616e 2026-04-14)",
+          "channel_version_matches_native_marker": true
+        }
+      },
+      "payloads": [
+        {
+          "archive_member": "rustc-1.95.0-aarch64-apple-darwin/rustc/share/doc/rust/COPYRIGHT-library.html",
+          "path": "rust-library-notices/59807616e1fa2540724bfbac14d7976d7e4a3860/COPYRIGHT-library.html",
+          "candidate_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/COPYRIGHT-library.html",
+          "sha256": "90567e2718bf7fd65a71a3a43c5596488e80e5f51ed02bfea6fec54458b5f3d1",
+          "size": 425661
+        },
+        {
+          "archive_member": "rustc-1.95.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/Apache-2.0.txt",
+          "path": "rust-library-notices/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/Apache-2.0.txt",
+          "candidate_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "size": 10280
+        },
+        {
+          "archive_member": "rustc-1.95.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/Unicode-3.0.txt",
+          "path": "rust-library-notices/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/Unicode-3.0.txt",
+          "candidate_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/Unicode-3.0.txt",
+          "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443",
+          "size": 1995
+        },
+        {
+          "archive_member": "rustc-1.95.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/CC-BY-SA-4.0.txt",
+          "path": "rust-library-notices/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/CC-BY-SA-4.0.txt",
+          "candidate_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/CC-BY-SA-4.0.txt",
+          "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2",
+          "size": 20137
+        },
+        {
+          "archive_member": "rustc-1.95.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/OFL-1.1.txt",
+          "path": "rust-library-notices/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/OFL-1.1.txt",
+          "candidate_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/OFL-1.1.txt",
+          "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd",
+          "size": 4016
+        },
+        {
+          "archive_member": "rustc-1.95.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/GCC-exception-3.1.txt",
+          "path": "rust-library-notices/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GCC-exception-3.1.txt",
+          "candidate_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GCC-exception-3.1.txt",
+          "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54",
+          "size": 3320
+        },
+        {
+          "archive_member": "rustc-1.95.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/NCSA.txt",
+          "path": "rust-library-notices/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/NCSA.txt",
+          "candidate_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/NCSA.txt",
+          "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630",
+          "size": 1676
+        },
+        {
+          "archive_member": "rustc-1.95.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/ISC.txt",
+          "path": "rust-library-notices/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/ISC.txt",
+          "candidate_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/ISC.txt",
+          "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381",
+          "size": 730
+        },
+        {
+          "archive_member": "rustc-1.95.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/MIT.txt",
+          "path": "rust-library-notices/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/MIT.txt",
+          "candidate_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/MIT.txt",
+          "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0",
+          "size": 1078
+        },
+        {
+          "archive_member": "rustc-1.95.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/BSD-2-Clause.txt",
+          "path": "rust-library-notices/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/BSD-2-Clause.txt",
+          "candidate_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/BSD-2-Clause.txt",
+          "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df",
+          "size": 1267
+        },
+        {
+          "archive_member": "rustc-1.95.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/LLVM-exception.txt",
+          "path": "rust-library-notices/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/LLVM-exception.txt",
+          "candidate_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/LLVM-exception.txt",
+          "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+          "size": 919
+        },
+        {
+          "archive_member": "rustc-1.95.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/GPL-3.0-or-later.txt",
+          "path": "rust-library-notices/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GPL-3.0-or-later.txt",
+          "candidate_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GPL-3.0-or-later.txt",
+          "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2",
+          "size": 34795
+        },
+        {
+          "archive_member": "rustc-1.95.0-aarch64-apple-darwin/rustc/share/doc/rust/licenses/GPL-2.0-only.txt",
+          "path": "rust-library-notices/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GPL-2.0-only.txt",
+          "candidate_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GPL-2.0-only.txt",
+          "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af",
+          "size": 17642
+        }
+      ]
+    },
+    {
+      "commit": "8bab26f4f68e0e26f0bb7960be334d5b520ea452",
+      "release": "1.97.1",
+      "owners": [
+        {
+          "distribution": "hypothesis",
+          "native_path": "hypothesis/_native.cpython-312-x86_64-linux-gnu.so"
+        }
+      ],
+      "archive_url": "https://static.rust-lang.org/dist/2026-07-16/rustc-1.97.1-aarch64-apple-darwin.tar.xz",
+      "archive_sha256": "6076cad38ccabaa24325f26a74080a363a2633a9cd34c473a8977255d8a593cb",
+      "carrier_target": "aarch64-apple-darwin",
+      "manifest_binding": {
+        "commit": "8bab26f4f68e0e26f0bb7960be334d5b520ea452",
+        "release": "1.97.1",
+        "manifest_url": "https://static.rust-lang.org/dist/channel-rust-1.97.1.toml",
+        "manifest_sha256_url": "https://static.rust-lang.org/dist/channel-rust-1.97.1.toml.sha256",
+        "manifest_sha256": "03569b1886ceb5c05276b50c8431ab111de944cd6140fe1fa7d821dd8e0f29cf",
+        "official_manifest_hash_matches": true,
+        "manifest_payload_bytes": 846007,
+        "compiler_archive_url": "https://static.rust-lang.org/dist/2026-07-16/rustc-1.97.1-x86_64-unknown-linux-gnu.tar.xz",
+        "compiler_archive_sha256": "9819d0a32d56bd339585319c80260e332779f5541fd66838ab7e016d6c814819",
+        "compiler_archive_bytes_head": 81050916,
+        "manifest_release_date": "2026-07-16",
+        "binding": {
+          "native_release_matches_exact_commit_src_version": true,
+          "official_versioned_std_matches_native_release_commit_date": true,
+          "channel_rustc_git_commit_hash": "8bab26f4f68e0e26f0bb7960be334d5b520ea452",
+          "channel_rustc_git_commit_matches": true,
+          "channel_rustc_version": "1.97.1 (8bab26f4f 2026-07-14)",
+          "channel_version_matches_native_marker": true
+        }
+      },
+      "payloads": [
+        {
+          "archive_member": "rustc-1.97.1-aarch64-apple-darwin/rustc/share/doc/rust/COPYRIGHT-library.html",
+          "path": "rust-library-notices/8bab26f4f68e0e26f0bb7960be334d5b520ea452/COPYRIGHT-library.html",
+          "candidate_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/COPYRIGHT-library.html",
+          "sha256": "0a65bb747c49c7bb816cbc7188319bd6e4e8d08091c1190b8a3c0971c47968ed",
+          "size": 279302
+        },
+        {
+          "archive_member": "rustc-1.97.1-aarch64-apple-darwin/rustc/share/doc/rust/licenses/Apache-2.0.txt",
+          "path": "rust-library-notices/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/Apache-2.0.txt",
+          "candidate_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "size": 10280
+        },
+        {
+          "archive_member": "rustc-1.97.1-aarch64-apple-darwin/rustc/share/doc/rust/licenses/Unicode-3.0.txt",
+          "path": "rust-library-notices/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/Unicode-3.0.txt",
+          "candidate_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/Unicode-3.0.txt",
+          "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443",
+          "size": 1995
+        },
+        {
+          "archive_member": "rustc-1.97.1-aarch64-apple-darwin/rustc/share/doc/rust/licenses/CC-BY-SA-4.0.txt",
+          "path": "rust-library-notices/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/CC-BY-SA-4.0.txt",
+          "candidate_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/CC-BY-SA-4.0.txt",
+          "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2",
+          "size": 20137
+        },
+        {
+          "archive_member": "rustc-1.97.1-aarch64-apple-darwin/rustc/share/doc/rust/licenses/OFL-1.1.txt",
+          "path": "rust-library-notices/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/OFL-1.1.txt",
+          "candidate_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/OFL-1.1.txt",
+          "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd",
+          "size": 4016
+        },
+        {
+          "archive_member": "rustc-1.97.1-aarch64-apple-darwin/rustc/share/doc/rust/licenses/GCC-exception-3.1.txt",
+          "path": "rust-library-notices/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/GCC-exception-3.1.txt",
+          "candidate_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/GCC-exception-3.1.txt",
+          "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54",
+          "size": 3320
+        },
+        {
+          "archive_member": "rustc-1.97.1-aarch64-apple-darwin/rustc/share/doc/rust/licenses/NCSA.txt",
+          "path": "rust-library-notices/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/NCSA.txt",
+          "candidate_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/NCSA.txt",
+          "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630",
+          "size": 1676
+        },
+        {
+          "archive_member": "rustc-1.97.1-aarch64-apple-darwin/rustc/share/doc/rust/licenses/ISC.txt",
+          "path": "rust-library-notices/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/ISC.txt",
+          "candidate_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/ISC.txt",
+          "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381",
+          "size": 730
+        },
+        {
+          "archive_member": "rustc-1.97.1-aarch64-apple-darwin/rustc/share/doc/rust/licenses/MIT.txt",
+          "path": "rust-library-notices/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/MIT.txt",
+          "candidate_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/MIT.txt",
+          "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0",
+          "size": 1078
+        },
+        {
+          "archive_member": "rustc-1.97.1-aarch64-apple-darwin/rustc/share/doc/rust/licenses/BSD-2-Clause.txt",
+          "path": "rust-library-notices/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/BSD-2-Clause.txt",
+          "candidate_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/BSD-2-Clause.txt",
+          "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df",
+          "size": 1267
+        },
+        {
+          "archive_member": "rustc-1.97.1-aarch64-apple-darwin/rustc/share/doc/rust/licenses/LLVM-exception.txt",
+          "path": "rust-library-notices/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/LLVM-exception.txt",
+          "candidate_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/LLVM-exception.txt",
+          "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+          "size": 919
+        },
+        {
+          "archive_member": "rustc-1.97.1-aarch64-apple-darwin/rustc/share/doc/rust/licenses/GPL-3.0-or-later.txt",
+          "path": "rust-library-notices/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/GPL-3.0-or-later.txt",
+          "candidate_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/GPL-3.0-or-later.txt",
+          "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2",
+          "size": 34795
+        },
+        {
+          "archive_member": "rustc-1.97.1-aarch64-apple-darwin/rustc/share/doc/rust/licenses/GPL-2.0-only.txt",
+          "path": "rust-library-notices/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/GPL-2.0-only.txt",
+          "candidate_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/GPL-2.0-only.txt",
+          "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af",
+          "size": 17642
+        }
+      ]
+    },
+    {
+      "release": "1.98.1",
+      "commit": "48a229ceaefd4985c50990b14116b6d856af0985",
+      "actual_native_version_strings": [
+        "rustc version 1.98.1 (48a229cea 2026-09-01)"
+      ],
+      "official_manifest_sha256_matches": true,
+      "manifest_sha256": "a7c8774a5fd8441c997d94c029776cbc5eb111e9d72ab5d256fa69866644347e",
+      "manifest_url": "https://static.rust-lang.org/dist/channel-rust-1.98.1.toml",
+      "official_full_commit_matches": true,
+      "versioned_rustdoc_marker_matches": true,
+      "carrier_target": "x86_64-unknown-linux-gnu",
+      "archive_url": "https://static.rust-lang.org/dist/2026-09-03/rustc-1.98.1-x86_64-unknown-linux-gnu.tar.xz",
+      "archive_sha256": "e974f036b28565f37c0f3bd92ddefa809bee16c04f9dcf07b9ed96e05aaaf7c4",
+      "archive_sha256_verified": true,
+      "archive_bytes_streamed_not_saved": 79727616,
+      "notice_files": [
+        {
+          "archive_member": "rustc-1.98.1-x86_64-unknown-linux-gnu/rustc/share/doc/rust/COPYRIGHT-library.html",
+          "path": "rust-1.98.1/COPYRIGHT-library.html",
+          "sha256": "68129500b616d5838629e68f55ff3aed5e096dacf60ce9eb41bbe599a563afa6",
+          "size": 1512520
+        },
+        {
+          "archive_member": "rustc-1.98.1-x86_64-unknown-linux-gnu/rustc/share/doc/rust/licenses/Apache-2.0.txt",
+          "path": "rust-1.98.1/licenses/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "size": 10280
+        },
+        {
+          "archive_member": "rustc-1.98.1-x86_64-unknown-linux-gnu/rustc/share/doc/rust/licenses/Unicode-3.0.txt",
+          "path": "rust-1.98.1/licenses/Unicode-3.0.txt",
+          "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443",
+          "size": 1995
+        },
+        {
+          "archive_member": "rustc-1.98.1-x86_64-unknown-linux-gnu/rustc/share/doc/rust/licenses/CC-BY-SA-4.0.txt",
+          "path": "rust-1.98.1/licenses/CC-BY-SA-4.0.txt",
+          "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2",
+          "size": 20137
+        },
+        {
+          "archive_member": "rustc-1.98.1-x86_64-unknown-linux-gnu/rustc/share/doc/rust/licenses/OFL-1.1.txt",
+          "path": "rust-1.98.1/licenses/OFL-1.1.txt",
+          "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd",
+          "size": 4016
+        },
+        {
+          "archive_member": "rustc-1.98.1-x86_64-unknown-linux-gnu/rustc/share/doc/rust/licenses/GCC-exception-3.1.txt",
+          "path": "rust-1.98.1/licenses/GCC-exception-3.1.txt",
+          "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54",
+          "size": 3320
+        },
+        {
+          "archive_member": "rustc-1.98.1-x86_64-unknown-linux-gnu/rustc/share/doc/rust/licenses/NCSA.txt",
+          "path": "rust-1.98.1/licenses/NCSA.txt",
+          "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630",
+          "size": 1676
+        },
+        {
+          "archive_member": "rustc-1.98.1-x86_64-unknown-linux-gnu/rustc/share/doc/rust/licenses/ISC.txt",
+          "path": "rust-1.98.1/licenses/ISC.txt",
+          "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381",
+          "size": 730
+        },
+        {
+          "archive_member": "rustc-1.98.1-x86_64-unknown-linux-gnu/rustc/share/doc/rust/licenses/MIT.txt",
+          "path": "rust-1.98.1/licenses/MIT.txt",
+          "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0",
+          "size": 1078
+        },
+        {
+          "archive_member": "rustc-1.98.1-x86_64-unknown-linux-gnu/rustc/share/doc/rust/licenses/BSD-2-Clause.txt",
+          "path": "rust-1.98.1/licenses/BSD-2-Clause.txt",
+          "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df",
+          "size": 1267
+        },
+        {
+          "archive_member": "rustc-1.98.1-x86_64-unknown-linux-gnu/rustc/share/doc/rust/licenses/LLVM-exception.txt",
+          "path": "rust-1.98.1/licenses/LLVM-exception.txt",
+          "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+          "size": 919
+        },
+        {
+          "archive_member": "rustc-1.98.1-x86_64-unknown-linux-gnu/rustc/share/doc/rust/licenses/GPL-3.0-or-later.txt",
+          "path": "rust-1.98.1/licenses/GPL-3.0-or-later.txt",
+          "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2",
+          "size": 34795
+        },
+        {
+          "archive_member": "rustc-1.98.1-x86_64-unknown-linux-gnu/rustc/share/doc/rust/licenses/GPL-2.0-only.txt",
+          "path": "rust-1.98.1/licenses/GPL-2.0-only.txt",
+          "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af",
+          "size": 17642
+        }
+      ],
+      "signature_claim": "Official HTTPS manifest+sidecar and full archive SHA-256; no detached signature or reproducible-build claim.",
+      "owners": [
+        {
+          "distribution": "cryptography",
+          "version": "50.0.2",
+          "native_path": "cryptography/hazmat/bindings/_rust.abi3.so"
+        }
+      ]
+    }
+  ],
+  "current_candidate_note": "Current backend candidate; original 1.97.1 remains required for unchanged hypothesis. Rust 1.98.1 applies to repaired cryptography in backend and MCP; no arm64 assertion."
+}

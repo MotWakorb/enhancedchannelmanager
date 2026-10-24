@@ -1,7 +1,7 @@
-"""Complete scan evidence is required; a scanner failure is never zero findings.
+"""Fail-closed scan contract against the real SUSE/RPM report projection.
 
-The compact OS inventory and report vocabulary below are recorded from the
-2026-10-23 Wolfi probe scan (Trivy 0.76.1), not a guessed distro/package schema.
+Fixture digests and scanner DB times are unit-only, not publication evidence.
+FFmpeg source/build identity remains the parent runtime gate's responsibility.
 """
 
 from __future__ import annotations
@@ -11,44 +11,42 @@ import importlib.util
 import json
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "scripts/check_native_image_scan.py"
+FIXTURE = ROOT / "backend/tests/fixtures/native_scan/opensuse-tumbleweed.json"
 CONFIG = "sha256:" + "a" * 64
 DIFF = "sha256:" + "b" * 64
-OS_INVENTORY = """
-aom-libs=3.15.2-r0 apk-tools=2.14.10-r17 bash=5.3-r14 busybox=1.38.0-r3
-ca-certificates-bundle=20260909-r3 cairo=1.18.6-r0 coreutils=9.12-r4
-ffmpeg-9.0=9.0.2-r5 ffmpeg-9.0-libavcodec63=9.0.2-r5 ffmpeg-9.0-libavdevice63=9.0.2-r5
-ffmpeg-9.0-libavfilter12=9.0.2-r5 ffmpeg-9.0-libavformat63=9.0.2-r5 ffmpeg-9.0-libavutil61=9.0.2-r5
-ffmpeg-9.0-libswresample7=9.0.2-r5 ffmpeg-9.0-libswscale10=9.0.2-r5
-fontconfig-config=2.18.3-r2 freetype=2.14.3-r7 gdbm=1.26-r7 glib=2.90.1-r0
-glibc-2.44=2.44-r9 glibc-2.44-locale-posix=2.44-r9 gosu=1.19-r20 graphite2=1.3.15-r4
-harfbuzz=15.0.0-r0 lame-libs=4.0-r2 ld-linux-2.44=2.44-r9 libacl1=2.4.0-r4
-libattr1=2.6.0-r4 libaudit=4.2.1-r2 libblkid=2.42.4-r1 libbrotlicommon1=1.2.1-r0
-libbrotlidec1=1.2.1-r0 libbrotlienc1=1.2.1-r0 libbsd=0.12.2-r9 libbz2-1=1.0.8-r25
-libcap-ng=0.9.6-r1 libcrypt1-2.44=2.44-r9 libdav1d=1.5.4-r2 libexpat1=2.9.0-r0
-libffi=3.8.0-r2 libfontconfig1=2.18.3-r2 libgcc=16.2.0-r1 libgomp=16.2.0-r1 libmd=1.3.0-r0
-libmount=2.42.4-r1 libogg=1.3.6-r5 libpcre2-8-0=10.49-r1 libpng=1.6.59-r0
-libsdl2=2.32.10-r5 libselinux=3.11-r2 libsemanage=3.11-r3 libsepol=3.11-r3
-libsodium=1.0.22-r2 libsrt=1.5.7-r4 libssh=0.12.2-r3 libstdc++=16.2.0-r1
-libsvtav1enc4=4.2.0-r2 libtheora=1.2.0-r8 libuuid=2.42.4-r1 libvorbis=1.3.7-r12
-libvpx=1.17.0-r2 libwebp=1.6.0-r7 libx11=1.8.14-r1 libx265-216=4.2-r2
-libxau=1.0.12-r9 libxcb=1.17.0-r17 libxcrypt=4.5.2-r6 libxdmcp=1.1.5-r12
-libxext=1.3.7-r4 libxml2-16=2.15.4-r1 libxrender=0.9.13-r0 linux-pam=1.7.3-r1
-mpdecimal=4.0.1-r4 ncurses=6.6.20261017-r0 ncurses-terminfo-base=6.6.20261017-r0
-opencore-amr=0.1.6-r6 openjpeg=2.5.4-r3 openssl-4.0-dev=4.0.3-r8
-openssl-4.0-libcrypto=4.0.3-r8 openssl-4.0-libssl=4.0.3-r8
-openssl-provider-legacy-allowed=4.0.3-r1 opus=1.6.1-r5 pixman=0.46.4-r6
-posix-libc-utils-2.44=2.44-r9 posix-libc-utils-bin-2.44=2.44-r9 py3-pip-wheel=26.2.2-r0
-python-3.12=3.12.15-r6 python-3.12-base=3.12.15-r6 readline=8.3-r3 shadow=4.20.3-r0
-snappy=1.3.1-r0 soxr=0.1.3-r8 speex=1.2.1-r8 sqlite-libs=3.54.1-r0 tzdata=2026e-r0
-wolfi-base=1-r7 wolfi-baselayout=20230201-r30 wolfi-keys=1-r14 x264=2025.06.08-r4
-xz=5.8.4-r0 zeromq=4.3.5-r13 zlib=1.3.2.1_rc20260921-r0
-"""
+# Independently reviewed identities, not read from the validator's constants.
+NATIVE_PACKAGES = (
+    "python312",
+    "python312-base",
+    "libpython3_12-1_0",
+    "libxml2-16",
+    "glibc",
+    "libopenssl3",
+    "libexpat1",
+    "libaom3",
+    "libass9",
+    "libdav1d7",
+    "libSvtAv1Enc4",
+    "libfontconfig1",
+    "libfreetype6",
+    "libharfbuzz0",
+    "libmp3lame0",
+    "libopenjp2-7",
+    "libopus0",
+    "libvorbis0",
+    "libvorbisenc2",
+    "libvpx12",
+    "libwebp7",
+    "libx264-165",
+    "libx265-215",
+)
 
 
 @pytest.fixture
@@ -60,6 +58,7 @@ def scan():
 
 
 def _evidence(arch="amd64"):
+    report = json.loads(FIXTURE.read_text())
     identity = {
         "ManifestDigest": "sha256:" + "c" * 64,
         "ConfigDigest": CONFIG,
@@ -67,69 +66,148 @@ def _evidence(arch="amd64"):
         "Architecture": arch,
         "RootFSDiffIDs": [DIFF],
     }
-    report = {
-        "SchemaVersion": 2,
-        "Trivy": {"Version": "0.76.1"},
-        "CreatedAt": "2026-10-23T02:52:02.14650828-05:00",
-        "ArtifactType": "container_image",
-        "Metadata": {
-            "OS": {"Family": "wolfi", "Name": "20230201"},
-            "ImageID": CONFIG,
-            "DiffIDs": [DIFF],
-            "ImageConfig": {
-                "os": "linux",
-                "architecture": arch,
-                "rootfs": {"type": "layers", "diff_ids": [DIFF]},
-            },
-        },
-        "Results": [
-            {
-                "Class": "os-pkgs",
-                "Type": "wolfi",
-                "Packages": [
-                    {
-                        "Name": value.split("=")[0],
-                        "Version": value.split("=")[1],
-                        "Arch": "x86_64" if arch == "amd64" else "aarch64",
-                        "AnalyzedBy": "apk",
-                    }
-                    for value in OS_INVENTORY.split()
-                ],
-            },
-            {
-                "Class": "lang-pkgs",
-                "Type": "python-pkg",
-                "Packages": [
-                    {"Name": "Mako", "Version": "1.4.1", "AnalyzedBy": "python-pkg"}
-                ],
-                "Vulnerabilities": [
-                    {
-                        "VulnerabilityID": "CVE-fixture-medium",
-                        "PkgName": "Mako",
-                        "InstalledVersion": "1.4.1",
-                        "Severity": "MEDIUM",
-                    }
-                ],
-            },
-        ],
-    }
+    if arch == "arm64":
+        # Synthetic architecture mapping, NOT recorded arm64 image evidence.
+        report["Metadata"]["ImageConfig"]["architecture"] = arch
+        for package in report["Results"][0]["Packages"]:
+            if package["Arch"] == "x86_64":
+                package["Arch"] = "aarch64"
     scanner = {
         "Version": "0.76.1",
         "VulnerabilityDB": {
             "Version": 2,
-            "UpdatedAt": "2026-10-23T00:00:00Z",
-            "NextUpdate": "2026-10-24T00:00:00Z",
-            "DownloadedAt": "2026-10-23T01:00:00Z",
+            "UpdatedAt": "2026-10-24T00:00:00Z",
+            "NextUpdate": "2026-10-25T00:00:00Z",
+            "DownloadedAt": "2026-10-24T01:00:00Z",
         },
     }
     return report, identity, scanner
 
 
 @pytest.mark.parametrize("arch", ["amd64", "arm64"])
-def test_complete_recorded_inventory_and_medium_finding_are_accepted(scan, arch):
+def test_complete_recorded_inventory_and_unsuppressed_findings_are_accepted(scan, arch):
     report, identity, scanner = _evidence(arch)
-    assert len(report["Results"][0]["Packages"]) == 102
+    os_result, python_result, go_result = report["Results"]
+    packages = os_result["Packages"]
+    assert [len(r["Packages"]) for r in report["Results"]] == [212, 74, 4]
+    assert Counter(p["AnalyzedBy"] for p in packages) == {"rpm": 212}
+    assert Counter(p["Arch"] for p in packages) == {
+        "x86_64" if arch == "amd64" else "aarch64": 189,
+        "noarch": 17,
+        "None": 6,
+    }
+    keys = [p for p in packages if p["Name"] == "gpg-pubkey"]
+    assert len(keys) == len({(p["Version"], p["Release"]) for p in keys}) == 6
+    assert python_result["Vulnerabilities"][0]["Severity"] == "MEDIUM"
+    assert go_result["Vulnerabilities"][0]["Severity"] == "UNKNOWN"
+    # Custom FFmpeg is not RPM-owned; this does NOT prove its source/build pin.
+    assert not any(p["Name"].startswith("ffmpeg") for p in packages)
+    assert scan.MIN_OS_PACKAGES == 212
     assert scan.check_report(report, identity, scanner, arch) == []
+
+
+@pytest.mark.parametrize("name", NATIVE_PACKAGES)
+def test_missing_native_identity_cannot_be_hidden_by_inventory_padding(scan, name):
+    report, identity, scanner = _evidence()
+    package = next(p for p in report["Results"][0]["Packages"] if p["Name"] == name)
+    package["Name"] = "unrelated-replacement"
+    assert f"missing/outdated expected native package {name}" in scan.check_report(
+        report, identity, scanner, "amd64"
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "version"),
+    [
+        ("python312", "3.12.14"),
+        ("python312-base", "3.12.14"),
+        ("libpython3_12-1_0", "3.12.14"),
+        ("python312", "3.13.15"),
+        ("libxml2-16", "2.15.3"),
+        ("libxml2-16", "2.15.4~rc1"),
+        ("libxml2-16", "2.15.4-r1"),
+        ("glibc", "2.43"),
+        ("libopenssl3", "3.5.2"),
+        ("libexpat1", "2.8.0"),
+        ("libaom3", "3.15.1"),
+        ("libdav1d7", "1.5.3"),
+        ("libSvtAv1Enc4", "4.1.0"),
+        ("libfreetype6", "2.14.0"),
+        ("libvpx12", "1.16.0"),
+        ("libwebp7", "1.5.0"),
+    ],
+)
+def test_expected_numeric_version_floors_do_not_accept_old_or_foreign_versions(
+    scan, name, version
+):
+    report, identity, scanner = _evidence()
+    next(p for p in report["Results"][0]["Packages"] if p["Name"] == name)[
+        "Version"
+    ] = version
+    assert f"missing/outdated expected native package {name}" in scan.check_report(
+        report, identity, scanner, "amd64"
+    )
+
+
+@pytest.mark.parametrize("name", ["python312", "libxml2-16"])
+def test_later_fixed_patch_versions_are_not_exact_version_pins(scan, name):
+    report, identity, scanner = _evidence()
+    next(p for p in report["Results"][0]["Packages"] if p["Name"] == name)[
+        "Version"
+    ] = "3.12.16" if name == "python312" else "2.15.5"
+    assert scan.check_report(report, identity, scanner, "amd64") == []
+
+
+def test_old_native_version_is_not_hidden_by_a_second_same_name_rpm(scan):
+    report, identity, scanner = _evidence()
+    packages = report["Results"][0]["Packages"]
+    current = next(p for p in packages if p["Name"] == "libxml2-16")
+    old = copy.deepcopy(current)
+    old["Version"] = "2.15.3"
+    packages.insert(0, old)
+    assert "missing/outdated expected native package libxml2-16" in scan.check_report(
+        report, identity, scanner, "amd64"
+    )
+
+
+def test_rpm_release_is_part_of_composite_identity(scan):
+    report, identity, scanner = _evidence()
+    keys = [p for p in report["Results"][0]["Packages"] if p["Name"] == "gpg-pubkey"]
+    # Synthetic same-version/different-release mutant of the recorded key rows.
+    keys[1]["Version"] = keys[0]["Version"]
+    assert keys[1]["Release"] != keys[0]["Release"]
+    assert scan.check_report(report, identity, scanner, "amd64") == []
+
+
+def test_high_finding_in_an_additional_analyzer_cannot_be_ignored(scan):
+    report, identity, scanner = _evidence()
+    extra = copy.deepcopy(report["Results"][2])
+    extra["Type"] = "additional-analyzer"
+    extra["Vulnerabilities"][0]["Severity"] = "HIGH"
+    report["Results"].append(extra)
+    finding = extra["Vulnerabilities"][0]
+    assert (
+        f"HIGH {finding['VulnerabilityID']} in {finding['PkgName']}"
+        in scan.check_report(report, identity, scanner, "amd64")
+    )
+
+
+@pytest.mark.parametrize("result_index", [0, 1, 2], ids=["rpm", "python", "go"])
+@pytest.mark.parametrize("severity", ["HIGH", "CRITICAL"])
+@pytest.mark.parametrize(
+    "status", ["fixed", "affected", "will_not_fix", "not_affected"]
+)
+def test_any_high_or_critical_fails_even_unfixed_or_marked_not_affected(
+    scan, result_index, severity, status
+):
+    report, identity, scanner = _evidence()
+    finding = copy.deepcopy(report["Results"][2]["Vulnerabilities"][0])
+    finding.update(Severity=severity, Status=status, FixedVersion="")
+    report["Results"][result_index]["Vulnerabilities"] = [finding]
+    assert (
+        f"{severity} {finding['VulnerabilityID']} in {finding['PkgName']}"
+        in scan.check_report(report, identity, scanner, "amd64")
+    )
 
 
 @pytest.mark.parametrize(
@@ -139,6 +217,7 @@ def test_complete_recorded_inventory_and_medium_finding_are_accepted(scan, arch)
         "null",
         "results",
         "unsupported",
+        "wrongtype",
         "eosl",
         "wrongarch",
         "packagearch",
@@ -146,17 +225,15 @@ def test_complete_recorded_inventory_and_medium_finding_are_accepted(scan, arch)
         "diffids",
         "rootfs",
         "inventory",
-        "missingffmpeg",
-        "missingxml",
-        "oldffmpeg",
-        "oldxml",
         "duplicatepkgs",
-        "noapk",
+        "duplicategpg",
+        "nonrpm",
+        "emptyanalysis",
+        "emptyrelease",
         "nopython",
-        "high",
-        "critical",
-        "unfixedhigh",
+        "nogo",
         "suppressed",
+        "vex",
         "malformedfinding",
         "malformedpkgs",
         "malformedmetadata",
@@ -171,12 +248,24 @@ def test_complete_recorded_inventory_and_medium_finding_are_accepted(scan, arch)
         "invalidpackagearch",
         "invalidfinding",
         "invalidpythonpackage",
+        "invalidgopackage",
+        "native-noarch",
+        "native-none",
+        "gpg-null",
+        "gpg-missingarch",
+        "gpg-arch",
+        "identitymanifest",
+        "identityconfig",
+        "identityrootfs",
+        "identityplatform",
+        "ambiguousos",
     ],
 )
 def test_scan_fails_closed_on_incomplete_substituted_or_unsafe_evidence(scan, mutation):
     report, identity, scanner = _evidence()
     original = copy.deepcopy((report, identity, scanner))
-    os_result, python_result = report["Results"]
+    os_result, python_result, go_result = report["Results"]
+    packages = os_result["Packages"]
     if mutation == "empty":
         report = {}
     elif mutation == "null":
@@ -184,13 +273,15 @@ def test_scan_fails_closed_on_incomplete_substituted_or_unsafe_evidence(scan, mu
     elif mutation == "results":
         report["Results"] = []
     elif mutation == "unsupported":
-        report["Metadata"]["OS"]["Family"] = "unknown"
+        report["Metadata"]["OS"]["Family"] = "wolfi"
+    elif mutation == "wrongtype":
+        os_result["Type"] = "wolfi"
     elif mutation == "eosl":
         report["Metadata"]["OS"]["EOSL"] = True
     elif mutation == "wrongarch":
         report["Metadata"]["ImageConfig"]["architecture"] = "arm64"
     elif mutation == "packagearch":
-        os_result["Packages"][0]["Arch"] = "aarch64"
+        packages[0]["Arch"] = "aarch64"
     elif mutation == "config":
         report["Metadata"]["ImageID"] = "sha256:" + "0" * 64
     elif mutation == "diffids":
@@ -198,43 +289,30 @@ def test_scan_fails_closed_on_incomplete_substituted_or_unsafe_evidence(scan, mu
     elif mutation == "rootfs":
         report["Metadata"]["ImageConfig"]["rootfs"]["diff_ids"] = []
     elif mutation == "inventory":
-        os_result["Packages"].pop()
-    elif mutation in {"missingffmpeg", "missingxml"}:
-        name = "ffmpeg-9.0" if mutation == "missingffmpeg" else "libxml2-16"
-        os_result["Packages"] = [p for p in os_result["Packages"] if p["Name"] != name]
-        os_result["Packages"].append(
-            {
-                "Name": "replacement",
-                "Version": "1",
-                "Arch": "x86_64",
-                "AnalyzedBy": "apk",
-            }
-        )
-    elif mutation in {"oldffmpeg", "oldxml"}:
-        name = "ffmpeg-9.0" if mutation == "oldffmpeg" else "libxml2-16"
-        next(p for p in os_result["Packages"] if p["Name"] == name)["Version"] = (
-            "1.0.0-r0"
-        )
+        packages.pop()
     elif mutation == "duplicatepkgs":
-        os_result["Packages"][-1] = os_result["Packages"][0]
-    elif mutation == "noapk":
-        os_result["Type"] = "alpine"
+        packages[-1] = copy.deepcopy(packages[0])
+    elif mutation == "duplicategpg":
+        keys = [p for p in packages if p["Name"] == "gpg-pubkey"]
+        keys[1].update(keys[0])
+    elif mutation in {"nonrpm", "emptyanalysis"}:
+        packages[0]["AnalyzedBy"] = "apk" if mutation == "nonrpm" else ""
+    elif mutation == "emptyrelease":
+        packages[0]["Release"] = ""
     elif mutation == "nopython":
         python_result["Packages"] = []
-    elif mutation in {"high", "critical", "unfixedhigh"}:
-        finding = python_result["Vulnerabilities"][0]
-        finding["Severity"] = "CRITICAL" if mutation == "critical" else "HIGH"
-        if mutation == "unfixedhigh":
-            finding["Status"] = "will_not_fix"
-            finding["FixedVersion"] = ""
+    elif mutation == "nogo":
+        report["Results"].remove(go_result)
     elif mutation == "suppressed":
         os_result["ExperimentalModifiedFindings"] = [
             {"VulnerabilityID": "hidden", "Status": "not_affected"}
         ]
+    elif mutation == "vex":
+        report["Metadata"]["VEX"] = {"status": "not_affected"}
     elif mutation == "malformedfinding":
         python_result["Vulnerabilities"] = "no findings"
     elif mutation == "malformedpkgs":
-        os_result["Packages"] = [None] * 102
+        os_result["Packages"] = [None] * 212
     elif mutation == "malformedmetadata":
         report["Metadata"] = None
     elif mutation == "malformedresult":
@@ -242,11 +320,13 @@ def test_scan_fails_closed_on_incomplete_substituted_or_unsafe_evidence(scan, mu
     elif mutation == "invalidseverity":
         python_result["Vulnerabilities"][0]["Severity"] = []
     elif mutation == "invalidpackagearch":
-        os_result["Packages"][0]["Arch"] = []
+        packages[0]["Arch"] = []
     elif mutation == "invalidfinding":
         python_result["Vulnerabilities"][0] = None
     elif mutation == "invalidpythonpackage":
         python_result["Packages"] = [None]
+    elif mutation == "invalidgopackage":
+        go_result["Packages"] = [None]
     elif mutation == "wrongscanner":
         scanner["Version"] = "0.1.0"
     elif mutation == "missingdb":
@@ -259,6 +339,26 @@ def test_scan_fails_closed_on_incomplete_substituted_or_unsafe_evidence(scan, mu
         del report["CreatedAt"]
     elif mutation == "schema":
         report["SchemaVersion"] = 0
+    elif mutation in {"native-noarch", "native-none"}:
+        next(p for p in packages if p["Name"] == "libxml2-16")["Arch"] = (
+            "noarch" if mutation == "native-noarch" else "None"
+        )
+    elif mutation.startswith("gpg-"):
+        key = next(p for p in packages if p["Name"] == "gpg-pubkey")
+        if mutation == "gpg-missingarch":
+            del key["Arch"]
+        else:
+            key["Arch"] = None if mutation == "gpg-null" else "x86_64"
+    elif mutation == "identitymanifest":
+        identity["ManifestDigest"] = "not-a-digest"
+    elif mutation == "identityconfig":
+        identity["ConfigDigest"] = "not-a-digest"
+    elif mutation == "identityrootfs":
+        identity["RootFSDiffIDs"] = []
+    elif mutation == "identityplatform":
+        identity["OS"] = "windows"
+    elif mutation == "ambiguousos":
+        report["Results"].append(copy.deepcopy(os_result))
     assert (report, identity, scanner) != original
     assert scan.check_report(report, identity, scanner, "amd64")
 

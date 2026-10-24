@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import shutil
 from pathlib import Path
 from urllib.parse import parse_qsl
 
@@ -89,53 +90,17 @@ NODE_DIGEST = "a" * 64
 PYTHON_DIGEST = "b" * 64
 UV_DIGEST = "c" * 64
 ALPINE_DIGEST = "d" * 64
-WOLFI_IMAGE = (
-    "cgr.dev/chainguard/wolfi-base@sha256:"
-    "f15fea2f49cb14dceaea491fcbde0d35e0c190126a744ac05a9838440d47d994"
+SUSE_IMAGE = (
+    "registry.opensuse.org/opensuse/tumbleweed@sha256:"
+    "c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55"
 )
-WOLFI_RUNTIME_RUN = (
-    "apk upgrade --no-cache && apk add --no-cache python-3.12 "
-    "'ffmpeg-9.0>=9.0.2-r5' 'libxml2-16>=2.15.4-r1' "
-    "gosu shadow coreutils bash tzdata ca-certificates-bundle posix-libc-utils"
-)
-WOLFI_HEALTHCHECK = (
+SUSE_HEALTHCHECK = (
     "HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 "
     'CMD /opt/venv/bin/python -c "import urllib.request, os; '
     "port = os.environ.get('ECM_PORT', '6100'); "
     "urllib.request.urlopen(f'http://localhost:{port}/api/health')\" || exit 1"
 )
-WOLFI_DOCKERFILE = (
-    DOCKERFILE.format(node=NODE_DIGEST, python=PYTHON_DIGEST, uv=UV_DIGEST)
-    .replace(
-        f"FROM python:3.12-slim@sha256:{PYTHON_DIGEST} AS python-builder",
-        f"FROM {WOLFI_IMAGE} AS runtime-base\nRUN {WOLFI_RUNTIME_RUN}\n\n"
-        "FROM runtime-base AS python-builder",
-    )
-    .replace(
-        f"COPY --from=ghcr.io/astral-sh/uv:latest@sha256:{UV_DIGEST} /uv /usr/local/bin/uv",
-        f"COPY --from=ghcr.io/astral-sh/uv:latest@sha256:{UV_DIGEST} /uv /usr/local/bin/uv\n"
-        "COPY backend/requirements.txt /tmp/requirements.txt\n"
-        "RUN uv venv --python /usr/bin/python3.12 /opt/venv "
-        "&& uv pip install --python /opt/venv/bin/python --no-cache -r /tmp/requirements.txt",
-    )
-    .replace(f"FROM python:3.12-slim@sha256:{PYTHON_DIGEST}", "FROM runtime-base")
-    .replace(
-        "apt-get update && apt-get install -y --no-install-recommends "
-        "build-essential ca-certificates pkg-config \\\n    && rm -rf /var/lib/apt/lists/* \\\n    && python ",
-        "apk add --no-cache build-base pkgconf gawk && python3.12 ",
-    )
-    .replace(
-        "FROM runtime-base\n",
-        "FROM runtime-base\nARG GIT_COMMIT=unknown\nARG ECM_VERSION=unknown\n"
-        "ARG RELEASE_CHANNEL=latest\nENV GIT_COMMIT=$GIT_COMMIT\n"
-        "ENV ECM_VERSION=$ECM_VERSION\nENV RELEASE_CHANNEL=$RELEASE_CHANNEL\n",
-    )
-) + (
-    "ENV PUID=1000\nENV PGID=1000\nENV CONFIG_DIR=/config\n"
-    "ENV ECM_PORT=6100\nENV ECM_HTTPS_PORT=6143\nEXPOSE 6100 6143\n"
-    f"{WOLFI_HEALTHCHECK}\n"
-    'ENTRYPOINT ["/app/entrypoint.sh"]\n'
-)
+SUSE_DOCKERFILE = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 BUILDKIT_INSTRUCTION_WHITESPACE = (" ", "\t", "\v", "\f", "\r")
 BUILDKIT_INSTRUCTION_WHITESPACE_IDS = (
     "space",
@@ -241,6 +206,17 @@ def generated(sbom, tree: Path) -> Path:
     directory = tree / "sbom" / "v9.9.9"
     sbom.generate(tree, directory, "9.9.9", CREATED)
     return directory
+
+
+@pytest.fixture
+def suse_tree(tree: Path) -> Path:
+    _write(tree / "Dockerfile", SUSE_DOCKERFILE)
+    shutil.copytree(ROOT / "docker/native", tree / "docker/native")
+    for name in ("build_native_runtime.py", "collect_native_sources.py"):
+        destination = tree / "scripts" / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / "scripts" / name, destination)
+    return tree
 
 
 # ─── The document itself ───────────────────────────────────────────────
@@ -665,16 +641,16 @@ def test_final_resdet_cannot_be_replaced_after_fixed_copy(sbom, tree):
         sbom.render(tree, "9.9.9", CREATED)
 
 
-def test_reviewed_wolfi_common_base_records_one_runtime_image_and_same_native_graph(sbom, tree):
-    _write(tree / "Dockerfile", WOLFI_DOCKERFILE)
+def test_reviewed_suse_graph_records_one_runtime_image_and_manifest_native_graph(sbom, suse_tree):
+    tree = suse_tree
     rendered = sbom.render(tree, "9.9.9", CREATED)
     document = json.loads(rendered["ecm.spdx.json"])
-    wolfi = [p for p in document["packages"] if p["name"] == "cgr.dev/chainguard/wolfi-base"]
-    assert len(wolfi) == 1
-    assert wolfi[0]["comment"].startswith("Final base image")
+    suse = [p for p in document["packages"] if p["name"] == "registry.opensuse.org/opensuse/tumbleweed"]
+    assert len(suse) == 1
+    assert suse[0]["comment"].startswith("Final base image")
     assert not any(p["name"] in {"runtime-base", "resdet-builder"} for p in document["packages"])
     assert {p["name"] for p in document["packages"] if "native-" in p["SPDXID"]} == {
-        "resdet", "KISS FFT",
+        "resdet", "KISS FFT", "FFmpeg", "gosu",
     }
     directory = tree / "sbom" / "v9.9.9"
     sbom.generate(tree, directory, "9.9.9", CREATED)
@@ -685,34 +661,35 @@ def test_reviewed_wolfi_common_base_records_one_runtime_image_and_same_native_gr
 @pytest.mark.parametrize(
     ("old", "new"),
     [
-        (WOLFI_IMAGE, WOLFI_IMAGE.split("@")[0]),
-        (WOLFI_IMAGE, WOLFI_IMAGE[:-1] + "0"),
+        (SUSE_IMAGE, SUSE_IMAGE.split("@")[0]),
+        (SUSE_IMAGE, SUSE_IMAGE[:-1] + "0"),
         ("AS runtime-base", "AS Runtime-Base"),
         ("FROM runtime-base AS resdet-builder", "FROM python-builder AS resdet-builder"),
         ("FROM runtime-base\n", "FROM python-builder\n"),
         ("FROM runtime-base AS python-builder", "FROM resdet-builder AS python-builder"),
         ("AS python-builder", "AS runtime-base"),
-        ("RUN apk upgrade", "ENV CFLAGS=-O0\nRUN apk upgrade"),
-        ("RUN apk upgrade", 'SHELL ["/bin/true"]\nRUN apk upgrade'),
-        ("RUN apk upgrade", "ARG PATH=/tmp\nRUN apk upgrade"),
-        ("apk upgrade --no-cache", "true || apk upgrade --no-cache"),
-        ("'ffmpeg-9.0>=9.0.2-r5'", "ffmpeg-9.0"),
-        ("'libxml2-16>=2.15.4-r1'", "libxml2-16"),
-        ("apk add --no-cache build-base", "apk add --simulate --no-cache build-base"),
+        ("RUN case", "ENV CFLAGS=-O0\nRUN case"),
+        ("RUN case", 'SHELL ["/bin/true"]\nRUN case'),
+        ("RUN case", "ARG PATH=/tmp\nRUN case"),
+        ("zypper --non-interactive update", "true || zypper --non-interactive update"),
+        ("/tmp/runtime-rpms/*.rpm \\\n", "ffmpeg \\\n"),
+        ("$(cat /tmp/runtime-packages.txt)", "libxml2-16"),
+        ("install --no-recommends gcc", "install --dry-run --no-recommends gcc"),
         ("&& python3.12 /tmp/build_resdet.py", "&& python /tmp/build_resdet.py"),
         ("COPY scripts/generate_sbom.py", "ENV CC=false\nCOPY scripts/generate_sbom.py"),
         ("uv venv --python /usr/bin/python3.12", "uv venv"),
         ("COPY backend/requirements.txt", "ENV PYTHONPATH=/tmp\nCOPY backend/requirements.txt"),
-        ("RUN mkdir /config", 'SHELL ["/bin/true"]\nRUN mkdir /config'),
-        ("RUN mkdir /config", "ENV LD_PRELOAD=/app/fake.so\nRUN mkdir /config"),
-        ("RUN mkdir /config", "ONBUILD RUN false\nRUN mkdir /config"),
+        ("RUN mkdir -p /config", 'SHELL ["/bin/true"]\nRUN mkdir -p /config'),
+        ("RUN mkdir -p /config", "ENV LD_PRELOAD=/app/fake.so\nRUN mkdir -p /config"),
+        ("RUN mkdir -p /config", "ONBUILD RUN false\nRUN mkdir -p /config"),
         ("ARG GIT_COMMIT=unknown", "ARG PATH=/tmp"),
         ("ENV GIT_COMMIT=$GIT_COMMIT", "ENV GIT_COMMIT=$GIT_COMMIT LD_PRELOAD=/app/fake.so"),
     ],
 )
-def test_wolfi_native_contract_rejects_unreviewed_inheritance_and_recipes(sbom, tree, old, new):
-    assert old in WOLFI_DOCKERFILE
-    _write(tree / "Dockerfile", WOLFI_DOCKERFILE.replace(old, new, 1))
+def test_suse_native_contract_rejects_unreviewed_inheritance_and_recipes(sbom, suse_tree, old, new):
+    tree = suse_tree
+    assert old in SUSE_DOCKERFILE
+    _write(tree / "Dockerfile", SUSE_DOCKERFILE.replace(old, new, 1))
     with pytest.raises(sbom.SbomError):
         sbom.render(tree, "9.9.9", CREATED)
 
@@ -724,8 +701,9 @@ def test_wolfi_native_contract_rejects_unreviewed_inheritance_and_recipes(sbom, 
     "ENV LD_PRELOAD=/app/fake.so\n",
     'SHELL ["/bin/true"]\n',
 ])
-def test_wolfi_final_artifacts_remain_immutable(sbom, tree, extra):
-    _write(tree / "Dockerfile", WOLFI_DOCKERFILE + extra)
+def test_suse_final_artifacts_remain_immutable(sbom, suse_tree, extra):
+    tree = suse_tree
+    _write(tree / "Dockerfile", SUSE_DOCKERFILE + extra)
     with pytest.raises(sbom.SbomError):
         sbom.render(tree, "9.9.9", CREATED)
 
@@ -738,46 +716,52 @@ def test_wolfi_final_artifacts_remain_immutable(sbom, tree, extra):
     "LABEL unreviewed=true\n",
     "ARG GIT_COMMIT=unknown\n",
 ])
-def test_wolfi_suffix_rejects_unreviewed_postcopy_instructions(sbom, tree, extra):
-    _write(tree / "Dockerfile", WOLFI_DOCKERFILE + extra)
+def test_suse_suffix_rejects_unreviewed_postcopy_instructions(sbom, suse_tree, extra):
+    tree = suse_tree
+    _write(tree / "Dockerfile", SUSE_DOCKERFILE + extra)
     with pytest.raises(sbom.SbomError):
         sbom.render(tree, "9.9.9", CREATED)
 
 
 @pytest.mark.parametrize(("old", "new"), [
     ('ENTRYPOINT ["/app/entrypoint.sh"]', 'ENTRYPOINT ["/bin/sh"]'),
-    (WOLFI_HEALTHCHECK, "HEALTHCHECK NONE"),
+    (SUSE_HEALTHCHECK, "HEALTHCHECK NONE"),
     ("CMD /opt/venv/bin/python", "CMD python"),
     ("EXPOSE 6100 6143", "EXPOSE 6100"),
     ("ENV PUID=1000\n", ""),
     ("ENV PUID=1000\nENV PGID=1000", "ENV PGID=1000\nENV PUID=1000"),
     ('ENTRYPOINT ["/app/entrypoint.sh"]\n', ""),
 ])
-def test_wolfi_suffix_rejects_changed_runtime_defaults(sbom, tree, old, new):
-    assert old in WOLFI_DOCKERFILE
-    _write(tree / "Dockerfile", WOLFI_DOCKERFILE.replace(old, new, 1))
+def test_suse_suffix_rejects_changed_runtime_defaults(sbom, suse_tree, old, new):
+    tree = suse_tree
+    if old == SUSE_HEALTHCHECK:
+        old = old.replace(" CMD ", " \\\n  CMD ")
+    assert old in SUSE_DOCKERFILE
+    _write(tree / "Dockerfile", SUSE_DOCKERFILE.replace(old, new, 1))
     with pytest.raises(sbom.SbomError):
         sbom.render(tree, "9.9.9", CREATED)
 
 
 @pytest.mark.parametrize("mutation", ["missing", "before-copy", "after-env", "duplicated"])
-def test_wolfi_suffix_requires_version_assertion_immediately_after_artifacts(sbom, tree, mutation):
-    assertion = next(line for line in WOLFI_DOCKERFILE.splitlines() if line.startswith("RUN test "))
-    text = WOLFI_DOCKERFILE.replace(assertion + "\n", "", 1)
+def test_suse_suffix_requires_version_assertion_immediately_after_artifacts(sbom, suse_tree, mutation):
+    tree = suse_tree
+    assertion = next(line for line in SUSE_DOCKERFILE.splitlines() if line.startswith("RUN test "))
+    text = SUSE_DOCKERFILE.replace(assertion + "\n", "", 1)
     if mutation == "before-copy":
         marker = "COPY --from=resdet-builder /tmp/resdet-output/resdet"
         text = text.replace(marker, assertion + "\n" + marker, 1)
     elif mutation == "after-env":
         text = text.replace("ENV PUID=1000\n", "ENV PUID=1000\n" + assertion + "\n", 1)
     elif mutation == "duplicated":
-        text = WOLFI_DOCKERFILE + assertion + "\n"
+        text = SUSE_DOCKERFILE + assertion + "\n"
     _write(tree / "Dockerfile", text)
     with pytest.raises(sbom.SbomError):
         sbom.render(tree, "9.9.9", CREATED)
 
 
-def test_wolfi_suffix_accepts_ordinary_comments_spacing_and_continuations(sbom, tree):
-    prefix, suffix = WOLFI_DOCKERFILE.split("RUN test ", 1)
+def test_suse_suffix_accepts_ordinary_comments_spacing_and_continuations(sbom, suse_tree):
+    tree = suse_tree
+    prefix, suffix = SUSE_DOCKERFILE.split("RUN test ", 1)
     suffix = "RUN test " + suffix
     spaced = "\n".join("# ordinary comment\n" + line.replace(" ", " \t ") for line in suffix.splitlines())
     spaced = spaced.replace("HEALTHCHECK \t ", "HEALTHCHECK \\\n    ", 1)
@@ -792,13 +776,144 @@ def test_legacy_debian_recipe_retains_only_its_historical_tail_checks(sbom, tree
     sbom.validate_resdet_docker_contract(NATIVE_DEPENDENCIES, (tree / "Dockerfile").read_text(), "Dockerfile")
 
 
-def test_wolfi_build_recipe_cannot_run_before_manifest_copy(sbom, tree):
-    start = WOLFI_DOCKERFILE.index("COPY scripts/generate_sbom.py")
-    end = WOLFI_DOCKERFILE.index("\n\nFROM runtime-base", start)
-    copy, run = WOLFI_DOCKERFILE[start:end].split("\n", 1)
-    _write(tree / "Dockerfile", WOLFI_DOCKERFILE[:start] + run + "\n" + copy + WOLFI_DOCKERFILE[end:])
+def test_suse_build_recipe_cannot_run_before_manifest_copy(sbom, suse_tree):
+    tree = suse_tree
+    start = SUSE_DOCKERFILE.index("COPY scripts/generate_sbom.py")
+    end = SUSE_DOCKERFILE.index("\n\n# Retain exact sources", start)
+    copy, run = SUSE_DOCKERFILE[start:end].split("\n", 1)
+    _write(tree / "Dockerfile", SUSE_DOCKERFILE[:start] + run + "\n" + copy + SUSE_DOCKERFILE[end:])
     with pytest.raises(sbom.SbomError):
         sbom.render(tree, "9.9.9", CREATED)
+
+
+@pytest.mark.parametrize("stage", [
+    "frontend-builder", "native-builder", "runtime-base", "python-builder",
+    "resdet-builder", "source-builder",
+])
+@pytest.mark.parametrize("instruction", [
+    "ARG PATH=/tmp", "ENV LD_PRELOAD=/tmp/fake.so", 'SHELL ["/bin/true"]',
+    "ONBUILD COPY replacement /usr/local/bin/ffmpeg",
+])
+def test_suse_every_stage_rejects_injected_build_environment(sbom, stage, instruction):
+    marker = f"AS {stage}\n"
+    assert marker in SUSE_DOCKERFILE
+    mutant = SUSE_DOCKERFILE.replace(marker, marker + instruction + "\n", 1)
+    with pytest.raises(sbom.SbomError):
+        sbom.validate_resdet_docker_contract(NATIVE_DEPENDENCIES, mutant, "Dockerfile")
+
+
+@pytest.mark.parametrize(("old", "new"), [
+    ("FROM native-builder AS source-builder", "FROM runtime-base AS source-builder"),
+    ("--arch \"$arch\"", "--arch amd64"),
+    ("python3.12 /tmp/build_native_runtime.py", "echo python3.12 /tmp/build_native_runtime.py"),
+    ("COPY scripts/build_native_runtime.py", "COPY replacement"),
+    ("COPY docker/native/ /tmp/native/", "COPY docker/other/ /tmp/native/"),
+    ("--output-dir /tmp/native-output", "--output-dir /tmp/substitute-output"),
+    ("/tmp/native-output/runtime-rpms/", "/tmp/native-output/builder-rpms/"),
+    ("/tmp/native-output/runtime-packages.txt", "/tmp/native-output/builder-packages.txt"),
+    ("rpm --checksig /tmp/runtime-rpms/*.rpm", "true"),
+    ("rpm --import /tmp/packman.asc", "true"),
+    ("install --no-recommends /tmp/runtime-rpms/*.rpm", "install --dry-run --no-recommends /tmp/runtime-rpms/*.rpm"),
+    ("python312 python312-base shadow", "gcc python312 python312-base shadow"),
+    ("if rpm -q \"$package\"; then exit 1; fi;", "true;"),
+    ("rpm -qa --qf", "printf --"),
+    ("--check --gpgcheck --refresh", "--no-gpgcheck --refresh"),
+    ("COPY --from=native-builder /tmp/native-output/root/ /", "COPY replacement /"),
+    ("COPY --from=runtime-base /tmp/runtime-inventory.tsv", "COPY --from=native-builder /tmp/runtime-inventory.tsv"),
+    ("--inventory /tmp/runtime-inventory.tsv", "--inventory /tmp/builder-inventory.tsv"),
+    ("python3.12 /tmp/collect_native_sources.py", "echo python3.12 /tmp/collect_native_sources.py"),
+    ("--suse-key /tmp/suse.asc", "--suse-key /tmp/packman.asc"),
+    ("--packman-key /tmp/native/packman.asc", "--packman-key /tmp/suse.asc"),
+    ("/tmp/native-output/build-output.json", "/tmp/native-output/decoy.json"),
+    ("/tmp/native-output/source-files.json", "/tmp/native-output/decoy.json"),
+])
+def test_suse_native_invocation_provider_and_actual_inventory_are_canonical(sbom, old, new):
+    assert old in SUSE_DOCKERFILE
+    with pytest.raises(sbom.SbomError):
+        sbom.validate_resdet_docker_contract(
+            NATIVE_DEPENDENCIES, SUSE_DOCKERFILE.replace(old, new, 1), "Dockerfile"
+        )
+
+
+SOURCE_DELIVERY_COPIES = [
+    line for line in SUSE_DOCKERFILE.splitlines()
+    if line.startswith("COPY ") and (
+        "/usr/share/ecm/sources/" in line or "/usr/share/ecm/provenance/" in line
+        or "/usr/share/doc/ecm/python-third-party/" in line
+    )
+]
+
+
+@pytest.mark.parametrize("copy", SOURCE_DELIVERY_COPIES)
+@pytest.mark.parametrize("mutation", ["missing", "substitute", "duplicate"])
+def test_suse_delivers_each_complete_source_tree_once(sbom, copy, mutation):
+    replacement = {
+        "missing": "", "substitute": copy.replace("COPY ", "COPY replacement ", 1),
+        "duplicate": copy + "\n" + copy,
+    }[mutation]
+    with pytest.raises(sbom.SbomError):
+        sbom.validate_resdet_docker_contract(
+            NATIVE_DEPENDENCIES, SUSE_DOCKERFILE.replace(copy, replacement, 1), "Dockerfile"
+        )
+
+
+def test_suse_native_source_inputs_are_fingerprinted_and_identities_come_from_manifest(sbom, suse_tree):
+    rendered = sbom.render(suse_tree, "9.9.9", CREATED)
+    index = json.loads(rendered["index.json"])
+    expected = {path.relative_to(suse_tree).as_posix() for path in (suse_tree / "docker/native").rglob("*") if path.is_file()}
+    expected.update({"scripts/build_native_runtime.py", "scripts/collect_native_sources.py"})
+    assert expected <= index["sources"].keys()
+    for path in expected:
+        assert index["sources"][path] == "sha256:" + sbom.sha256_file(suse_tree / path)
+    manifest = json.loads((suse_tree / "docker/native/manifest.json").read_text())
+    document = json.loads(rendered["ecm.spdx.json"])
+    packages = {package["name"]: package for package in document["packages"]}
+    for key, name in (("ffmpeg", "FFmpeg"), ("gosu", "gosu")):
+        assert packages[name]["versionInfo"] == manifest[key]["version"]
+        assert packages[name]["downloadLocation"] == manifest[key]["url"]
+        assert packages[name]["checksums"] == [{"algorithm": "SHA256", "checksumValue": manifest[key]["sha256"]}]
+    manifest["gosu"]["version"] = "99.99"
+    _write(suse_tree / "docker/native/manifest.json", json.dumps(manifest))
+    changed = json.loads(sbom.render(suse_tree, "9.9.9", CREATED)["ecm.spdx.json"])
+    assert next(p for p in changed["packages"] if p["name"] == "gosu")["versionInfo"] == "99.99"
+
+
+@pytest.mark.parametrize("path", [
+    "docker/native/manifest.json", "docker/native/ffmpeg.args",
+    "docker/native/patches/CVE-2026-107696.patch", "docker/native/packman.asc",
+    "scripts/build_native_runtime.py", "scripts/collect_native_sources.py",
+])
+def test_suse_native_input_edits_invalidate_source_sbom(sbom, suse_tree, path):
+    directory = suse_tree / "sbom/v9.9.9"
+    sbom.generate(suse_tree, directory, "9.9.9", CREATED)
+    target = suse_tree / path
+    target.write_text(target.read_text() + "\n")
+    assert "index.json" in sbom.verify(suse_tree, directory, "9.9.9")
+
+
+@pytest.mark.parametrize("mutation", ["add", "remove", "symlink"])
+def test_suse_native_asset_set_cannot_change_without_invalidating_fingerprint(sbom, suse_tree, mutation):
+    directory = suse_tree / "sbom/v9.9.9"
+    sbom.generate(suse_tree, directory, "9.9.9", CREATED)
+    if mutation == "add":
+        _write(suse_tree / "docker/native/new-input.args", "--disable-network\n")
+    elif mutation == "remove":
+        (suse_tree / "docker/native/README.md").unlink()
+    else:
+        (suse_tree / "docker/native/alias.args").symlink_to("ffmpeg.args")
+        with pytest.raises(sbom.SbomError, match="must not be a symlink"):
+            sbom.verify(suse_tree, directory, "9.9.9")
+        return
+    assert "index.json" in sbom.verify(suse_tree, directory, "9.9.9")
+
+
+def test_suse_native_manifest_base_must_match_the_reviewed_graph(sbom, suse_tree):
+    path = suse_tree / "docker/native/manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["base_image"] = SUSE_IMAGE[:-1] + "0"
+    _write(path, json.dumps(manifest))
+    with pytest.raises(sbom.SbomError, match="reviewed SUSE base"):
+        sbom.render(suse_tree, "9.9.9", CREATED)
 
 
 @pytest.mark.parametrize("text", [

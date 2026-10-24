@@ -4,6 +4,11 @@
 This validates Trivy's complete JSON output, not a severity-filtered table. The
 separate HIGH/CRITICAL exit-1 scan remains a publication gate. Package floors and
 inventory are detection sanity checks, never substitutes for advisory review.
+
+The supported OS report is openSUSE Tumbleweed/RPM. Custom FFmpeg 8 is not
+RPM-owned and is NOT covered by this OS scan. Its exact source/build pin and
+required-owned-artifact/source binding are separate parent runtime-gate
+conditions; accepting this report alone never authorizes publication.
 """
 
 from __future__ import annotations
@@ -17,8 +22,39 @@ from pathlib import Path
 
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SEVERITIES = {"UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"}
-MIN_OS_PACKAGES = 102
-PACKAGE_FLOORS = {"ffmpeg-9.0": (9, 0, 2), "libxml2-16": (2, 15, 4)}
+# Recorded integration report: 212 RPM entries, including six distinct keys.
+# Do not lower this completeness baseline to make a smaller inventory pass.
+MIN_OS_PACKAGES = 212
+# Reviewed upstream-version sanity floors from RPM Version fields, not an RPM
+# EVR/advisory solver. Release fields remain separate; source-built FFmpeg has
+# no RPM floor here and must satisfy the runtime gate's exact source/build pin.
+PACKAGE_FLOORS = {
+    "python312": (3, 12, 15),
+    "python312-base": (3, 12, 15),
+    "libpython3_12-1_0": (3, 12, 15),
+    "libxml2-16": (2, 15, 4),
+    "glibc": (2, 44),
+    "libopenssl3": (3, 5, 3),
+    "libexpat1": (2, 9, 0),
+    "libaom3": (3, 15, 2),
+    "libdav1d7": (1, 5, 4),
+    "libSvtAv1Enc4": (4, 2, 0),
+    "libfreetype6": (2, 15, 0),
+    "libvpx12": (1, 17, 0),
+    "libwebp7": (1, 6, 0),
+}
+REQUIRED_NATIVE_PACKAGES = set(PACKAGE_FLOORS) | {
+    "libass9",
+    "libfontconfig1",
+    "libharfbuzz0",
+    "libmp3lame0",
+    "libopenjp2-7",
+    "libopus0",
+    "libvorbis0",
+    "libvorbisenc2",
+    "libx264-165",
+    "libx265-215",
+}
 
 
 def _timestamp(value: object) -> bool:
@@ -108,11 +144,11 @@ def check_report(
     os_info = metadata.get("OS")
     if (
         not isinstance(os_info, dict)
-        or os_info.get("Family") != "wolfi"
+        or os_info.get("Family") != "opensuse-tumbleweed"
         or not os_info.get("Name")
         or os_info.get("EOSL")
     ):
-        failures.append("unsupported/missing/EOL Wolfi OS detection")
+        failures.append("unsupported/missing/EOL openSUSE Tumbleweed OS detection")
     config = metadata.get("ImageConfig")
     if (
         not isinstance(config, dict)
@@ -132,11 +168,9 @@ def check_report(
         or any(not isinstance(result, dict) for result in results)
     ):
         return failures + ["missing/malformed scan results"]
-    os_results = [
-        r for r in results if r.get("Class") == "os-pkgs" and r.get("Type") == "wolfi"
-    ]
-    if len(os_results) != 1:
-        failures.append("missing/ambiguous Wolfi APK scan")
+    os_results = [r for r in results if r.get("Class") == "os-pkgs"]
+    if len(os_results) != 1 or os_results[0].get("Type") != "opensuse-tumbleweed":
+        failures.append("missing/ambiguous openSUSE Tumbleweed RPM scan")
     else:
         packages = os_results[0].get("Packages")
         if not isinstance(packages, list) or len(packages) < MIN_OS_PACKAGES:
@@ -146,6 +180,7 @@ def check_report(
         if not isinstance(packages, list):
             packages = []
         inventory = {}
+        seen = set()
         expected_arch = {"amd64": "x86_64", "arm64": "aarch64"}.get(architecture)
         for package in packages:
             if (
@@ -154,42 +189,78 @@ def check_report(
                 or not package.get("Name")
                 or not isinstance(package.get("Version"), str)
                 or not package.get("Version")
-                or package.get("AnalyzedBy") != "apk"
+                or not isinstance(package.get("Release"), str)
+                or not package.get("Release")
+                or package.get("AnalyzedBy") != "rpm"
                 or not isinstance(package.get("Arch"), str)
-                or package.get("Arch") not in {expected_arch, "noarch"}
+                or (
+                    package["Arch"] != "None"
+                    if package["Name"] == "gpg-pubkey"
+                    else package["Arch"] not in {expected_arch, "noarch"}
+                )
             ):
                 failures.append(
-                    "malformed/wrong-architecture/non-APK package inventory"
+                    "malformed/wrong-architecture/non-RPM package inventory"
                 )
                 continue
             name = package["Name"]
-            if name in inventory:
-                failures.append("duplicate OS package inventory")
-            inventory[name] = package["Version"]
-        for name, floor in PACKAGE_FLOORS.items():
-            match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)-r\d+", inventory.get(name, ""))
-            if match is None or tuple(map(int, match.groups())) < floor:
+            # Trivy records RPM gpg-pubkey architecture as the STRING "None".
+            # It is not a blanket architecture exemption for native libraries.
+            if name == "gpg-pubkey" and not all(
+                re.fullmatch(r"[0-9a-f]{8}", package[field])
+                for field in ("Version", "Release")
+            ):
+                failures.append("malformed RPM public-key inventory")
+            # Same-name key rows are legitimate; only repeated RPM composite
+            # identities are duplicates. Version and Release are separate fields.
+            key = tuple(
+                package[field] for field in ("Name", "Version", "Release", "Arch")
+            )
+            if key in seen:
+                failures.append("duplicate RPM composite package inventory")
+            seen.add(key)
+            inventory.setdefault(name, []).append(package)
+        for name in sorted(REQUIRED_NATIVE_PACKAGES):
+            installed = inventory.get(name, [])
+            valid = bool(installed)
+            for package in installed:
+                valid &= package["Arch"] == expected_arch
+                if name in PACKAGE_FLOORS:
+                    match = re.fullmatch(r"\d+(?:\.\d+)+", package["Version"])
+                    version = tuple(map(int, match[0].split("."))) if match else ()
+                    valid &= version >= PACKAGE_FLOORS[name]
+                    if name in {"python312", "python312-base", "libpython3_12-1_0"}:
+                        valid &= version[:2] == (3, 12)
+            if not valid:
                 failures.append(f"missing/outdated expected native package {name}")
-    python_results = [
-        r
-        for r in results
-        if r.get("Class") == "lang-pkgs" and r.get("Type") == "python-pkg"
-    ]
-    if not python_results or any(
-        not isinstance(r.get("Packages"), list) or not r["Packages"]
-        for r in python_results
-    ):
-        failures.append("missing Python wheel/package detection inventory")
-    for result in python_results:
-        packages = result.get("Packages")
-        if isinstance(packages, list) and any(
-            not isinstance(package, dict)
-            or not package.get("Name")
-            or not package.get("Version")
-            or package.get("AnalyzedBy") != "python-pkg"
-            for package in packages
+    for kind, label in (("python-pkg", "Python"), ("gobinary", "Go")):
+        language_results = [
+            r
+            for r in results
+            if r.get("Class") == "lang-pkgs" and r.get("Type") == kind
+        ]
+        if not language_results or any(
+            not isinstance(r.get("Packages"), list) or not r["Packages"]
+            for r in language_results
         ):
-            failures.append("malformed Python package detection inventory")
+            failures.append(f"missing {label} package detection inventory")
+        for result in language_results:
+            packages = result.get("Packages")
+            if isinstance(packages, list) and any(
+                not isinstance(package, dict)
+                or not isinstance(package.get("Name"), str)
+                or not package["Name"]
+                or (
+                    not (isinstance(package.get("Version"), str) and package["Version"])
+                    # The recorded gosu root module has no Version field.
+                    and not (
+                        kind == "gobinary" and package.get("Relationship") == "root"
+                    )
+                )
+                or package.get("AnalyzedBy") != kind
+                for package in packages
+            ):
+                failures.append(f"malformed {label} package detection inventory")
     for result in results:
         findings = result.get("Vulnerabilities", [])
         if not isinstance(findings, list):
@@ -233,7 +304,9 @@ def main() -> int:
             print(f"SCAN DENIED: {failure}", file=sys.stderr)
         return 1
     print(
-        "Complete unsuppressed native scan evidence verified; no HIGH/CRITICAL findings"
+        "Complete unsuppressed RPM/Python/Go scan evidence verified; "
+        "no HIGH/CRITICAL findings. Custom native source/build binding "
+        "requires the separate runtime gate."
     )
     return 0
 

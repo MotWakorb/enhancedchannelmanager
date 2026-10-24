@@ -1,0 +1,18 @@
+{
+  "base_child": "registry.opensuse.org/opensuse/tumbleweed@sha256:e3e0701837a8100896673e810575947c638a5544ff714279cb15a709c625f17f",
+  "source_repository": "https://download.opensuse.org/ports/aarch64/source/tumbleweed/repo/oss/",
+  "repository_documentation": "https://en.opensuse.org/openSUSE:Migrate_Leap_to_Tumbleweed",
+  "fingerprint": "AD485664E901B867051AB15F35A2F86E29B700A4",
+  "inventory_columns": ["name", "version", "release", "arch", "sourcerpm", "license"],
+  "inventory_rows": [
+    "coreutils\t9.12\t1.1\taarch64\tcoreutils-9.12-1.1.src.rpm\tGPL-3.0-or-later",
+    "system-user-root\t20190513\t2.23\tnoarch\tsystem-user-root-20190513-2.23.src.rpm\tMIT"
+  ],
+  "coreutils": {
+    "filename": "coreutils-9.12-1.1.src.rpm",
+    "sha256": "d2b4f9b3114bba6a7c91ee8b8cfb4db9dd3ade8f28ee801b75dd2a3762a49f09",
+    "sha512": "69ce0fe439246254ee32e2c67fabcbbdecefa26a06818a0a0d24c383faf7629c5f75e7a28582459d52523d0cd1eb1d2ad54286b4ee7b774b0e28fbbf2ef974c3",
+    "size": 7301949,
+    "note": "Same filename as x86_64, different complete SRPM bytes. Compact projection of completed ARM source-bundle.tsv; no ARM execution."
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "catalogue_url": "https://go.dev/dl/?mode=json&include=all",
+  "response_sha256": "6b83804b8dd2d6052bb93cc03e4aba2ddee834f82c15f7bf8faacf5f91825950",
+  "release": {
+    "version": "go1.26.10",
+    "stable": true,
+    "files": [
+      {
+        "filename": "go1.26.10.src.tar.gz",
+        "os": "",
+        "arch": "",
+        "version": "go1.26.10",
+        "sha256": "fd63e883ba2f2bfca93c1646b31ebef63e2b1e4d2b317c9789d976a68d81f36f",
+        "size": 34164741,
+        "kind": "source"
+      },
+      {
+        "filename": "go1.26.10.linux-arm64.tar.gz",
+        "os": "linux",
+        "arch": "arm64",
+        "version": "go1.26.10",
+        "sha256": "3f4227ce7b206a513e794f1393adb473a07b46e94d18bd15d1c684bbb7319797",
+        "size": 63827526,
+        "kind": "archive"
+      }
+    ]
+  }
+}

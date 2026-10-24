@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import ssl
 import subprocess
 import sys
@@ -85,6 +86,8 @@ elif args[0] == "run" and "/native-image/runtime_checks.py" in args:
         "runtime_missing_prober_ts": "production_prober_ts",
         "runtime_missing_prober_hls": "production_prober_aes_hls",
         "runtime_missing_prober_cancel": "production_prober_cancellation",
+        "runtime_missing_rare_decode": "synthetic_rare_input_decode",
+        "runtime_missing_sources": "native_source_and_artifact_integrity",
     }
     if case in missing and missing[case] in checks:
         checks.remove(missing[case])
@@ -270,6 +273,8 @@ def test_fixture_success_requires_runtime_and_both_bootstrap_lifecycles(docker_f
         "runtime_missing_prober_ts",
         "runtime_missing_prober_hls",
         "runtime_missing_prober_cancel",
+        "runtime_missing_rare_decode",
+        "runtime_missing_sources",
     ],
 )
 def test_fixture_failures_never_emit_success(docker_fixture, case):
@@ -317,6 +322,66 @@ def runtime_checks():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize(
+    ("version", "accepted"),
+    [
+        ("getent (GNU libc) 2.44", True),
+        ("getent (glibc-2.44-r9) 2.44", True),
+        ("getent (Debian GLIBC 2.41-12+deb13u4) 2.41", True),
+        ("BusyBox v1.38.0", False),
+        ("getent (musl libc) 1.2.5", False),
+        ("unrelated helper mentioning glibc", False),
+    ],
+)
+def test_getent_checks_accept_recorded_gnu_libc_identities_only(
+    runtime_checks, monkeypatch, version, accepted
+):
+    outputs = {
+        (
+            "getent",
+            "passwd",
+            "appuser",
+        ): "appuser:x:1000:1000::/home/appuser:/bin/bash\n",
+        ("getent", "group", "appuser"): "appuser:x:1000:\n",
+        ("getent", "--version"): version + "\n",
+    }
+    monkeypatch.setattr(runtime_checks, "command", lambda *args: outputs[args])
+    if accepted:
+        assert runtime_checks.getent_checks() == {"getent": version}
+    else:
+        with pytest.raises(AssertionError):
+            runtime_checks.getent_checks()
+
+
+@pytest.mark.parametrize(
+    ("version", "accepted"),
+    [
+        ("OpenSSL 4.0.3 29 Sep 2026", True),
+        ("OpenSSL 4.0.1 9 Jun 2026", False),
+        ("OpenSSL 4.0.2 25 Aug 2026", False),
+        ("OpenSSL 3.5.3 16 Sep 2025", False),
+        ("LibreSSL 4.0.3", False),
+        ("OpenSSL 4.0.3-dev 29 Sep 2026", False),
+        ("", False),
+    ],
+)
+def test_native_python_operations_check_the_loaded_wheel_openssl(
+    runtime_checks, monkeypatch, version, accepted
+):
+    from cryptography.hazmat.backends.openssl.backend import backend
+
+    monkeypatch.setattr(backend, "openssl_version_text", lambda: version)
+    if accepted:
+        report = runtime_checks.python_operations()
+        assert report["cryptography_openssl"]["loaded_version"] == version
+        assert re.fullmatch(
+            r"[0-9a-f]{64}", report["cryptography_openssl"]["extension_sha256"]
+        )
+    else:
+        with pytest.raises(AssertionError, match="bundled OpenSSL"):
+            runtime_checks.python_operations()
 
 
 @pytest.mark.parametrize("suffix", ["", ".m3u8", ".ts", ".m4s", ".mp4", ".aac", ".vtt"])
@@ -665,3 +730,212 @@ print(json.dumps({"streams": [
         ]
         assert report["resolution"] == "128x72" and report["reaped"] is True
     assert len(owned) == 1 and owned[0].returncode is not None
+
+
+@pytest.fixture
+def rare_baseline_outputs():
+    # Recorded published bdef595b metadata and first framemd5 frame per fixture.
+    # Hashes below describe recorded output, but are not compared across versions.
+    records = {
+        "synthetic.c2": (
+            {
+                "format_name": "codec2",
+                "codec_type": "audio",
+                "codec_name": "codec2",
+                "sample_rate": "8000",
+                "channels": 1,
+            },
+            "#media_type 0: audio\n#sample_rate 0: 8000\n#channel_layout_name 0: mono\n0, 0, 0, 320, 640, d808fe1cfcaffb2e272060cdeb6ff4cb\n",
+        ),
+        "synthetic.jxl": (
+            {
+                "format_name": "jpegxl_pipe",
+                "codec_type": "video",
+                "codec_name": "jpegxl",
+                "width": 16,
+                "height": 16,
+            },
+            "#media_type 0: video\n#dimensions 0: 16x16\n0, 0, 0, 1, 768, 6c9880e69c622981d507f8d5f8b125ba\n",
+        ),
+        "synthetic.svg": (
+            {
+                "format_name": "svg_pipe",
+                "codec_type": "video",
+                "codec_name": "svg",
+                "width": 16,
+                "height": 16,
+            },
+            "#media_type 0: video\n#dimensions 0: 16x16\n0, 0, 0, 1, 1024, 99d9a4031d220dedc34031c24cc0f15e\n",
+        ),
+        "synthetic.vgm": (
+            {
+                "format_name": "libgme",
+                "codec_type": "audio",
+                "codec_name": "pcm_s16le",
+                "sample_rate": "44100",
+                "channels": 2,
+            },
+            "#media_type 0: audio\n#sample_rate 0: 44100\n#channel_layout_name 0: stereo\n0, 0, 0, 128, 512, f355be31dccb052dcc26deb9b6678989\n",
+        ),
+        "synthetic.mod": (
+            {
+                "format_name": "libopenmpt",
+                "codec_type": "audio",
+                "codec_name": "pcm_f32le",
+                "sample_rate": "48000",
+                "channels": 2,
+            },
+            "#media_type 0: audio\n#sample_rate 0: 48000\n#channel_layout_name 0: stereo\n0, 0, 0, 256, 1024, 0f343b0931126a20f133d67c2b018a3b\n",
+        ),
+    }
+    return records
+
+
+@pytest.fixture
+def rare_process(runtime_checks, rare_baseline_outputs, monkeypatch):
+    controls, calls = {}, []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        assert kwargs["check"] is False and kwargs["timeout"] == 30
+        assert "-strict" not in args and "experimental" not in args
+        path = Path(args[-1] if args[0] == "ffprobe" else args[args.index("-i") + 1])
+        assert path.read_bytes() == runtime_checks.load_rare_inputs()[path.name]["data"]
+        expected, frames = rare_baseline_outputs[path.name]
+        if args[0] == "ffprobe":
+            metadata = {
+                "streams": [
+                    {
+                        key: value
+                        for key, value in expected.items()
+                        if key != "format_name"
+                    }
+                ],
+                "format": {"format_name": expected["format_name"]},
+            }
+            if controls.get("file") == path.name:
+                if controls.get("field") == "format_name":
+                    metadata["format"]["format_name"] = "mpegts"
+                elif controls.get("field"):
+                    metadata["streams"][0][controls["field"]] = "wrong"
+            return subprocess.CompletedProcess(args, 0, json.dumps(metadata), "")
+        assert args[0] == "ffmpeg" and args[-3:] == ("-f", "framemd5", "-")
+        mode = controls.get("decode")
+        if mode == "empty":
+            frames = "\n".join(
+                line for line in frames.splitlines() if line.startswith("#")
+            )
+        elif mode == "zero_size":
+            frames = frames.rsplit(",", 2)[0] + ", 0, " + "0" * 32 + "\n"
+        elif mode == "wrong_kind":
+            frames = frames.replace("#media_type 0: audio", "#media_type 0: video")
+        return subprocess.CompletedProcess(
+            args, 7 if mode == "nonzero" else 0, frames, "synthetic decoder error"
+        )
+
+    monkeypatch.setattr(runtime_checks.subprocess, "run", run)
+    return controls, calls
+
+
+def test_recorded_baseline_rare_fixture_json_is_integrity_checked(
+    runtime_checks, rare_baseline_outputs
+):
+    fixtures = runtime_checks.load_rare_inputs()
+    assert set(fixtures) == set(rare_baseline_outputs)
+    assert [len(fixtures[name]["data"]) for name in rare_baseline_outputs] == [
+        63,
+        64,
+        115,
+        131,
+        2108,
+    ]
+    assert all(
+        fixtures[name]["expected"] == record[0]
+        for name, record in rare_baseline_outputs.items()
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_file",
+        "missing_fixture",
+        "unknown_name",
+        "wrong_hash",
+        "wrong_bytes_and_hash",
+        "wrong_expected",
+        "wrong_provenance",
+        "invalid_base64",
+    ],
+)
+def test_rare_fixture_manifest_rejects_invalid_or_substituted_inputs(
+    runtime_checks, tmp_path, mutation
+):
+    path = tmp_path / "rare_inputs.json"
+    if mutation != "missing_file":
+        document = json.loads(
+            (ROOT / "tests/native_image/rare_inputs.json").read_text()
+        )
+        fixture = document["fixtures"]["synthetic.c2"]
+        if mutation == "missing_fixture":
+            del document["fixtures"]["synthetic.c2"]
+        elif mutation == "unknown_name":
+            document["fixtures"]["../synthetic.c2"] = document["fixtures"].pop(
+                "synthetic.c2"
+            )
+        elif mutation == "wrong_hash":
+            fixture["sha256"] = "0" * 64
+        elif mutation == "wrong_bytes_and_hash":
+            fixture["base64"] = "AA=="
+            fixture["sha256"] = hashlib.sha256(b"\0").hexdigest()
+        elif mutation == "wrong_expected":
+            fixture["expected"]["codec_name"] = "h264"
+        elif mutation == "wrong_provenance":
+            document["provenance"]["generator_sha256"] = "0" * 64
+        else:
+            fixture["base64"] = "!" * 84
+        path.write_text(json.dumps(document))
+    with pytest.raises(AssertionError):
+        runtime_checks.load_rare_inputs(path)
+
+
+def test_recorded_baseline_metadata_and_frames_satisfy_real_decode_check(
+    runtime_checks, rare_process
+):
+    _, calls = rare_process
+    report = runtime_checks.synthetic_rare_input_decode()["synthetic_rare_input_decode"]
+    assert len(report) == 5 and all(
+        item["decoded_frames"] > 0 for item in report.values()
+    )
+    assert len(calls) == 10 and sum(args[0] == "ffprobe" for args in calls) == 5
+
+
+@pytest.mark.parametrize("mode", ["nonzero", "empty", "zero_size", "wrong_kind"])
+def test_rare_decode_rejects_nonzero_or_nonframe_success(
+    runtime_checks, rare_process, mode
+):
+    controls, _ = rare_process
+    controls["decode"] = mode
+    with pytest.raises(AssertionError):
+        runtime_checks.synthetic_rare_input_decode()
+
+
+@pytest.mark.parametrize(
+    "name,field",
+    [
+        ("synthetic.c2", "format_name"),
+        ("synthetic.c2", "codec_name"),
+        ("synthetic.c2", "channels"),
+        ("synthetic.jxl", "width"),
+        ("synthetic.svg", "height"),
+        ("synthetic.vgm", "sample_rate"),
+        ("synthetic.mod", "codec_name"),
+    ],
+)
+def test_rare_decode_rejects_wrong_format_or_metadata(
+    runtime_checks, rare_process, name, field
+):
+    controls, _ = rare_process
+    controls.update(file=name, field=field)
+    with pytest.raises(AssertionError):
+        runtime_checks.synthetic_rare_input_decode()

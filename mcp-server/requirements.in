@@ -29,3 +29,8 @@ starlette>=1.6.0
 # so the test fixtures cannot silently break if a transitive provider drops it.
 # GH1024: security fixes through 2.15.0 plus padded-signature compatibility.
 pyjwt>=2.15.1
+# Direct security floor for MCP/PyJWT's transitive cryptography dependency:
+# 50.0.2 wheels bundle OpenSSL 4.0.3, fixing CVE-2026-84782 (High) and
+# CVE-2026-84783 (vendor Moderate / CVSS High), outside the OS package scan.
+# 50.0.1 bundles only 4.0.2 and does not fix these issues.
+cryptography>=50.0.2

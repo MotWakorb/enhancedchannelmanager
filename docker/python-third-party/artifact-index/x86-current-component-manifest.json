@@ -1,0 +1,2682 @@
+{
+  "generated_utc": "2026-10-24T09:36:34.862882+00:00",
+  "candidate_status": "targeted local file/delivery proof only; final image integration not implemented or verified",
+  "supersedes_for_current_backend_delivery": "historical cryptography 50.0.0/OpenSSL 4.0.1 mapping only; original audit/candidate files preserved",
+  "architecture": "actual inspected Linux x86_64 only",
+  "arm64_audited": false,
+  "ecm_root_license": "CC0-1.0 unchanged; third-party licenses remain separate",
+  "crypto": {
+    "version": "50.0.2",
+    "license_expression": "Apache-2.0 OR BSD-3-Clause",
+    "wheel": {
+      "filename": "cryptography-50.0.2-cp311-abi3-manylinux_2_34_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/d3/69/2c833a049475e0a3444e94c7d0aca0aa51d166374a449b09e92ac98138de/cryptography-50.0.2-cp311-abi3-manylinux_2_34_x86_64.whl",
+      "sha256": "9dab55f57c74c3cad24c323bacbbd04be4705ba6eb0d92e920b1fc4837ed5079",
+      "status": 200,
+      "headers": {
+        "Connection": "close",
+        "Content-Length": "4752576",
+        "x-amz-request-id": "5JMRPBVBVQRX58YP",
+        "x-amz-id-2": "pDSdCZqd/g5d1F7me09esBKO6LzwF4pSb55oWUSRXB9sTvvnofnMjaAy84r3h8C8+jRgazxB3GHHRoHADqYbUPYj9zIY0o55",
+        "Server": "AmazonS3",
+        "Last-Modified": "Wed, 30 Sep 2026 14:44:06 GMT",
+        "ETag": "\"101d8521d5fe2181d2d21c689afa4d15\"",
+        "x-amz-version-id": "L15C0G3tdlvUKI7Xjszk10jUN7Gvi7PT",
+        "Content-Type": "binary/octet-stream",
+        "x-amz-server-side-encryption": "AES256",
+        "Fastly-Restarts": "1",
+        "Cache-Control": "max-age=365000000, immutable, public",
+        "Accept-Ranges": "bytes",
+        "Date": "Sat, 24 Oct 2026 09:26:17 GMT",
+        "Age": "812838",
+        "X-Served-By": "cache-iad-kiad7000175-IAD, cache-chi-kigq8000120-CHI",
+        "X-Cache": "HIT, HIT",
+        "X-Cache-Hits": "7, 748",
+        "X-Timer": "S1792833978.911706,VS0,VE0",
+        "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+        "X-Frame-Options": "deny",
+        "X-XSS-Protection": "1; mode=block",
+        "X-Content-Type-Options": "nosniff",
+        "X-Robots-Header": "noindex",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Range",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
+        "x-pypi-file-python-version": "cp311",
+        "x-pypi-file-version": "50.0.2",
+        "x-pypi-file-package-type": "bdist_wheel",
+        "x-pypi-file-project": "cryptography"
+      },
+      "pypi_metadata": "/tmp/opencode/ecm-native-remediation-20261023/current-native-advisories/cryptography-50.0.2-pypi.json"
+    },
+    "native_sha256": "1e5d23fa66915204b9b67202a46993844d81cda56f6ad52cead2def37617ee29",
+    "both_current_envs_native_matches_public_wheel": true,
+    "openssl_sbom_sha256": "90a9c8d03d95672422f4e7c611fb6d35d1a7c5fed98d032d9dc57d8965e239e6",
+    "rust_sbom_sha256": "8fa299053f3da6ff2c5b85ce2b34bfc2870e2ea17c5a8629dea5b8285cd1d654",
+    "openssl": {
+      "version": "4.0.3",
+      "source_sha256_from_actual_wheel_sbom": "325b5c806167c13b40b1ffeadfe0248197c00eccc4cf123ec1e28d2d2fd216d9",
+      "standalone_upstream_notice_files": [],
+      "license": "Apache-2.0"
+    },
+    "rust_compiler": {
+      "release": "1.98.1",
+      "commit": "48a229ceaefd4985c50990b14116b6d856af0985"
+    },
+    "project_license_comparison": [
+      {
+        "filename": "LICENSE",
+        "new_sha256": "3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb",
+        "old_sha256": "3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb",
+        "bytes_unchanged": true
+      },
+      {
+        "filename": "LICENSE.APACHE",
+        "new_sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe",
+        "old_sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe",
+        "bytes_unchanged": true
+      },
+      {
+        "filename": "LICENSE.BSD",
+        "new_sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb",
+        "old_sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb",
+        "bytes_unchanged": true
+      }
+    ],
+    "rust_component_count": 39,
+    "rust_components": [
+      {
+        "type": "library",
+        "bom-ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpKUZmhW/cryptography-50.0.2/src/rust/cryptography-cffi#0.50.2",
+        "author": "The cryptography developers <cryptography-dev@python.org>",
+        "name": "cryptography-cffi",
+        "version": "0.50.2",
+        "scope": "required",
+        "licenses": [
+          {
+            "expression": "Apache-2.0 OR BSD-3-Clause"
+          }
+        ],
+        "purl": "pkg:cargo/cryptography-cffi@0.50.2?download_url=file://cryptography-cffi"
+      },
+      {
+        "type": "library",
+        "bom-ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpKUZmhW/cryptography-50.0.2/src/rust/cryptography-crypto#0.50.2",
+        "author": "The cryptography developers <cryptography-dev@python.org>",
+        "name": "cryptography-crypto",
+        "version": "0.50.2",
+        "scope": "required",
+        "licenses": [
+          {
+            "expression": "Apache-2.0 OR BSD-3-Clause"
+          }
+        ],
+        "purl": "pkg:cargo/cryptography-crypto@0.50.2?download_url=file://cryptography-crypto"
+      },
+      {
+        "type": "library",
+        "bom-ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpKUZmhW/cryptography-50.0.2/src/rust/cryptography-keepalive#0.50.2",
+        "author": "The cryptography developers <cryptography-dev@python.org>",
+        "name": "cryptography-keepalive",
+        "version": "0.50.2",
+        "scope": "required",
+        "licenses": [
+          {
+            "expression": "Apache-2.0 OR BSD-3-Clause"
+          }
+        ],
+        "purl": "pkg:cargo/cryptography-keepalive@0.50.2?download_url=file://cryptography-keepalive"
+      },
+      {
+        "type": "library",
+        "bom-ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpKUZmhW/cryptography-50.0.2/src/rust/cryptography-key-parsing#0.50.2",
+        "author": "The cryptography developers <cryptography-dev@python.org>",
+        "name": "cryptography-key-parsing",
+        "version": "0.50.2",
+        "scope": "required",
+        "licenses": [
+          {
+            "expression": "Apache-2.0 OR BSD-3-Clause"
+          }
+        ],
+        "purl": "pkg:cargo/cryptography-key-parsing@0.50.2?download_url=file://cryptography-key-parsing"
+      },
+      {
+        "type": "library",
+        "bom-ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpKUZmhW/cryptography-50.0.2/src/rust/cryptography-openssl#0.50.2",
+        "author": "The cryptography developers <cryptography-dev@python.org>",
+        "name": "cryptography-openssl",
+        "version": "0.50.2",
+        "scope": "required",
+        "licenses": [
+          {
+            "expression": "Apache-2.0 OR BSD-3-Clause"
+          }
+        ],
+        "purl": "pkg:cargo/cryptography-openssl@0.50.2?download_url=file://cryptography-openssl"
+      },
+      {
+        "type": "library",
+        "bom-ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpKUZmhW/cryptography-50.0.2/src/rust/cryptography-x509#0.50.2",
+        "author": "The cryptography developers <cryptography-dev@python.org>",
+        "name": "cryptography-x509",
+        "version": "0.50.2",
+        "scope": "required",
+        "licenses": [
+          {
+            "expression": "Apache-2.0 OR BSD-3-Clause"
+          }
+        ],
+        "purl": "pkg:cargo/cryptography-x509@0.50.2?download_url=file://cryptography-x509"
+      },
+      {
+        "type": "library",
+        "bom-ref": "path+file:///__w/cryptography/cryptography/tmpwheelhouse/.tmpKUZmhW/cryptography-50.0.2/src/rust/cryptography-x509-verification#0.50.2",
+        "author": "The cryptography developers <cryptography-dev@python.org>",
+        "name": "cryptography-x509-verification",
+        "version": "0.50.2",
+        "scope": "required",
+        "licenses": [
+          {
+            "expression": "Apache-2.0 OR BSD-3-Clause"
+          }
+        ],
+        "purl": "pkg:cargo/cryptography-x509-verification@0.50.2?download_url=file://cryptography-x509-verification"
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#asn1@0.24.1",
+        "author": "Alex Gaynor <alex.gaynor@gmail.com>",
+        "name": "asn1",
+        "version": "0.24.1",
+        "description": "ASN.1 (DER) parser and writer for Rust.",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "c9795210620c0cb3f9a7ce4f882808c38e1ef7b347c90591dceae0886e031fb1"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "BSD-3-Clause"
+          }
+        ],
+        "purl": "pkg:cargo/asn1@0.24.1",
+        "externalReferences": [
+          {
+            "type": "vcs",
+            "url": "https://github.com/alex/rust-asn1"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#asn1_derive@0.24.1",
+        "author": "Alex Gaynor <alex.gaynor@gmail.com>",
+        "name": "asn1_derive",
+        "version": "0.24.1",
+        "description": "#[derive] support for asn1",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "909e307f1cc32bb8bccbd98f446e6d1bf03fa30f7b53a4337da7181ad30fa11a"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "BSD-3-Clause"
+          }
+        ],
+        "purl": "pkg:cargo/asn1_derive@0.24.1",
+        "externalReferences": [
+          {
+            "type": "vcs",
+            "url": "https://github.com/alex/rust-asn1"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#base64@0.23.0",
+        "author": "Marshall Pierce <marshall@mpierce.org>",
+        "name": "base64",
+        "version": "0.23.0",
+        "description": "encodes and decodes base64 as bytes or utf8",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "b25655df2c3cdd83c5e5b293b88acd880332b2ddadd7c30ac43144fdc0033da9"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/base64@0.23.0",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/base64"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/marshallpierce/rust-base64"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#bitflags@2.13.1",
+        "author": "The Rust Project Developers",
+        "name": "bitflags",
+        "version": "2.13.1",
+        "description": "A macro to generate structures which behave like bitflags. ",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/bitflags@2.13.1",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/bitflags"
+          },
+          {
+            "type": "website",
+            "url": "https://github.com/bitflags/bitflags"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/bitflags/bitflags"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#cc@1.4.0",
+        "author": "Alex Crichton <alex@alexcrichton.com>",
+        "name": "cc",
+        "version": "1.4.0",
+        "description": "A build-time dependency for Cargo build scripts to assist in invoking the native C compiler to compile native C code into a static archive to be linked into Rust code. ",
+        "scope": "excluded",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "5add81bb678e6cb321aff7fa0dc7689ad82b112dbc032cea19f91d6b8e3582b9"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/cc@1.4.0",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/cc"
+          },
+          {
+            "type": "website",
+            "url": "https://github.com/rust-lang/cc-rs"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/rust-lang/cc-rs"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#cfg-if@1.0.4",
+        "author": "Alex Crichton <alex@alexcrichton.com>",
+        "name": "cfg-if",
+        "version": "1.0.4",
+        "description": "A macro to ergonomically define an item depending on a large number of #[cfg] parameters. Structured like an if-else chain, the first matching branch is the item that gets emitted. ",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/cfg-if@1.0.4",
+        "externalReferences": [
+          {
+            "type": "vcs",
+            "url": "https://github.com/rust-lang/cfg-if"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#find-msvc-tools@0.1.9",
+        "name": "find-msvc-tools",
+        "version": "0.1.9",
+        "description": "Find windows-specific tools, read MSVC versions from the registry and from COM interfaces",
+        "scope": "excluded",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/find-msvc-tools@0.1.9",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/find-msvc-tools"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/rust-lang/cc-rs"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#foreign-types-shared@0.1.1",
+        "author": "Steven Fackler <sfackler@gmail.com>",
+        "name": "foreign-types-shared",
+        "version": "0.1.1",
+        "description": "An internal crate used by foreign-types",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/foreign-types-shared@0.1.1",
+        "externalReferences": [
+          {
+            "type": "vcs",
+            "url": "https://github.com/sfackler/foreign-types"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#foreign-types@0.3.2",
+        "author": "Steven Fackler <sfackler@gmail.com>",
+        "name": "foreign-types",
+        "version": "0.3.2",
+        "description": "A framework for Rust wrappers over C APIs",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "f6f339eb8adc052cd2ca78910fda869aefa38d22d5cb648e6485e4d3fc06f3b1"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/foreign-types@0.3.2",
+        "externalReferences": [
+          {
+            "type": "vcs",
+            "url": "https://github.com/sfackler/foreign-types"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#heck@0.5.0",
+        "name": "heck",
+        "version": "0.5.0",
+        "description": "heck is a case conversion library.",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/heck@0.5.0",
+        "externalReferences": [
+          {
+            "type": "vcs",
+            "url": "https://github.com/withoutboats/heck"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.18",
+        "author": "David Tolnay <dtolnay@gmail.com>",
+        "name": "itoa",
+        "version": "1.0.18",
+        "description": "Fast integer primitive to string conversion",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/itoa@1.0.18",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/itoa"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/dtolnay/itoa"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#libc@0.2.189",
+        "name": "libc",
+        "version": "0.2.189",
+        "description": "Raw FFI bindings to platform libraries like libc.",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/libc@0.2.189",
+        "externalReferences": [
+          {
+            "type": "vcs",
+            "url": "https://github.com/rust-lang/libc"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#once_cell@1.21.4",
+        "author": "Aleksey Kladov <aleksey.kladov@gmail.com>",
+        "name": "once_cell",
+        "version": "1.21.4",
+        "description": "Single assignment cells and lazy values.",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/once_cell@1.21.4",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/once_cell"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/matklad/once_cell"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#openssl-macros@0.1.1",
+        "name": "openssl-macros",
+        "version": "0.1.1",
+        "description": "Internal macros used by the openssl crate.",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/openssl-macros@0.1.1"
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#openssl-sys@0.9.117",
+        "author": "Alex Crichton <alex@alexcrichton.com>, Steven Fackler <sfackler@gmail.com>",
+        "name": "openssl-sys",
+        "version": "0.9.117",
+        "description": "FFI bindings to OpenSSL",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "b47e7e6bb2c38cd930d25a23b40fa52e068c10e85f3e03a7f5ba5aaca5713695"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT"
+          }
+        ],
+        "purl": "pkg:cargo/openssl-sys@0.9.117",
+        "externalReferences": [
+          {
+            "type": "other",
+            "url": "openssl"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/rust-openssl/rust-openssl"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#openssl@0.10.81",
+        "author": "Steven Fackler <sfackler@gmail.com>",
+        "name": "openssl",
+        "version": "0.10.81",
+        "description": "OpenSSL bindings",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "77823a27f0babb03091cb9ed9ef80af3b39dbc82f97e8fa530374b7dafd87a45"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/openssl@0.10.81",
+        "externalReferences": [
+          {
+            "type": "vcs",
+            "url": "https://github.com/rust-openssl/rust-openssl"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#pem@4.0.0",
+        "author": "Jonathan Creekmore <jonathan@thecreekmores.org>",
+        "name": "pem",
+        "version": "4.0.0",
+        "description": "Parse and encode PEM-encoded data.",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT"
+          }
+        ],
+        "purl": "pkg:cargo/pem@4.0.0",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/pem/"
+          },
+          {
+            "type": "website",
+            "url": "https://github.com/jcreekmore/pem-rs.git"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/jcreekmore/pem-rs.git"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#pkg-config@0.3.33",
+        "author": "Alex Crichton <alex@alexcrichton.com>",
+        "name": "pkg-config",
+        "version": "0.3.33",
+        "description": "A library to run the pkg-config system tool at build time in order to be used in Cargo build scripts. ",
+        "scope": "excluded",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/pkg-config@0.3.33",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/pkg-config"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/rust-lang/pkg-config-rs"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#portable-atomic@1.14.0",
+        "name": "portable-atomic",
+        "version": "1.14.0",
+        "description": "Portable atomic types including support for 128-bit atomics, atomic float, etc. ",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "3d20d5497ef88037a52ff98267d066e7f11fcc5e99bbfbd58a42336193aacec3"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "Apache-2.0 OR MIT"
+          }
+        ],
+        "purl": "pkg:cargo/portable-atomic@1.14.0",
+        "externalReferences": [
+          {
+            "type": "vcs",
+            "url": "https://github.com/taiki-e/portable-atomic"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#proc-macro2@1.0.107",
+        "author": "David Tolnay <dtolnay@gmail.com>, Alex Crichton <alex@alexcrichton.com>",
+        "name": "proc-macro2",
+        "version": "1.0.107",
+        "description": "A substitute implementation of the compiler's `proc_macro` API to decouple token-based libraries from the procedural macro use case.",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/proc-macro2@1.0.107",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/proc-macro2"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/dtolnay/proc-macro2"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#pyo3-build-config@0.29.2",
+        "author": "PyO3 Project and Contributors <https://github.com/PyO3>",
+        "name": "pyo3-build-config",
+        "version": "0.29.2",
+        "description": "Build configuration for the PyO3 ecosystem",
+        "scope": "excluded",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "f41027e41b4bd03f6e60f9f417fe24a6341a6bb744edd62b6f709f2a52ea30e9"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/pyo3-build-config@0.29.2",
+        "externalReferences": [
+          {
+            "type": "website",
+            "url": "https://github.com/pyo3/pyo3"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/pyo3/pyo3"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#pyo3-ffi@0.29.2",
+        "author": "PyO3 Project and Contributors <https://github.com/PyO3>",
+        "name": "pyo3-ffi",
+        "version": "0.29.2",
+        "description": "Python-API bindings for the PyO3 ecosystem",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "e591a95526fead067432c3b3a33fc74770b87b1e04e73671090d9c2055a2b327"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/pyo3-ffi@0.29.2",
+        "externalReferences": [
+          {
+            "type": "website",
+            "url": "https://github.com/pyo3/pyo3"
+          },
+          {
+            "type": "other",
+            "url": "python"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/pyo3/pyo3"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#pyo3-macros-backend@0.29.2",
+        "author": "PyO3 Project and Contributors <https://github.com/PyO3>",
+        "name": "pyo3-macros-backend",
+        "version": "0.29.2",
+        "description": "Code generation for PyO3 package",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "571575aa3749fa6216757dd47d2a3e7ef360f329a40f0666a9fbd14889024952"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/pyo3-macros-backend@0.29.2",
+        "externalReferences": [
+          {
+            "type": "website",
+            "url": "https://github.com/pyo3/pyo3"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/pyo3/pyo3"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#pyo3-macros@0.29.2",
+        "author": "PyO3 Project and Contributors <https://github.com/PyO3>",
+        "name": "pyo3-macros",
+        "version": "0.29.2",
+        "description": "Proc macros for PyO3 package",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "73225868fc1cd84eef2c3c230ddb91273bf1de46aeb8a4248da76d32a0924a1c"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/pyo3-macros@0.29.2",
+        "externalReferences": [
+          {
+            "type": "website",
+            "url": "https://github.com/pyo3/pyo3"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/pyo3/pyo3"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#pyo3@0.29.2",
+        "author": "PyO3 Project and Contributors <https://github.com/PyO3>",
+        "name": "pyo3",
+        "version": "0.29.2",
+        "description": "Bindings to Python interpreter",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "4688ddedf473e32662b9b067670129a8afb8c18e351482c70d62ba4a88171e8b"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/pyo3@0.29.2",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/crate/pyo3/"
+          },
+          {
+            "type": "website",
+            "url": "https://github.com/pyo3/pyo3"
+          },
+          {
+            "type": "other",
+            "url": "pyo3-python"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/pyo3/pyo3"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#quote@1.0.47",
+        "author": "David Tolnay <dtolnay@gmail.com>",
+        "name": "quote",
+        "version": "1.0.47",
+        "description": "Quasi-quoting macro quote!(...)",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/quote@1.0.47",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/quote/"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/dtolnay/quote"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#self_cell@1.3.0",
+        "author": "Lukas Bergdoll <lukas.bergdoll@gmail.com>",
+        "name": "self_cell",
+        "version": "1.3.0",
+        "description": "Safe-to-use proc-macro-free self-referential structs in stable Rust.",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "2ab42ca02749e120097e328d91d415325bdf43b1c72c4c8badf37375fe40a813"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "Apache-2.0 OR GPL-2.0-only"
+          }
+        ],
+        "purl": "pkg:cargo/self_cell@1.3.0",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/self_cell"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/Voultapher/self_cell"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#shlex@2.0.1",
+        "author": "comex <comexk@gmail.com>, Fenhl <fenhl@fenhl.net>, Adrian Taylor <adetaylor@chromium.org>, Alex Touchet <alextouchet@outlook.com>, Daniel Parks <dp+git@oxidized.org>, Garrett Berg <googberg@gmail.com>",
+        "name": "shlex",
+        "version": "2.0.1",
+        "description": "Split a string into shell words, like Python's shlex.",
+        "scope": "excluded",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/shlex@2.0.1",
+        "externalReferences": [
+          {
+            "type": "vcs",
+            "url": "https://github.com/comex/rust-shlex"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#syn@2.0.119",
+        "author": "David Tolnay <dtolnay@gmail.com>",
+        "name": "syn",
+        "version": "2.0.119",
+        "description": "Parser for Rust source code",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/syn@2.0.119",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/syn"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/dtolnay/syn"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#target-lexicon@0.13.5",
+        "author": "Dan Gohman <sunfish@mozilla.com>",
+        "name": "target-lexicon",
+        "version": "0.13.5",
+        "description": "LLVM target triple types",
+        "scope": "excluded",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "Apache-2.0 WITH LLVM-exception"
+          }
+        ],
+        "purl": "pkg:cargo/target-lexicon@0.13.5",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/target-lexicon/"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/bytecodealliance/target-lexicon"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#unicode-ident@1.0.24",
+        "author": "David Tolnay <dtolnay@gmail.com>",
+        "name": "unicode-ident",
+        "version": "1.0.24",
+        "description": "Determine whether characters have the XID_Start or XID_Continue properties according to Unicode Standard Annex #31",
+        "scope": "required",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "(MIT OR Apache-2.0) AND Unicode-3.0"
+          }
+        ],
+        "purl": "pkg:cargo/unicode-ident@1.0.24",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/unicode-ident"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/dtolnay/unicode-ident"
+          }
+        ]
+      },
+      {
+        "type": "library",
+        "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#vcpkg@0.2.15",
+        "author": "Jim McGrath <jimmc2@gmail.com>",
+        "name": "vcpkg",
+        "version": "0.2.15",
+        "description": "A library to find native dependencies in a vcpkg tree at build time in order to be used in Cargo build scripts. ",
+        "scope": "excluded",
+        "hashes": [
+          {
+            "alg": "SHA-256",
+            "content": "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
+          }
+        ],
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ],
+        "purl": "pkg:cargo/vcpkg@0.2.15",
+        "externalReferences": [
+          {
+            "type": "documentation",
+            "url": "https://docs.rs/vcpkg"
+          },
+          {
+            "type": "vcs",
+            "url": "https://github.com/mcgoo/vcpkg-rs"
+          }
+        ]
+      }
+    ],
+    "changed_rust_components": [
+      {
+        "name": "cryptography-cffi",
+        "before": "0.50.0",
+        "after": "0.50.2"
+      },
+      {
+        "name": "cryptography-crypto",
+        "before": "0.50.0",
+        "after": "0.50.2"
+      },
+      {
+        "name": "cryptography-keepalive",
+        "before": "0.50.0",
+        "after": "0.50.2"
+      },
+      {
+        "name": "cryptography-key-parsing",
+        "before": "0.50.0",
+        "after": "0.50.2"
+      },
+      {
+        "name": "cryptography-openssl",
+        "before": "0.50.0",
+        "after": "0.50.2"
+      },
+      {
+        "name": "cryptography-x509",
+        "before": "0.50.0",
+        "after": "0.50.2"
+      },
+      {
+        "name": "cryptography-x509-verification",
+        "before": "0.50.0",
+        "after": "0.50.2"
+      },
+      {
+        "name": "pyo3-build-config",
+        "before": "0.29.0",
+        "after": "0.29.2"
+      },
+      {
+        "name": "pyo3-ffi",
+        "before": "0.29.0",
+        "after": "0.29.2"
+      },
+      {
+        "name": "pyo3-macros-backend",
+        "before": "0.29.0",
+        "after": "0.29.2"
+      },
+      {
+        "name": "pyo3-macros",
+        "before": "0.29.0",
+        "after": "0.29.2"
+      },
+      {
+        "name": "pyo3",
+        "before": "0.29.0",
+        "after": "0.29.2"
+      }
+    ],
+    "reused_pyo3_sources_and_notices": [
+      {
+        "name": "pyo3-build-config",
+        "before": "0.29.0",
+        "after": "0.29.2",
+        "source_archive": "public-crates/pyo3-build-config-0.29.2.crate",
+        "source_sha256": "f41027e41b4bd03f6e60f9f417fe24a6341a6bb744edd62b6f709f2a52ea30e9",
+        "notice_files": [
+          {
+            "path": "crate-notices/pyo3-build-config-0.29.2/Cargo.toml",
+            "sha256": "f8dcc21ccccfb2ba65fa980b5d0a24b637eabb1532efceebc29daa667fe04ad3"
+          },
+          {
+            "path": "crate-notices/pyo3-build-config-0.29.2/LICENSE-APACHE",
+            "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+          },
+          {
+            "path": "crate-notices/pyo3-build-config-0.29.2/LICENSE-MIT",
+            "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+          }
+        ],
+        "network_download_repeated": false
+      },
+      {
+        "name": "pyo3-ffi",
+        "before": "0.29.0",
+        "after": "0.29.2",
+        "source_archive": "public-crates/pyo3-ffi-0.29.2.crate",
+        "source_sha256": "e591a95526fead067432c3b3a33fc74770b87b1e04e73671090d9c2055a2b327",
+        "notice_files": [
+          {
+            "path": "crate-notices/pyo3-ffi-0.29.2/Cargo.toml",
+            "sha256": "246de015ba73057315cb602fbc50f0b36fefb8bc4febb4bef54dce8301b15235"
+          },
+          {
+            "path": "crate-notices/pyo3-ffi-0.29.2/LICENSE-APACHE",
+            "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+          },
+          {
+            "path": "crate-notices/pyo3-ffi-0.29.2/LICENSE-MIT",
+            "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+          }
+        ],
+        "network_download_repeated": false
+      },
+      {
+        "name": "pyo3-macros-backend",
+        "before": "0.29.0",
+        "after": "0.29.2",
+        "source_archive": "public-crates/pyo3-macros-backend-0.29.2.crate",
+        "source_sha256": "571575aa3749fa6216757dd47d2a3e7ef360f329a40f0666a9fbd14889024952",
+        "notice_files": [
+          {
+            "path": "crate-notices/pyo3-macros-backend-0.29.2/Cargo.toml",
+            "sha256": "a965cadd857e44658af0673a7e7402a266de9fbbfdbc12beff0fcf58c40375ef"
+          },
+          {
+            "path": "crate-notices/pyo3-macros-backend-0.29.2/LICENSE-APACHE",
+            "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+          },
+          {
+            "path": "crate-notices/pyo3-macros-backend-0.29.2/LICENSE-MIT",
+            "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+          }
+        ],
+        "network_download_repeated": false
+      },
+      {
+        "name": "pyo3-macros",
+        "before": "0.29.0",
+        "after": "0.29.2",
+        "source_archive": "public-crates/pyo3-macros-0.29.2.crate",
+        "source_sha256": "73225868fc1cd84eef2c3c230ddb91273bf1de46aeb8a4248da76d32a0924a1c",
+        "notice_files": [
+          {
+            "path": "crate-notices/pyo3-macros-0.29.2/Cargo.toml",
+            "sha256": "246dd2bad7ef1a5c56bf79c89ee9844115cc79fdbe659e647e38d30d7535ac10"
+          },
+          {
+            "path": "crate-notices/pyo3-macros-0.29.2/LICENSE-APACHE",
+            "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+          },
+          {
+            "path": "crate-notices/pyo3-macros-0.29.2/LICENSE-MIT",
+            "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+          }
+        ],
+        "network_download_repeated": false
+      },
+      {
+        "name": "pyo3",
+        "before": "0.29.0",
+        "after": "0.29.2",
+        "source_archive": "public-crates/pyo3-0.29.2.crate",
+        "source_sha256": "4688ddedf473e32662b9b067670129a8afb8c18e351482c70d62ba4a88171e8b",
+        "notice_files": [
+          {
+            "path": "crate-notices/pyo3-0.29.2/Cargo.toml",
+            "sha256": "ea1b4d0e5ee0eaa7179f413f68b9f59351ed0c154df80539b6587f3b53e7e04a"
+          },
+          {
+            "path": "crate-notices/pyo3-0.29.2/LICENSE-APACHE",
+            "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+          },
+          {
+            "path": "crate-notices/pyo3-0.29.2/LICENSE-MIT",
+            "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+          },
+          {
+            "path": "crate-notices/pyo3-0.29.2/pyo3-runtime/LICENSE-APACHE",
+            "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+          },
+          {
+            "path": "crate-notices/pyo3-0.29.2/pyo3-runtime/LICENSE-MIT",
+            "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+          }
+        ],
+        "network_download_repeated": false
+      }
+    ],
+    "workspace_crates": [
+      {
+        "name": "cryptography-cffi",
+        "before": "0.50.0",
+        "after": "0.50.2",
+        "manifest": "source-notices/cryptography-50.0.2/src/rust/cryptography-cffi/Cargo.toml",
+        "source_lock_confirms_version": true,
+        "license_paths": [
+          "source-notices/cryptography-50.0.2/LICENSE.APACHE",
+          "source-notices/cryptography-50.0.2/LICENSE.BSD"
+        ]
+      },
+      {
+        "name": "cryptography-crypto",
+        "before": "0.50.0",
+        "after": "0.50.2",
+        "manifest": "source-notices/cryptography-50.0.2/src/rust/cryptography-crypto/Cargo.toml",
+        "source_lock_confirms_version": true,
+        "license_paths": [
+          "source-notices/cryptography-50.0.2/LICENSE.APACHE",
+          "source-notices/cryptography-50.0.2/LICENSE.BSD"
+        ]
+      },
+      {
+        "name": "cryptography-keepalive",
+        "before": "0.50.0",
+        "after": "0.50.2",
+        "manifest": "source-notices/cryptography-50.0.2/src/rust/cryptography-keepalive/Cargo.toml",
+        "source_lock_confirms_version": true,
+        "license_paths": [
+          "source-notices/cryptography-50.0.2/LICENSE.APACHE",
+          "source-notices/cryptography-50.0.2/LICENSE.BSD"
+        ]
+      },
+      {
+        "name": "cryptography-key-parsing",
+        "before": "0.50.0",
+        "after": "0.50.2",
+        "manifest": "source-notices/cryptography-50.0.2/src/rust/cryptography-key-parsing/Cargo.toml",
+        "source_lock_confirms_version": true,
+        "license_paths": [
+          "source-notices/cryptography-50.0.2/LICENSE.APACHE",
+          "source-notices/cryptography-50.0.2/LICENSE.BSD"
+        ]
+      },
+      {
+        "name": "cryptography-openssl",
+        "before": "0.50.0",
+        "after": "0.50.2",
+        "manifest": "source-notices/cryptography-50.0.2/src/rust/cryptography-openssl/Cargo.toml",
+        "source_lock_confirms_version": true,
+        "license_paths": [
+          "source-notices/cryptography-50.0.2/LICENSE.APACHE",
+          "source-notices/cryptography-50.0.2/LICENSE.BSD"
+        ]
+      },
+      {
+        "name": "cryptography-x509",
+        "before": "0.50.0",
+        "after": "0.50.2",
+        "manifest": "source-notices/cryptography-50.0.2/src/rust/cryptography-x509/Cargo.toml",
+        "source_lock_confirms_version": true,
+        "license_paths": [
+          "source-notices/cryptography-50.0.2/LICENSE.APACHE",
+          "source-notices/cryptography-50.0.2/LICENSE.BSD"
+        ]
+      },
+      {
+        "name": "cryptography-x509-verification",
+        "before": "0.50.0",
+        "after": "0.50.2",
+        "manifest": "source-notices/cryptography-50.0.2/src/rust/cryptography-x509-verification/Cargo.toml",
+        "source_lock_confirms_version": true,
+        "license_paths": [
+          "source-notices/cryptography-50.0.2/LICENSE.APACHE",
+          "source-notices/cryptography-50.0.2/LICENSE.BSD"
+        ]
+      }
+    ],
+    "corresponding_source_label": "Exact public sdist supplied voluntarily for attribution/provenance; Apache/BSD does not itself impose a GPL corresponding-source obligation."
+  },
+  "backend": {
+    "locked_count": 74,
+    "lock_sha256": "7fbaf818e6617efc2bbd54e07af7ef5a7eac300712ad7b29fa5c6b4ada17a2bf",
+    "distributions": [
+      {
+        "name": "aiofiles",
+        "version": "25.1.0",
+        "metadata_sha256": "6b96b99073158a00ddb012a514834b48c3ec5f732ce059ffcde700481759a8b5",
+        "record_sha256": "e3fa09d80891aacbff2844e3b25cafa706d5c12bfeef193c074299f6bee0c4be",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "aiofiles-25.1.0.dist-info/licenses/LICENSE",
+            "sha256": "cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14"
+          },
+          {
+            "path": "aiofiles-25.1.0.dist-info/licenses/NOTICE",
+            "sha256": "104c58d1d450bd6474c09d8b64bc0182733a60ac3d8c253e334cde8294520ff1"
+          }
+        ]
+      },
+      {
+        "name": "aiohappyeyeballs",
+        "version": "2.7.1",
+        "metadata_sha256": "e68d1bf48aec9dcc2767343dedec25e12860085cba180e10bc3d3bdd031602ba",
+        "record_sha256": "14263431f101aad85e690b74756640a356c3f311654f0db92305c7fd5fcfa75c",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "aiohappyeyeballs-2.7.1.dist-info/licenses/LICENSE",
+            "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+          }
+        ]
+      },
+      {
+        "name": "aiohttp",
+        "version": "3.14.5",
+        "metadata_sha256": "50b29a2268649f7ce5b22c0a41b60896d246fee58e2a74b468f66848e469834c",
+        "record_sha256": "f0151ae7446d1959f6d2ba273d524c6a94006972eb65273535cac2b6a346b6d9",
+        "native_files": [
+          {
+            "path": "aiohttp/_http_parser.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "fbdb69d4b707f0fa75ef3e5d72cc10681903fe428bdba1be2fd9eecbfa5009b2"
+          },
+          {
+            "path": "aiohttp/_http_writer.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "36f687dda2b63a85a305deed8d896551cbc74034cbb285ab91d099210b1b2338"
+          },
+          {
+            "path": "aiohttp/_websocket/mask.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "8f9be7e800e262ed6f2332b9818e8b9165adc23c14612c54a2aac887113b1038"
+          },
+          {
+            "path": "aiohttp/_websocket/reader_c.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "1c727b5d9234ddcdbac7d8c38ffdc49b327598d86e5570b427e68306fee6d028"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "aiohttp-3.14.5.dist-info/licenses/LICENSE.txt",
+            "sha256": "2e4be5fc6c4c72a466fcb665d726e049a6891981fe536c4f04b6366749461d23"
+          },
+          {
+            "path": "aiohttp-3.14.5.dist-info/licenses/vendor/llhttp/LICENSE",
+            "sha256": "628168d68bb5a8a17e0bbefb3bd74e326e1edc20583d76f52f457c82c921867d"
+          }
+        ]
+      },
+      {
+        "name": "aiosignal",
+        "version": "1.4.0",
+        "metadata_sha256": "09247ef1da8bc696728d47130e702e4307f6f7d101d6c485bff9f3a71ce7008d",
+        "record_sha256": "b9a6cd07dac78298d856613e8140b7da26b20506ed07747802bd513bf9b3ea35",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "aiosignal-1.4.0.dist-info/licenses/LICENSE",
+            "sha256": "6fd5243e92dd7f98ec69c7ac377728e74905709ff527a5bf98d6d0263c04f5b6"
+          }
+        ]
+      },
+      {
+        "name": "alembic",
+        "version": "1.18.5",
+        "metadata_sha256": "d7fd3308b0b854d58f6c3bddc2c8c8a841e13f45a90abeb02f5ebea70b008e09",
+        "record_sha256": "361406ac36499ba956aff9f98dcec825c5d3cb1a0744bcff80981309f0f628cd",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "alembic-1.18.5.dist-info/licenses/LICENSE",
+            "sha256": "6e68d94a03a0e3e327ddf3e86d1ebedc14eece3922022618fc246a36296fd0cc"
+          }
+        ]
+      },
+      {
+        "name": "annotated-doc",
+        "version": "0.0.5",
+        "metadata_sha256": "8c24d70c5d9153d22123353a906042fd7603df2d15c2196290b0f8a962558c46",
+        "record_sha256": "eee5b3b5754ae1cb431e5aba650cdab050673d518473f0fb2b4ad9f48671e2e7",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "annotated_doc-0.0.5.dist-info/licenses/LICENSE",
+            "sha256": "fff170779a6acbf65abdb405c087f1cee1786691e4a96a4034517e4a504a0cdf"
+          }
+        ]
+      },
+      {
+        "name": "annotated-types",
+        "version": "0.8.0",
+        "metadata_sha256": "614985b278f601b8ef863f82783b991cc3ada4b89f592eb71c7c48c5f2ef2298",
+        "record_sha256": "8191d3aa1ac93480688819b4db2385606219a3f7a453b85e086646134ded4f96",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "annotated_types-0.8.0.dist-info/licenses/LICENSE",
+            "sha256": "fe1049884b1a0d9342901e88e07f32925d24b3121d9972b6a6805fb9824b095d"
+          }
+        ]
+      },
+      {
+        "name": "anyio",
+        "version": "4.14.2",
+        "metadata_sha256": "c5e6fc4dfd833319913b287be7a30d9935e9208c7ef917630621855aaac4d419",
+        "record_sha256": "722d3bb1432c0f34f49dca8ac66fa132db1e4a2151f7104ee66a8cd44222c0b6",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "anyio-4.14.2.dist-info/licenses/LICENSE",
+            "sha256": "5361ac9dc58f2ef5fd2e9b09c68297c17f04950909bbc8023bdb82eacf22c2b0"
+          }
+        ]
+      },
+      {
+        "name": "attrs",
+        "version": "26.1.0",
+        "metadata_sha256": "4cd40e690f23bf37cbcad34efd6758e062df1df07c86833f7e3ce95bf1fa38cc",
+        "record_sha256": "6b0b326d4b4ee0fac27909ac7cbb066fc4bdf8e93d87031e27e770db059e5a04",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "attrs-26.1.0.dist-info/licenses/LICENSE",
+            "sha256": "882115c95dfc2af1eeb6714f8ec6d5cbcabf667caff8729f42420da63f714e9f"
+          }
+        ]
+      },
+      {
+        "name": "bcrypt",
+        "version": "5.0.0",
+        "metadata_sha256": "c95d417cb948eae765572db778d6f30daeb60d211b52b956be52c1088e9401d2",
+        "record_sha256": "ec8fb02f11303150af7a5871a1f41ec766b8e55ee5367fb474bc5a941212c2f4",
+        "native_files": [
+          {
+            "path": "bcrypt/_bcrypt.abi3.so",
+            "sha256": "a05c09bb81aae3816a243b6dc7fa16a72a5fb94437d019025b30f6161a23758c"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "bcrypt-5.0.0.dist-info/licenses/LICENSE",
+            "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+          }
+        ]
+      },
+      {
+        "name": "boto3",
+        "version": "1.43.78",
+        "metadata_sha256": "67f693e357f6826551327b04e95b9a542136eadea7f616161d85a3b57233a420",
+        "record_sha256": "df8caf9ec7621adfa3561b8816c88855dd31e711dd2500cb7b08dfce17d3a683",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "boto3-1.43.78.dist-info/LICENSE",
+            "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+          },
+          {
+            "path": "boto3-1.43.78.dist-info/NOTICE",
+            "sha256": "04fb1e61484a7810f1ba09bb42bc01ca58c9af33927d7c5a21556e4c4d1c7fa4"
+          }
+        ]
+      },
+      {
+        "name": "botocore",
+        "version": "1.43.78",
+        "metadata_sha256": "e6437cf82a2ddad229dc1a02ed8198cb51fbdd8b78e49ad733c9a20a8136cb4a",
+        "record_sha256": "779aa6b49ea69538a4f27b101553f122af67a935ff0cf886648c37819015ead6",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "botocore-1.43.78.dist-info/LICENSE.txt",
+            "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+          },
+          {
+            "path": "botocore-1.43.78.dist-info/NOTICE",
+            "sha256": "1d1c5a6f3d68cb11f4fad1afa86a7450d0286f15c176ef0ea048f255b46d95b0"
+          }
+        ]
+      },
+      {
+        "name": "certifi",
+        "version": "2026.10.19",
+        "metadata_sha256": "a5c0be3a42daeef0edfaf58e6ea5b7550f3e4e8eb35420f72e902df9bcf00f5c",
+        "record_sha256": "f4c1c8f6821d02df60a121d954fe0b944d4af8c7bc79d7b45b38eba13adb3284",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "certifi-2026.10.19.dist-info/licenses/LICENSE",
+            "sha256": "e93716da6b9c0d5a4a1df60fe695b370f0695603d21f6f83f053e42cfc10caf7"
+          }
+        ]
+      },
+      {
+        "name": "cffi",
+        "version": "2.1.1",
+        "metadata_sha256": "558bafb9093a8e790175d9ecff9688382981d744877dad86fd6770db0f4dc918",
+        "record_sha256": "ee719acd9d0d0f3c26e3851a0539226834067c408e4b54316ff3f5d8b73854df",
+        "native_files": [
+          {
+            "path": "_cffi_backend.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "9bc1d08072255a5ec2db10fc75df1dd9e73097a75cd9150cfe875ebd6712f17c"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "cffi-2.1.1.dist-info/licenses/LICENSE",
+            "sha256": "5ba24ddc57067f9249add644c3afc41a5d6dc37e23433ef759d95df370b0af63"
+          }
+        ]
+      },
+      {
+        "name": "click",
+        "version": "8.4.2",
+        "metadata_sha256": "194c9dd81d567f9081f026c7e401060fbafa7bc147c8e0a58b3668b40a64c031",
+        "record_sha256": "f14e3990f101ef4a1dd09903eb3f859f233ec1d9bd9a00e4470f207568804d12",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "click-8.4.2.dist-info/licenses/LICENSE.txt",
+            "sha256": "9a8ad106a394e853bfe21f42f4e72d592819a22805d991b5f3275029292b658d"
+          }
+        ]
+      },
+      {
+        "name": "coverage",
+        "version": "7.15.4",
+        "metadata_sha256": "1ec1d62cb37a000e691d78bde85ffb2d33802692946944ba97152013c1cebe4c",
+        "record_sha256": "735d78a6fb0a438472bc8dcd0f09dcb0269152dca8d8944d1e0f406b03ea4b54",
+        "native_files": [
+          {
+            "path": "coverage/tracer.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "91914cdbdf09b920730eca4d48ddeb6a20e923b00432ecf8cab81ffdf272d2d1"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "coverage-7.15.4.dist-info/licenses/LICENSE.txt",
+            "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+          },
+          {
+            "path": "coverage-7.15.4.dist-info/licenses/NOTICE.txt",
+            "sha256": "80e177ab397d5f332954693a52abc1b34b06c5792dd57297608b6d68a2f6af11"
+          }
+        ]
+      },
+      {
+        "name": "croniter",
+        "version": "6.2.4",
+        "metadata_sha256": "75cfeb8f533984a6adcc3a2f842f98b5a5b74f7ce97eeddf7d5aa0ff41c7577d",
+        "record_sha256": "12338f2c794fa6bcc6c713ec5ba1b7c08684adfd30da7f07067b2847ba5d2983",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "croniter-6.2.4.dist-info/licenses/LICENSE",
+            "sha256": "a8f952e6c6bb30b0cfcf71c304e3931160d2a9b578d6eddfa5cc18c832e17ed3"
+          }
+        ]
+      },
+      {
+        "name": "cryptography",
+        "version": "50.0.2",
+        "metadata_sha256": "047cfc71226409de4318b360aef15c63a2adf609731e3dcf7fe932f14ea042ee",
+        "record_sha256": "61fa4cc2e3dfd89909ef58ce6e58bee07059008ec542e091750c6b51bf138edf",
+        "native_files": [
+          {
+            "path": "cryptography/hazmat/bindings/_rust.abi3.so",
+            "sha256": "1e5d23fa66915204b9b67202a46993844d81cda56f6ad52cead2def37617ee29"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "cryptography-50.0.2.dist-info/licenses/LICENSE",
+            "sha256": "3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb"
+          },
+          {
+            "path": "cryptography-50.0.2.dist-info/licenses/LICENSE.APACHE",
+            "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+          },
+          {
+            "path": "cryptography-50.0.2.dist-info/licenses/LICENSE.BSD",
+            "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+          }
+        ]
+      },
+      {
+        "name": "deprecated",
+        "version": "1.3.1",
+        "metadata_sha256": "409767ac23878c1c694888ce4acc43dab6b37efa2b40499567fb5c7d9dce5852",
+        "record_sha256": "04f3900b10c2cb084b781451b586880e64b0f5affd54906b137d2441da63c66e",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "deprecated-1.3.1.dist-info/licenses/LICENSE.rst",
+            "sha256": "1e83edd15be419b5d5bde372e325e527ff4f9915f548e7c75314b41f6699e83c"
+          }
+        ]
+      },
+      {
+        "name": "dnspython",
+        "version": "2.8.0",
+        "metadata_sha256": "74f759539b89e299151b2d697c612307345b766dbb7e9435cf863a06981fd385",
+        "record_sha256": "835d7f4fdc1c7488000c15b9296e76053aacb4eba2692e5b4bada924f21172c7",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "dnspython-2.8.0.dist-info/licenses/LICENSE",
+            "sha256": "c3ea3ff5654b329c19d3bc5f7481af623c3dded4a6145585499f843ad3d741cd"
+          }
+        ]
+      },
+      {
+        "name": "email-validator",
+        "version": "2.3.0",
+        "metadata_sha256": "2a97b81eefcd856bc80b0346f47fa2d800b9a438bf8f9231ae00fe931d5c9fbc",
+        "record_sha256": "5060e3df1885965b09325a1d58e44835fd9f0fb0f87a92c4608d5b1db4b926a4",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "email_validator-2.3.0.dist-info/licenses/LICENSE",
+            "sha256": "672179752e109134a3fb2bdd0780b29fdb7a03974f0f586a13aead5129562d4c"
+          }
+        ]
+      },
+      {
+        "name": "fastapi",
+        "version": "0.136.1",
+        "metadata_sha256": "e2e9a1d58f484d775a3b0333e65dfc593ca39b7e1e1fd9573d2d5b18ea07beac",
+        "record_sha256": "1bb819315a700b84b651dcd0d0bea6329d9b00767f085fc930a57552b76a9ef3",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "fastapi-0.136.1.dist-info/licenses/LICENSE",
+            "sha256": "4ec89ffc81485b97fec584b2d4a961032eeffe834453894fd9c1274906cc744e"
+          }
+        ]
+      },
+      {
+        "name": "frozenlist",
+        "version": "1.8.0",
+        "metadata_sha256": "946c22dc9f7e2c76f2d698f00a4306dbe49a820e2b3f1a0e22fe5286cbec35f1",
+        "record_sha256": "8f934b7c96c7ba14179d87da9876b436b260e2b97200915756ed8ab880f807fe",
+        "native_files": [
+          {
+            "path": "frozenlist/_frozenlist.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "533163376b8ddb84f3f3a49d12ba74eda261e0b3a9f00d30f448719033f88b71"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "frozenlist-1.8.0.dist-info/licenses/LICENSE",
+            "sha256": "6fd5243e92dd7f98ec69c7ac377728e74905709ff527a5bf98d6d0263c04f5b6"
+          }
+        ]
+      },
+      {
+        "name": "greenlet",
+        "version": "3.5.5",
+        "metadata_sha256": "16de87de070796e2e1f18019f963c3ba5972bb9bfca1b856b83096bf73c61f38",
+        "record_sha256": "067c4e78ca7d2700f5369f4f300471fc9d5cb64f6e23a9a79f6d3f27f6b96d4c",
+        "native_files": [
+          {
+            "path": "greenlet/_greenlet.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "962f25455d5489cfba56b5f9ae9938ffa2ef4be1f86e7e496eed8d0aece4a2cc"
+          },
+          {
+            "path": "greenlet/tests/_test_extension.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "d866ac9629ca31687d31a95637df13ad2eb8400db52da6c729341d4be10d74f9"
+          },
+          {
+            "path": "greenlet/tests/_test_extension_cpp.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "5574792528bf90908081403d515deb6cc6a84df292cc674aafb6774587054e18"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "greenlet-3.5.5.dist-info/licenses/LICENSE",
+            "sha256": "769831d6e5dfaf2c20802faccff1fafb4c2025dd8f6253dfa47fcad59d4d0979"
+          },
+          {
+            "path": "greenlet-3.5.5.dist-info/licenses/LICENSE.PSF",
+            "sha256": "e5ff3c23c110e494cd7d736c10fd96d462457bafeca310840db6527298c7d46b"
+          }
+        ]
+      },
+      {
+        "name": "h11",
+        "version": "0.16.0",
+        "metadata_sha256": "28f326098ac09fcba79b8f180f96087c841fe2456215cb7b872a9c7d5cd19d64",
+        "record_sha256": "3779e13c17d8e21c769ed9ee8780af123cc3f8656185f5f8d3af258ff5639b3e",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "h11-0.16.0.dist-info/licenses/LICENSE.txt",
+            "sha256": "37db5bb85926db28a427a25867f10b1232003aea1be69ccb851138adb8e6f361"
+          }
+        ]
+      },
+      {
+        "name": "httpcore",
+        "version": "1.0.9",
+        "metadata_sha256": "fe2d4fda6199128978779e0cf27f3c045c531863fcdd987eacc74f3a18d41c21",
+        "record_sha256": "67cb4644d84fef1df8c5a0862c57c3380eff058a153bac7a4ba2722779982554",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "httpcore-1.0.9.dist-info/licenses/LICENSE.md",
+            "sha256": "fdcb59154c74cbaba16a11242f7740bea9f23d6feb5547917d8c5f94a80392a5"
+          }
+        ]
+      },
+      {
+        "name": "httptools",
+        "version": "0.8.0",
+        "metadata_sha256": "7b5c0231580b589e7721b111f37324276f2a585bc2d27aedd67297e0c9b4bda8",
+        "record_sha256": "ec3aaee7dba4c908829d663a4acde40782d78aecf9155e24761fa35dfe413fc8",
+        "native_files": [
+          {
+            "path": "httptools/parser/parser.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "59861e7c89a396db7a6d8a70063f74caaf2ef7b94fe977afe38f153b29aba88f"
+          },
+          {
+            "path": "httptools/parser/url_parser.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "378057f062297d508bac06c0f972175d1a731f15af6dd99ecf0e77e6d66c3b2c"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "httptools-0.8.0.dist-info/licenses/LICENSE",
+            "sha256": "f4573e7cb7676745fb5b8d36fa548aa93e391cfb6872ddacd65130c45ea6a92d"
+          },
+          {
+            "path": "httptools-0.8.0.dist-info/licenses/vendor/http-parser/LICENSE-MIT",
+            "sha256": "79e6ba8b687cb54786207342b9b6fcee0ac10218453ed9009b84d949b2233cc0"
+          },
+          {
+            "path": "httptools-0.8.0.dist-info/licenses/vendor/llhttp/LICENSE",
+            "sha256": "628168d68bb5a8a17e0bbefb3bd74e326e1edc20583d76f52f457c82c921867d"
+          }
+        ]
+      },
+      {
+        "name": "httpx",
+        "version": "0.28.1",
+        "metadata_sha256": "febb9b0f8f3e80d57c8199c304f35c4336e8581d1d18d7983c92766b82793b25",
+        "record_sha256": "dfc50fc14b53ac1e5273e996b841427e01db5e6301458a7c0eb3a44e1526ef9e",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "httpx-0.28.1.dist-info/licenses/LICENSE.md",
+            "sha256": "4ec59d544f12b5f539a3a716fd321ac58ccd8030b465221f2c880200cdf28d8d"
+          }
+        ]
+      },
+      {
+        "name": "hypothesis",
+        "version": "6.165.10",
+        "metadata_sha256": "1bc8efdaf287f0251d12f40bc89b99233075d2b987a119e78174051699860213",
+        "record_sha256": "519b56891cca527d128bd8d81427d3818fa51f3c6b1c3198439c77b4aa4b0799",
+        "native_files": [
+          {
+            "path": "hypothesis/_native.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "d907d41da946caf3729bc33b1756b015fdd6f7f7b86e5eb7b56ec290e0bcc1a6"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "hypothesis-6.165.10.dist-info/licenses/LICENSE.txt",
+            "sha256": "ac89037bac63550644dce8cf32c6765e5fab9dc1a1ce94b89f8a805f341a6750"
+          }
+        ]
+      },
+      {
+        "name": "idna",
+        "version": "3.19",
+        "metadata_sha256": "4d113161aca8582e8d28fddf3ea50f19b607209c2b3e4364379a163454680084",
+        "record_sha256": "c3dcd87ae5f9756e4c6cec8af11fe74954d8fb0913df31ab1600204878eeb7e8",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "idna-3.19.dist-info/licenses/LICENSE.md",
+            "sha256": "1a9a4f0e3d479a27240ddd59a9137a66ab4a0f9dfdc8ca6188cc0bfd85187f04"
+          }
+        ]
+      },
+      {
+        "name": "iniconfig",
+        "version": "2.3.0",
+        "metadata_sha256": "40d773f84e4e112f495bbf4f1be9cbd2d456c0aeb6ef5311f75d1bf322f2165b",
+        "record_sha256": "4b560f65489a4dc0f32d8403da676d2e6338c371fe844160934b3fe469785185",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "iniconfig-2.3.0.dist-info/licenses/LICENSE",
+            "sha256": "3409fa91f7ace557894632676656e32264fe5ef7581535725dc9a23774551bd4"
+          }
+        ]
+      },
+      {
+        "name": "jmespath",
+        "version": "1.1.0",
+        "metadata_sha256": "81181e9a312f1b87e5be7c8376c57b0e8c962ba524a25a313d43dc2e2d3984f3",
+        "record_sha256": "211f8a3f97c7d262c3f4bdb2bb8cc4313b041b92bee4fde749889a9e12656253",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "jmespath-1.1.0.dist-info/LICENSE",
+            "sha256": "6eefacfa4d71b82d08408c751470ac8d9854538da2142cb27be0287fb13d0ab9"
+          }
+        ]
+      },
+      {
+        "name": "josepy",
+        "version": "2.2.0",
+        "metadata_sha256": "84c9c6d020acba000db1b08c582b02f41e14ad31b9f7ea04f5657360063506b8",
+        "record_sha256": "dd710e8cd194fc6c898394713be1c2e32049e96d5c0053df8c67c71df20b8046",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "josepy-2.2.0.dist-info/licenses/LICENSE.txt",
+            "sha256": "2cc5de715ae5a976f086fba4930880c9e421914173fc85111bff514d4757123f"
+          }
+        ]
+      },
+      {
+        "name": "limits",
+        "version": "5.8.0",
+        "metadata_sha256": "d2b2f429fb52fc08c649b805137a48d781d271d86457d977776254a1e631b70c",
+        "record_sha256": "e658d427792c2a10f5c4fd8e9e505684af749a8a2a677ac588cdefa5263c1df0",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "limits-5.8.0.dist-info/licenses/LICENSE.txt",
+            "sha256": "4fa8bb92aec5e6020f7dc9e8f450b15391dcc26db6063ab4b87655dc495c8ec4"
+          }
+        ]
+      },
+      {
+        "name": "mako",
+        "version": "1.4.1",
+        "metadata_sha256": "1f427af53f47988519af11a1a04136154eadbda5b9607fe30a64eb653d5118a8",
+        "record_sha256": "845426b7b6e17c5ce4aae2d4b80d0a24e83d87bac168e19303fa2e49e618bd51",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "mako-1.4.1.dist-info/licenses/LICENSE",
+            "sha256": "8c1d171bc5d341ad9cd33d5e2c39b96a82c7bd49b3ae89a470c37e5822232054"
+          }
+        ]
+      },
+      {
+        "name": "markupsafe",
+        "version": "3.0.3",
+        "metadata_sha256": "12b4cc61a7fa288cf7667ee3f213786d9619db57fb33ff6f934afbcb5c12ec81",
+        "record_sha256": "3e96bcf1c73245c4ff9be34b7df22f705b615b7980b7b984fd2feba5032127b6",
+        "native_files": [
+          {
+            "path": "markupsafe/_speedups.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "f4a31de071c565959002db29bf36c6f8d35ae7929f64700adeeba46fa4f90daf"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "markupsafe-3.0.3.dist-info/licenses/LICENSE.txt",
+            "sha256": "489a8e1108509ed98a37bb983e11e0f7e1d31f0bd8f99a79c8448e7ff37d07ea"
+          }
+        ]
+      },
+      {
+        "name": "multidict",
+        "version": "6.9.1",
+        "metadata_sha256": "b52756a8e05f6cf5e429cb0133ea395f252aee4a30b748506dd354a5ad2d4af2",
+        "record_sha256": "672a67398e98f524ffbd4c2f38f9791ff36dd4291d4675804f4577e947060d69",
+        "native_files": [
+          {
+            "path": "multidict/_multidict.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "2ebc449f43657f8460a18167944e4e4e13f00b74bef41c9f2704b9261fb5e1f8"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "multidict-6.9.1.dist-info/licenses/LICENSE",
+            "sha256": "2e4be5fc6c4c72a466fcb665d726e049a6891981fe536c4f04b6366749461d23"
+          }
+        ]
+      },
+      {
+        "name": "packaging",
+        "version": "26.3",
+        "metadata_sha256": "70fdb89fc4d4a9a043bf7372b8972bcc883fddff34ab55e9cf80d73875384763",
+        "record_sha256": "1b8655965b0d83e9a067fd7f84b977bd1e117e0fb9f2874b2572781bdc9e2147",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "packaging-26.3.dist-info/licenses/LICENSE",
+            "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"
+          },
+          {
+            "path": "packaging-26.3.dist-info/licenses/LICENSE.APACHE",
+            "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+          },
+          {
+            "path": "packaging-26.3.dist-info/licenses/LICENSE.BSD",
+            "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"
+          }
+        ]
+      },
+      {
+        "name": "pluggy",
+        "version": "1.6.0",
+        "metadata_sha256": "7438c35ee25a095eb7416f84b461c2d74425c5e734ad54c3912453c65244e01c",
+        "record_sha256": "a42a63bcba12ddb7e7db19158c8d05d8fc41d51f48686b411ad3a0213fbd7721",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "pluggy-1.6.0.dist-info/licenses/LICENSE",
+            "sha256": "d6b65e6c213a5d0b577911d34d6e5949b9f59d76c238c5071a2f3fc16cfb2606"
+          }
+        ]
+      },
+      {
+        "name": "prometheus-client",
+        "version": "0.26.0",
+        "metadata_sha256": "ea4a4f111b1723da4c588baa002fe7b7886f0e8f653c4dd3d05738686ea85004",
+        "record_sha256": "280ebace139aa01e4f408c34c512a4fcc1d0c077195fe5b698e9b5fc62d15850",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "prometheus_client-0.26.0.dist-info/licenses/LICENSE",
+            "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+          },
+          {
+            "path": "prometheus_client-0.26.0.dist-info/licenses/NOTICE",
+            "sha256": "4efa1874aeaa60f365f5797e617f1ff933e15e508eaf751e9848ed4413d7a7ae"
+          }
+        ]
+      },
+      {
+        "name": "propcache",
+        "version": "0.5.2",
+        "metadata_sha256": "f534495cdd2f915af8e649783d95fddcb1a05a1ac181850f0c973c0a78f7bbae",
+        "record_sha256": "5b47b5249186957cc332c6bc948cae117846f92e3561d6a8835888d6da3ba392",
+        "native_files": [
+          {
+            "path": "propcache/_helpers_c.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "84f85de74e8900c5e8f7dc08b9f5fe513fab63e1eb21bf4acf1f5f290e744b0a"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "propcache-0.5.2.dist-info/licenses/LICENSE",
+            "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+          },
+          {
+            "path": "propcache-0.5.2.dist-info/licenses/NOTICE",
+            "sha256": "56d6ac6c8105c0a51304c21db060e361af9a8ea0af9a75c239c28b5d13693838"
+          }
+        ]
+      },
+      {
+        "name": "py-cpuinfo2",
+        "version": "10.1.1",
+        "metadata_sha256": "f269df8cd942c65b98e12bf08169a6fb0ffef5a92151928ef664870246fed73a",
+        "record_sha256": "de3142bcc413ed0c74cb79bb642afc61c9c51ab787f50d381ee6e417592766c6",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "py_cpuinfo2-10.1.1.dist-info/licenses/LICENSE",
+            "sha256": "8b5335617b870f76baf0329d7135ee97cf087f2186d2245f0cafad3a84e6fee2"
+          }
+        ]
+      },
+      {
+        "name": "pycparser",
+        "version": "3.0",
+        "metadata_sha256": "f547a60b0ab54cc2f242213d1f87960ad80df7dd5dfeb98d17a444d48bfb6b93",
+        "record_sha256": "e752c5c64ce06f508a80e0edeef0c165df849587b829cb9a7b7bb22ac43b0c7e",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "pycparser-3.0.dist-info/licenses/LICENSE",
+            "sha256": "0c846399369ea76ddd7b5c44fe6d16497415fcf015f5cbb508c24bf98b81c5b1"
+          }
+        ]
+      },
+      {
+        "name": "pydantic",
+        "version": "2.13.4",
+        "metadata_sha256": "d1e56c3412492512fb6b59a9dfc25ab7af2a8204585cd7bca000513023133394",
+        "record_sha256": "d0cbe0f34b294885175920bc8f2ece0b3ed6d9874347dc9cfb2caf4931329272",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "pydantic-2.13.4.dist-info/licenses/LICENSE",
+            "sha256": "a9e186f3ca16b5eef84318e7a701721351a00cb7b8ae3a4394b67b49e3529ef3"
+          }
+        ]
+      },
+      {
+        "name": "pydantic-core",
+        "version": "2.46.4",
+        "metadata_sha256": "135fa8b2f89473e9191c7078c2164e3ec6c8927a61c2379c2fddcc07f11f3bae",
+        "record_sha256": "3e55a95c4577dcb5dfd08cb8740db06dad7117273dd4885c090413888e606fc0",
+        "native_files": [
+          {
+            "path": "pydantic_core/_pydantic_core.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "7b3b21e8e6fc722fa6913a893d1f82968542135b0119f83c7cede35fc71c4a2f"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "pydantic_core-2.46.4.dist-info/licenses/LICENSE",
+            "sha256": "2afdd30d54b4d62b6f488a6bcc1546e84ec5061f13f4209c03d012348783795a"
+          }
+        ]
+      },
+      {
+        "name": "pygments",
+        "version": "2.21.0",
+        "metadata_sha256": "1dde075570136774c706bf0009183a793fe0ee262e4a5590cc6eff8453eedd43",
+        "record_sha256": "58ee1f3289ab7f64d2fc84a09f2b0e172f02eae085d24eaff5e4b4e3d9615888",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "pygments-2.21.0.dist-info/licenses/AUTHORS",
+            "sha256": "71a83872ad82f57be692cf827e048e2cd51d45169cfa1ea3f28706d97a872c0f"
+          },
+          {
+            "path": "pygments-2.21.0.dist-info/licenses/LICENSE",
+            "sha256": "a9d66f1d526df02e29dce73436d34e56e8632f46c275bbdffc70569e882f9f17"
+          }
+        ]
+      },
+      {
+        "name": "pyjwt",
+        "version": "2.15.1",
+        "metadata_sha256": "1ea0c9f139b8c928276b3628af165955f6f764491448a6ad8f103cdcbb382da3",
+        "record_sha256": "c38214546c80b4d215bee801e57689a2a8b1f1e6afdbbb8d57b6c43db557f17e",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "pyjwt-2.15.1.dist-info/licenses/AUTHORS.rst",
+            "sha256": "925ce43461029eedbf558ec0b7cf7fc4b045def5120ebb97937c70814071cf07"
+          },
+          {
+            "path": "pyjwt-2.15.1.dist-info/licenses/LICENSE",
+            "sha256": "797a7a20231d4c433e9f1911db1731d06b5828b98f499819a034f7c0f56f5ce5"
+          }
+        ]
+      },
+      {
+        "name": "pytest",
+        "version": "9.1.1",
+        "metadata_sha256": "c5d032518012789cabc870d46589aca3aeda36cf9fa4399ee88bda3d10438451",
+        "record_sha256": "aa244bc0390b857a608997041089641c2f17ae12981679c2093eb86f4386c360",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "pytest-9.1.1.dist-info/licenses/LICENSE",
+            "sha256": "ca836a5f9ecca3b2f350230faa20a48fb8b145653b5568d784862df864706b9b"
+          }
+        ]
+      },
+      {
+        "name": "pytest-asyncio",
+        "version": "1.4.0",
+        "metadata_sha256": "4e583f46befbdb780e30a98856ab46afb88da6e65b6c9fb94d3794746faa8516",
+        "record_sha256": "e49266b994f750ffb149f52d35c162c7626f6e422bd9317b13ae2aa6767ea2f1",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "pytest_asyncio-1.4.0.dist-info/licenses/LICENSE",
+            "sha256": "a8ad31b1c3f40dca5a84119351b8fa8ddc868edd77fad8a8ebf6d8f2d16fa4ae"
+          }
+        ]
+      },
+      {
+        "name": "pytest-benchmark",
+        "version": "5.3.0",
+        "metadata_sha256": "ad2be47975d28174aee7f2eda28f19b71517056f53d45650fb00c684f23c38b3",
+        "record_sha256": "8e7defbffc9d25f640627409933d8a84d69a0aead9f20caf2a181f25b9135c2f",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "pytest_benchmark-5.3.0.dist-info/licenses/LICENSE",
+            "sha256": "682a2108a42127a3b54318004a2618dd7325561ca977b72edad8a6bdd44f93da"
+          }
+        ]
+      },
+      {
+        "name": "pytest-cov",
+        "version": "7.1.0",
+        "metadata_sha256": "d670e42439ea5a87c46d5659cfcbf64e29aaf7da3aca69dc03eecdafe7e4894c",
+        "record_sha256": "115408c1989f669153666396affa70c5edeb9a80a88a5b51e0dce4911c986357",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "pytest_cov-7.1.0.dist-info/licenses/AUTHORS.rst",
+            "sha256": "d7390c793c73c36265497ffac90a886a235c8b50948454c9af98f1aef2a00d2a"
+          },
+          {
+            "path": "pytest_cov-7.1.0.dist-info/licenses/LICENSE",
+            "sha256": "835586ae156766a24e3c103fbc55d9af6b1a16df57ca932c97482a2737fd83d5"
+          }
+        ]
+      },
+      {
+        "name": "python-dateutil",
+        "version": "2.9.0.post0",
+        "metadata_sha256": "a9d436da322be808332f98d88325998e87cb693a678a9969feb4cfad729a6e93",
+        "record_sha256": "e15e868a50b9c4e71df17b31369843617780146ac5adb1bbfdcced0ebe501824",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "python_dateutil-2.9.0.post0.dist-info/LICENSE",
+            "sha256": "ba00f51a0d92823b5a1cde27d8b5b9d2321e67ed8da9bc163eff96d5e17e577e"
+          }
+        ]
+      },
+      {
+        "name": "python-dotenv",
+        "version": "1.2.3",
+        "metadata_sha256": "2380ea9700796b7398fd8156e22f9028afe5eebf918eb84a6bd5ebb0a8fdd3b5",
+        "record_sha256": "fa1a9c54a80757667fdd27c6af588c164fc249f07f6ed3d1a4873b4ef6d7af2f",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "python_dotenv-1.2.3.dist-info/licenses/LICENSE",
+            "sha256": "80619b7049f08c81683ad0e01f08f257a840652dd71ee83146d36658c7d2c2b9"
+          }
+        ]
+      },
+      {
+        "name": "python-multipart",
+        "version": "0.0.32",
+        "metadata_sha256": "e9d399d7dea5eddf0e4d24b5c24687a82e7e50bf2c2b30f8f8a06a64d887dd86",
+        "record_sha256": "5c11c391e44fdc2dbec56603265b8af273dae504ee2e6143d3b9d3bab2bc12df",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "python_multipart-0.0.32.dist-info/licenses/LICENSE.txt",
+            "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+          }
+        ]
+      },
+      {
+        "name": "pytz",
+        "version": "2026.3.post1",
+        "metadata_sha256": "25ef8a562377a28d8c6bd8c5c9e80d761d0e22ac4a7bed24e512f589644ed33d",
+        "record_sha256": "1a35d5890fd5dcfc29e5d4c0f22132f98cd32e51e58d95e7908ebbfae0029667",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "pytz-2026.3.post1.dist-info/LICENSE.txt",
+            "sha256": "be8b1a37ebe26c592a90f6c0eb33103a7f383ce2f4d7498c0af9a526990a07b8"
+          }
+        ]
+      },
+      {
+        "name": "pyyaml",
+        "version": "6.0.3",
+        "metadata_sha256": "03c3b415ed38d09faedc49360e930769b40c58f68585e6de00e2e4916a858d34",
+        "record_sha256": "7d0856221a182f5b25fde9bb976af79b4883090f54680d86a42b35fc8d6735a2",
+        "native_files": [
+          {
+            "path": "yaml/_yaml.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "957a099a4521c1f7669306fb6f79ca63fa4b9a0b4c463f7cac833a65a5c5c0cb"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "pyyaml-6.0.3.dist-info/licenses/LICENSE",
+            "sha256": "8d3928f9dc4490fd635707cb88eb26bd764102a7282954307d3e5167a577e8a4"
+          }
+        ]
+      },
+      {
+        "name": "rapidfuzz",
+        "version": "3.14.5",
+        "metadata_sha256": "51dae324caa606a75cc7e7c22f08e7f12d76c341a43e969fffdaab7f056e0291",
+        "record_sha256": "204108eed1370733ea092a7f51a3f3c10c1dadf1bb9ca59a638912680d91452b",
+        "native_files": [
+          {
+            "path": "rapidfuzz/_feature_detector_cpp.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "5afaf772444c17b499727a6ddb6da45a5e77cb7975751f6d7060efc0a79c0b57"
+          },
+          {
+            "path": "rapidfuzz/distance/_initialize_cpp.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "48c6795a7efe7ce90fd8ea35f20fc24ae44b526e7f5233e2e793af2f17ab89bc"
+          },
+          {
+            "path": "rapidfuzz/distance/metrics_cpp.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "6ec08b0dd15870e30d15f26de4170ed8d73852b3c0b1ae95b08b1e33d8b69467"
+          },
+          {
+            "path": "rapidfuzz/distance/metrics_cpp_avx2.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "7c9fe2c5f99f178b26f579391d062ad0f1e8b4a03aa7fc7a6d30f5083e4cbdb1"
+          },
+          {
+            "path": "rapidfuzz/fuzz_cpp.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "d392cb569314c84f09fc75656221d60ed70509f8df8a5a4e0f8026fdaf2a6228"
+          },
+          {
+            "path": "rapidfuzz/fuzz_cpp_avx2.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "98a33a3791edb65155387b5887dcafaaaafda0192d314e9cd2bc471d4526c764"
+          },
+          {
+            "path": "rapidfuzz/process_cpp_impl.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "284bd5c355baf9aa28aae7d7b6046e2e2faa79ae9ebce08f7751ddc43f590f77"
+          },
+          {
+            "path": "rapidfuzz/utils_cpp.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "86a5c21b445c5d834cbb5fe2964c65b8fbce5ec2072afff0950559fd635fcdc8"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "rapidfuzz-3.14.5.dist-info/licenses/LICENSE",
+            "sha256": "f34ccdffdff56fc417785915eedf18601d5479755df3c472b2c754c29802d683"
+          }
+        ]
+      },
+      {
+        "name": "regex",
+        "version": "2026.7.19",
+        "metadata_sha256": "fd895ec7522cd0bbab71ee4826442162f3f408a5f8d92e759f4ddf1be60dcf73",
+        "record_sha256": "e12c6bf2ed883dc5c5f624987d553f7405af4a587560454ddc7ee39359a55c5d",
+        "native_files": [
+          {
+            "path": "regex/_regex.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "9da92c474d560183d67f7c19f9e0f0cc72c5709a44d346ef2c279f3d521d0a07"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "regex-2026.7.19.dist-info/licenses/LICENSE.txt",
+            "sha256": "bff55ef4cdcc8c14ce259f8e8ab60e264418440d6335f4dc138273fbd506144d"
+          }
+        ]
+      },
+      {
+        "name": "respx",
+        "version": "0.23.1",
+        "metadata_sha256": "2dafdf292b8e1ad27f4dae27f3b4157339a87109e64fe67b15f7857a62d4f9c8",
+        "record_sha256": "6aa407cd7a614aa7d8e55d53bd7c744cc0c2774a4eed933fd68d866e5168f7e5",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "respx-0.23.1.dist-info/LICENSE.md",
+            "sha256": "741b7f3f139d58c88ecf43de1ffedb4914936e914a93a95dfa33d3673b5137bd"
+          }
+        ]
+      },
+      {
+        "name": "s3transfer",
+        "version": "0.19.2",
+        "metadata_sha256": "8730b9a4c6d5e9104a664b610d2297176eb42444b5369b37486b668dc9e27471",
+        "record_sha256": "baaade59b86817d4b3fe081514ce7afeb461ed146576902e485e1b266fcd1041",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "s3transfer-0.19.2.dist-info/LICENSE.txt",
+            "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+          },
+          {
+            "path": "s3transfer-0.19.2.dist-info/NOTICE.txt",
+            "sha256": "d8354e0fa7fb762da7bc054a8a6774a0b310dfbbc78006393ee573a0e57612b5"
+          }
+        ]
+      },
+      {
+        "name": "six",
+        "version": "1.17.0",
+        "metadata_sha256": "562042078c2752549f6d8a7c86dbc5dd708088a7be6d80672ec7b07100b72468",
+        "record_sha256": "d16e50f347969b1e1919fb0c88bac4b9c644f5305bcfcfb00f72b646dbd4065d",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "six-1.17.0.dist-info/LICENSE",
+            "sha256": "4375ba20e2b9c6c4e7cad2940a628fd90e95cc3d50ee92aae755715d8ba1fbd0"
+          }
+        ]
+      },
+      {
+        "name": "slowapi",
+        "version": "0.1.10",
+        "metadata_sha256": "346b6a289c4d98e7d552d1d7467bd4d90ed911e8931174c4182b3f14275b99cd",
+        "record_sha256": "84d56544969a48a20688be610dc7d6854fe09d8f2ed92426d35ae3c00c33b480",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "slowapi-0.1.10.dist-info/LICENSE",
+            "sha256": "29eefa286ff3007c39c0040a15abfd1dca6211abceb38f48f5d138057467b34e"
+          }
+        ]
+      },
+      {
+        "name": "sortedcontainers",
+        "version": "2.4.0",
+        "metadata_sha256": "eedf115109e215001e904da0882851beae50b03c0b0161a8b9e74b7cfd679473",
+        "record_sha256": "2e764b15bb6fc2e19a0a795409c5da3eae994032a5d9173a4dadc7ef238cab52",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "sortedcontainers-2.4.0.dist-info/LICENSE",
+            "sha256": "1db7cae7fce6452e2e608e401a0f953e0133e4c2d75db69fb8ae851d2086f5b6"
+          }
+        ]
+      },
+      {
+        "name": "sqlalchemy",
+        "version": "2.0.52",
+        "metadata_sha256": "21d72718662462c632bd5db16a74cfb31904f77bb9f080bdc49cf3f764543218",
+        "record_sha256": "24d34ab002de32089410985da5121278771c99285a2ada489309782e80b5746f",
+        "native_files": [
+          {
+            "path": "sqlalchemy/cyextension/collections.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "3b2cbf1aaea0edf05cb7c77a3b4844861cd85b304f2592f759cb6dc5c6a70651"
+          },
+          {
+            "path": "sqlalchemy/cyextension/immutabledict.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "4ffa8451c2c52d05cbf37aca877ed555057d778884f62fd8fc0838a9a31cec59"
+          },
+          {
+            "path": "sqlalchemy/cyextension/processors.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "f69a0bebc11e8004e84d92a1eb1826a15a9e4f79489de2ff94c684ed0285ec8a"
+          },
+          {
+            "path": "sqlalchemy/cyextension/resultproxy.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "97292b4ab2cddea649e45dfc73f19ec39ea0c43eb5213457a5aae1f1bc18f19e"
+          },
+          {
+            "path": "sqlalchemy/cyextension/util.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "9fa48d18a36b6be046a00663c4fe561fee4aa746a1feb0847f15c91b6add6ea4"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "sqlalchemy-2.0.52.dist-info/licenses/LICENSE",
+            "sha256": "e862bb5b904fb5513c3e14288d7a25a12eb0ecc7847a0a965d310e9a955e7cb9"
+          }
+        ]
+      },
+      {
+        "name": "starlette",
+        "version": "1.6.0",
+        "metadata_sha256": "43f6240f976044f4cf9a573506d96d895391094717c55682700c931d5cd3c5a2",
+        "record_sha256": "ce00b84cd91bcb3a3c9d05d0acb8d879ad8f28232ef1941cf82e2cb0661e4be1",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "starlette-1.6.0.dist-info/licenses/LICENSE.md",
+            "sha256": "dcb95677a02240243187e964f941847d19b17821cf99e5afae684fab328c19bf"
+          }
+        ]
+      },
+      {
+        "name": "typing-extensions",
+        "version": "4.16.0",
+        "metadata_sha256": "b05084ca1d50879865178d9fff9fabeab61bdfb1f361bfbde95421ffc8f9be46",
+        "record_sha256": "9e07fea845cac76293d927afa7157a14ecba39b318bc8af236b8de530b7656c1",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "typing_extensions-4.16.0.dist-info/licenses/LICENSE",
+            "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+          }
+        ]
+      },
+      {
+        "name": "typing-inspection",
+        "version": "0.4.4",
+        "metadata_sha256": "bad3d9e6342ef6750cf5128ec942327b8bebdce0b6e4d6f67cb15b27ae5118da",
+        "record_sha256": "83fc23669db31500d06056b13ecebe4f088f56a81c1ea86e3b68f1de3b8c7d95",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "typing_inspection-0.4.4.dist-info/licenses/LICENSE",
+            "sha256": "804b59b25f2c31bd278f9202a19ae49a3945aa2664387e2d0a128c7cacc61ec3"
+          }
+        ]
+      },
+      {
+        "name": "urllib3",
+        "version": "2.8.0",
+        "metadata_sha256": "10898c620e8007c030e07fa5622b68358a43010025dfbd78a1cb797699de2bb4",
+        "record_sha256": "1753d325c8936a612ecdc947e686ade56b21f591fbb7518330cb0f2f7619c330",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "urllib3-2.8.0.dist-info/licenses/LICENSE.txt",
+            "sha256": "130e3a64d5fdd5d096a752694634a7d9df284469de86e5732100268041e3d686"
+          }
+        ]
+      },
+      {
+        "name": "uvicorn",
+        "version": "0.52.4",
+        "metadata_sha256": "6cea83c70e4f2746374ca19af72a52406aa706ad8735b11d72fbd5fd82f7cbff",
+        "record_sha256": "d84649580241a2a070b85b8fbd72c8995dea32df8c3043da0877f42e85603b6e",
+        "native_files": [],
+        "notice_files": [
+          {
+            "path": "uvicorn-0.52.4.dist-info/licenses/LICENSE.md",
+            "sha256": "efe1acf3e62fb99c288b0ec73e5a773b7268ef4320fe757ea994214e4b63c371"
+          }
+        ]
+      },
+      {
+        "name": "uvloop",
+        "version": "0.22.1",
+        "metadata_sha256": "7106328da9670776c358802971b7dc41c0b86ed3673bf9cc4c0d5e11ff2f3583",
+        "record_sha256": "562769559d99609e53bed0deaf383980bf14b495e0c1e65f8c03a979d80308a2",
+        "native_files": [
+          {
+            "path": "uvloop/loop.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "8d67497ee731a56033f091471d500e3b0a277a641af09ca7da06794ed3e6f76f"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "uvloop-0.22.1.dist-info/licenses/LICENSE-APACHE",
+            "sha256": "377025287798f9dcd819e1f826fa5fc5e2f382528691ab0528c5cf8c8c282c27"
+          },
+          {
+            "path": "uvloop-0.22.1.dist-info/licenses/LICENSE-MIT",
+            "sha256": "6dd4c399f26de043d77a2ad7e31db4cb5bf08ea8368b0a42d6e158635cc8ab62"
+          }
+        ]
+      },
+      {
+        "name": "watchfiles",
+        "version": "1.2.0",
+        "metadata_sha256": "2c92c0bfebdf6743603f6e7c4da95a53ce4d575f00cede3aa2032a8d5ce3da17",
+        "record_sha256": "e6a224cdbd8cd3fb19e4ffdc406150e9a5b9476079357e2147b155436d2b82f3",
+        "native_files": [
+          {
+            "path": "watchfiles/_rust_notify.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "2ab9489939c76aec37f5842fb26ceafab912efe22ff2ee359f8676cf880a8f74"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "watchfiles-1.2.0.dist-info/licenses/LICENSE",
+            "sha256": "4fd78355b67ce2677ede9fb6f63a250f377bb7e22088136a5f4699adb4bc069f"
+          }
+        ]
+      },
+      {
+        "name": "websockets",
+        "version": "17.0.1",
+        "metadata_sha256": "67f6eda687dfcf4b9b8875668a6d2b62314cc4d74e9ff2e1695bac2bc0990880",
+        "record_sha256": "8fb3b3fc134b07fa5c5433ca1fc63693f62c7bbd7467174c98416723927085c2",
+        "native_files": [
+          {
+            "path": "websockets/speedups.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "dd8f00b231337f61fe1da38d1b4a2c0e6e8b9072a5c632e789d5de739ef66314"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "websockets-17.0.1.dist-info/licenses/LICENSE",
+            "sha256": "3d6a0c050d8bec52fabad502e45fb25bd02bcadbd70dea34d447b6a0ff4e6da8"
+          }
+        ]
+      },
+      {
+        "name": "wrapt",
+        "version": "2.3.0",
+        "metadata_sha256": "bed8a0620d9d2a6779427fcecabcbc642f6fa68b107ab583faa01a6dabcafaef",
+        "record_sha256": "11ddb9f3b74e23762b8d337e68a55182042f0b8d2d29fb0f0c0726ca2b672ff7",
+        "native_files": [
+          {
+            "path": "wrapt/_wrappers.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "ce29bc6ce66ce3009bead068779a665b092b2cd2cf0106c8610b2a7978246059"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "wrapt-2.3.0.dist-info/licenses/LICENSE",
+            "sha256": "d4f66854a24dda2f2a5282912aedebe6b18186b86284510a433d78fadcd88e5d"
+          }
+        ]
+      },
+      {
+        "name": "yarl",
+        "version": "1.25.1",
+        "metadata_sha256": "fd6baa258a11c4d7e7008272a69180d4d34aa04a6a5afda36ac5e55aa0aa4f41",
+        "record_sha256": "0843cf86f63630a606d063a78b8240367374749f3f8b6c2e0244f2f34903175d",
+        "native_files": [
+          {
+            "path": "yarl/_quoting_c.cpython-312-x86_64-linux-gnu.so",
+            "sha256": "deae0fb92793730e5b3924f267c03225360f0756e4cbb3971c5a048010b3245e"
+          }
+        ],
+        "notice_files": [
+          {
+            "path": "yarl-1.25.1.dist-info/licenses/LICENSE",
+            "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+          },
+          {
+            "path": "yarl-1.25.1.dist-info/licenses/NOTICE",
+            "sha256": "56d6ac6c8105c0a51304c21db060e361af9a8ea0af9a75c239c28b5d13693838"
+          }
+        ]
+      }
+    ],
+    "unchanged_packages_proven": 73,
+    "unchanged_native_files_proven": 38
+  },
+  "mcp": {
+    "locked_count": 41,
+    "lock_sha256": "de79f8bc7af6839295f4dfcb225e063fec46e841035468d17eaf84f48324833f",
+    "pins_and_RECORD_integrity_verified": true,
+    "shared_baseline_packages_verified": 27,
+    "crypto_same_actual_wheel": true,
+    "boundary": "13 MCP-only locked packages have metadata/RECORD integrity checked here, not a newly performed source/native-attribution audit. Extra local test tools are excluded. This is not a complete MCP notice closure claim."
+  },
+  "retained_rust_library_notice_mapping": {
+    "1.90.0": [
+      "bcrypt"
+    ],
+    "1.95.0": [
+      "pydantic-core",
+      "watchfiles"
+    ],
+    "1.97.1": [
+      "hypothesis"
+    ],
+    "1.98.1": [
+      "cryptography==50.0.2"
+    ]
+  },
+  "notice_superset_label": "Retained old Rust crate attribution texts include conservative build/foreign-target candidates; active crypto component versions are explicitly listed above, not inferred from directory contents.",
+  "source_delivery": {
+    "proposed_image_path": "/usr/share/ecm/sources/python/",
+    "implemented_verified_or_public": false,
+    "required_MPL_components_if_shipped": [
+      "certifi CA bundle",
+      "botocore CA bundle",
+      "hypothesis covered source"
+    ],
+    "crypto_sdist_optional_extra": "cryptography-50.0.2.tar.gz"
+  },
+  "remaining_parent_owned": [
+    "Integrate current notices/sources in final SUSE image.",
+    "Verify recipient source accessibility at proposed path.",
+    "Audit actual final amd64 and arm64 artifacts independently; no parity inferred.",
+    "CVE/advisory assessment remains another lane; this notice refresh does not certify clearance."
+  ],
+  "additional_public_download_bytes": 81629128,
+  "additional_public_download_cap_bytes": 100000000,
+  "evidence_directory": "/tmp/opencode/ecm-native-remediation-20261023/wheel-native-notices/updates/cryptography-50.0.2"
+}

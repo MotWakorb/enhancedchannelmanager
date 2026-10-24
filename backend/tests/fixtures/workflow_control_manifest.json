@@ -197,6 +197,28 @@
       "file": "build.yml",
       "path": [
         "jobs",
+        "trivy-scan-mcp-amd64",
+        "steps",
+        4,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "trivy-scan-mcp-arm64",
+        "steps",
+        4,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
         "attest-image-candidates",
         "if"
       ],

@@ -798,10 +798,20 @@ jobs:
         with:
           name: mcp-amd64-candidate
           path: /tmp
-      - run: |
+      - name: Verify bundled OpenSSL in exact MCP candidate
+        run: |
+          set -euo pipefail
+          mkdir -p mcp-native-crypto
           python scripts/candidate_image.py verify-archive /tmp/mcp-amd64.oci.tar --expected '${{ needs.build-mcp-amd64.outputs.digest }}'
+          python scripts/candidate_image.py runtime-config /tmp/mcp-amd64.oci.tar --expected '${{ needs.build-mcp-amd64.outputs.digest }}' --architecture amd64 > mcp-native-crypto/identity.json
           test "$(skopeo --version)" = "skopeo version 1.13.3"
           skopeo copy oci-archive:/tmp/mcp-amd64.oci.tar docker-archive:/tmp/trivy-mcp-amd64-scan.docker.tar
+          docker load --input /tmp/trivy-mcp-amd64-scan.docker.tar
+          image_id=$(jq -er '.ConfigDigest' mcp-native-crypto/identity.json)
+          docker image inspect "$image_id" > mcp-native-crypto/loaded-image.json
+          python scripts/candidate_image.py verify-loaded mcp-native-crypto/identity.json --inspect mcp-native-crypto/loaded-image.json
+          printf '%s\n' '${{ github.sha }}' > mcp-native-crypto/source-sha.txt
+          docker run --rm --pull never --read-only --network none --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,source=$PWD/scripts/check_bundled_openssl.py,target=/check_bundled_openssl.py,readonly" --mount "type=bind,source=$PWD/mcp-native-crypto,target=/mcp-native-crypto,readonly" --entrypoint /usr/local/bin/python "$image_id" -I -B /check_bundled_openssl.py --identity /mcp-native-crypto/identity.json --loaded-image /mcp-native-crypto/loaded-image.json --source-sha /mcp-native-crypto/source-sha.txt --expected-image-id "$image_id" --expected-source-sha '${{ github.sha }}' --architecture amd64 > mcp-native-crypto/receipt.json
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           input: /tmp/trivy-mcp-amd64-scan.docker.tar
@@ -809,6 +819,14 @@ jobs:
           exit-code: '1'
           vuln-type: os,library
           severity: 'CRITICAL,HIGH'
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: mcp-native-crypto-amd64-${{ github.sha }}
+          path: mcp-native-crypto/
+          retention-days: 14
+          if-no-files-found: error
 
   trivy-scan-mcp-arm64:
     name: MCP Container Security Scan (Trivy ARM64)
@@ -820,10 +838,20 @@ jobs:
         with:
           name: mcp-arm64-candidate
           path: /tmp
-      - run: |
+      - name: Verify bundled OpenSSL in exact MCP candidate
+        run: |
+          set -euo pipefail
+          mkdir -p mcp-native-crypto
           python scripts/candidate_image.py verify-archive /tmp/mcp-arm64.oci.tar --expected '${{ needs.build-mcp-arm64.outputs.digest }}'
+          python scripts/candidate_image.py runtime-config /tmp/mcp-arm64.oci.tar --expected '${{ needs.build-mcp-arm64.outputs.digest }}' --architecture arm64 > mcp-native-crypto/identity.json
           test "$(skopeo --version)" = "skopeo version 1.13.3"
           skopeo copy oci-archive:/tmp/mcp-arm64.oci.tar docker-archive:/tmp/trivy-mcp-arm64-scan.docker.tar
+          docker load --input /tmp/trivy-mcp-arm64-scan.docker.tar
+          image_id=$(jq -er '.ConfigDigest' mcp-native-crypto/identity.json)
+          docker image inspect "$image_id" > mcp-native-crypto/loaded-image.json
+          python scripts/candidate_image.py verify-loaded mcp-native-crypto/identity.json --inspect mcp-native-crypto/loaded-image.json
+          printf '%s\n' '${{ github.sha }}' > mcp-native-crypto/source-sha.txt
+          docker run --rm --pull never --read-only --network none --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,source=$PWD/scripts/check_bundled_openssl.py,target=/check_bundled_openssl.py,readonly" --mount "type=bind,source=$PWD/mcp-native-crypto,target=/mcp-native-crypto,readonly" --entrypoint /usr/local/bin/python "$image_id" -I -B /check_bundled_openssl.py --identity /mcp-native-crypto/identity.json --loaded-image /mcp-native-crypto/loaded-image.json --source-sha /mcp-native-crypto/source-sha.txt --expected-image-id "$image_id" --expected-source-sha '${{ github.sha }}' --architecture arm64 > mcp-native-crypto/receipt.json
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           input: /tmp/trivy-mcp-arm64-scan.docker.tar
@@ -831,6 +859,14 @@ jobs:
           exit-code: '1'
           vuln-type: os,library
           severity: 'CRITICAL,HIGH'
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: mcp-native-crypto-arm64-${{ github.sha }}
+          path: mcp-native-crypto/
+          retention-days: 14
+          if-no-files-found: error
 
   attest-image-candidates:
     name: Attest Verified Image Candidates

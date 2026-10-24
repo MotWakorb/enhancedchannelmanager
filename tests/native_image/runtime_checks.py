@@ -6,10 +6,13 @@ host/application dependencies are installed. Version evidence is NOT CVE proof.
 """
 
 import asyncio
+import base64
+import binascii
 import functools
 import hashlib
 import http.server
 import importlib
+import importlib.util
 import json
 import os
 import platform
@@ -36,6 +39,72 @@ _RELAY_URL_RE = re.compile(
     r"http://127\.0\.0\.1:[0-9]+/resource/[0-9a-f]{32}(?P<suffix>\.[a-z0-9]+)?"
 )
 _HLS_KEY_URI_RE = re.compile(r'#EXT-X-KEY:[^\n]*URI="([^"]+)"')
+_FRAME_MD5_RE = re.compile(r"[0-9a-f]{32}")
+# Exact owned bytes and baseline metadata, not arbitrary media supplied by JSON.
+_RARE_INPUTS = {
+    "synthetic.c2": (
+        63,
+        "1e6481a7721df66f01c4f6655161e7beb7e76107cb7fdcf3795df743445c4604",
+        {
+            "format_name": "codec2",
+            "codec_type": "audio",
+            "codec_name": "codec2",
+            "sample_rate": "8000",
+            "channels": 1,
+        },
+    ),
+    "synthetic.jxl": (
+        64,
+        "6fe9765c1f0614056c13dd236536e5958099b7937b9eed4d2309962fc3c502bd",
+        {
+            "format_name": "jpegxl_pipe",
+            "codec_type": "video",
+            "codec_name": "jpegxl",
+            "width": 16,
+            "height": 16,
+        },
+    ),
+    "synthetic.svg": (
+        115,
+        "9d6be6e2353498d2723c64a50795603c6dd7d4ff96c637b2987053281207b938",
+        {
+            "format_name": "svg_pipe",
+            "codec_type": "video",
+            "codec_name": "svg",
+            "width": 16,
+            "height": 16,
+        },
+    ),
+    "synthetic.vgm": (
+        131,
+        "3ca313b3924a1ea89c9aa0f859884b9a0934b57c23b217467955d6055ab7c294",
+        {
+            "format_name": "libgme",
+            "codec_type": "audio",
+            "codec_name": "pcm_s16le",
+            "sample_rate": "44100",
+            "channels": 2,
+        },
+    ),
+    "synthetic.mod": (
+        2108,
+        "b62b7bb8fcba672d2689a9fb2c6b22c8be43e5c4b10d845efe89a69f6c1f904c",
+        {
+            "format_name": "libopenmpt",
+            "codec_type": "audio",
+            "codec_name": "pcm_f32le",
+            "sample_rate": "48000",
+            "channels": 2,
+        },
+    ),
+}
+_RARE_PROVENANCE = {
+    "image": "ghcr.io/motwakorb/enhancedchannelmanager@sha256:8ac2b20f9f85416d088d3adf8479a7c3b6c55236b282dad0a91a63b2bb4319f9",
+    "commit": "bdef595bafc40128e7df49b8dcb55dde98e9aee2",
+    "generator": "compatibility-fixtures/generate_and_check.py",
+    "generator_sha256": "269b1801fff716faf591ecc10f6794a9b1a5af158a33230284320114b4818ff0",
+    "owned_synthetic": True,
+}
 _DECODER_RE = re.compile(r"^\s*[VAS][A-Z.]{5}\s+([a-z0-9_-]+)\s+", re.MULTILINE)
 _DEMUXER_RE = re.compile(r"^\s*D\s+([a-z0-9_,]+)\s+", re.MULTILINE)
 _PROTOCOL_RE = re.compile(r"[a-z0-9_]+")
@@ -266,6 +335,157 @@ def software_input_format_support():
             for name in ("decoders", "demuxers", "protocols")
         }
     )
+
+
+def load_rare_inputs(fixture_path=None):
+    """Validate the five recorded fixtures before creating any decoder input."""
+    path = (
+        Path(fixture_path)
+        if fixture_path is not None
+        else Path(__file__).with_name("rare_inputs.json")
+    )
+    try:
+        assert path.stat().st_size <= 8192, "rare fixture manifest exceeds its bound"
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise AssertionError("rare fixture manifest unavailable or invalid") from exc
+    assert isinstance(document, dict) and set(document) == {
+        "schema",
+        "provenance",
+        "fixtures",
+    }
+    assert type(document["schema"]) is int and document["schema"] == 1
+    assert (
+        document["provenance"] == _RARE_PROVENANCE
+        and document["provenance"]["owned_synthetic"] is True
+    )
+    fixtures = document["fixtures"]
+    assert isinstance(fixtures, dict) and set(fixtures) == set(_RARE_INPUTS), (
+        "rare fixture names must match the five owned inputs"
+    )
+    validated = {}
+    for name, (size, digest, expected) in _RARE_INPUTS.items():
+        entry = fixtures[name]
+        assert isinstance(entry, dict) and set(entry) == {
+            "base64",
+            "sha256",
+            "expected",
+        }, name
+        assert entry["sha256"] == digest, f"{name}: unrecognized fixture hash"
+        assert json.dumps(entry["expected"], sort_keys=True) == json.dumps(
+            expected, sort_keys=True
+        ), f"{name}: unexpected fixture metadata contract"
+        encoded = entry["base64"]
+        assert isinstance(encoded, str) and len(encoded) == 4 * ((size + 2) // 3), name
+        try:
+            data = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise AssertionError(f"{name}: invalid base64") from exc
+        assert len(data) == size and hashlib.sha256(data).hexdigest() == digest, (
+            f"{name}: fixture integrity mismatch"
+        )
+        validated[name] = {
+            "data": data,
+            "expected": entry["expected"],
+            "sha256": digest,
+        }
+    return validated
+
+
+def _rare_decoded_frames(output, expected, name):
+    headers = {}
+    rows = []
+    for line in output.splitlines():
+        if line.startswith("#"):
+            if ":" in line:
+                key, value = line[1:].split(":", 1)
+                headers[key.strip()] = value.strip()
+        elif line.strip():
+            fields = [field.strip() for field in line.split(",")]
+            assert len(fields) == 6 and fields[0] == "0", (
+                f"{name}: invalid decoded frame"
+            )
+            assert all(field.removeprefix("-").isdigit() for field in fields[1:5]), name
+            assert (
+                int(fields[3]) > 0
+                and int(fields[4]) > 0
+                and _FRAME_MD5_RE.fullmatch(fields[5])
+            ), f"{name}: empty or invalid decoded frame"
+            rows.append(int(fields[4]))
+    assert rows, f"{name}: no decoded frames"
+    assert headers.get("media_type 0") == expected["codec_type"], (
+        f"{name}: wrong decoded media kind"
+    )
+    if expected["codec_type"] == "video":
+        assert headers.get("dimensions 0") == "16x16", name
+    else:
+        assert headers.get("sample_rate 0") == expected["sample_rate"], name
+        assert headers.get("channel_layout_name 0") == (
+            "mono" if expected["channels"] == 1 else "stereo"
+        ), name
+    return len(rows), sum(rows)
+
+
+def synthetic_rare_input_decode(fixture_path=None):
+    """Probe and decode actual owned inputs; never compare PCM across versions."""
+    fixtures = load_rare_inputs(fixture_path)
+    results = {}
+    with tempfile.TemporaryDirectory(prefix="ecm-rare-inputs-") as temporary:
+        for name, fixture in fixtures.items():
+            path = Path(temporary) / name
+            path.write_bytes(fixture["data"])
+            metadata = json.loads(
+                command(
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_streams",
+                    "-show_format",
+                    "-of",
+                    "json",
+                    str(path),
+                )
+            )
+            expected = fixture["expected"]
+            assert isinstance(metadata, dict) and isinstance(
+                metadata.get("format"), dict
+            ), name
+            assert metadata["format"].get("format_name") == expected["format_name"], (
+                f"{name}: wrong probed format"
+            )
+            streams = metadata.get("streams")
+            assert (
+                isinstance(streams, list)
+                and len(streams) == 1
+                and isinstance(streams[0], dict)
+            ), name
+            for key, value in expected.items():
+                if key != "format_name":
+                    actual = streams[0].get(key)
+                    assert type(actual) is type(value) and actual == value, (
+                        f"{name}: wrong probed {key}"
+                    )
+            output = command(
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(path),
+                "-t",
+                "0.2",
+                "-f",
+                "framemd5",
+                "-",
+            )
+            frames, decoded_bytes = _rare_decoded_frames(output, expected, name)
+            results[name] = {
+                **expected,
+                "fixture_sha256": fixture["sha256"],
+                "decoded_frames": frames,
+                "decoded_bytes": decoded_bytes,
+            }
+    return {"synthetic_rare_input_decode": results}
 
 
 def assert_prober_argv(args, timeout):
@@ -704,11 +924,24 @@ def python_imports():
 
 def python_operations():
     import bcrypt
+    import cryptography
     import uvloop
+    from cryptography.hazmat.backends.openssl.backend import backend
+    from cryptography.hazmat.bindings import _rust
     from greenlet import greenlet
     from pydantic_core import SchemaValidator
     from rapidfuzz.fuzz import ratio
 
+    # Check the reviewed wheel's static copy, not ssl's separate system library.
+    # Other OpenSSL branches require their own artifact/advisory review.
+    bundled_openssl = backend.openssl_version_text()
+    match = re.fullmatch(
+        r"OpenSSL 4\.0\.(\d+) [0-9]{1,2} [A-Z][a-z]{2} [0-9]{4}",
+        bundled_openssl,
+    )
+    assert match is not None and int(match[1]) >= 3, (
+        f"unreviewed or vulnerable bundled OpenSSL: {bundled_openssl}"
+    )
     assert ratio("synthetic channel", "synthetic channel") == 100
     assert bcrypt.checkpw(
         b"synthetic-only", bcrypt.hashpw(b"synthetic-only", bcrypt.gensalt(rounds=4))
@@ -720,6 +953,15 @@ def python_operations():
         assert loop.run_until_complete(asyncio.sleep(0, result=42)) == 42
     finally:
         loop.close()
+    return {
+        "cryptography_openssl": {
+            "package_version": cryptography.__version__,
+            "loaded_version": bundled_openssl,
+            "extension_sha256": hashlib.sha256(
+                Path(_rust.__file__).read_bytes()
+            ).hexdigest(),
+        }
+    }
 
 
 def sqlite_checks(directory):
@@ -778,7 +1020,11 @@ def getent_checks():
     assert user[0] == group[0] == "appuser"
     assert int(user[2]) > 0 and int(user[3]) == int(group[2]) > 0
     version = command("getent", "--version").splitlines()[0]
-    assert "glibc" in version.lower(), version
+    assert re.fullmatch(
+        r"getent \((?:GNU libc|Debian GLIBC [0-9][^)]*|glibc-[0-9][^)]*)\) "
+        r"[0-9]+\.[0-9]+(?:\.[0-9]+)?",
+        version,
+    ), version
     return {"getent": version}
 
 
@@ -931,6 +1177,7 @@ def main():
         check("getent_identity_tools", getent_checks)
         check("native_versions_readers_licenses", native_metadata)
         check("software_input_format_support", software_input_format_support)
+        check("synthetic_rare_input_decode", synthetic_rare_input_decode)
         source = directory / "source.ts"
         check(
             "generated_h264_aac_mpegts",
@@ -1103,6 +1350,17 @@ def main():
                 ), result.stderr
 
             check("https_untrusted_certificate_refused", untrusted_tls)
+        # -I omits the mounted script directory from sys.path. Import only this
+        # read-only sibling, not application or delivered source-code helpers.
+        spec = importlib.util.spec_from_file_location(
+            "native_source_checks", Path(__file__).with_name("source_checks.py")
+        )
+        source_checks = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(source_checks)
+        check(
+            "native_source_and_artifact_integrity",
+            source_checks.native_source_and_artifact_integrity,
+        )
     expected = json.loads(Path(__file__).with_name("checks.json").read_text())
     assert checks == [name for name in expected if name not in failures], (
         "runtime check contract drifted"

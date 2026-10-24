@@ -9,6 +9,7 @@
   "getent_identity_tools",
   "native_versions_readers_licenses",
   "software_input_format_support",
+  "synthetic_rare_input_decode",
   "generated_h264_aac_mpegts",
   "http_probe",
   "aes_encrypted_hls_probe",
@@ -24,5 +25,6 @@
   "aes_hls_backend_relay_probe",
   "aes_hls_backend_relay_previews",
   "verified_https_probe",
-  "https_untrusted_certificate_refused"
+  "https_untrusted_certificate_refused",
+  "native_source_and_artifact_integrity"
 ]

@@ -1,9 +1,10 @@
-# ADR-015: Use a shared Wolfi/glibc runtime for native security fixes
+# ADR-015: Source-closed native runtime for security fixes
 
-- **Status:** Rejected for publication; replacement prototype in progress
+- **Status:** Source-closed replacement implemented; final publication gates pending
 - **Date:** 2026-10-23
 - **Bead:** `enhancedchannelmanager-x1xne`
-- **Scope:** ECM production image; MCP remains unchanged
+- **Scope:** ECM native runtime; both services receive the bundled-OpenSSL lock
+  repair. MCP's image recipe remains unchanged.
 
 ## Context
 
@@ -38,10 +39,35 @@ image scan or compatibility result. Stock Fedora/RPM Fusion and
 stock openSUSE/Packman were rejected; neither closes the combined security and
 format contract. A custom build is not yet an accepted production replacement.
 
-The branch's Wolfi Dockerfile and scan validator remain **quarantined prototype
-code**, not a deployable remediation. Do not open a binary-building PR or run its
-image-distribution workflow before replacing that graph and delivering matching
-sources/notices. A source-only branch push does not approve binary distribution.
+The source-built amd64 native prototype now passes its eight native checks and
+the five original rare-input fixtures. Its supported Tumbleweed Trivy report
+inventories 212 OS packages with zero High/Critical, retaining one UNKNOWN Go
+finding. Actual base source correspondence has separately been checked for all
+89 source origins on **each** architecture; ARM source RPMs are not assumed equal
+to same-named x86 files. These do not establish final-runtime source closure or
+native ARM execution. The application integration/source-delivery work remains
+in progress.
+
+The wheel-native review also found a separate statically bundled OpenSSL 4.0.1
+copy. Both service locks now select cryptography 50.0.2/OpenSSL 4.0.3, with actual
+loaded-library and crypto-operation regressions passing locally. This is a
+security fix, not an incidental package-currency upgrade; replacing system
+OpenSSL would not repair that copy. Updated notices and final artifact audits
+must follow the new wheel identity.
+
+The branch now uses the seven-stage SUSE source-build/source-delivery recipe and
+SUSE/RPM scan contract. The original Wolfi graph remains rejected. Matching
+sources and final artifact verification are publication prerequisites; a
+source-only branch push does not approve binary distribution.
+
+The complete amd64 application experiment passed 27 runtime checks and actual
+default/custom UID/GID restart/recreation persistence. Its scan inventories 212
+RPM/key entries, 74 Python packages and four Go components with zero High/Critical;
+one Medium and one UNKNOWN remain recorded. A separate collector authenticated
+all 156 exact SRPMs for its 206 non-key RPM rows (966,679,281 bytes). These are
+experiment/source receipts, not final patched-recipe or arm64 execution proof.
+Expected public Python-wheel artifacts and notices are audited separately for
+both architectures; final-image selection must match those indexes.
 
 ### Original prototype decision (not publication approval)
 
