@@ -524,6 +524,7 @@ class StreamProber:
         self._probe_cancelled = False  # Controls cancellation of in-progress probe
         self._probe_paused = False  # Controls pausing of in-progress probe
         self._probing_in_progress = False
+        self._probe_guard_token: Optional[object] = None  # Owner of a try_acquire_probe_guard claim
         self._bulk_probe_tasks: set[asyncio.Task] = set()
         # Progress tracking for probe all streams
         self._probe_progress_total = 0
@@ -1052,6 +1053,43 @@ class StreamProber:
             task.cancel()
         logger.info("[STREAM-PROBE] StreamProber stopped")
 
+    def try_acquire_probe_guard(self) -> Optional[object]:
+        """Claim the shared probing guard for a task that opens provider connections.
+
+        Returns an owner token, or None when another probe or scan already
+        holds the guard. The caller passes the token to ``release_probe_guard``
+        in ``finally``. While held, the guard is visible to ``cancel_probe``,
+        ``pause_probe`` and ``force_reset_probe_state``, so holders stop when
+        ``probe_guard_cancelled`` returns True and wait while ``_probe_paused``
+        is set.
+        """
+        if self._probing_in_progress:
+            return None
+        self._probing_in_progress = True
+        self._probe_cancelled = False
+        self._probe_paused = False
+        self._probe_guard_token = object()
+        return self._probe_guard_token
+
+    def release_probe_guard(self, token: object) -> None:
+        """Release the guard if ``token`` still owns it.
+
+        ``force_reset_probe_state`` revokes the current token, so a stale
+        holder finishing late cannot release a later holder's guard.
+        """
+        if token is not None and token is self._probe_guard_token:
+            self._probe_guard_token = None
+            self._probing_in_progress = False
+
+    def probe_guard_cancelled(self, token: object) -> bool:
+        """True when the holder of ``token`` must stop.
+
+        That is when a cancel is pending, or when ``token`` no longer owns the
+        guard because ``force_reset_probe_state`` revoked it; a later acquire
+        clears ``_probe_cancelled`` but cannot make a revoked token current.
+        """
+        return self._probe_cancelled or token is not self._probe_guard_token
+
     def cancel_probe(self) -> dict:
         """Cancel an in-progress probe operation.
 
@@ -1109,6 +1147,7 @@ class StreamProber:
         logger.warning("[STREAM-PROBE] Force resetting probe state (was_in_progress=%s)", was_in_progress)
 
         self._probing_in_progress = False
+        self._probe_guard_token = None  # A stale holder's release becomes a no-op
         self._probe_cancelled = True  # Signal any running probe to stop
         self._probe_paused = False  # Reset paused state
         self._probe_progress_status = "idle"
@@ -2223,6 +2262,48 @@ class StreamProber:
             # Return empty dict on failure - allows probes to proceed (fail-open)
             return {}
 
+    async def _load_m3u_account_profiles(self) -> tuple[dict, dict]:
+        """Rebuild the profile maps that connection-aware probing reads.
+
+        Sets ``_profile_to_account_map``, ``_account_profiles`` and
+        ``_profile_max_streams`` from Dispatcharr's M3U accounts.
+
+        Returns:
+            ``(m3u_accounts_map, m3u_max_streams)``: account id -> name and
+            account id -> account-level max_streams. Both are empty, as are the
+            profile maps, when the accounts cannot be fetched.
+        """
+        logger.info("[STREAM-PROBE] Fetching M3U accounts...")
+        m3u_accounts_map = {}  # id -> name
+        m3u_max_streams = {}   # id -> max_streams
+        self._profile_to_account_map = {}  # profile_id -> account_id
+        self._account_profiles = {}  # account_id -> [sorted list of active profile dicts]
+        self._profile_max_streams = {}  # profile_id -> max_streams
+        try:
+            m3u_accounts = await self.client.get_m3u_accounts()
+            for account in m3u_accounts:
+                account_id = account["id"]
+                m3u_accounts_map[account_id] = account.get("name", f"M3U {account_id}")
+                # Build profile-to-account map and profile lists
+                account_profiles = []
+                for profile in account.get("profiles", []):
+                    self._profile_to_account_map[profile["id"]] = account_id
+                    self._profile_max_streams[profile["id"]] = profile.get("max_streams", 0)
+                    if profile.get("is_active", True):
+                        account_profiles.append(profile)
+                # Sort profiles: default first, then by ID
+                account_profiles.sort(key=lambda p: (not p.get("is_default", False), p["id"]))
+                self._account_profiles[account_id] = account_profiles
+                # Use the account-level max_streams as the cap
+                m3u_max_streams[account_id] = account.get("max_streams", 0)
+            logger.info("[STREAM-PROBE] Found %s M3U accounts, %s profiles mapped, "
+                       "%s active profiles",
+                       len(m3u_accounts_map), len(self._profile_to_account_map),
+                       sum(len(v) for v in self._account_profiles.values()))
+        except Exception as e:
+            logger.warning("[STREAM-PROBE] Failed to fetch M3U accounts: %s", e)
+        return m3u_accounts_map, m3u_max_streams
+
     async def _get_profile_active_connections(self) -> dict[int, int]:
         """
         Fetch current active connection counts per profile.
@@ -2932,35 +3013,7 @@ class StreamProber:
                 }
 
             # Fetch M3U accounts to map account IDs to names and max_streams
-            logger.info("[STREAM-PROBE] Fetching M3U accounts...")
-            m3u_accounts_map = {}  # id -> name
-            m3u_max_streams = {}   # id -> max_streams
-            self._profile_to_account_map = {}  # profile_id -> account_id
-            self._account_profiles = {}  # account_id -> [sorted list of active profile dicts]
-            self._profile_max_streams = {}  # profile_id -> max_streams
-            try:
-                m3u_accounts = await self.client.get_m3u_accounts()
-                for account in m3u_accounts:
-                    account_id = account["id"]
-                    m3u_accounts_map[account_id] = account.get("name", f"M3U {account_id}")
-                    # Build profile-to-account map and profile lists
-                    account_profiles = []
-                    for profile in account.get("profiles", []):
-                        self._profile_to_account_map[profile["id"]] = account_id
-                        self._profile_max_streams[profile["id"]] = profile.get("max_streams", 0)
-                        if profile.get("is_active", True):
-                            account_profiles.append(profile)
-                    # Sort profiles: default first, then by ID
-                    account_profiles.sort(key=lambda p: (not p.get("is_default", False), p["id"]))
-                    self._account_profiles[account_id] = account_profiles
-                    # Use the account-level max_streams as the cap
-                    m3u_max_streams[account_id] = account.get("max_streams", 0)
-                logger.info("[STREAM-PROBE] Found %s M3U accounts, %s profiles mapped, "
-                           "%s active profiles",
-                           len(m3u_accounts_map), len(self._profile_to_account_map),
-                           sum(len(v) for v in self._account_profiles.values()))
-            except Exception as e:
-                logger.warning("[STREAM-PROBE] Failed to fetch M3U accounts: %s", e)
+            m3u_accounts_map, m3u_max_streams = await self._load_m3u_account_profiles()
 
             # Fetch all streams
             logger.info("[STREAM-PROBE] Fetching stream details...")
