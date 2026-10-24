@@ -1,5 +1,23 @@
 # Native image triage — 2026-10-23
 
+## Remediation implementation
+
+[ADR-015](../adr/ADR-015-wolfi-native-runtime.md) records the native-remediation
+experiments and their publication boundary. **The Wolfi prototype is rejected for
+publication:** its zero High/Critical result does not repair the missing exact
+source/patch correspondence or its software-input losses. No format waiver was
+approved. A source-built FFmpeg 8.1.3/openSUSE replacement is being tested; it is
+not yet an accepted production image.
+
+The three full-backend integration regressions have targeted green evidence
+(355 tests), and the runtime gate now requires 26 checks including actual
+production probing/cancellation and software-input inventory. Its 80 self-tests
+pass, but the earlier 22-check Wolfi image result does not satisfy this expanded
+gate. Final-source full tests, native execution on both architectures, complete
+source/notices, unsuppressed scans and exact-SHA publication remain required.
+The historical Debian inventory below is preserved, not reclassified as fixed or
+suppressed.
+
 ## Decision and evidence boundary
 
 **Production promotion remains blocked by unresolved applicable Critical/High

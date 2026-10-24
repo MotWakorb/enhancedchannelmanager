@@ -89,6 +89,53 @@ NODE_DIGEST = "a" * 64
 PYTHON_DIGEST = "b" * 64
 UV_DIGEST = "c" * 64
 ALPINE_DIGEST = "d" * 64
+WOLFI_IMAGE = (
+    "cgr.dev/chainguard/wolfi-base@sha256:"
+    "f15fea2f49cb14dceaea491fcbde0d35e0c190126a744ac05a9838440d47d994"
+)
+WOLFI_RUNTIME_RUN = (
+    "apk upgrade --no-cache && apk add --no-cache python-3.12 "
+    "'ffmpeg-9.0>=9.0.2-r5' 'libxml2-16>=2.15.4-r1' "
+    "gosu shadow coreutils bash tzdata ca-certificates-bundle posix-libc-utils"
+)
+WOLFI_HEALTHCHECK = (
+    "HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 "
+    'CMD /opt/venv/bin/python -c "import urllib.request, os; '
+    "port = os.environ.get('ECM_PORT', '6100'); "
+    "urllib.request.urlopen(f'http://localhost:{port}/api/health')\" || exit 1"
+)
+WOLFI_DOCKERFILE = (
+    DOCKERFILE.format(node=NODE_DIGEST, python=PYTHON_DIGEST, uv=UV_DIGEST)
+    .replace(
+        f"FROM python:3.12-slim@sha256:{PYTHON_DIGEST} AS python-builder",
+        f"FROM {WOLFI_IMAGE} AS runtime-base\nRUN {WOLFI_RUNTIME_RUN}\n\n"
+        "FROM runtime-base AS python-builder",
+    )
+    .replace(
+        f"COPY --from=ghcr.io/astral-sh/uv:latest@sha256:{UV_DIGEST} /uv /usr/local/bin/uv",
+        f"COPY --from=ghcr.io/astral-sh/uv:latest@sha256:{UV_DIGEST} /uv /usr/local/bin/uv\n"
+        "COPY backend/requirements.txt /tmp/requirements.txt\n"
+        "RUN uv venv --python /usr/bin/python3.12 /opt/venv "
+        "&& uv pip install --python /opt/venv/bin/python --no-cache -r /tmp/requirements.txt",
+    )
+    .replace(f"FROM python:3.12-slim@sha256:{PYTHON_DIGEST}", "FROM runtime-base")
+    .replace(
+        "apt-get update && apt-get install -y --no-install-recommends "
+        "build-essential ca-certificates pkg-config \\\n    && rm -rf /var/lib/apt/lists/* \\\n    && python ",
+        "apk add --no-cache build-base pkgconf gawk && python3.12 ",
+    )
+    .replace(
+        "FROM runtime-base\n",
+        "FROM runtime-base\nARG GIT_COMMIT=unknown\nARG ECM_VERSION=unknown\n"
+        "ARG RELEASE_CHANNEL=latest\nENV GIT_COMMIT=$GIT_COMMIT\n"
+        "ENV ECM_VERSION=$ECM_VERSION\nENV RELEASE_CHANNEL=$RELEASE_CHANNEL\n",
+    )
+) + (
+    "ENV PUID=1000\nENV PGID=1000\nENV CONFIG_DIR=/config\n"
+    "ENV ECM_PORT=6100\nENV ECM_HTTPS_PORT=6143\nEXPOSE 6100 6143\n"
+    f"{WOLFI_HEALTHCHECK}\n"
+    'ENTRYPOINT ["/app/entrypoint.sh"]\n'
+)
 BUILDKIT_INSTRUCTION_WHITESPACE = (" ", "\t", "\v", "\f", "\r")
 BUILDKIT_INSTRUCTION_WHITESPACE_IDS = (
     "space",
@@ -616,6 +663,157 @@ def test_final_resdet_cannot_be_replaced_after_fixed_copy(sbom, tree):
     _write(dockerfile, dockerfile.read_text(encoding="utf-8") + "COPY replacement /usr/local/bin/resdet\n")
     with pytest.raises(sbom.SbomError, match="final resdet artifacts"):
         sbom.render(tree, "9.9.9", CREATED)
+
+
+def test_reviewed_wolfi_common_base_records_one_runtime_image_and_same_native_graph(sbom, tree):
+    _write(tree / "Dockerfile", WOLFI_DOCKERFILE)
+    rendered = sbom.render(tree, "9.9.9", CREATED)
+    document = json.loads(rendered["ecm.spdx.json"])
+    wolfi = [p for p in document["packages"] if p["name"] == "cgr.dev/chainguard/wolfi-base"]
+    assert len(wolfi) == 1
+    assert wolfi[0]["comment"].startswith("Final base image")
+    assert not any(p["name"] in {"runtime-base", "resdet-builder"} for p in document["packages"])
+    assert {p["name"] for p in document["packages"] if "native-" in p["SPDXID"]} == {
+        "resdet", "KISS FFT",
+    }
+    directory = tree / "sbom" / "v9.9.9"
+    sbom.generate(tree, directory, "9.9.9", CREATED)
+    assert sbom.verify(tree, directory, "9.9.9") == []
+    assert sbom.audit(directory) == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (WOLFI_IMAGE, WOLFI_IMAGE.split("@")[0]),
+        (WOLFI_IMAGE, WOLFI_IMAGE[:-1] + "0"),
+        ("AS runtime-base", "AS Runtime-Base"),
+        ("FROM runtime-base AS resdet-builder", "FROM python-builder AS resdet-builder"),
+        ("FROM runtime-base\n", "FROM python-builder\n"),
+        ("FROM runtime-base AS python-builder", "FROM resdet-builder AS python-builder"),
+        ("AS python-builder", "AS runtime-base"),
+        ("RUN apk upgrade", "ENV CFLAGS=-O0\nRUN apk upgrade"),
+        ("RUN apk upgrade", 'SHELL ["/bin/true"]\nRUN apk upgrade'),
+        ("RUN apk upgrade", "ARG PATH=/tmp\nRUN apk upgrade"),
+        ("apk upgrade --no-cache", "true || apk upgrade --no-cache"),
+        ("'ffmpeg-9.0>=9.0.2-r5'", "ffmpeg-9.0"),
+        ("'libxml2-16>=2.15.4-r1'", "libxml2-16"),
+        ("apk add --no-cache build-base", "apk add --simulate --no-cache build-base"),
+        ("&& python3.12 /tmp/build_resdet.py", "&& python /tmp/build_resdet.py"),
+        ("COPY scripts/generate_sbom.py", "ENV CC=false\nCOPY scripts/generate_sbom.py"),
+        ("uv venv --python /usr/bin/python3.12", "uv venv"),
+        ("COPY backend/requirements.txt", "ENV PYTHONPATH=/tmp\nCOPY backend/requirements.txt"),
+        ("RUN mkdir /config", 'SHELL ["/bin/true"]\nRUN mkdir /config'),
+        ("RUN mkdir /config", "ENV LD_PRELOAD=/app/fake.so\nRUN mkdir /config"),
+        ("RUN mkdir /config", "ONBUILD RUN false\nRUN mkdir /config"),
+        ("ARG GIT_COMMIT=unknown", "ARG PATH=/tmp"),
+        ("ENV GIT_COMMIT=$GIT_COMMIT", "ENV GIT_COMMIT=$GIT_COMMIT LD_PRELOAD=/app/fake.so"),
+    ],
+)
+def test_wolfi_native_contract_rejects_unreviewed_inheritance_and_recipes(sbom, tree, old, new):
+    assert old in WOLFI_DOCKERFILE
+    _write(tree / "Dockerfile", WOLFI_DOCKERFILE.replace(old, new, 1))
+    with pytest.raises(sbom.SbomError):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+@pytest.mark.parametrize("extra", [
+    "COPY replacement /usr/local/bin/resdet\n",
+    "ADD replacement /usr/share/doc/resdet/\n",
+    "RUN cp /app/fake /usr/local/bin/resdet\n",
+    "ENV LD_PRELOAD=/app/fake.so\n",
+    'SHELL ["/bin/true"]\n',
+])
+def test_wolfi_final_artifacts_remain_immutable(sbom, tree, extra):
+    _write(tree / "Dockerfile", WOLFI_DOCKERFILE + extra)
+    with pytest.raises(sbom.SbomError):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+@pytest.mark.parametrize("extra", [
+    "VOLUME /usr/local/bin\n",
+    'CMD ["/bin/sh"]\n',
+    "USER nobody\n",
+    "WORKDIR /usr/local/bin\n",
+    "LABEL unreviewed=true\n",
+    "ARG GIT_COMMIT=unknown\n",
+])
+def test_wolfi_suffix_rejects_unreviewed_postcopy_instructions(sbom, tree, extra):
+    _write(tree / "Dockerfile", WOLFI_DOCKERFILE + extra)
+    with pytest.raises(sbom.SbomError):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+@pytest.mark.parametrize(("old", "new"), [
+    ('ENTRYPOINT ["/app/entrypoint.sh"]', 'ENTRYPOINT ["/bin/sh"]'),
+    (WOLFI_HEALTHCHECK, "HEALTHCHECK NONE"),
+    ("CMD /opt/venv/bin/python", "CMD python"),
+    ("EXPOSE 6100 6143", "EXPOSE 6100"),
+    ("ENV PUID=1000\n", ""),
+    ("ENV PUID=1000\nENV PGID=1000", "ENV PGID=1000\nENV PUID=1000"),
+    ('ENTRYPOINT ["/app/entrypoint.sh"]\n', ""),
+])
+def test_wolfi_suffix_rejects_changed_runtime_defaults(sbom, tree, old, new):
+    assert old in WOLFI_DOCKERFILE
+    _write(tree / "Dockerfile", WOLFI_DOCKERFILE.replace(old, new, 1))
+    with pytest.raises(sbom.SbomError):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "before-copy", "after-env", "duplicated"])
+def test_wolfi_suffix_requires_version_assertion_immediately_after_artifacts(sbom, tree, mutation):
+    assertion = next(line for line in WOLFI_DOCKERFILE.splitlines() if line.startswith("RUN test "))
+    text = WOLFI_DOCKERFILE.replace(assertion + "\n", "", 1)
+    if mutation == "before-copy":
+        marker = "COPY --from=resdet-builder /tmp/resdet-output/resdet"
+        text = text.replace(marker, assertion + "\n" + marker, 1)
+    elif mutation == "after-env":
+        text = text.replace("ENV PUID=1000\n", "ENV PUID=1000\n" + assertion + "\n", 1)
+    elif mutation == "duplicated":
+        text = WOLFI_DOCKERFILE + assertion + "\n"
+    _write(tree / "Dockerfile", text)
+    with pytest.raises(sbom.SbomError):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+def test_wolfi_suffix_accepts_ordinary_comments_spacing_and_continuations(sbom, tree):
+    prefix, suffix = WOLFI_DOCKERFILE.split("RUN test ", 1)
+    suffix = "RUN test " + suffix
+    spaced = "\n".join("# ordinary comment\n" + line.replace(" ", " \t ") for line in suffix.splitlines())
+    spaced = spaced.replace("HEALTHCHECK \t ", "HEALTHCHECK \\\n    ", 1)
+    _write(tree / "Dockerfile", prefix + spaced + "\n")
+    sbom.validate_resdet_docker_contract(NATIVE_DEPENDENCIES, (tree / "Dockerfile").read_text(), "Dockerfile")
+
+
+def test_legacy_debian_recipe_retains_only_its_historical_tail_checks(sbom, tree):
+    text = (tree / "Dockerfile").read_text()
+    _write(tree / "Dockerfile", text + "VOLUME /usr/local/bin\n")
+    # Historical compatibility is not a claim of full legacy tail protection.
+    sbom.validate_resdet_docker_contract(NATIVE_DEPENDENCIES, (tree / "Dockerfile").read_text(), "Dockerfile")
+
+
+def test_wolfi_build_recipe_cannot_run_before_manifest_copy(sbom, tree):
+    start = WOLFI_DOCKERFILE.index("COPY scripts/generate_sbom.py")
+    end = WOLFI_DOCKERFILE.index("\n\nFROM runtime-base", start)
+    copy, run = WOLFI_DOCKERFILE[start:end].split("\n", 1)
+    _write(tree / "Dockerfile", WOLFI_DOCKERFILE[:start] + run + "\n" + copy + WOLFI_DOCKERFILE[end:])
+    with pytest.raises(sbom.SbomError):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+@pytest.mark.parametrize("text", [
+    f"FROM node@sha256:{NODE_DIGEST} AS build\nFROM node@sha256:{NODE_DIGEST} AS build\n",
+    f"FROM node@sha256:{NODE_DIGEST} AS Build\nFROM build\n",
+    f"FROM node@sha256:{NODE_DIGEST} AS build ignored\nFROM build\n",
+    f"FROM node@sha256:{NODE_DIGEST} AS registry.test/evil:latest\nFROM registry.test/evil:latest\n",
+    f"FROM node@sha256:{NODE_DIGEST} AS build\nCOPY --from=build /x /x\n",
+    f"FROM node@sha256:{NODE_DIGEST}\nCOPY --from=later /x /x\nFROM node@sha256:{NODE_DIGEST} AS later\n",
+    f"FROM later AS build\nFROM node@sha256:{NODE_DIGEST} AS later\n",
+    f"# escape=`\nFROM node@sha256:{NODE_DIGEST}\n",
+])
+def test_image_parser_rejects_ambiguous_aliases_and_parser_overrides(sbom, text):
+    with pytest.raises(sbom.SbomError):
+        sbom.parse_dockerfile_images(text, "Dockerfile")
 
 
 def test_a_manifest_only_resdet_pin_divergence_cannot_regenerate_to_green(sbom, tree):

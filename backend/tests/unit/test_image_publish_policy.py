@@ -271,17 +271,149 @@ def test_every_gh_cli_step_declares_github_authentication():
     assert failures == [], f"gh CLI steps missing GitHub token env: {failures}"
 
 
-def test_trivy_scans_converted_docker_archives_from_verified_oci_candidates():
-    """Pinned Trivy accepts Docker archives, converted without rebuilding candidates."""
-    workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
-    assert workflow.count("skopeo version 1.13.3") == 4
-    assert workflow.count("candidate_image.py verify-archive ") >= 4
-    assert workflow.count("skopeo copy oci-archive:") == 4
-    assert workflow.count("docker-archive:/tmp/trivy-") == 4
-    assert workflow.count("input: /tmp/trivy-") == 4
-    assert workflow.count("-scan.docker.tar") == 8
-    scan_inputs = re.findall(r"input:\s+(\S+)", workflow)
-    scan_inputs = [value for value in scan_inputs if value.startswith("/tmp/trivy-")]
-    assert len(scan_inputs) == 4
-    assert all(value.endswith("-scan.docker.tar") for value in scan_inputs)
-    assert not re.search(r"input:\s+\S+\.oci\.tar", workflow)
+SCAN_CANDIDATES = {
+    "trivy-scan": ("build-amd64", "ecm-amd64"),
+    "trivy-scan-arm64": ("build-arm64", "ecm-arm64"),
+    "trivy-scan-mcp-amd64": ("build-mcp-amd64", "mcp-amd64"),
+    "trivy-scan-mcp-arm64": ("build-mcp-arm64", "mcp-arm64"),
+}
+TRIVY_ACTION = "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25"
+
+
+@pytest.fixture
+def build_workflow():
+    import yaml
+
+    return yaml.safe_load(BUILD.read_text(encoding="utf-8"))
+
+
+def _assert_verified_candidate_scans(workflow):
+    """Each scanner consumes its own verified candidate, independent of native jobs."""
+    jobs = workflow.get("jobs", {})
+    for job_id, (build_job, candidate) in SCAN_CANDIDATES.items():
+        assert job_id in jobs, f"missing scanner job: {job_id}"
+        job = jobs[job_id]
+        assert job["needs"] == [build_job], job_id
+        assert "if" not in job and not job.get("continue-on-error"), job_id
+        steps = job["steps"]
+        downloads = [
+            step["with"]
+            for step in steps
+            if step.get("uses", "").startswith("actions/download-artifact@")
+        ]
+        assert downloads == [{"name": f"{candidate}-candidate", "path": "/tmp"}], job_id
+
+        archive = f"/tmp/{candidate}.oci.tar"
+        scan_archive = f"/tmp/trivy-{candidate}-scan.docker.tar"
+        digest = "${{ needs." + build_job + ".outputs.digest }}"
+        verify = (
+            f"python scripts/candidate_image.py verify-archive {archive} "
+            f"--expected '{digest}'"
+        )
+        pin = 'test "$(skopeo --version)" = "skopeo version 1.13.3"'
+        convert = f"skopeo copy oci-archive:{archive} docker-archive:{scan_archive}"
+        preparations = [
+            (index, step, [line.strip() for line in step.get("run", "").splitlines()])
+            for index, step in enumerate(steps)
+            if "skopeo copy " in step.get("run", "")
+        ]
+        assert len(preparations) == 1, job_id
+        preparation_index, preparation, commands = preparations[0]
+        assert "if" not in preparation and not preparation.get("continue-on-error"), job_id
+        assert all(command in commands for command in (verify, pin, convert)), job_id
+        assert commands.index(verify) < commands.index(pin) < commands.index(convert), job_id
+
+        scans = [
+            (index, step)
+            for index, step in enumerate(steps)
+            if step.get("uses", "").startswith("aquasecurity/trivy-action@")
+        ]
+        assert scans, f"{job_id}: missing scan"
+        for index, scan in scans:
+            assert scan["uses"] == TRIVY_ACTION, job_id
+            assert index > preparation_index, job_id
+            assert "if" not in scan and not scan.get("continue-on-error"), job_id
+            assert scan["with"]["input"] == scan_archive, job_id
+        blocking = [scan for _, scan in scans if scan["with"].get("exit-code") == "1"]
+        assert len(blocking) == 1, f"{job_id}: missing blocking scan"
+        assert blocking[0]["with"]["severity"] == "CRITICAL,HIGH", job_id
+
+
+def test_trivy_scans_converted_docker_archives_from_verified_oci_candidates(build_workflow):
+    """All four scans retain their bar even when native jobs also convert archives."""
+    _assert_verified_candidate_scans(build_workflow)
+
+
+@pytest.mark.parametrize("job_id", SCAN_CANDIDATES)
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "remove-job",
+        "remove-scans",
+        "remove-blocking-scan",
+        "remove-verifier",
+        "remove-version-check",
+        "wrong-version",
+        "wrong-digest-architecture",
+        "wrong-source-architecture",
+        "wrong-scan-architecture",
+        "scan-oci-archive",
+        "convert-before-verify",
+    ],
+)
+def test_candidate_scan_contract_rejects_dangerous_mutants(build_workflow, job_id, mutation):
+    # Validate the real fixture first so an unrelated failure cannot satisfy raises().
+    _assert_verified_candidate_scans(build_workflow)
+    build_job, candidate = SCAN_CANDIDATES[job_id]
+    job = build_workflow["jobs"][job_id]
+    steps = job["steps"]
+    preparation = next(step for step in steps if "skopeo copy " in step.get("run", ""))
+    architecture, other_architecture = (
+        ("amd64", "arm64") if "amd64" in candidate else ("arm64", "amd64")
+    )
+    other_candidate = candidate.replace(architecture, other_architecture)
+    other_build = build_job.replace(architecture, other_architecture)
+    if mutation == "remove-job":
+        del build_workflow["jobs"][job_id]
+    elif mutation in {"remove-scans", "remove-blocking-scan"}:
+        job["steps"] = [
+            step
+            for step in steps
+            if not (
+                step.get("uses") == TRIVY_ACTION
+                and (mutation == "remove-scans" or step["with"].get("exit-code") == "1")
+            )
+        ]
+    elif mutation in {"remove-verifier", "remove-version-check"}:
+        marker = "verify-archive " if mutation == "remove-verifier" else "skopeo --version"
+        preparation["run"] = "\n".join(
+            line for line in preparation["run"].splitlines() if marker not in line
+        )
+    elif mutation == "wrong-version":
+        preparation["run"] = preparation["run"].replace(
+            "skopeo version 1.13.3", "skopeo version 1.13.2"
+        )
+    elif mutation == "wrong-digest-architecture":
+        preparation["run"] = preparation["run"].replace(
+            f"needs.{build_job}.", f"needs.{other_build}."
+        )
+    elif mutation == "wrong-source-architecture":
+        preparation["run"] = preparation["run"].replace(
+            f"oci-archive:/tmp/{candidate}.", f"oci-archive:/tmp/{other_candidate}."
+        )
+    elif mutation in {"wrong-scan-architecture", "scan-oci-archive"}:
+        scan = next(step for step in steps if step.get("uses") == TRIVY_ACTION)
+        scan["with"]["input"] = (
+            f"/tmp/trivy-{other_candidate}-scan.docker.tar"
+            if mutation == "wrong-scan-architecture"
+            else f"/tmp/{candidate}.oci.tar"
+        )
+    elif mutation == "convert-before-verify":
+        lines = preparation["run"].splitlines()
+        conversion = next(line for line in lines if "skopeo copy " in line)
+        lines.remove(conversion)
+        lines.insert(0, conversion)
+        preparation["run"] = "\n".join(lines)
+
+    with pytest.raises(AssertionError, match=job_id):
+        _assert_verified_candidate_scans(build_workflow)

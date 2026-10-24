@@ -34,6 +34,46 @@ def test_repository_satisfies_mcp_publication_policy():
     assert gate.check_repository(REPO_ROOT) == []
 
 
+def _use_common_base(root: Path) -> Path:
+    dockerfile = root / "Dockerfile"
+    dockerfile.write_text(
+        "FROM cgr.dev/chainguard/wolfi-base@sha256:"
+        "f15fea2f49cb14dceaea491fcbde0d35e0c190126a744ac05a9838440d47d994 AS runtime-base\n"
+        "FROM runtime-base AS python-builder\n"
+        "COPY --from=ghcr.io/astral-sh/uv:latest@sha256:"
+        "e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1 /uv /usr/local/bin/uv\n"
+        "FROM runtime-base AS resdet-builder\nFROM runtime-base\nRUN npm ci\n",
+        encoding="utf-8",
+    )
+    return dockerfile
+
+
+def test_policy_accepts_previous_digest_pinned_common_base_aliases(tmp_path):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    _use_common_base(tmp_path)
+    assert gate.check_repository(tmp_path) == []
+
+
+@pytest.mark.parametrize(("old", "new"), [
+    ("FROM runtime-base AS python-builder", "FROM floating:latest AS python-builder"),
+    ("COPY --from=ghcr.io/astral-sh/uv:latest@sha256:", "COPY --from=ghcr.io/astral-sh/uv:latest # sha256:"),
+    ("FROM runtime-base AS python-builder", "FROM future AS python-builder"),
+    ("AS resdet-builder", "AS runtime-base"),
+    ("AS runtime-base", "AS Runtime-Base"),
+    ("FROM runtime-base\n", "from floating:latest\n"),
+    ("FROM runtime-base\n", "FROM\truntime-base ignored\n"),
+])
+def test_policy_alias_support_does_not_allow_external_or_ambiguous_refs(tmp_path, old, new):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    dockerfile = _use_common_base(tmp_path)
+    contents = dockerfile.read_text(encoding="utf-8")
+    assert old in contents
+    dockerfile.write_text(contents.replace(old, new, 1), encoding="utf-8")
+    assert gate.check_repository(tmp_path)
+
+
 @pytest.mark.parametrize(
     ("old", "new"),
     [

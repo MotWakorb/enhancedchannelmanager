@@ -11,38 +11,31 @@ ENV GIT_COMMIT=$GIT_COMMIT
 COPY frontend/ ./
 RUN npm run build
 
-# Build Python dependencies in a separate stage to reduce peak memory
-# ARM64 needs build tools + Rust for packages like cryptography
-FROM python:3.12-slim-trixie@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704 AS python-builder
+# Keep Python, native builders and runtime on the same reviewed glibc package
+# graph. Wolfi supplies the FFmpeg/libxml2 fixes unavailable in Debian stable.
+FROM cgr.dev/chainguard/wolfi-base@sha256:f15fea2f49cb14dceaea491fcbde0d35e0c190126a744ac05a9838440d47d994 AS runtime-base
+RUN apk upgrade --no-cache \
+    && apk add --no-cache python-3.12 'ffmpeg-9.0>=9.0.2-r5' 'libxml2-16>=2.15.4-r1' \
+        gosu shadow coreutils bash tzdata ca-certificates-bundle posix-libc-utils
+
+# Install the locked Python dependencies without carrying build tools at runtime.
+FROM runtime-base AS python-builder
 
 COPY --from=ghcr.io/astral-sh/uv:latest@sha256:e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1 /uv /usr/local/bin/uv
 
-# Install build tools in their own layer (cached separately from pip install)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        python3-dev \
-        libffi-dev \
-        cargo \
-        rustc \
-    && rm -rf /var/lib/apt/lists/*
-
 # Compile Python packages into a virtual env we can copy to the final image
 COPY backend/requirements.txt /tmp/requirements.txt
-RUN uv venv /opt/venv \
+RUN uv venv --python /usr/bin/python3.12 /opt/venv \
     && uv pip install --python /opt/venv/bin/python --no-cache -r /tmp/requirements.txt
 
 # Build resdet from a pinned source commit for both supported image architectures.
-FROM python:3.12-slim-trixie@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704 AS resdet-builder
+FROM runtime-base AS resdet-builder
 COPY scripts/generate_sbom.py scripts/build_resdet.py sbom/native-dependencies.json /tmp/
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        ca-certificates \
-        pkg-config \
-    && rm -rf /var/lib/apt/lists/* \
-    && python /tmp/build_resdet.py --manifest /tmp/native-dependencies.json --work-dir /tmp/resdet-work --output-dir /tmp/resdet-output
+RUN apk add --no-cache build-base pkgconf gawk \
+    && python3.12 /tmp/build_resdet.py --manifest /tmp/native-dependencies.json --work-dir /tmp/resdet-work --output-dir /tmp/resdet-output
 
 # Production image
-FROM python:3.12-slim-trixie@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
+FROM runtime-base
 
 # Build args - MUST be declared early in the stage to receive build arg
 ARG GIT_COMMIT=unknown
@@ -54,13 +47,10 @@ ENV RELEASE_CHANNEL=$RELEASE_CHANNEL
 
 WORKDIR /app
 
-# Install gosu for proper user switching, ffmpeg for stream probing, and create non-root user.
-# apt-get upgrade pulls in Debian security updates (e.g. openssl CVE fixes) that the base image lags behind on.
-RUN apt-get update \
-    && apt-get upgrade -y --no-install-recommends \
-    && apt-get install -y --no-install-recommends gosu ffmpeg \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --shell /bin/bash appuser
+# Explicit identity avoids distribution-specific useradd defaults. Entrypoint
+# still remaps this account to the configured PUID/PGID before dropping root.
+RUN groupadd --gid 1000 appuser \
+    && useradd --uid 1000 --gid appuser --create-home --shell /bin/bash appuser
 
 # Copy pre-built Python packages from builder stage (no build tools needed)
 COPY --from=python-builder /opt/venv /opt/venv

@@ -7,6 +7,8 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from generate_sbom import SbomError, parse_dockerfile_images
 
 POLICY_FILES = (
     Path(".github/workflows/build.yml"),
@@ -190,9 +192,10 @@ def check_repository(root: Path) -> list[str]:
                 )
 
     for name, contents in (("Dockerfile", dockerfile), ("mcp-server/Dockerfile", mcp_dockerfile)):
-        for image in _FROM.findall(contents):
-            if "@sha256:" not in image:
-                failures.append(f"digest-pinned FROM requirement violated in {name}: {image}")
+        try:
+            parse_dockerfile_images(contents, name)
+        except SbomError as exc:
+            failures.append(f"digest-pinned FROM/COPY requirement violated in {name}: {exc}")
 
     if "RUN npm ci" not in dockerfile or "RUN npm install" in dockerfile:
         failures.append("npm production build must install from the lockfile with npm ci")

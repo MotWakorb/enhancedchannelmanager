@@ -115,10 +115,39 @@ RESDET_BUILDER_RUN = (
     "build-essential ca-certificates pkg-config && rm -rf /var/lib/apt/lists/* && "
     + RESDET_BUILD_COMMAND
 )
+WOLFI_BASE_IMAGE = (
+    "cgr.dev/chainguard/wolfi-base@sha256:"
+    "f15fea2f49cb14dceaea491fcbde0d35e0c190126a744ac05a9838440d47d994"
+)
+WOLFI_RUNTIME_RUN = (
+    "apk upgrade --no-cache && apk add --no-cache python-3.12 "
+    "'ffmpeg-9.0>=9.0.2-r5' 'libxml2-16>=2.15.4-r1' "
+    "gosu shadow coreutils bash tzdata ca-certificates-bundle posix-libc-utils"
+)
+WOLFI_RESDET_BUILDER_RUN = (
+    "apk add --no-cache build-base pkgconf gawk && "
+    + RESDET_BUILD_COMMAND.replace("python ", "python3.12 ", 1)
+)
 RESDET_RUNTIME_ASSERTION = (
     'test "$(resdet -V)" = "$(printf \'resdet version 2.4.3\\n'
     'libresdet version 3.2.0\\nBuilt with image readers: Y4M\')"'
 )
+WOLFI_RESDET_RUNTIME_SUFFIX = [
+    ("RUN", RESDET_RUNTIME_ASSERTION),
+    ("ENV", "PUID=1000"),
+    ("ENV", "PGID=1000"),
+    ("ENV", "CONFIG_DIR=/config"),
+    ("ENV", "ECM_PORT=6100"),
+    ("ENV", "ECM_HTTPS_PORT=6143"),
+    ("EXPOSE", "6100 6143"),
+    ("HEALTHCHECK", (
+        "--interval=30s --timeout=10s --start-period=120s --retries=3 "
+        'CMD /opt/venv/bin/python -c "import urllib.request, os; '
+        "port = os.environ.get('ECM_PORT', '6100'); "
+        "urllib.request.urlopen(f'http://localhost:{port}/api/health')\" || exit 1"
+    )),
+    ("ENTRYPOINT", '["/app/entrypoint.sh"]'),
+]
 
 # SPDX 2.3 section 6.5 requires a new namespace when a document is updated.
 # Content-addressing the namespace-free document provides that uniqueness while
@@ -131,11 +160,6 @@ DOCKER_IMAGE_REF = re.compile(
 )
 DOCKER_INSTRUCTION_WHITESPACE = " \t\v\f\r"
 DOCKER_INSTRUCTION_WHITESPACE_PATTERN = r"[\t\v\f\r ]+"
-DOCKER_IMAGE_INSTRUCTION = re.compile(
-    rf"^(?P<instruction>FROM|COPY)(?:{DOCKER_INSTRUCTION_WHITESPACE_PATTERN}"
-    r"(?P<arguments>.*))?$",
-    re.IGNORECASE,
-)
 SPDX_ID_UNSAFE = re.compile(r"[^A-Za-z0-9.-]")
 
 # docs/versioning.md §Format: `BUILD` is a zero-padded CI build counter used on
@@ -316,40 +340,26 @@ def parse_dockerfile_images(text: str, source: str) -> list[dict[str, str]]:
         images.setdefault(key, entry)
         return key
 
-    # Docker physical lines end at LF; CR is also valid instruction whitespace
-    # and must not split an instruction when it appears anywhere else.
-    for number, raw in enumerate(text.split("\n"), start=1):
-        line = raw.strip(DOCKER_INSTRUCTION_WHITESPACE)
-        match = DOCKER_IMAGE_INSTRUCTION.fullmatch(line)
-        if match is None:
-            continue
-        instruction = match["instruction"].upper()
-        arguments = (match["arguments"] or "").strip(DOCKER_INSTRUCTION_WHITESPACE)
-        if instruction == "FROM":
-            tokens = (
-                re.split(DOCKER_INSTRUCTION_WHITESPACE_PATTERN, arguments)
-                if arguments
-                else []
-            )
-            if not tokens:
-                raise SbomError(f"{source} line {number} has a bare FROM")
-            reference = tokens[0]
-            if reference in stage_base:
-                key = stage_base[reference]
-            else:
-                key = _record(_pinned_image(reference, source, number, "base"))
-            if len(tokens) >= 3 and tokens[1].upper() == "AS":
-                stage_base[tokens[2]] = key
-            runtime_key = key
-        elif "--from=" in arguments:
-            reference = re.split(
-                DOCKER_INSTRUCTION_WHITESPACE_PATTERN,
-                arguments.split("--from=", 1)[1],
-                maxsplit=1,
-            )[0]
-            if reference in stage_base:
+    for stage in _docker_stages(text, source):
+        reference, number = stage["base"], stage["line"]
+        key = stage_base.get(reference)
+        if key is None:
+            key = _record(_pinned_image(reference, source, number, "base"))
+        runtime_key = key
+        # Only completed previous stages may be COPY sources (never self/future).
+        for instruction, arguments, number in stage["instructions"]:
+            if instruction != "COPY" or "--from" not in arguments:
                 continue
-            _record(_pinned_image(reference, source, number, "build"))
+            match = re.fullmatch(r"--from=(\S+) (?!.*--from)\S+ .+", arguments)
+            if match is None:
+                raise SbomError(f"{source} line {number} has an unsupported COPY --from")
+            reference = match[1]
+            if reference == stage["alias"]:
+                raise SbomError(f"{source} line {number} copies from its own stage")
+            if reference not in stage_base:
+                _record(_pinned_image(reference, source, number, "build"))
+        if stage["alias"] is not None:
+            stage_base[stage["alias"]] = key
     if runtime_key is None:
         raise SbomError(f"{source} has no FROM instruction")
     # An image that is both an intermediate base and the final base is one
@@ -551,21 +561,27 @@ def _docker_stages(dockerfile: str, source: str) -> list[dict[str, Any]]:
     logical: list[tuple[int, str]] = []
     pending = ""
     start = 0
-    for number, raw in enumerate(dockerfile.splitlines(), start=1):
-        stripped = raw.strip()
-        if not pending and (not stripped or stripped.startswith("#")):
+    # Docker physical lines end at LF, not at every Unicode whitespace character.
+    for number, raw in enumerate(dockerfile.split("\n"), start=1):
+        stripped = raw.strip(DOCKER_INSTRUCTION_WHITESPACE)
+        if stripped.startswith("#"):
+            if re.match(r"#\s*(syntax|escape|check)\s*=", stripped, re.IGNORECASE):
+                raise SbomError(f"{source} line {number} has an unreviewed parser directive")
+            continue
+        if not pending and not stripped:
             continue
         if not pending:
             start = number
         pending += (" " if pending else "") + stripped.removesuffix("\\").strip()
         if stripped.endswith("\\"):
             continue
-        logical.append((start, re.sub(r"\s+", " ", pending)))
+        logical.append((start, re.sub(DOCKER_INSTRUCTION_WHITESPACE_PATTERN, " ", pending)))
         pending = ""
     if pending:
         raise SbomError(f"{source} line {start} has an unterminated instruction")
 
     stages: list[dict[str, Any]] = []
+    aliases: set[str] = set()
     for number, text in logical:
         match = re.fullmatch(r"(?P<kind>[A-Za-z]+)\s+(?P<args>.+)", text)
         if match is None:
@@ -573,13 +589,51 @@ def _docker_stages(dockerfile: str, source: str) -> list[dict[str, Any]]:
         kind, arguments = match["kind"].upper(), match["args"]
         if kind == "FROM":
             tokens = arguments.split()
-            alias = tokens[2] if len(tokens) >= 3 and tokens[1].upper() == "AS" else None
-            stages.append({"alias": alias, "instructions": []})
+            if len(tokens) != 1 and not (len(tokens) == 3 and tokens[1].upper() == "AS"):
+                raise SbomError(f"{source} line {number} has an unsupported FROM")
+            alias = tokens[2] if len(tokens) == 3 else None
+            if alias is not None:
+                if re.fullmatch(r"[a-z][a-z0-9_-]*", alias) is None or alias in aliases:
+                    raise SbomError(f"{source} line {number} has an ambiguous stage alias")
+                aliases.add(alias)
+            stages.append({
+                "alias": alias, "base": tokens[0], "line": number, "instructions": [],
+            })
         elif not stages:
             raise SbomError(f"{source} line {number} precedes the first FROM")
         else:
             stages[-1]["instructions"].append((kind, arguments, number))
     return stages
+
+
+def _validate_wolfi_stages(stages: list[dict[str, Any]], source: str) -> None:
+    """Allow reviewed inheritance, not arbitrary build environment inheritance."""
+    if [stage["alias"] for stage in stages] != [
+        "frontend-builder", "runtime-base", "python-builder", "resdet-builder", None,
+    ] or [stage["base"] for stage in stages[1:]] != [
+        WOLFI_BASE_IMAGE, "runtime-base", "runtime-base", "runtime-base",
+    ]:
+        raise SbomError(f"{source} must use the reviewed Wolfi common-base stage graph")
+    common = [(kind, args) for kind, args, _line in stages[1]["instructions"]]
+    if common != [("RUN", WOLFI_RUNTIME_RUN)]:
+        raise SbomError(f"{source} runtime-base must contain only the reviewed Wolfi recipe")
+    python = [(kind, args) for kind, args, _line in stages[2]["instructions"]]
+    if (
+        len(python) != 3
+        or python[0][0] != "COPY"
+        or re.fullmatch(
+            r"--from=ghcr.io/astral-sh/uv:latest@sha256:[0-9a-f]{64} /uv /usr/local/bin/uv",
+            python[0][1],
+        ) is None
+        or python[1:] != [
+            ("COPY", "backend/requirements.txt /tmp/requirements.txt"),
+            ("RUN", (
+                "uv venv --python /usr/bin/python3.12 /opt/venv && uv pip install "
+                "--python /opt/venv/bin/python --no-cache -r /tmp/requirements.txt"
+            )),
+        ]
+    ):
+        raise SbomError(f"{source} python-builder must use the reviewed Python 3.12 recipe")
 
 
 def validate_resdet_docker_contract(document: Any, dockerfile: str, source: str) -> None:
@@ -590,20 +644,39 @@ def validate_resdet_docker_contract(document: Any, dockerfile: str, source: str)
     if resdet is None or "build" not in resdet:
         raise SbomError(f"{NATIVE_DEPENDENCIES_PATH} has no resdet build metadata")
     stages = _docker_stages(dockerfile, source)
+    parse_dockerfile_images(dockerfile, source)
+    wolfi = any(
+        stage["alias"] == "runtime-base" or "wolfi-base" in stage["base"]
+        for stage in stages
+    )
+    if wolfi:
+        _validate_wolfi_stages(stages, source)
     builders = [stage for stage in stages if stage["alias"] == "resdet-builder"]
     if len(builders) != 1:
         raise SbomError(f"{source} must source the resdet build pin from {NATIVE_DEPENDENCIES_PATH}")
     instructions = builders[0]["instructions"]
-    copies = [f"{kind} {args}" for kind, args, _line in instructions if kind == "COPY"]
-    runs = [args for kind, args, _line in instructions if kind == "RUN"]
-    if (
-        copies != [RESDET_BUILD_COPY]
-        or runs != [RESDET_BUILDER_RUN]
-        or any(kind not in {"COPY", "RUN"} for kind, _args, _line in instructions)
-    ):
+    if [(kind, args) for kind, args, _line in instructions] != [
+        ("COPY", RESDET_BUILD_COPY.removeprefix("COPY ")),
+        ("RUN", WOLFI_RESDET_BUILDER_RUN if wolfi else RESDET_BUILDER_RUN),
+    ]:
         raise SbomError(f"{source} resdet-builder must contain only the fixed dedicated build recipe")
 
     final_instructions = stages[-1]["instructions"]
+    allowed_environment = {
+        "GIT_COMMIT=$GIT_COMMIT", "ECM_VERSION=$ECM_VERSION",
+        "RELEASE_CHANNEL=$RELEASE_CHANNEL", 'PATH="/opt/venv/bin:$PATH"',
+        "PUID=1000", "PGID=1000", "CONFIG_DIR=/config", "ECM_PORT=6100",
+        "ECM_HTTPS_PORT=6143",
+    }
+    for kind, args, _line in final_instructions:
+        if (
+            kind in {"SHELL", "ONBUILD"}
+            or kind == "ENV" and args not in allowed_environment
+            or kind == "ARG" and args not in {
+                "GIT_COMMIT=unknown", "ECM_VERSION=unknown", "RELEASE_CHANNEL=latest",
+            }
+        ):
+            raise SbomError(f"{source} final resdet artifacts require the reviewed environment")
     binary_copy = "--from=resdet-builder /tmp/resdet-output/resdet /usr/local/bin/resdet"
     notice_copy = "--from=resdet-builder /tmp/resdet-output/licenses/ /usr/share/doc/resdet/"
     artifact_indexes = [
@@ -612,9 +685,16 @@ def validate_resdet_docker_contract(document: Any, dockerfile: str, source: str)
     ]
     if len(artifact_indexes) != 2 or artifact_indexes != list(range(artifact_indexes[0], artifact_indexes[0] + 2)):
         raise SbomError(f"{source} final resdet artifacts must be copied once from the fixed output")
-    for kind, args, _line in final_instructions[artifact_indexes[0] + 2:]:
-        if kind in {"COPY", "ADD"} or kind == "RUN" and args != RESDET_RUNTIME_ASSERTION:
-            raise SbomError(f"{source} final resdet artifacts may not be replaced after copy")
+    suffix = final_instructions[artifact_indexes[0] + 2:]
+    if wolfi:
+        if [(kind, args) for kind, args, _line in suffix] != WOLFI_RESDET_RUNTIME_SUFFIX:
+            raise SbomError(f"{source} final resdet artifacts require the exact reviewed Wolfi suffix")
+    else:
+        # Historical Debian compatibility: this checks file-mutating steps only,
+        # not the complete runtime suffix enforced for the reviewed Wolfi recipe.
+        for kind, args, _line in suffix:
+            if kind in {"COPY", "ADD"} or kind == "RUN" and args != RESDET_RUNTIME_ASSERTION:
+                raise SbomError(f"{source} final resdet artifacts may not be replaced after copy")
     for index, (kind, args, _line) in enumerate(final_instructions):
         if index < artifact_indexes[0] and kind == "COPY" and (
             args.endswith(" /usr/local/bin/resdet") or args.endswith(" /usr/share/doc/resdet/")

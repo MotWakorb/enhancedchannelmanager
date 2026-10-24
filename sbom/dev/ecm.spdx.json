@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "ecm-0.18.2-0046",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0046/ecm-466babd38ef75d7dcbd18b3d75048b230980c17bbdffda631dcf41e3b8055d27",
+  "name": "ecm-0.18.2-0047",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0047/ecm-a4504cd5ec923032b1af15b216b385d3586b480bbed9ba89c0597ea0c853d71d",
   "creationInfo": {
-    "created": "2026-10-23T07:02:21Z",
+    "created": "2026-10-23T08:07:41Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-ecm",
       "name": "enhanced-channel-manager",
-      "versionInfo": "0.18.2-0046",
+      "versionInfo": "0.18.2-0047",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7037,6 +7037,31 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
+      "SPDXID": "SPDXRef-Package-oci-cgr.dev.chainguard.wolfi-base-f15fea2f49cb",
+      "name": "cgr.dev/chainguard/wolfi-base",
+      "versionInfo": "sha256:f15fea2f49cb14dceaea491fcbde0d35e0c190126a744ac05a9838440d47d994",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "supplier": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "f15fea2f49cb14dceaea491fcbde0d35e0c190126a744ac05a9838440d47d994"
+        }
+      ],
+      "comment": "Final base image of the published container. Its own OS package set is NOT enumerated by this document, and the Dockerfile applies OS security upgrades on top of it at build time.",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:oci/wolfi-base@sha256:f15fea2f49cb14dceaea491fcbde0d35e0c190126a744ac05a9838440d47d994?repository_url=cgr.dev%2Fchainguard%2Fwolfi-base"
+        }
+      ]
+    },
+    {
       "SPDXID": "SPDXRef-Package-oci-ghcr.io.astral-sh.uv.latest-e85be8442038",
       "name": "ghcr.io/astral-sh/uv:latest",
       "versionInfo": "sha256:e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1",
@@ -7083,31 +7108,6 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:oci/node@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293?repository_url=docker.io%2Flibrary%2Fnode&tag=20-alpine"
-        }
-      ]
-    },
-    {
-      "SPDXID": "SPDXRef-Package-oci-python.3.12-slim-trixie-a0f57064cbdc",
-      "name": "python:3.12-slim-trixie",
-      "versionInfo": "sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "supplier": "NOASSERTION",
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "NOASSERTION",
-      "copyrightText": "NOASSERTION",
-      "checksums": [
-        {
-          "algorithm": "SHA256",
-          "checksumValue": "a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704"
-        }
-      ],
-      "comment": "Final base image of the published container. Its own OS package set is NOT enumerated by this document, and the Dockerfile applies OS security upgrades on top of it at build time.",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:oci/python@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704?repository_url=docker.io%2Flibrary%2Fpython&tag=3.12-slim-trixie"
         }
       ]
     },
@@ -8728,7 +8728,7 @@
     {
       "spdxElementId": "SPDXRef-Package-ecm",
       "relationshipType": "CONTAINS",
-      "relatedSpdxElement": "SPDXRef-Package-oci-python.3.12-slim-trixie-a0f57064cbdc"
+      "relatedSpdxElement": "SPDXRef-Package-oci-cgr.dev.chainguard.wolfi-base-f15fea2f49cb"
     },
     {
       "spdxElementId": "SPDXRef-Package-ecm",

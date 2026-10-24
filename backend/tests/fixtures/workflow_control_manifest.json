@@ -153,10 +153,54 @@
       "file": "build.yml",
       "path": [
         "jobs",
+        "native-runtime-amd64",
+        "steps",
+        3,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "native-runtime-arm64",
+        "steps",
+        3,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "trivy-scan",
+        "steps",
+        6,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "trivy-scan-arm64",
+        "steps",
+        6,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
         "attest-image-candidates",
         "if"
       ],
-      "value": "always() && github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success' && needs.trivy-scan.result == 'success' && needs.trivy-scan-arm64.result == 'success' && needs.trivy-scan-mcp-amd64.result == 'success' && needs.trivy-scan-mcp-arm64.result == 'success' && needs.security-scan-mcp.result == 'success'"
+      "value": "always() && github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success' && needs.trivy-scan.result == 'success' && needs.trivy-scan-arm64.result == 'success' && needs.trivy-scan-mcp-amd64.result == 'success' && needs.trivy-scan-mcp-arm64.result == 'success' && needs.native-runtime-amd64.result == 'success' && needs.native-runtime-arm64.result == 'success' && needs.security-scan-mcp.result == 'success'"
     },
     {
       "file": "docs-pages.yml",
