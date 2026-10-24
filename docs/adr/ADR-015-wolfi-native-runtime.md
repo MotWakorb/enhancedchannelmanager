@@ -31,8 +31,10 @@ operator has not accepted narrower format support.
 The replacement experiment builds signed upstream FFmpeg **8.1.3** on a public
 openSUSE Tumbleweed graph, explicitly retaining Codec2, JPEG XL, SVG and
 game/tracker integrations. The 17 affected files in the signed release archive
-match the source inspected for all 16 original FFmpeg fixes. That is source-level
-evidence, not an image scan or compatibility result. Stock Fedora/RPM Fusion and
+match the source inspected for all 16 original FFmpeg fixes. The
+[source-review receipt](../security/ffmpeg-8.1.3-source-review-20261024.md) records
+the signed release and exact stable fixes. That is source-level evidence, not an
+image scan or compatibility result. Stock Fedora/RPM Fusion and
 stock openSUSE/Packman were rejected; neither closes the combined security and
 format contract. A custom build is not yet an accepted production replacement.
 
