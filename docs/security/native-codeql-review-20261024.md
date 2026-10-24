@@ -26,6 +26,31 @@ the complete focused stats/client/contract subset passed 200 tests. Require fres
 CodeQL before disposition of any
 remaining modeled integer-only paths. No scanner-severity downgrade is applied.
 
+### Fresh residual record after the repair
+
+Python analysis `2018890474` on merge
+`7509715dad8c3021942df3003c930e7edc5298ef` still grouped 64 numbered sources into
+alert 2045. Independent review checked every fresh SARIF source: 60 are actual
+FastAPI integer path arguments, two are Pydantic-parsed integer batch models,
+and two are the now-explicitly validated string stop identifiers. The four
+representative traces all use framework-parsed group/logo integers. Python type
+annotations alone were not accepted as enforcement.
+
+`backend/tests/unit/test_dispatcharr_codeql_input_boundaries.py` exercises the
+real application/routers: malformed integer path and batch IDs return specific
+422 `int_parsing` errors before client lookup or request dispatch; the positive
+`0042` path dispatches integer `42`. Its 37 cases and 102 existing stop-boundary
+cases pass together. These new framework regressions passed first because that
+framework behavior was already secure; they do not replace the original
+test-first stop-ID production repair.
+
+The remaining **2045 record only** qualifies as a false positive under ADR-005:
+the data-flow model does not recognize these tested framework/model/fullmatch
+boundaries. Its disposition comment references the tracked boundary tests.
+The scanner's Critical/9.1 classification is retained in the evidence; no query,
+global severity rule, unknown flow or future validator change is waived. Fresh
+CI and candidate attestation remain mandatory on the final head.
+
 ## Alert 2046 — specific test-only disposition
 
 `py/insecure-protocol`, scanner **High / 7.5**, points to the synthetic TLS server
