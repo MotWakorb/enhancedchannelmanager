@@ -1,0 +1,88 @@
+{
+  "OpenSSL": {
+    "actual_ARM_SBOM_component": {
+      "type": "library",
+      "name": "openssl",
+      "version": "4.0.3",
+      "purl": "pkg:generic/openssl@4.0.3?download_url=https://github.com/openssl/openssl/releases/download/openssl-4.0.3/openssl-4.0.3.tar.gz",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "325b5c806167c13b40b1ffeadfe0248197c00eccc4cf123ec1e28d2d2fd216d9"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://github.com/openssl/openssl/releases/download/openssl-4.0.3/openssl-4.0.3.tar.gz"
+        }
+      ],
+      "properties": [
+        {
+          "name": "build:operating-system",
+          "value": "linux"
+        },
+        {
+          "name": "build:architecture",
+          "value": "aarch64"
+        },
+        {
+          "name": "build:flags",
+          "value": "no-zlib no-shared no-module no-comp no-apps no-docs no-sm2-precomp no-atexit enable-ec_nistp_64_gcc_128"
+        }
+      ]
+    },
+    "notice_files": [
+      {
+        "shared_path": "notices/upstream/openssl-4.0.3/LICENSE.txt",
+        "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+      },
+      {
+        "shared_path": "notices/upstream/openssl-4.0.3/AUTHORS.md",
+        "sha256": "b9f638dfc06b59c2d3b808186c3b30f713805a5db390f5b77b1703ac58acb83e"
+      },
+      {
+        "shared_path": "notices/upstream/openssl-4.0.3/ACKNOWLEDGEMENTS.md",
+        "sha256": "58dee45791f007ced048114717f86672778fe75c551827c57e760861446ce3c3"
+      }
+    ]
+  },
+  "static_bundle_clues": {
+    "cffi": true,
+    "pyyaml": true,
+    "uvloop": true
+  },
+  "recipe_bound_shared_components": [
+    {
+      "wheel": "cffi",
+      "component": "libffi 3.4.6",
+      "basis": "ARM ELF renamed static ffi call plus already-preserved exact CFFI release Linux aarch64 wheel recipe; not an embedded version or reproducible-build proof."
+    },
+    {
+      "wheel": "pyyaml",
+      "component": "libyaml 0.2.5",
+      "basis": "ARM ELF version string and static YAML implementation; same exact-version source notice."
+    },
+    {
+      "wheel": "uvloop",
+      "component": "libuv 1.48.0",
+      "basis": "ARM ELF version and libuv symbols plus corresponding source header/recipe; retained libuv and inline BSD/ISC notices."
+    },
+    {
+      "wheel": "rapidfuzz",
+      "component": "rapidfuzz-cpp and Taskflow 3.9.0",
+      "basis": "Same exact project sdist source linkage/notice evidence; no claim Eigen/TBB benchmark sources are linked."
+    }
+  ],
+  "external_DT_NEEDED": [
+    "ld-linux-aarch64.so.1",
+    "libc.so.6",
+    "libdl.so.2",
+    "libgcc_s.so.1",
+    "libm.so.6",
+    "libpthread.so.0",
+    "librt.so.1",
+    "libstdc++.so.6"
+  ],
+  "OS_runtime_boundary": "Actual final SUSE RPM/library presence and OS source/license closure remain parent-owned, not discharged by the wheel notice bundle."
+}

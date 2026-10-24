@@ -1,0 +1,653 @@
+{
+  "architecture": "linux/amd64",
+  "elf_machine": 62,
+  "proof_layer": "Existing current x86 local artifacts/receipts reused, not final whole-image proof.",
+  "lock_sha256": "7fbaf818e6617efc2bbd54e07af7ef5a7eac300712ad7b29fa5c6b4ada17a2bf",
+  "native_distribution_count": 22,
+  "native_ELF_count": 39,
+  "native_distributions": [
+    {
+      "name": "aiohttp",
+      "version": "3.14.5",
+      "filename": "aiohttp-3.14.5-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/da/e4/aa172eb534b7f02f1f8ff1c3213347eaf3cf218db91a727c6863c22f1035/aiohttp-3.14.5-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "20f085697d7e911f1f73c43ed03fafbed1e7121797e2eb5428efa80398060584",
+      "native_files": [
+        {
+          "path": "aiohttp/_http_parser.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "fbdb69d4b707f0fa75ef3e5d72cc10681903fe428bdba1be2fd9eecbfa5009b2",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "aiohttp/_http_writer.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "36f687dda2b63a85a305deed8d896551cbc74034cbb285ab91d099210b1b2338",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "aiohttp/_websocket/mask.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "8f9be7e800e262ed6f2332b9818e8b9165adc23c14612c54a2aac887113b1038",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "aiohttp/_websocket/reader_c.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "1c727b5d9234ddcdbac7d8c38ffdc49b327598d86e5570b427e68306fee6d028",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "50b29a2268649f7ce5b22c0a41b60896d246fee58e2a74b468f66848e469834c",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "bcrypt",
+      "version": "5.0.0",
+      "filename": "bcrypt-5.0.0-cp39-abi3-manylinux_2_34_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/d4/8d/5e43d9584b3b3591a6f9b68f755a4da879a59712981ef5ad2a0ac1379f7a/bcrypt-5.0.0-cp39-abi3-manylinux_2_34_x86_64.whl",
+      "sha256": "611f0a17aa4a25a69362dcc299fda5c8a3d4f160e2abb3831041feb77393a14a",
+      "native_files": [
+        {
+          "path": "bcrypt/_bcrypt.abi3.so",
+          "sha256": "a05c09bb81aae3816a243b6dc7fa16a72a5fb94437d019025b30f6161a23758c",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libgcc_s.so.1",
+            "libc.so.6",
+            "ld-linux-x86-64.so.2"
+          ]
+        }
+      ],
+      "metadata_sha256": "c95d417cb948eae765572db778d6f30daeb60d211b52b956be52c1088e9401d2",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1",
+      "filename": "cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/b1/db/dceb9dd5b231e1da801793f8acc9f3c52a7e1afe40bb1aae37e02b0faad5/cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "sha256": "c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf",
+      "native_files": [
+        {
+          "path": "_cffi_backend.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "9bc1d08072255a5ec2db10fc75df1dd9e73097a75cd9150cfe875ebd6712f17c",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6",
+            "ld-linux-x86-64.so.2"
+          ]
+        }
+      ],
+      "metadata_sha256": "558bafb9093a8e790175d9ecff9688382981d744877dad86fd6770db0f4dc918",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "coverage",
+      "version": "7.15.4",
+      "filename": "coverage-7.15.4-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/8c/3f/f0642a372f494bd0d7dad3b497083b910194a5f1c88be2c94fef707c3b59/coverage-7.15.4-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+      "sha256": "899b9da30f3c6c336566e3707495bb23e8302d39d862f01fa78c48b99b9437e2",
+      "native_files": [
+        {
+          "path": "coverage/tracer.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "91914cdbdf09b920730eca4d48ddeb6a20e923b00432ecf8cab81ffdf272d2d1",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "1ec1d62cb37a000e691d78bde85ffb2d33802692946944ba97152013c1cebe4c",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "cryptography",
+      "version": "50.0.2",
+      "filename": "cryptography-50.0.2-cp311-abi3-manylinux_2_34_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/d3/69/2c833a049475e0a3444e94c7d0aca0aa51d166374a449b09e92ac98138de/cryptography-50.0.2-cp311-abi3-manylinux_2_34_x86_64.whl",
+      "sha256": "9dab55f57c74c3cad24c323bacbbd04be4705ba6eb0d92e920b1fc4837ed5079",
+      "native_files": [
+        {
+          "path": "cryptography/hazmat/bindings/_rust.abi3.so",
+          "sha256": "1e5d23fa66915204b9b67202a46993844d81cda56f6ad52cead2def37617ee29",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libgcc_s.so.1",
+            "libc.so.6",
+            "ld-linux-x86-64.so.2"
+          ]
+        }
+      ],
+      "metadata_sha256": "047cfc71226409de4318b360aef15c63a2adf609731e3dcf7fe932f14ea042ee",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "frozenlist",
+      "version": "1.8.0",
+      "filename": "frozenlist-1.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/6a/bd/d91c5e39f490a49df14320f4e8c80161cfcce09f1e2cde1edd16a551abb3/frozenlist-1.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+      "sha256": "494a5952b1c597ba44e0e78113a7266e656b9794eec897b19ead706bd7074383",
+      "native_files": [
+        {
+          "path": "frozenlist/_frozenlist.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "533163376b8ddb84f3f3a49d12ba74eda261e0b3a9f00d30f448719033f88b71",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libstdc++.so.6",
+            "libm.so.6",
+            "libgcc_s.so.1",
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "946c22dc9f7e2c76f2d698f00a4306dbe49a820e2b3f1a0e22fe5286cbec35f1",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "greenlet",
+      "version": "3.5.5",
+      "filename": "greenlet-3.5.5-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/78/ac/5c5b959999b6f09c3026b5dfe171575bc3121c5236ce74f495096f25b203/greenlet-3.5.5-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "147b25a42e5ca5be3d42356e8f608b37af715a1c196e9bf9d1627f3341adfe1d",
+      "native_files": [
+        {
+          "path": "greenlet/_greenlet.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "962f25455d5489cfba56b5f9ae9938ffa2ef4be1f86e7e496eed8d0aece4a2cc",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libstdc++.so.6",
+            "libm.so.6",
+            "libgcc_s.so.1",
+            "libpthread.so.0",
+            "libc.so.6",
+            "ld-linux-x86-64.so.2"
+          ]
+        },
+        {
+          "path": "greenlet/tests/_test_extension.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "d866ac9629ca31687d31a95637df13ad2eb8400db52da6c729341d4be10d74f9",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "greenlet/tests/_test_extension_cpp.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "5574792528bf90908081403d515deb6cc6a84df292cc674aafb6774587054e18",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libstdc++.so.6",
+            "libm.so.6",
+            "libgcc_s.so.1",
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "16de87de070796e2e1f18019f963c3ba5972bb9bfca1b856b83096bf73c61f38",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "httptools",
+      "version": "0.8.0",
+      "filename": "httptools-0.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/e3/a6/febbb8b8db0f58b38e44ad6cb946e6a255ae49b55f2e8543408fb7501ccd/httptools-0.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+      "sha256": "b15fc622b0f869d19207c4089a501d9bcc63ca5e071ffdd2f03f922df882dcb2",
+      "native_files": [
+        {
+          "path": "httptools/parser/parser.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "59861e7c89a396db7a6d8a70063f74caaf2ef7b94fe977afe38f153b29aba88f",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "httptools/parser/url_parser.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "378057f062297d508bac06c0f972175d1a731f15af6dd99ecf0e77e6d66c3b2c",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "7b5c0231580b589e7721b111f37324276f2a585bc2d27aedd67297e0c9b4bda8",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "hypothesis",
+      "version": "6.165.10",
+      "filename": "hypothesis-6.165.10-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/e3/c4/e2cbd2810e79f7a452a8ea9f6c6438ee718ce938d8cc12252cf0b36a81d3/hypothesis-6.165.10-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "sha256": "1a380bc99aa3b035e6a95a2201bf792d4082a04ca75babcc21849c2d0914bb28",
+      "native_files": [
+        {
+          "path": "hypothesis/_native.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "d907d41da946caf3729bc33b1756b015fdd6f7f7b86e5eb7b56ec290e0bcc1a6",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libgcc_s.so.1",
+            "libpthread.so.0",
+            "libc.so.6",
+            "ld-linux-x86-64.so.2"
+          ]
+        }
+      ],
+      "metadata_sha256": "1bc8efdaf287f0251d12f40bc89b99233075d2b987a119e78174051699860213",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "markupsafe",
+      "version": "3.0.3",
+      "filename": "markupsafe-3.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/3c/2e/8d0c2ab90a8c1d9a24f0399058ab8519a3279d1bd4289511d74e909f060e/markupsafe-3.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "d6dd0be5b5b189d31db7cda48b91d7e0a9795f31430b7f271219ab30f1d3ac9d",
+      "native_files": [
+        {
+          "path": "markupsafe/_speedups.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "f4a31de071c565959002db29bf36c6f8d35ae7929f64700adeeba46fa4f90daf",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "12b4cc61a7fa288cf7667ee3f213786d9619db57fb33ff6f934afbcb5c12ec81",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "multidict",
+      "version": "6.9.1",
+      "filename": "multidict-6.9.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/ed/5b/db08419c1e1f7c9d60cfd2787b2b517d7ae4ebbda8281b48a33eb5141467/multidict-6.9.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "976fd7689d69ec78d67d31d38d396d8adb562f7e8368279f76aed4aa451fa06d",
+      "native_files": [
+        {
+          "path": "multidict/_multidict.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "2ebc449f43657f8460a18167944e4e4e13f00b74bef41c9f2704b9261fb5e1f8",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "b52756a8e05f6cf5e429cb0133ea395f252aee4a30b748506dd354a5ad2d4af2",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "propcache",
+      "version": "0.5.2",
+      "filename": "propcache-0.5.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/14/15/5574111ae50dd6e879456888c0eadd4c5a869959775854e18e18a6b345f3/propcache-0.5.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "6f328175a2cde1f0ff2c4ed8ce968b9dcfb55f3a7153f39e2957ed994da13476",
+      "native_files": [
+        {
+          "path": "propcache/_helpers_c.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "84f85de74e8900c5e8f7dc08b9f5fe513fab63e1eb21bf4acf1f5f290e744b0a",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "f534495cdd2f915af8e649783d95fddcb1a05a1ac181850f0c973c0a78f7bbae",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "pydantic-core",
+      "version": "2.46.4",
+      "filename": "pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/5f/97/2aab507d3d00ca626e8e57c1eac6a79e4e5fbcc63eb99733ff55d1717f65/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "sha256": "926c9541b14b12b1681dca8a0b75feb510b06c6341b70a8e500c2fdcff837cce",
+      "native_files": [
+        {
+          "path": "pydantic_core/_pydantic_core.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "7b3b21e8e6fc722fa6913a893d1f82968542135b0119f83c7cede35fc71c4a2f",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libgcc_s.so.1",
+            "librt.so.1",
+            "libpthread.so.0",
+            "libdl.so.2",
+            "libc.so.6",
+            "ld-linux-x86-64.so.2"
+          ]
+        }
+      ],
+      "metadata_sha256": "135fa8b2f89473e9191c7078c2164e3ec6c8927a61c2379c2fddcc07f11f3bae",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "pyyaml",
+      "version": "6.0.3",
+      "filename": "pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/8b/9d/b3589d3877982d4f2329302ef98a8026e7f4443c765c46cfecc8858c6b4b/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc",
+      "native_files": [
+        {
+          "path": "yaml/_yaml.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "957a099a4521c1f7669306fb6f79ca63fa4b9a0b4c463f7cac833a65a5c5c0cb",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "03c3b415ed38d09faedc49360e930769b40c58f68585e6de00e2e4916a858d34",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "rapidfuzz",
+      "version": "3.14.5",
+      "filename": "rapidfuzz-3.14.5-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/79/72/97a9728c711c7c1b06e107d3f0623880fb4ef90e147ed13c551a1730e7cc/rapidfuzz-3.14.5-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "48bee0b91bebfaec41e1081e351000659ab7570cc4598d617aa04d5bf827f9e6",
+      "native_files": [
+        {
+          "path": "rapidfuzz/_feature_detector_cpp.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "5afaf772444c17b499727a6ddb6da45a5e77cb7975751f6d7060efc0a79c0b57",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libstdc++.so.6",
+            "libm.so.6",
+            "libgcc_s.so.1",
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "rapidfuzz/distance/_initialize_cpp.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "48c6795a7efe7ce90fd8ea35f20fc24ae44b526e7f5233e2e793af2f17ab89bc",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libstdc++.so.6",
+            "libm.so.6",
+            "libgcc_s.so.1",
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "rapidfuzz/distance/metrics_cpp.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "6ec08b0dd15870e30d15f26de4170ed8d73852b3c0b1ae95b08b1e33d8b69467",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libstdc++.so.6",
+            "libm.so.6",
+            "libgcc_s.so.1",
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "rapidfuzz/distance/metrics_cpp_avx2.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "7c9fe2c5f99f178b26f579391d062ad0f1e8b4a03aa7fc7a6d30f5083e4cbdb1",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libstdc++.so.6",
+            "libm.so.6",
+            "libgcc_s.so.1",
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "rapidfuzz/fuzz_cpp.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "d392cb569314c84f09fc75656221d60ed70509f8df8a5a4e0f8026fdaf2a6228",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libstdc++.so.6",
+            "libm.so.6",
+            "libgcc_s.so.1",
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "rapidfuzz/fuzz_cpp_avx2.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "98a33a3791edb65155387b5887dcafaaaafda0192d314e9cd2bc471d4526c764",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libstdc++.so.6",
+            "libm.so.6",
+            "libgcc_s.so.1",
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "rapidfuzz/process_cpp_impl.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "284bd5c355baf9aa28aae7d7b6046e2e2faa79ae9ebce08f7751ddc43f590f77",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libstdc++.so.6",
+            "libm.so.6",
+            "libgcc_s.so.1",
+            "libpthread.so.0",
+            "libc.so.6",
+            "ld-linux-x86-64.so.2"
+          ]
+        },
+        {
+          "path": "rapidfuzz/utils_cpp.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "86a5c21b445c5d834cbb5fe2964c65b8fbce5ec2072afff0950559fd635fcdc8",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libstdc++.so.6",
+            "libm.so.6",
+            "libgcc_s.so.1",
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "51dae324caa606a75cc7e7c22f08e7f12d76c341a43e969fffdaab7f056e0291",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "regex",
+      "version": "2026.7.19",
+      "filename": "regex-2026.7.19-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/2a/8e/096d00c7c480ef2ff4265349b14e2261d4ab787ba1f74e2e80d1c58079c3/regex-2026.7.19-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "9dce8ec9695f531a1b8a6f314fd4b393adcccf2ea861db480cdf97a301d01a68",
+      "native_files": [
+        {
+          "path": "regex/_regex.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "9da92c474d560183d67f7c19f9e0f0cc72c5709a44d346ef2c279f3d521d0a07",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "fd895ec7522cd0bbab71ee4826442162f3f408a5f8d92e759f4ddf1be60dcf73",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "sqlalchemy",
+      "version": "2.0.52",
+      "filename": "sqlalchemy-2.0.52-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/be/57/2eadf93a552568c57e8680b7e58bb5e9770d80942a1bdbaf4f2f63f0d7c8/sqlalchemy-2.0.52-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "8738008376d22f30f411ea3efecf39b51110b6996d80bb73786f30bcfdd5fd3b",
+      "native_files": [
+        {
+          "path": "sqlalchemy/cyextension/collections.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "3b2cbf1aaea0edf05cb7c77a3b4844861cd85b304f2592f759cb6dc5c6a70651",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "sqlalchemy/cyextension/immutabledict.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "4ffa8451c2c52d05cbf37aca877ed555057d778884f62fd8fc0838a9a31cec59",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "sqlalchemy/cyextension/processors.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "f69a0bebc11e8004e84d92a1eb1826a15a9e4f79489de2ff94c684ed0285ec8a",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "sqlalchemy/cyextension/resultproxy.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "97292b4ab2cddea649e45dfc73f19ec39ea0c43eb5213457a5aae1f1bc18f19e",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        },
+        {
+          "path": "sqlalchemy/cyextension/util.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "9fa48d18a36b6be046a00663c4fe561fee4aa746a1feb0847f15c91b6add6ea4",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "21d72718662462c632bd5db16a74cfb31904f77bb9f080bdc49cf3f764543218",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "uvloop",
+      "version": "0.22.1",
+      "filename": "uvloop-0.22.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/5f/6f/e62b4dfc7ad6518e7eff2516f680d02a0f6eb62c0c212e152ca708a0085e/uvloop-0.22.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "7b5b1ac819a3f946d3b2ee07f09149578ae76066d70b44df3fa990add49a82e4",
+      "native_files": [
+        {
+          "path": "uvloop/loop.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "8d67497ee731a56033f091471d500e3b0a277a641af09ca7da06794ed3e6f76f",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "librt.so.1",
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "7106328da9670776c358802971b7dc41c0b86ed3673bf9cc4c0d5e11ff2f3583",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "watchfiles",
+      "version": "1.2.0",
+      "filename": "watchfiles-1.2.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/22/24/ed72f68cbc1333ca9b9f2200aa048bb6658ae41709bc1caad4310f4bdffd/watchfiles-1.2.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "sha256": "e53a384f76b631c3ae5334ce6a52f0baa3a911eb94a4eac7f160079868b716d5",
+      "native_files": [
+        {
+          "path": "watchfiles/_rust_notify.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "2ab9489939c76aec37f5842fb26ceafab912efe22ff2ee359f8676cf880a8f74",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libgcc_s.so.1",
+            "librt.so.1",
+            "libpthread.so.0",
+            "libdl.so.2",
+            "libc.so.6",
+            "ld-linux-x86-64.so.2"
+          ]
+        }
+      ],
+      "metadata_sha256": "2c92c0bfebdf6743603f6e7c4da95a53ce4d575f00cede3aa2032a8d5ce3da17",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "websockets",
+      "version": "17.0.1",
+      "filename": "websockets-17.0.1-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/42/28/9ec976c16d63cc51c28dfec74b66854048c0b8b6579946e902f91b69e8bf/websockets-17.0.1-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+      "sha256": "f47b0815af3948ec6a440b3afa02f05b18cc0939549e91b5c677b5d9c2c8472a",
+      "native_files": [
+        {
+          "path": "websockets/speedups.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "dd8f00b231337f61fe1da38d1b4a2c0e6e8b9072a5c632e789d5de739ef66314",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "67f6eda687dfcf4b9b8875668a6d2b62314cc4d74e9ff2e1695bac2bc0990880",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "wrapt",
+      "version": "2.3.0",
+      "filename": "wrapt-2.3.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/28/7f/cfd9bc4b1f5e424eeea83d0493e43f3b1b02707ce8e50c47945873982bd5/wrapt-2.3.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+      "sha256": "5d221a6e6ddd302b8397433184e96b59f259f50024b854db1c411a881586b6b8",
+      "native_files": [
+        {
+          "path": "wrapt/_wrappers.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "ce29bc6ce66ce3009bead068779a665b092b2cd2cf0106c8610b2a7978246059",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "bed8a0620d9d2a6779427fcecabcbc642f6fa68b107ab583faa01a6dabcafaef",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    },
+    {
+      "name": "yarl",
+      "version": "1.25.1",
+      "filename": "yarl-1.25.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/bc/7b/ca212cbe170ac8b96e45317ecbcf9c3c3ecf0cdec98d5b088a9c4088929b/yarl-1.25.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "c6f117789d22dce188e5754e8bc65b7e6ebf8cb73963b9fa761f672a5883769d",
+      "native_files": [
+        {
+          "path": "yarl/_quoting_c.cpython-312-x86_64-linux-gnu.so",
+          "sha256": "deae0fb92793730e5b3924f267c03225360f0756e4cbb3971c5a048010b3245e",
+          "elf_machine": 62,
+          "DT_NEEDED": [
+            "libpthread.so.0",
+            "libc.so.6"
+          ]
+        }
+      ],
+      "metadata_sha256": "fd6baa258a11c4d7e7008272a69180d4d34aa04a6a5afda36ac5e55aa0aa4f41",
+      "proof_source": "Previously verified current local x86 artifacts/public wheel receipts; not re-audited in ARM lane."
+    }
+  ],
+  "pure_python_shared_notices_index": "pure-python-shared.json"
+}

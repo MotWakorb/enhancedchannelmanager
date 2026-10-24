@@ -46,8 +46,11 @@ slowapi>=0.1.9
 # ACME JOSE implementation below and serves a different protocol.
 # GH1024: security fixes through 2.15.0 plus padded-signature compatibility.
 pyjwt>=2.15.1
-# Floored at 48.0.1 to clear GHSA-537c-gmf6-5ccf (v0.18.0 release-scan blocker).
-cryptography>=50.0.0
+# Wheels must bundle OpenSSL >=4.0.3 to fix CVE-2026-84782 (High) and
+# CVE-2026-84783 (vendor Moderate / CVSS High), outside the OS package scan.
+# 50.0.2 supplies 4.0.3; 50.0.1's 4.0.2 is insufficient. Retains the earlier
+# GHSA-537c-gmf6-5ccf fix (48.0.1 minimum).
+cryptography>=50.0.2
 
 # TLS/ACME (Let's Encrypt)
 josepy>=1.14.0

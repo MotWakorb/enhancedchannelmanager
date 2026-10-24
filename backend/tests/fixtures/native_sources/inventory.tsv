@@ -1,0 +1,5 @@
+gpg-pubkey	29b700a4	6a17fa38	(none)	(none)	(none)	pubkey
+system-user-root	20190513	2.20	noarch	openSUSE	system-user-root-20190513-2.20.src.rpm	MIT
+coreutils	9.12	1.1	x86_64	openSUSE	coreutils-9.12-1.1.src.rpm	GPL-3.0-or-later
+libx264-165	20250608.b35605ac	1699.1.pm.18	x86_64	http://packman.links2linux.de	libx264-20250608.b35605ac-1699.1.pm.18.src.rpm	GPL-2.0-or-later
+libhdr10plus-4_1	4.1	1699.4.pm.27	x86_64	http://packman.links2linux.de	x265-4.1-1699.4.pm.27.src.rpm	GPL-2.0-or-later

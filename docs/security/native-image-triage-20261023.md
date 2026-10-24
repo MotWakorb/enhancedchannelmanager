@@ -1,5 +1,95 @@
 # Native image triage — 2026-10-23
 
+## Remediation implementation
+
+[ADR-015](../adr/ADR-015-wolfi-native-runtime.md) records the native-remediation
+experiments and their publication boundary. **The Wolfi prototype is rejected for
+publication:** its zero High/Critical result does not repair the missing exact
+source/patch correspondence or its software-input losses. No format waiver was
+approved. The production recipe now uses source-built FFmpeg 8.1.3/openSUSE,
+with source delivery and final artifact checks. It is not yet an accepted
+production image.
+
+The three full-backend integration regressions have targeted green evidence
+(355 tests), and the runtime gate now requires 28 checks including actual
+production probing/cancellation, software-input inventory and five original
+rare-input decodes and final source/artifact integrity. The earlier 22-check
+Wolfi image result does not satisfy this expanded gate. Final-source full tests,
+native execution on both architectures, complete
+source/notices, unsuppressed scans and exact-SHA publication remain required.
+The historical Debian inventory below is preserved, not reclassified as fixed or
+suppressed.
+
+### Additional wheel-native finding — 2026-10-24
+
+The installed locked `cryptography==50.0.0` wheel was independently matched to its
+public PyPI wheel bytes. Its `_rust.abi3.so` statically embeds **OpenSSL 4.0.1**;
+upgrading system OpenSSL does not replace that copy. The
+[OpenSSL September 29 advisories](https://openssl-library.org/news/secadv/20260929.txt)
+identify CVE-2026-84782 (maintainer High, CISA CVSS 8.2) and CVE-2026-84783
+(maintainer Moderate, CISA CVSS 7.5/High), fixed in **4.0.3**. Application
+reachability/affected-code retention is not established, so neither is waived.
+
+The [cryptography changelog](https://cryptography.io/en/latest/changelog/)
+maps **50.0.2** to OpenSSL **4.0.3** wheels; 50.0.1's 4.0.2 is insufficient.
+Both service floors and locks now select 50.0.2 with no other locked-version
+changes. The actual loaded library is OpenSSL 4.0.3 in the two new local test
+environments, not Python's unrelated `ssl.OPENSSL_VERSION`. Local targeted backend
+checks pass (112), and the full MCP suite passes (791); the integrated native,
+relay, workflow, supply-chain and OpenSSL unit subset passes (805). These are
+local x86_64 results, not final-image or arm64 approval. The wheel and Rust/PyO3
+identities changed; matching notices/source identities are being refreshed.
+Final image inspection and both architectures remain required. An empty
+OS/Python-package Trivy result does not close this
+separate native-copy finding. The original 42-advisory inventory remains intact;
+it is not a limit on reviewing newly identified native issues.
+
+### Source-closed replacement and remaining acceptance
+
+The digest-pinned seven-stage recipe delivers exact runtime SRPMs at
+`/usr/share/ecm/sources/rpm/`, owned FFmpeg/gosu recipes and sources under
+`/usr/share/ecm/sources/owned/`, and resdet/Python sources and third-party notices.
+[Source delivery](native-source-delivery.md) describes the authentication,
+completeness checks and size/rolling-repository trade-offs. The runtime gate
+compares these records to the live RPM database and the actual shipped binaries;
+its receipt retains per-architecture source bindings for final advisory joins.
+
+The complete amd64 application experiment passed the former 27-check matrix and
+scanned 212 RPM/key entries, 74 Python packages and four Go components with zero
+High/Critical. It is **not** the completed patched production recipe. SUSE's OS
+scan omits unfixed issues and does not cover custom FFmpeg; neither limitation is
+treated as a fix. The strict raw High/Critical gate is unchanged.
+
+Static correspondence covers all 42 historical advisories: the 16 FFmpeg fixes
+are documented [separately](ffmpeg-8.1.3-source-review-20261024.md); the remaining
+26 comprise 17 fixes in the reviewed acl/libxml2/X11/Xrender/ncurses/systemd/
+util-linux source inputs and nine prototype-absence rows (cJSON, libsndfile,
+Archive::Tar and libtiff). These remain **source/prototype dispositions** until
+the final amd64 and arm64 source/artifact records match. A changed source revision
+requires another exact source join, not an inference from a newer version.
+The [replacement source dispositions](native-source-dispositions-20261024.md)
+retain the complete grouped advisory mapping, exact source hashes and limits.
+
+Eight additional FFmpeg development-snapshot advisories were mapped to corrected
+source in the signed 8.1.3 archive: CVE-2026-38344, -38346, -38347, -38348,
+-38349, -38350, CVE-2025-52290 and CVE-2026-96611. The -38350/-52290 mappings are
+source-derived rather than CVE-tagged; unsigned `SUINT` reasoning requires a
+normal non-`CHECKED` build. The separately retained, byte-pinned upstream RTSP
+redirect-limit correction is applied with zero fuzz and exact source witnesses.
+No adversarial runtime reproduction or general decoder-safety claim is made.
+
+Both services now require actual loaded cryptography/OpenSSL checks in the
+architecture-specific image jobs. The local MCP amd64 musl image confirms
+OpenSSL 4.0.3, non-root execution and RSA/AES-GCM operations. Final ARM execution
+and exact-candidate scans remain mandatory; no x86 result is relabeled as ARM.
+
+Separate unscored application YAML composition budgets (`enhancedchannelmanager-10tln`)
+and x265 allocation-failure propagation (`enhancedchannelmanager-6ayl0`) are P2
+follow-ups, not waivers for a named unresolved High/Critical finding. The reviewed
+YAML consumers select the pure-Python SafeLoader, not the affected native parser;
+the exact x265 source already contains the two guards correcting CVE-2017-13135.
+Neither conclusion establishes general resource-exhaustion or allocation safety.
+
 ## Decision and evidence boundary
 
 **Production promotion remains blocked by unresolved applicable Critical/High

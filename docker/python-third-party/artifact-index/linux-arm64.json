@@ -1,0 +1,4323 @@
+{
+  "architecture": "linux/arm64",
+  "elf_machine": 183,
+  "python": "CPython 3.12 standard ABI",
+  "selection_glibc": "2.44",
+  "proof_layer": "Expected official manylinux wheel archive metadata, ELF and notices only; final resolver choices, final image files and ARM execution not proved.",
+  "lock_sha256": "7fbaf818e6617efc2bbd54e07af7ef5a7eac300712ad7b29fa5c6b4ada17a2bf",
+  "native_distribution_count": 22,
+  "native_ELF_count": 36,
+  "native_distributions": [
+    {
+      "name": "aiohttp",
+      "version": "3.14.5",
+      "filename": "aiohttp-3.14.5-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/22/ff/c6615806c14aab34f82b9424ccde8ce6e417315fd57ce1c5b4d4747888e1/aiohttp-3.14.5-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "abfda5cb094a829f7bc25216a32f7db2e85cc65bd59910f8e7b40b3d9b224764",
+      "size": 1896245,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "50b29a2268649f7ce5b22c0a41b60896d246fee58e2a74b468f66848e469834c",
+      "license_metadata": {
+        "License": [],
+        "License-Expression": [
+          "Apache-2.0 AND MIT"
+        ],
+        "License-File": [
+          "LICENSE.txt",
+          "vendor/llhttp/LICENSE"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "aiohttp/_http_parser.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "80e17c20a6c5a216c9fd31b8cb3675d9dab50bb85b84706210a64adda19f8274",
+          "size": 3426576,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        },
+        {
+          "path": "aiohttp/_http_writer.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "5c9ee5d8c9d9df610167dc50e794d356641dda8e92850a2525ea14ba3c9097c2",
+          "size": 617536,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        },
+        {
+          "path": "aiohttp/_websocket/mask.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "2aa90bfdba889313b8bf890a14f727ea4fddfd7455392d60d5f3f1a6456ca334",
+          "size": 417184,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        },
+        {
+          "path": "aiohttp/_websocket/reader_c.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "d5a04fba6beb291b5357a5df70213cb0ca2d414b90ab023770fd78cca925c185",
+          "size": 2111056,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/aiohttp-3.14.5.dist-info/licenses/LICENSE.txt",
+          "sha256": "2e4be5fc6c4c72a466fcb665d726e049a6891981fe536c4f04b6366749461d23"
+        },
+        {
+          "shared_path": "notices/wheels/aiohttp-3.14.5.dist-info/licenses/vendor/llhttp/LICENSE",
+          "sha256": "628168d68bb5a8a17e0bbefb3bd74e326e1edc20583d76f52f457c82c921867d"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "aiohttp/_http_parser.cpython-312-aarch64-linux-gnu.so",
+          "aiohttp/_http_writer.cpython-312-aarch64-linux-gnu.so",
+          "aiohttp/_websocket/mask.cpython-312-aarch64-linux-gnu.so",
+          "aiohttp/_websocket/reader_c.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "aiohttp/_http_parser.cpython-312-x86_64-linux-gnu.so",
+          "aiohttp/_http_writer.cpython-312-x86_64-linux-gnu.so",
+          "aiohttp/_websocket/mask.cpython-312-x86_64-linux-gnu.so",
+          "aiohttp/_websocket/reader_c.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "bcrypt",
+      "version": "5.0.0",
+      "filename": "bcrypt-5.0.0-cp39-abi3-manylinux_2_34_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/ac/31/79f11865f8078e192847d2cb526e3fa27c200933c982c5b2869720fa5fce/bcrypt-5.0.0-cp39-abi3-manylinux_2_34_aarch64.whl",
+      "sha256": "edfcdcedd0d0f05850c52ba3127b1fce70b9f89e0fe5ff16517df7e81fa3cbb8",
+      "size": 275662,
+      "best_tag": "cp39-abi3-manylinux_2_34_aarch64",
+      "metadata_sha256": "c95d417cb948eae765572db778d6f30daeb60d211b52b956be52c1088e9401d2",
+      "license_metadata": {
+        "License": [
+          "Apache-2.0"
+        ],
+        "License-Expression": [],
+        "License-File": [
+          "LICENSE"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "bcrypt/_bcrypt.abi3.so",
+          "sha256": "deb31d8fea190d0737e48bc3475548fd64b24bd60556681575fdc14381452afb",
+          "size": 715816,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libgcc_s.so.1",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [
+            "rustc version 1.90.0 (1159e78c4 2025-09-14)"
+          ],
+          "rustc_commits": [
+            "1159e78c4747b02ef996e55082b704c09b970588"
+          ],
+          "embedded_crate_source_versions": [
+            [
+              "base64",
+              "0.22.1"
+            ],
+            [
+              "bcrypt",
+              "0.17.1"
+            ],
+            [
+              "bcrypt-pbkdf",
+              "0.10.0"
+            ],
+            [
+              "blowfish",
+              "0.9.1"
+            ],
+            [
+              "generic-array",
+              "0.14.7"
+            ],
+            [
+              "once_cell",
+              "1.21.3"
+            ],
+            [
+              "pbkdf2",
+              "0.12.2"
+            ],
+            [
+              "pyo3",
+              "0.26.0"
+            ],
+            [
+              "pyo3-ffi",
+              "0.26.0"
+            ],
+            [
+              "sha2",
+              "0.10.9"
+            ]
+          ],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "6fa3453f55d89ca458252397f1ff67b039aba35812a1f0b3cda85eaaa281f072",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-7)",
+              "rustc version 1.90.0 (1159e78c4 2025-09-14)",
+              "clang version 20.1.0-rc2"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/bcrypt-5.0.0.dist-info/licenses/LICENSE",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+        }
+      ],
+      "Rust_standard_library_notice_binding": {
+        "distribution": "bcrypt",
+        "actual_ARM_commit": "1159e78c4747b02ef996e55082b704c09b970588",
+        "actual_ARM_version_strings": [
+          "rustc version 1.90.0 (1159e78c4 2025-09-14)"
+        ],
+        "notice_release": "1.90.0",
+        "existing_exact_recovery_receipt": "rust-library-notices/resolution.json",
+        "notice_files": [
+          {
+            "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/COPYRIGHT-library.html",
+            "sha256": "025c0dd1236493fcd5b6386b68453852e6528722bd5f8dce5949e94d225e7a60"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/Apache-2.0.txt",
+            "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/Unicode-3.0.txt",
+            "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/CC-BY-SA-4.0.txt",
+            "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/OFL-1.1.txt",
+            "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/GCC-exception-3.1.txt",
+            "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/NCSA.txt",
+            "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/ISC.txt",
+            "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/MIT.txt",
+            "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/BSD-2-Clause.txt",
+            "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/LLVM-exception.txt",
+            "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/GPL-3.0-or-later.txt",
+            "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/1159e78c4747b02ef996e55082b704c09b970588/licenses/GPL-2.0-only.txt",
+            "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af"
+          }
+        ],
+        "new_toolchain_notice_download_required": false,
+        "reason": "Actual ARM full compiler commit and release match the previously authenticated release-global library notice, whose text hashes were checked. No x86 compiler identity was assumed."
+      },
+      "native_path_comparison_to_x86": {
+        "arm_only": [],
+        "x86_only": [],
+        "same_path_set": true,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1",
+      "filename": "cffi-2.1.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/44/de/f98430906df1545ffde0d543dd124a7a439bc2cd32b36b9c53f805df7333/cffi-2.1.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+      "sha256": "68e62fe11f30d5ca8289242866f0a5291402d8529ca2178ab8afc5c9694ae890",
+      "size": 222389,
+      "best_tag": "cp312-cp312-manylinux2014_aarch64",
+      "metadata_sha256": "558bafb9093a8e790175d9ecff9688382981d744877dad86fd6770db0f4dc918",
+      "license_metadata": {
+        "License": [],
+        "License-Expression": [
+          "MIT-0"
+        ],
+        "License-File": [
+          "LICENSE"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "_cffi_backend.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "23e198f625ece5106ebdf2f90c7219b1fe204bb6d264021aa5a6dd892195e59a",
+          "size": 452656,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": true,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "8cfca6c539c8ae839af79351ec8866f254fcfea22671eb64af8c5629a42e5faa",
+            "strings": [
+              "GCC: (GNU) 10.2.1 20210130 (Red Hat 10.2.1-11)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/cffi-2.1.1.dist-info/licenses/LICENSE",
+          "sha256": "5ba24ddc57067f9249add644c3afc41a5d6dc37e23433ef759d95df370b0af63"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "_cffi_backend.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "_cffi_backend.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "coverage",
+      "version": "7.15.4",
+      "filename": "coverage-7.15.4-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/71/17/8b46d0ed68251016002ec972c8fc0119961a765d0984cafb8bf317c43758/coverage-7.15.4-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "d15715e8c46552827e5e4f30a35575a2dbcad14454cf3284c54483946bd16931",
+      "size": 258257,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "1ec1d62cb37a000e691d78bde85ffb2d33802692946944ba97152013c1cebe4c",
+      "license_metadata": {
+        "License": [
+          "Apache-2.0"
+        ],
+        "License-Expression": [],
+        "License-File": [
+          "LICENSE.txt",
+          "NOTICE.txt"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "coverage/tracer.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "8a477bca09a1781bf96835161dd382e2c5779f042aa468c4be0b75ac78aa8d02",
+          "size": 309752,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/coverage-7.15.4.dist-info/licenses/LICENSE.txt",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "shared_path": "notices/wheels/coverage-7.15.4.dist-info/licenses/NOTICE.txt",
+          "sha256": "80e177ab397d5f332954693a52abc1b34b06c5792dd57297608b6d68a2f6af11"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "coverage/tracer.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "coverage/tracer.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "cryptography",
+      "version": "50.0.2",
+      "filename": "cryptography-50.0.2-cp311-abi3-manylinux_2_34_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/71/37/6202e488cc1eb625ea110c292c6bda92823176e023f427d8d5660ce8d632/cryptography-50.0.2-cp311-abi3-manylinux_2_34_aarch64.whl",
+      "sha256": "87e9ce85beb6b328ba370cc6e6aea483c92617b4c95b1d33a49297eb662bfb04",
+      "size": 4737859,
+      "best_tag": "cp311-abi3-manylinux_2_34_aarch64",
+      "metadata_sha256": "047cfc71226409de4318b360aef15c63a2adf609731e3dcf7fe932f14ea042ee",
+      "license_metadata": {
+        "License": [],
+        "License-Expression": [
+          "Apache-2.0 OR BSD-3-Clause"
+        ],
+        "License-File": [
+          "LICENSE",
+          "LICENSE.APACHE",
+          "LICENSE.BSD"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "cryptography/hazmat/bindings/_rust.abi3.so",
+          "sha256": "b52e6ae53c343ce97478ee10d93a0263576d778de65333c234577298d1e9ef07",
+          "size": 13652416,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libgcc_s.so.1",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": [
+              "OpenSSL 3's legacy provider failed to load. Legacy algorithms will not be available. If you need those algori",
+              "OpenSSL 4.0.3 29 Sep 2026"
+            ]
+          },
+          "rustc_version_strings": [
+            "rustc version 1.98.1 (48a229cea 2026-09-01)"
+          ],
+          "rustc_commits": [
+            "48a229ceaefd4985c50990b14116b6d856af0985"
+          ],
+          "embedded_crate_source_versions": [
+            [
+              "asn1",
+              "0.24.1"
+            ],
+            [
+              "base64",
+              "0.23.0"
+            ],
+            [
+              "bitflags",
+              "2.13.1"
+            ],
+            [
+              "itoa",
+              "1.0.18"
+            ],
+            [
+              "once_cell",
+              "1.21.4"
+            ],
+            [
+              "openssl",
+              "0.10.81"
+            ],
+            [
+              "openssl-sys",
+              "0.9.117"
+            ],
+            [
+              "pem",
+              "4.0.0"
+            ],
+            [
+              "pyo3",
+              "0.29.2"
+            ],
+            [
+              "pyo3-ffi",
+              "0.29.2"
+            ]
+          ],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "eb01ce76acd01f9069f284fa12ec39a248fffdf41a1081a1399de1daebf435ab",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-13)",
+              "rustc version 1.98.1 (48a229cea 2026-09-01)",
+              "clang version 22.1.0-rc2"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [
+        {
+          "path": "notices/architecture/linux-arm64/cryptography/cryptography-rust.cyclonedx.json",
+          "sha256": "fee819a6ce3cffc8a3f152acf6e0933c9bc719f8ccf76766d799f844f8b22772",
+          "components": [
+            {
+              "name": "cryptography-cffi",
+              "version": "0.50.2",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR BSD-3-Clause"
+                }
+              ]
+            },
+            {
+              "name": "cryptography-crypto",
+              "version": "0.50.2",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR BSD-3-Clause"
+                }
+              ]
+            },
+            {
+              "name": "cryptography-keepalive",
+              "version": "0.50.2",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR BSD-3-Clause"
+                }
+              ]
+            },
+            {
+              "name": "cryptography-key-parsing",
+              "version": "0.50.2",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR BSD-3-Clause"
+                }
+              ]
+            },
+            {
+              "name": "cryptography-openssl",
+              "version": "0.50.2",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR BSD-3-Clause"
+                }
+              ]
+            },
+            {
+              "name": "cryptography-x509",
+              "version": "0.50.2",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR BSD-3-Clause"
+                }
+              ]
+            },
+            {
+              "name": "cryptography-x509-verification",
+              "version": "0.50.2",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR BSD-3-Clause"
+                }
+              ]
+            },
+            {
+              "name": "asn1",
+              "version": "0.24.1",
+              "licenses": [
+                {
+                  "expression": "BSD-3-Clause"
+                }
+              ]
+            },
+            {
+              "name": "asn1_derive",
+              "version": "0.24.1",
+              "licenses": [
+                {
+                  "expression": "BSD-3-Clause"
+                }
+              ]
+            },
+            {
+              "name": "base64",
+              "version": "0.23.0",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "bitflags",
+              "version": "2.13.1",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "cc",
+              "version": "1.4.0",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "cfg-if",
+              "version": "1.0.4",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "find-msvc-tools",
+              "version": "0.1.9",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "foreign-types-shared",
+              "version": "0.1.1",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "foreign-types",
+              "version": "0.3.2",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "heck",
+              "version": "0.5.0",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "itoa",
+              "version": "1.0.18",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "libc",
+              "version": "0.2.189",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "once_cell",
+              "version": "1.21.4",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "openssl-macros",
+              "version": "0.1.1",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "openssl-sys",
+              "version": "0.9.117",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "openssl",
+              "version": "0.10.81",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pem",
+              "version": "4.0.0",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "pkg-config",
+              "version": "0.3.33",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "portable-atomic",
+              "version": "1.14.0",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "proc-macro2",
+              "version": "1.0.107",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-build-config",
+              "version": "0.29.2",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-ffi",
+              "version": "0.29.2",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-macros-backend",
+              "version": "0.29.2",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-macros",
+              "version": "0.29.2",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3",
+              "version": "0.29.2",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "quote",
+              "version": "1.0.47",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "self_cell",
+              "version": "1.3.0",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR GPL-2.0-only"
+                }
+              ]
+            },
+            {
+              "name": "shlex",
+              "version": "2.0.1",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "syn",
+              "version": "2.0.119",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "target-lexicon",
+              "version": "0.13.5",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 WITH LLVM-exception"
+                }
+              ]
+            },
+            {
+              "name": "unicode-ident",
+              "version": "1.0.24",
+              "licenses": [
+                {
+                  "expression": "(MIT OR Apache-2.0) AND Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "vcpkg",
+              "version": "0.2.15",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "path": "notices/architecture/linux-arm64/cryptography/sbom.json",
+          "sha256": "b0bf7d97f711a6abea7658c0e84ad5954226663559cba3ae14321e70adb72184",
+          "components": [
+            {
+              "name": "openssl",
+              "version": "4.0.3",
+              "licenses": []
+            }
+          ]
+        }
+      ],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE",
+          "sha256": "3e0c7c091a948b82533ba98fd7cbb40432d6f1a9acbf85f5922d2f99a93ae6bb"
+        },
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+        },
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.BSD",
+          "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+        }
+      ],
+      "Rust_standard_library_notice_binding": {
+        "distribution": "cryptography",
+        "actual_ARM_commit": "48a229ceaefd4985c50990b14116b6d856af0985",
+        "actual_ARM_version_strings": [
+          "rustc version 1.98.1 (48a229cea 2026-09-01)"
+        ],
+        "notice_release": "1.98.1",
+        "existing_exact_recovery_receipt": "updates/cryptography-50.0.2/changed-notice-recovery.json",
+        "notice_files": [
+          {
+            "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/COPYRIGHT-library.html",
+            "sha256": "68129500b616d5838629e68f55ff3aed5e096dacf60ce9eb41bbe599a563afa6"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/Apache-2.0.txt",
+            "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/Unicode-3.0.txt",
+            "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/CC-BY-SA-4.0.txt",
+            "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/OFL-1.1.txt",
+            "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/GCC-exception-3.1.txt",
+            "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/NCSA.txt",
+            "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/ISC.txt",
+            "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/MIT.txt",
+            "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/BSD-2-Clause.txt",
+            "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/LLVM-exception.txt",
+            "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/GPL-3.0-or-later.txt",
+            "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/48a229ceaefd4985c50990b14116b6d856af0985/licenses/GPL-2.0-only.txt",
+            "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af"
+          }
+        ],
+        "new_toolchain_notice_download_required": false,
+        "reason": "Actual ARM full compiler commit and release match the previously authenticated release-global library notice, whose text hashes were checked. No x86 compiler identity was assumed."
+      },
+      "native_path_comparison_to_x86": {
+        "arm_only": [],
+        "x86_only": [],
+        "same_path_set": true,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "frozenlist",
+      "version": "1.8.0",
+      "filename": "frozenlist-1.8.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/8f/83/f61505a05109ef3293dfb1ff594d13d64a2324ac3482be2cedc2be818256/frozenlist-1.8.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "96f423a119f4777a4a056b66ce11527366a8bb92f54e541ade21f2374433f6d4",
+      "size": 243014,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "946c22dc9f7e2c76f2d698f00a4306dbe49a820e2b3f1a0e22fe5286cbec35f1",
+      "license_metadata": {
+        "License": [
+          "Apache-2.0"
+        ],
+        "License-Expression": [],
+        "License-File": [
+          "LICENSE"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "frozenlist/_frozenlist.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "111659811c862ca6e80545ceb2de3437fe4550a7dda72333e425aa3ec0b38c15",
+          "size": 916224,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "cdff3ea7e85e94cf4c370ab06c8ff3279017d4c18549203a9d2bdfe3bd3b1cf2",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-7)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/frozenlist-1.8.0.dist-info/licenses/LICENSE",
+          "sha256": "6fd5243e92dd7f98ec69c7ac377728e74905709ff527a5bf98d6d0263c04f5b6"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "frozenlist/_frozenlist.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "frozenlist/_frozenlist.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "greenlet",
+      "version": "3.5.5",
+      "filename": "greenlet-3.5.5-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/35/73/60e4bbcc89252037b18087f2ec16405d5b2d5be42dde191bbf3667e96102/greenlet-3.5.5-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "55272212cbc5f43d1d723725ab931f1939969b7e9523882ca58b55061769d053",
+      "size": 611910,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "16de87de070796e2e1f18019f963c3ba5972bb9bfca1b856b83096bf73c61f38",
+      "license_metadata": {
+        "License": [],
+        "License-Expression": [
+          "MIT AND PSF-2.0"
+        ],
+        "License-File": [
+          "LICENSE",
+          "LICENSE.PSF"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "greenlet/_greenlet.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "e3edca9149a13878bdd98d5c7e50f1ff42bb6012185db5b10a23d0a2dc3ce184",
+          "size": 1449120,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        },
+        {
+          "path": "greenlet/tests/_test_extension.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "0e278fe263e8f87e9115b450221ce71732831e37850b42fd75136562ad96a594",
+          "size": 202752,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        },
+        {
+          "path": "greenlet/tests/_test_extension_cpp.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "a2b693495bf7524386f909b4a424cda258e257af8b8255f2a4a7cc0833c8dd56",
+          "size": 244160,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/greenlet-3.5.5.dist-info/licenses/LICENSE",
+          "sha256": "769831d6e5dfaf2c20802faccff1fafb4c2025dd8f6253dfa47fcad59d4d0979"
+        },
+        {
+          "shared_path": "notices/wheels/greenlet-3.5.5.dist-info/licenses/LICENSE.PSF",
+          "sha256": "e5ff3c23c110e494cd7d736c10fd96d462457bafeca310840db6527298c7d46b"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "greenlet/_greenlet.cpython-312-aarch64-linux-gnu.so",
+          "greenlet/tests/_test_extension.cpython-312-aarch64-linux-gnu.so",
+          "greenlet/tests/_test_extension_cpp.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "greenlet/_greenlet.cpython-312-x86_64-linux-gnu.so",
+          "greenlet/tests/_test_extension.cpython-312-x86_64-linux-gnu.so",
+          "greenlet/tests/_test_extension_cpp.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "httptools",
+      "version": "0.8.0",
+      "filename": "httptools-0.8.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/b7/e4/f90a0df0b83beff265b7e3b65f2a4cefd95792d4be0ac3e16049f2acd3c2/httptools-0.8.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "425f83884fd6343828d8c565f046cb72b6d19063f6924093e11bcd8e1548cd09",
+      "size": 518842,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "7b5c0231580b589e7721b111f37324276f2a585bc2d27aedd67297e0c9b4bda8",
+      "license_metadata": {
+        "License": [],
+        "License-Expression": [
+          "MIT"
+        ],
+        "License-File": [
+          "LICENSE",
+          "vendor/http-parser/LICENSE-MIT",
+          "vendor/llhttp/LICENSE"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "httptools/parser/parser.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "75749ec25c9b3202e400c3fb1b9d51af8903c825da2c6a6ad76b6f0d634bc003",
+          "size": 1381288,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "cdff3ea7e85e94cf4c370ab06c8ff3279017d4c18549203a9d2bdfe3bd3b1cf2",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-7)"
+            ]
+          }
+        },
+        {
+          "path": "httptools/parser/url_parser.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "c83a1ecfbd9806430c5b752521f7c0a0305df719196533bcf6430017a1972b80",
+          "size": 616640,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "cdff3ea7e85e94cf4c370ab06c8ff3279017d4c18549203a9d2bdfe3bd3b1cf2",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-7)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/httptools-0.8.0.dist-info/licenses/LICENSE",
+          "sha256": "f4573e7cb7676745fb5b8d36fa548aa93e391cfb6872ddacd65130c45ea6a92d"
+        },
+        {
+          "shared_path": "notices/wheels/httptools-0.8.0.dist-info/licenses/vendor/http-parser/LICENSE-MIT",
+          "sha256": "79e6ba8b687cb54786207342b9b6fcee0ac10218453ed9009b84d949b2233cc0"
+        },
+        {
+          "shared_path": "notices/wheels/httptools-0.8.0.dist-info/licenses/vendor/llhttp/LICENSE",
+          "sha256": "628168d68bb5a8a17e0bbefb3bd74e326e1edc20583d76f52f457c82c921867d"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "httptools/parser/parser.cpython-312-aarch64-linux-gnu.so",
+          "httptools/parser/url_parser.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "httptools/parser/parser.cpython-312-x86_64-linux-gnu.so",
+          "httptools/parser/url_parser.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "hypothesis",
+      "version": "6.165.10",
+      "filename": "hypothesis-6.165.10-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/04/66/4c71c5be7a49d84b8c3a9278c1807c4c81181ab5474beb27df9d4c40dc0e/hypothesis-6.165.10-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "sha256": "f9ff356e97e3ab09db07c8b675efa67340103874a0bae7465acb83dad7a35f7f",
+      "size": 1106830,
+      "best_tag": "cp312-cp312-manylinux2014_aarch64",
+      "metadata_sha256": "1bc8efdaf287f0251d12f40bc89b99233075d2b987a119e78174051699860213",
+      "license_metadata": {
+        "License": [],
+        "License-Expression": [
+          "MPL-2.0"
+        ],
+        "License-File": [
+          "LICENSE.txt"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "hypothesis/_native.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "37235dc7689363da2a0e261cbfd9606598e0b062fb134c4dbba2cfb5e1c5b691",
+          "size": 2078208,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libgcc_s.so.1",
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [
+            "rustc version 1.97.1 (8bab26f4f 2026-07-14)"
+          ],
+          "rustc_commits": [
+            "8bab26f4f68e0e26f0bb7960be334d5b520ea452"
+          ],
+          "embedded_crate_source_versions": [
+            [
+              "once_cell",
+              "1.21.4"
+            ],
+            [
+              "pyo3",
+              "0.29.2"
+            ],
+            [
+              "pyo3-ffi",
+              "0.29.2"
+            ]
+          ],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "132315c8258262e28e44d839dd1d89515717b101246789c57c751eab0e2dfcdc",
+            "strings": [
+              "GCC: (GNU) 4.8.5",
+              "rustc version 1.97.1 (8bab26f4f 2026-07-14)",
+              "clang version 22.1.0-rc2"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [
+        {
+          "path": "notices/architecture/linux-arm64/hypothesis/hypothesis-native.cyclonedx.json",
+          "sha256": "2be2daf43241f9078046a49129205271effd5e3d01eb2f16c168baca0c89bda8",
+          "components": [
+            {
+              "name": "heck",
+              "version": "0.5.0",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "libc",
+              "version": "0.2.186",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "once_cell",
+              "version": "1.21.4",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "proc-macro2",
+              "version": "1.0.106",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-build-config",
+              "version": "0.29.2",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-ffi",
+              "version": "0.29.2",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-macros-backend",
+              "version": "0.29.2",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-macros",
+              "version": "0.29.2",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3",
+              "version": "0.29.2",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "quote",
+              "version": "1.0.46",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "syn",
+              "version": "2.0.118",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "target-lexicon",
+              "version": "0.13.5",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 WITH LLVM-exception"
+                }
+              ]
+            },
+            {
+              "name": "unicode-ident",
+              "version": "1.0.24",
+              "licenses": [
+                {
+                  "expression": "(MIT OR Apache-2.0) AND Unicode-3.0"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/hypothesis-6.165.10.dist-info/licenses/LICENSE.txt",
+          "sha256": "ac89037bac63550644dce8cf32c6765e5fab9dc1a1ce94b89f8a805f341a6750"
+        }
+      ],
+      "Rust_standard_library_notice_binding": {
+        "distribution": "hypothesis",
+        "actual_ARM_commit": "8bab26f4f68e0e26f0bb7960be334d5b520ea452",
+        "actual_ARM_version_strings": [
+          "rustc version 1.97.1 (8bab26f4f 2026-07-14)"
+        ],
+        "notice_release": "1.97.1",
+        "existing_exact_recovery_receipt": "rust-library-notices/resolution.json",
+        "notice_files": [
+          {
+            "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/COPYRIGHT-library.html",
+            "sha256": "0a65bb747c49c7bb816cbc7188319bd6e4e8d08091c1190b8a3c0971c47968ed"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/Apache-2.0.txt",
+            "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/Unicode-3.0.txt",
+            "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/CC-BY-SA-4.0.txt",
+            "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/OFL-1.1.txt",
+            "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/GCC-exception-3.1.txt",
+            "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/NCSA.txt",
+            "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/ISC.txt",
+            "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/MIT.txt",
+            "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/BSD-2-Clause.txt",
+            "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/LLVM-exception.txt",
+            "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/GPL-3.0-or-later.txt",
+            "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/8bab26f4f68e0e26f0bb7960be334d5b520ea452/licenses/GPL-2.0-only.txt",
+            "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af"
+          }
+        ],
+        "new_toolchain_notice_download_required": false,
+        "reason": "Actual ARM full compiler commit and release match the previously authenticated release-global library notice, whose text hashes were checked. No x86 compiler identity was assumed."
+      },
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "hypothesis/_native.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "hypothesis/_native.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "markupsafe",
+      "version": "3.0.3",
+      "filename": "markupsafe-3.0.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/1e/2c/799f4742efc39633a1b54a92eec4082e4f815314869865d876824c257c1e/markupsafe-3.0.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "3a7e8ae81ae39e62a41ec302f972ba6ae23a5c5396c8e60113e9066ef893da0d",
+      "size": 24332,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "12b4cc61a7fa288cf7667ee3f213786d9619db57fb33ff6f934afbcb5c12ec81",
+      "license_metadata": {
+        "License": [],
+        "License-Expression": [
+          "BSD-3-Clause"
+        ],
+        "License-File": [
+          "LICENSE.txt"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "markupsafe/_speedups.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "68f3ea306612ebbe28af4b27b85869d1a194f53aa9807f23cf4946254d8c45a2",
+          "size": 230792,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "cdff3ea7e85e94cf4c370ab06c8ff3279017d4c18549203a9d2bdfe3bd3b1cf2",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-7)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/markupsafe-3.0.3.dist-info/licenses/LICENSE.txt",
+          "sha256": "489a8e1108509ed98a37bb983e11e0f7e1d31f0bd8f99a79c8448e7ff37d07ea"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "markupsafe/_speedups.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "markupsafe/_speedups.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "multidict",
+      "version": "6.9.1",
+      "filename": "multidict-6.9.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/90/bf/599ae2e6222822d88a247a8a7ae82fe6fd25d5700757b79603d5edafe6a0/multidict-6.9.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "35fc236507fb1b3138f0af5ecd5f94ed752d4d6d826248eae425f86204013eea",
+      "size": 334196,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "b52756a8e05f6cf5e429cb0133ea395f252aee4a30b748506dd354a5ad2d4af2",
+      "license_metadata": {
+        "License": [
+          "Apache License 2.0"
+        ],
+        "License-Expression": [],
+        "License-File": [
+          "LICENSE"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "multidict/_multidict.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "4f9e275e151383659dc8b2239b64eec1fc48fed7b77ef0a699d8725489673959",
+          "size": 1266600,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/multidict-6.9.1.dist-info/licenses/LICENSE",
+          "sha256": "2e4be5fc6c4c72a466fcb665d726e049a6891981fe536c4f04b6366749461d23"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "multidict/_multidict.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "multidict/_multidict.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "propcache",
+      "version": "0.5.2",
+      "filename": "propcache-0.5.2-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/44/c7/085d0cd63062e84044e3f05797749c3f8e3938ff3aeb0eb2f69d43fafc91/propcache-0.5.2-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "5dbc581d2814337da56222fab8dc5f161cd798a434e49bac27930aaef798e144",
+      "size": 59995,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "f534495cdd2f915af8e649783d95fddcb1a05a1ac181850f0c973c0a78f7bbae",
+      "license_metadata": {
+        "License": [
+          "Apache-2.0"
+        ],
+        "License-Expression": [],
+        "License-File": [
+          "LICENSE",
+          "NOTICE"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "propcache/_helpers_c.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "17d92e6996da0e3b11e3126e8d96fa36fdb8014268472f57a971d6b4fe333b92",
+          "size": 296200,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/propcache-0.5.2.dist-info/licenses/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "shared_path": "notices/wheels/propcache-0.5.2.dist-info/licenses/NOTICE",
+          "sha256": "56d6ac6c8105c0a51304c21db060e361af9a8ea0af9a75c239c28b5d13693838"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "propcache/_helpers_c.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "propcache/_helpers_c.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "pydantic-core",
+      "version": "2.46.4",
+      "filename": "pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/8e/bc/f47d1ff9cbb1620e1b5b697eef06010035735f07820180e74178226b27b3/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "sha256": "8233f2947cf85404441fd7e0085f53b10c93e0ee78611099b5c7237e36aacbf7",
+      "size": 1975742,
+      "best_tag": "cp312-cp312-manylinux2014_aarch64",
+      "metadata_sha256": "135fa8b2f89473e9191c7078c2164e3ec6c8927a61c2379c2fddcc07f11f3bae",
+      "license_metadata": {
+        "License": [],
+        "License-Expression": [
+          "MIT"
+        ],
+        "License-File": [
+          "LICENSE"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "pydantic_core/_pydantic_core.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "08fc5cbf746f1b30a1e2b9c19abc90343f80b828e2af1e99b61592775db2ad50",
+          "size": 4217944,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libgcc_s.so.1",
+              "libpthread.so.0",
+              "libdl.so.2",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [
+            "rustc version 1.95.0 (59807616e 2026-04-14)"
+          ],
+          "rustc_commits": [
+            "59807616e1fa2540724bfbac14d7976d7e4a3860"
+          ],
+          "embedded_crate_source_versions": [
+            [
+              "ahash",
+              "0.8.12"
+            ],
+            [
+              "aho-corasick",
+              "1.1.3"
+            ],
+            [
+              "base64",
+              "0.22.1"
+            ],
+            [
+              "getrandom",
+              "0.3.3"
+            ],
+            [
+              "hashbrown",
+              "0.16.1"
+            ],
+            [
+              "hex",
+              "0.4.3"
+            ],
+            [
+              "icu_normalizer",
+              "1.5.0"
+            ],
+            [
+              "idna",
+              "1.1.0"
+            ],
+            [
+              "jiter",
+              "0.14.0"
+            ],
+            [
+              "lexical-parse-float",
+              "1.0.5"
+            ],
+            [
+              "lru",
+              "0.16.3"
+            ],
+            [
+              "memchr",
+              "2.7.4"
+            ],
+            [
+              "num-bigint",
+              "0.4.6"
+            ],
+            [
+              "num-integer",
+              "0.1.46"
+            ],
+            [
+              "once_cell",
+              "1.21.3"
+            ],
+            [
+              "percent-encoding",
+              "2.3.2"
+            ],
+            [
+              "pyo3",
+              "0.28.3"
+            ],
+            [
+              "pyo3-ffi",
+              "0.28.3"
+            ],
+            [
+              "regex",
+              "1.12.3"
+            ],
+            [
+              "regex-automata",
+              "0.4.13"
+            ],
+            [
+              "regex-syntax",
+              "0.8.5"
+            ],
+            [
+              "serde_json",
+              "1.0.149"
+            ],
+            [
+              "smallvec",
+              "1.15.1"
+            ],
+            [
+              "speedate",
+              "0.17.0"
+            ],
+            [
+              "url",
+              "2.5.8"
+            ],
+            [
+              "uuid",
+              "1.23.0"
+            ]
+          ],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "c8fa93471b0b45f5a217a3c9951aac1bf513a1c2ea1069858212e04bd7bd64a5",
+            "strings": [
+              "GCC: (GNU) 10.2.1 20210130 (Red Hat 10.2.1-11)",
+              "rustc version 1.95.0 (59807616e 2026-04-14)",
+              "clang version 22.1.0-rc2",
+              "GCC: (GNU) 4.8.5 20150623 (Red Hat 4.8.5-44)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [
+        {
+          "path": "notices/architecture/linux-arm64/pydantic-core/pydantic-core.cyclonedx.json",
+          "sha256": "41d1c44b99c35cf611f01625ea9323664d612bf1879cdcb09dd3726570a3c882",
+          "components": [
+            {
+              "name": "ahash",
+              "version": "0.8.12",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "aho-corasick",
+              "version": "1.1.3",
+              "licenses": [
+                {
+                  "expression": "Unlicense OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "allocator-api2",
+              "version": "0.2.21",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "autocfg",
+              "version": "1.3.0",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "base64",
+              "version": "0.22.1",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "bitflags",
+              "version": "2.9.1",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "bitvec",
+              "version": "1.0.1",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "bumpalo",
+              "version": "3.19.0",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "cc",
+              "version": "1.0.101",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "cfg-if",
+              "version": "1.0.0",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "displaydoc",
+              "version": "0.2.5",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "enum_dispatch",
+              "version": "0.3.13",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "equivalent",
+              "version": "1.0.2",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "foldhash",
+              "version": "0.2.0",
+              "licenses": [
+                {
+                  "expression": "Zlib"
+                }
+              ]
+            },
+            {
+              "name": "form_urlencoded",
+              "version": "1.2.2",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "funty",
+              "version": "2.0.0",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "getrandom",
+              "version": "0.3.3",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "hashbrown",
+              "version": "0.16.1",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "heck",
+              "version": "0.5.0",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "hex",
+              "version": "0.4.3",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "icu_collections",
+              "version": "1.5.0",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "icu_locid",
+              "version": "1.5.0",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "icu_locid_transform",
+              "version": "1.5.0",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "icu_locid_transform_data",
+              "version": "1.5.0",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "icu_normalizer",
+              "version": "1.5.0",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "icu_normalizer_data",
+              "version": "1.5.0",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "icu_properties",
+              "version": "1.5.1",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "icu_properties_data",
+              "version": "1.5.0",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "icu_provider",
+              "version": "1.5.0",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "icu_provider_macros",
+              "version": "1.5.0",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "idna",
+              "version": "1.1.0",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "idna_adapter",
+              "version": "1.2.0",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "itoa",
+              "version": "1.0.11",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "jiter",
+              "version": "0.14.0",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "js-sys",
+              "version": "0.3.77",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "lexical-parse-float",
+              "version": "1.0.5",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "lexical-parse-integer",
+              "version": "1.0.5",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "lexical-util",
+              "version": "1.0.6",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "libc",
+              "version": "0.2.185",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "litemap",
+              "version": "0.7.3",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "log",
+              "version": "0.4.27",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "lru",
+              "version": "0.16.3",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "memchr",
+              "version": "2.7.4",
+              "licenses": [
+                {
+                  "expression": "Unlicense OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "num-bigint",
+              "version": "0.4.6",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "num-integer",
+              "version": "0.1.46",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "num-traits",
+              "version": "0.2.19",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "once_cell",
+              "version": "1.21.3",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "percent-encoding",
+              "version": "2.3.2",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "portable-atomic",
+              "version": "1.6.0",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "proc-macro2",
+              "version": "1.0.86",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-build-config",
+              "version": "0.28.3",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-ffi",
+              "version": "0.28.3",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-macros-backend",
+              "version": "0.28.3",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-macros",
+              "version": "0.28.3",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3",
+              "version": "0.28.3",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "python3-dll-a",
+              "version": "0.2.14",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "quote",
+              "version": "1.0.44",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "r-efi",
+              "version": "5.2.0",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0 OR LGPL-2.1-or-later"
+                }
+              ]
+            },
+            {
+              "name": "radium",
+              "version": "0.7.0",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "regex-automata",
+              "version": "0.4.13",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "regex-syntax",
+              "version": "0.8.5",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "regex",
+              "version": "1.12.3",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "rustversion",
+              "version": "1.0.17",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "serde",
+              "version": "1.0.228",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "serde_core",
+              "version": "1.0.228",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "serde_derive",
+              "version": "1.0.228",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "serde_json",
+              "version": "1.0.149",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "smallvec",
+              "version": "1.15.1",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "speedate",
+              "version": "0.17.0",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "stable_deref_trait",
+              "version": "1.2.0",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "static_assertions",
+              "version": "1.1.0",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "strum",
+              "version": "0.27.2",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "strum_macros",
+              "version": "0.27.2",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "syn",
+              "version": "2.0.82",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "synstructure",
+              "version": "0.13.1",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "tap",
+              "version": "1.0.1",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "target-lexicon",
+              "version": "0.13.4",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 WITH LLVM-exception"
+                }
+              ]
+            },
+            {
+              "name": "tinystr",
+              "version": "0.7.6",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "unicode-ident",
+              "version": "1.0.12",
+              "licenses": [
+                {
+                  "expression": "(MIT OR Apache-2.0) AND Unicode-DFS-2016"
+                }
+              ]
+            },
+            {
+              "name": "url",
+              "version": "2.5.8",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "utf16_iter",
+              "version": "1.0.5",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "utf8_iter",
+              "version": "1.0.4",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "uuid",
+              "version": "1.23.0",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "version_check",
+              "version": "0.9.5",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "wasi",
+              "version": "0.14.2+wasi-0.2.4",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "wasm-bindgen-backend",
+              "version": "0.2.100",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "wasm-bindgen-macro-support",
+              "version": "0.2.100",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "wasm-bindgen-macro",
+              "version": "0.2.100",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "wasm-bindgen-shared",
+              "version": "0.2.100",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "wasm-bindgen",
+              "version": "0.2.100",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "wit-bindgen-rt",
+              "version": "0.39.0",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "write16",
+              "version": "1.0.0",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "writeable",
+              "version": "0.5.5",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "wyz",
+              "version": "0.5.1",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "yoke-derive",
+              "version": "0.7.4",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "yoke",
+              "version": "0.7.4",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "zerocopy-derive",
+              "version": "0.8.25",
+              "licenses": [
+                {
+                  "expression": "BSD-2-Clause OR Apache-2.0 OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "zerocopy",
+              "version": "0.8.25",
+              "licenses": [
+                {
+                  "expression": "BSD-2-Clause OR Apache-2.0 OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "zerofrom-derive",
+              "version": "0.1.4",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "zerofrom",
+              "version": "0.1.4",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "zerovec-derive",
+              "version": "0.10.3",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "zerovec",
+              "version": "0.10.4",
+              "licenses": [
+                {
+                  "expression": "Unicode-3.0"
+                }
+              ]
+            },
+            {
+              "name": "zmij",
+              "version": "1.0.6",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/pydantic_core-2.46.4.dist-info/licenses/LICENSE",
+          "sha256": "2afdd30d54b4d62b6f488a6bcc1546e84ec5061f13f4209c03d012348783795a"
+        }
+      ],
+      "Rust_standard_library_notice_binding": {
+        "distribution": "pydantic-core",
+        "actual_ARM_commit": "59807616e1fa2540724bfbac14d7976d7e4a3860",
+        "actual_ARM_version_strings": [
+          "rustc version 1.95.0 (59807616e 2026-04-14)"
+        ],
+        "notice_release": "1.95.0",
+        "existing_exact_recovery_receipt": "rust-library-notices/resolution.json",
+        "notice_files": [
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/COPYRIGHT-library.html",
+            "sha256": "90567e2718bf7fd65a71a3a43c5596488e80e5f51ed02bfea6fec54458b5f3d1"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/Apache-2.0.txt",
+            "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/Unicode-3.0.txt",
+            "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/CC-BY-SA-4.0.txt",
+            "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/OFL-1.1.txt",
+            "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GCC-exception-3.1.txt",
+            "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/NCSA.txt",
+            "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/ISC.txt",
+            "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/MIT.txt",
+            "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/BSD-2-Clause.txt",
+            "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/LLVM-exception.txt",
+            "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GPL-3.0-or-later.txt",
+            "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GPL-2.0-only.txt",
+            "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af"
+          }
+        ],
+        "new_toolchain_notice_download_required": false,
+        "reason": "Actual ARM full compiler commit and release match the previously authenticated release-global library notice, whose text hashes were checked. No x86 compiler identity was assumed."
+      },
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "pydantic_core/_pydantic_core.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "pydantic_core/_pydantic_core.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "pyyaml",
+      "version": "6.0.3",
+      "filename": "pyyaml-6.0.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/ed/23/7a778b6bd0b9a8039df8b1b1d80e2e2ad78aa04171592c8a5c43a56a6af4/pyyaml-6.0.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "9149cad251584d5fb4981be1ecde53a1ca46c891a79788c0df828d2f166bda28",
+      "size": 775116,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "03c3b415ed38d09faedc49360e930769b40c58f68585e6de00e2e4916a858d34",
+      "license_metadata": {
+        "License": [
+          "MIT"
+        ],
+        "License-Expression": [],
+        "License-File": [
+          "LICENSE"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "yaml/_yaml.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "edc51c14c75bd17789a97020a8472e051b5adce1a7667d63edc27e4825c23cf2",
+          "size": 2700272,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": true,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "423e034827f01dc6c9253bbe499c5889b299e0940742fb9c1227bdd1969f026b",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-7)",
+              "GCC: (GNU) 10.2.1 20210130 (Red Hat 10.2.1-11)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/pyyaml-6.0.3.dist-info/licenses/LICENSE",
+          "sha256": "8d3928f9dc4490fd635707cb88eb26bd764102a7282954307d3e5167a577e8a4"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "yaml/_yaml.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "yaml/_yaml.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "rapidfuzz",
+      "version": "3.14.5",
+      "filename": "rapidfuzz-3.14.5-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/88/37/a3eb7ff6121ed3a5f199a8c38cc86c8e481816f879cb0e0b738b078c9a7e/rapidfuzz-3.14.5-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "01550fe5f60fd176aa66b7611289d46dc4aa4b1b904874c7b6d1d54e581c5ec1",
+      "size": 1371999,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "51dae324caa606a75cc7e7c22f08e7f12d76c341a43e969fffdaab7f056e0291",
+      "license_metadata": {
+        "License": [],
+        "License-Expression": [
+          "MIT"
+        ],
+        "License-File": []
+      },
+      "native_files": [
+        {
+          "path": "rapidfuzz/fuzz_cpp.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "ed1c0e5ae0289733038da058710e12472c0a2b35d40e1c251b23b84fe645ff82",
+          "size": 1774672,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        },
+        {
+          "path": "rapidfuzz/process_cpp_impl.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "a8ebd02ce4ae0549217240a11046f73ba719b4947cd3f06cb6b3c49a988935b3",
+          "size": 667400,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libpthread.so.0",
+              "libc.so.6",
+              "ld-linux-aarch64.so.1"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        },
+        {
+          "path": "rapidfuzz/utils_cpp.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "cb77e1f9890d463cecd38c37c955f1bdb6d32daca72e1ea44ba8e909993e7a78",
+          "size": 266816,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        },
+        {
+          "path": "rapidfuzz/distance/_initialize_cpp.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "c9beb79d1d19f132145deda5eddc3b15fa039c8fa64341b75355b9e8804e2a6c",
+          "size": 342888,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        },
+        {
+          "path": "rapidfuzz/distance/metrics_cpp.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "3c828431a2244bcba1482da694b9df54b0757412a02c45ebb38c18df7892e82b",
+          "size": 2103608,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/rapidfuzz-3.14.5.dist-info/licenses/LICENSE",
+          "sha256": "f34ccdffdff56fc417785915eedf18601d5479755df3c472b2c754c29802d683"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "rapidfuzz/distance/_initialize_cpp.cpython-312-aarch64-linux-gnu.so",
+          "rapidfuzz/distance/metrics_cpp.cpython-312-aarch64-linux-gnu.so",
+          "rapidfuzz/fuzz_cpp.cpython-312-aarch64-linux-gnu.so",
+          "rapidfuzz/process_cpp_impl.cpython-312-aarch64-linux-gnu.so",
+          "rapidfuzz/utils_cpp.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "rapidfuzz/_feature_detector_cpp.cpython-312-x86_64-linux-gnu.so",
+          "rapidfuzz/distance/_initialize_cpp.cpython-312-x86_64-linux-gnu.so",
+          "rapidfuzz/distance/metrics_cpp.cpython-312-x86_64-linux-gnu.so",
+          "rapidfuzz/distance/metrics_cpp_avx2.cpython-312-x86_64-linux-gnu.so",
+          "rapidfuzz/fuzz_cpp.cpython-312-x86_64-linux-gnu.so",
+          "rapidfuzz/fuzz_cpp_avx2.cpython-312-x86_64-linux-gnu.so",
+          "rapidfuzz/process_cpp_impl.cpython-312-x86_64-linux-gnu.so",
+          "rapidfuzz/utils_cpp.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "regex",
+      "version": "2026.7.19",
+      "filename": "regex-2026.7.19-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/22/85/102a81b218298957d4ea7d2f084fae537a71add9d6ff93c8e67284c5f45e/regex-2026.7.19-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "93db40c8de0815baab96a06e08a984bac71f989d13bab789e382158c5d426797",
+      "size": 796708,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "fd895ec7522cd0bbab71ee4826442162f3f408a5f8d92e759f4ddf1be60dcf73",
+      "license_metadata": {
+        "License": [],
+        "License-Expression": [
+          "Apache-2.0 AND CNRI-Python"
+        ],
+        "License-File": [
+          "LICENSE.txt"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "regex/_regex.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "33bbccfc9fa40720e48102cb76c4f1a2263f3330f1f08dd77a8d8efe8f58708f",
+          "size": 2675304,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "cdff3ea7e85e94cf4c370ab06c8ff3279017d4c18549203a9d2bdfe3bd3b1cf2",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-7)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/regex-2026.7.19.dist-info/licenses/LICENSE.txt",
+          "sha256": "bff55ef4cdcc8c14ce259f8e8ab60e264418440d6335f4dc138273fbd506144d"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "regex/_regex.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "regex/_regex.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "sqlalchemy",
+      "version": "2.0.52",
+      "filename": "sqlalchemy-2.0.52-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/54/bd/f444444adb37b5d53753fb1730ee7a421628e2e3b756c4da461af7e6394a/sqlalchemy-2.0.52-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "1b2d9e507a458832adcfbd8af6e2036ddf069b7710b799448542ebccae2dceee",
+      "size": 3383415,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "21d72718662462c632bd5db16a74cfb31904f77bb9f080bdc49cf3f764543218",
+      "license_metadata": {
+        "License": [
+          "MIT"
+        ],
+        "License-Expression": [],
+        "License-File": [
+          "LICENSE"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "sqlalchemy/cyextension/collections.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "20a2ea6576127a7d80562b94a66c226f31c13ce00c1f66c1ac011d5702b81e99",
+          "size": 2196776,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        },
+        {
+          "path": "sqlalchemy/cyextension/immutabledict.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "ab5862b297152606f0bf05aa7377c37e8c2006022816d5df6b7b1f298831c26e",
+          "size": 963248,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        },
+        {
+          "path": "sqlalchemy/cyextension/processors.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "8447f296f07eabb440aa5ce6fad8186e21bd8cfdc63183d1dd87a617a49326ec",
+          "size": 786896,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        },
+        {
+          "path": "sqlalchemy/cyextension/resultproxy.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "3785ce7c5d7238e7e371bd365591ff1e4e80f2a475156c58ffb5dde84a18acf0",
+          "size": 773360,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        },
+        {
+          "path": "sqlalchemy/cyextension/util.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "99cf409c4a66542d5582c76c0b59ecce74039aa0bf5b4c4f4412303f8b5e842f",
+          "size": 1094744,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/sqlalchemy-2.0.52.dist-info/licenses/LICENSE",
+          "sha256": "e862bb5b904fb5513c3e14288d7a25a12eb0ecc7847a0a965d310e9a955e7cb9"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "sqlalchemy/cyextension/collections.cpython-312-aarch64-linux-gnu.so",
+          "sqlalchemy/cyextension/immutabledict.cpython-312-aarch64-linux-gnu.so",
+          "sqlalchemy/cyextension/processors.cpython-312-aarch64-linux-gnu.so",
+          "sqlalchemy/cyextension/resultproxy.cpython-312-aarch64-linux-gnu.so",
+          "sqlalchemy/cyextension/util.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "sqlalchemy/cyextension/collections.cpython-312-x86_64-linux-gnu.so",
+          "sqlalchemy/cyextension/immutabledict.cpython-312-x86_64-linux-gnu.so",
+          "sqlalchemy/cyextension/processors.cpython-312-x86_64-linux-gnu.so",
+          "sqlalchemy/cyextension/resultproxy.cpython-312-x86_64-linux-gnu.so",
+          "sqlalchemy/cyextension/util.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "uvloop",
+      "version": "0.22.1",
+      "filename": "uvloop-0.22.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/24/68/a6ac446820273e71aa762fa21cdcc09861edd3536ff47c5cd3b7afb10eeb/uvloop-0.22.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "700e674a166ca5778255e0e1dc4e9d79ab2acc57b9171b79e65feba7184b3370",
+      "size": 4317413,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "7106328da9670776c358802971b7dc41c0b86ed3673bf9cc4c0d5e11ff2f3583",
+      "license_metadata": {
+        "License": [
+          "MIT License"
+        ],
+        "License-Expression": [],
+        "License-File": [
+          "LICENSE-APACHE",
+          "LICENSE-MIT"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "uvloop/loop.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "4598b87add17d5d379ec12c6101dd68fc0da28945b623603ab732aea1fa6df88",
+          "size": 16132144,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "librt.so.1",
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": true
+          },
+          "compiler_comment_section": {
+            "sha256": "96452134ac80cecc819cc768724b8b593299fd33426c5f155865fb15dcceb50f",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-7)",
+              "GCC: (GNU) 8.5.0 20210514 (Red Hat 8.5.0-26)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/uvloop-0.22.1.dist-info/licenses/LICENSE-APACHE",
+          "sha256": "377025287798f9dcd819e1f826fa5fc5e2f382528691ab0528c5cf8c8c282c27"
+        },
+        {
+          "shared_path": "notices/wheels/uvloop-0.22.1.dist-info/licenses/LICENSE-MIT",
+          "sha256": "6dd4c399f26de043d77a2ad7e31db4cb5bf08ea8368b0a42d6e158635cc8ab62"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "uvloop/loop.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "uvloop/loop.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "watchfiles",
+      "version": "1.2.0",
+      "filename": "watchfiles-1.2.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/13/01/b32a967c56fb3e3e5be3db52c3d3b87fa4513aa367d8ed1ad96d42952e5f/watchfiles-1.2.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "sha256": "8f70d8b291ef6e88d19b1f297a6905ddb978888d9272b0d05e6f53309856bcfc",
+      "size": 453207,
+      "best_tag": "cp312-cp312-manylinux2014_aarch64",
+      "metadata_sha256": "2c92c0bfebdf6743603f6e7c4da95a53ce4d575f00cede3aa2032a8d5ce3da17",
+      "license_metadata": {
+        "License": [
+          "MIT"
+        ],
+        "License-Expression": [],
+        "License-File": [
+          "LICENSE"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "watchfiles/_rust_notify.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "244adf74490cff1c893ac3d8aea4dc7a13bf3b335c6b1295b1e1edc033fcdca0",
+          "size": 1108816,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libgcc_s.so.1",
+              "libpthread.so.0",
+              "libdl.so.2",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [
+            "rustc version 1.95.0 (59807616e 2026-04-14)"
+          ],
+          "rustc_commits": [
+            "59807616e1fa2540724bfbac14d7976d7e4a3860"
+          ],
+          "embedded_crate_source_versions": [
+            [
+              "inotify",
+              "0.11.0"
+            ],
+            [
+              "log",
+              "0.4.22"
+            ],
+            [
+              "mio",
+              "1.0.3"
+            ],
+            [
+              "notify",
+              "8.0.0"
+            ],
+            [
+              "once_cell",
+              "1.21.3"
+            ],
+            [
+              "pyo3",
+              "0.28.3"
+            ],
+            [
+              "pyo3-ffi",
+              "0.28.3"
+            ],
+            [
+              "same-file",
+              "1.0.6"
+            ],
+            [
+              "walkdir",
+              "2.5.0"
+            ]
+          ],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "9f30a827676cd52a60f549dab88e61702c051f90848ded3b8163bdddd614d160",
+            "strings": [
+              "GCC: (GNU) 4.8.5",
+              "rustc version 1.95.0 (59807616e 2026-04-14)",
+              "clang version 22.1.0-rc2"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [
+        {
+          "path": "notices/architecture/linux-arm64/watchfiles/watchfiles_rust_notify.cyclonedx.json",
+          "sha256": "7a058aa41df230b186094ecbc9af347abf9ffda7af580e3145efed8060379c8d",
+          "components": [
+            {
+              "name": "bitflags",
+              "version": "2.7.0",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "cfg-if",
+              "version": "1.0.0",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "crossbeam-channel",
+              "version": "0.5.15",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "crossbeam-utils",
+              "version": "0.8.19",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "filetime",
+              "version": "0.2.24",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "heck",
+              "version": "0.5.0",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "inotify-sys",
+              "version": "0.1.5",
+              "licenses": [
+                {
+                  "expression": "ISC"
+                }
+              ]
+            },
+            {
+              "name": "inotify",
+              "version": "0.11.0",
+              "licenses": [
+                {
+                  "expression": "ISC"
+                }
+              ]
+            },
+            {
+              "name": "libc",
+              "version": "0.2.169",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "log",
+              "version": "0.4.22",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "mio",
+              "version": "1.0.3",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "notify-types",
+              "version": "2.0.0",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "notify",
+              "version": "8.0.0",
+              "licenses": [
+                {
+                  "expression": "CC0-1.0"
+                }
+              ]
+            },
+            {
+              "name": "once_cell",
+              "version": "1.21.3",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "proc-macro2",
+              "version": "1.0.81",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-build-config",
+              "version": "0.28.3",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-ffi",
+              "version": "0.28.3",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-macros-backend",
+              "version": "0.28.3",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3-macros",
+              "version": "0.28.3",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "pyo3",
+              "version": "0.28.3",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "python3-dll-a",
+              "version": "0.2.14",
+              "licenses": [
+                {
+                  "expression": "MIT"
+                }
+              ]
+            },
+            {
+              "name": "quote",
+              "version": "1.0.45",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "same-file",
+              "version": "1.0.6",
+              "licenses": [
+                {
+                  "expression": "Unlicense OR MIT"
+                }
+              ]
+            },
+            {
+              "name": "syn",
+              "version": "2.0.60",
+              "licenses": [
+                {
+                  "expression": "MIT OR Apache-2.0"
+                }
+              ]
+            },
+            {
+              "name": "target-lexicon",
+              "version": "0.13.5",
+              "licenses": [
+                {
+                  "expression": "Apache-2.0 WITH LLVM-exception"
+                }
+              ]
+            },
+            {
+              "name": "unicode-ident",
+              "version": "1.0.12",
+              "licenses": [
+                {
+                  "expression": "(MIT OR Apache-2.0) AND Unicode-DFS-2016"
+                }
+              ]
+            },
+            {
+              "name": "walkdir",
+              "version": "2.5.0",
+              "licenses": [
+                {
+                  "expression": "Unlicense OR MIT"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/watchfiles-1.2.0.dist-info/licenses/LICENSE",
+          "sha256": "4fd78355b67ce2677ede9fb6f63a250f377bb7e22088136a5f4699adb4bc069f"
+        }
+      ],
+      "Rust_standard_library_notice_binding": {
+        "distribution": "watchfiles",
+        "actual_ARM_commit": "59807616e1fa2540724bfbac14d7976d7e4a3860",
+        "actual_ARM_version_strings": [
+          "rustc version 1.95.0 (59807616e 2026-04-14)"
+        ],
+        "notice_release": "1.95.0",
+        "existing_exact_recovery_receipt": "rust-library-notices/resolution.json",
+        "notice_files": [
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/COPYRIGHT-library.html",
+            "sha256": "90567e2718bf7fd65a71a3a43c5596488e80e5f51ed02bfea6fec54458b5f3d1"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/Apache-2.0.txt",
+            "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/Unicode-3.0.txt",
+            "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/CC-BY-SA-4.0.txt",
+            "sha256": "23ee78c8bae49cf08ea2f0c84945c66b987ebe4520881fb51b3dad4fb43d07c2"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/OFL-1.1.txt",
+            "sha256": "8eea8287e5876b539670cadb82e99f9a7afddec6f6730811be1daf25d2e9bcfd"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GCC-exception-3.1.txt",
+            "sha256": "a3966c9410ef94a1efbfa9ec04e9c1994026a70623fbf0885ce36737bfba3b54"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/NCSA.txt",
+            "sha256": "39cb0234065c92b9e6cee3830cbb52b1aa289aa8fe9ba2e66730fec5cf05c630"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/ISC.txt",
+            "sha256": "0ff61769b238634e042ab759dddfd104a8e69d091e3600ae3410e401a6164381"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/MIT.txt",
+            "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/BSD-2-Clause.txt",
+            "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/LLVM-exception.txt",
+            "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GPL-3.0-or-later.txt",
+            "sha256": "05315fce6c35f79b8a35454828995fa26336f235895ac64557abc028f4ffcea2"
+          },
+          {
+            "shared_path": "notices/rust-standard-library/59807616e1fa2540724bfbac14d7976d7e4a3860/licenses/GPL-2.0-only.txt",
+            "sha256": "54b212ba1f97f6948fa5486239ab505dd820b02e50cbfd296b4062c8609a70af"
+          }
+        ],
+        "new_toolchain_notice_download_required": false,
+        "reason": "Actual ARM full compiler commit and release match the previously authenticated release-global library notice, whose text hashes were checked. No x86 compiler identity was assumed."
+      },
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "watchfiles/_rust_notify.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "watchfiles/_rust_notify.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "websockets",
+      "version": "17.0.1",
+      "filename": "websockets-17.0.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/f4/a4/850c699a16bbc451723856360c59bd997bec075e637154f3fa96e80d5760/websockets-17.0.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "8848c207049ad49d318e5f64a3d4d7bb189f8328d0d98e65647788f2a085785c",
+      "size": 221389,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "67f6eda687dfcf4b9b8875668a6d2b62314cc4d74e9ff2e1695bac2bc0990880",
+      "license_metadata": {
+        "License": [],
+        "License-Expression": [
+          "BSD-3-Clause"
+        ],
+        "License-File": [
+          "LICENSE"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "websockets/speedups.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "8c357975044089a3ce02c64df42229ec82bcd52beb254143fc9f3833f722bc0e",
+          "size": 224096,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/websockets-17.0.1.dist-info/licenses/LICENSE",
+          "sha256": "3d6a0c050d8bec52fabad502e45fb25bd02bcadbd70dea34d447b6a0ff4e6da8"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "websockets/speedups.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "websockets/speedups.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "wrapt",
+      "version": "2.3.0",
+      "filename": "wrapt-2.3.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/cb/89/ff7814f6eb6856b479946117d1138a2fbb46cdb6b1f379db359056c69743/wrapt-2.3.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "392158c9a7f2ab1b8699418bfc0fe6f83548788c418b27d7bf2019ad3405cebb",
+      "size": 174120,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "bed8a0620d9d2a6779427fcecabcbc642f6fa68b107ab583faa01a6dabcafaef",
+      "license_metadata": {
+        "License": [],
+        "License-Expression": [
+          "BSD-2-Clause"
+        ],
+        "License-File": [
+          "LICENSE"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "wrapt/_wrappers.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "0c2564cfdd95db9252087306c338dc553db6b9c16e23f8cbd1e2c3bd4aa0ccd6",
+          "size": 541512,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "cdff3ea7e85e94cf4c370ab06c8ff3279017d4c18549203a9d2bdfe3bd3b1cf2",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-7)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/wrapt-2.3.0.dist-info/licenses/LICENSE",
+          "sha256": "d4f66854a24dda2f2a5282912aedebe6b18186b86284510a433d78fadcd88e5d"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "wrapt/_wrappers.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "wrapt/_wrappers.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    },
+    {
+      "name": "yarl",
+      "version": "1.25.1",
+      "filename": "yarl-1.25.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/1e/b3/058dbfb1857b484c9cf9cc135659f50b85ce66e03c99e44dc2f7b6161f55/yarl-1.25.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+      "sha256": "4d781294bb815ecb5ea57ff6bbf8038e0a31a95fdf3e1788f66e0dc100d64b58",
+      "size": 115358,
+      "best_tag": "cp312-cp312-manylinux_2_28_aarch64",
+      "metadata_sha256": "fd6baa258a11c4d7e7008272a69180d4d34aa04a6a5afda36ac5e55aa0aa4f41",
+      "license_metadata": {
+        "License": [
+          "Apache-2.0"
+        ],
+        "License-Expression": [],
+        "License-File": [
+          "LICENSE",
+          "NOTICE"
+        ]
+      },
+      "native_files": [
+        {
+          "path": "yarl/_quoting_c.cpython-312-aarch64-linux-gnu.so",
+          "sha256": "9298de1070b0019f4a5b90c0d6f5be5e7440878cace29a0bfa465472f3e053ac",
+          "size": 268344,
+          "elf": {
+            "class": 64,
+            "machine": 183,
+            "needed": [
+              "libpthread.so.0",
+              "libc.so.6"
+            ],
+            "soname": null,
+            "rpath": [],
+            "version_strings": []
+          },
+          "rustc_version_strings": [],
+          "rustc_commits": [],
+          "embedded_crate_source_versions": [],
+          "bundled_static_clues": {
+            "libffi_renamed_call": false,
+            "libyaml_version_0_2_5": false,
+            "libuv_version_1_48_0": false
+          },
+          "compiler_comment_section": {
+            "sha256": "b88c2435bbacc08d471b8621ab3ac89131e6a12b265a9cb262b1ffc952500fbe",
+            "strings": [
+              "GCC: (GNU) 14.2.1 20250110 (Red Hat 14.2.1-11)"
+            ]
+          }
+        }
+      ],
+      "SBOMs": [],
+      "shared_notice_files": [
+        {
+          "shared_path": "notices/wheels/yarl-1.25.1.dist-info/licenses/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "shared_path": "notices/wheels/yarl-1.25.1.dist-info/licenses/NOTICE",
+          "sha256": "56d6ac6c8105c0a51304c21db060e361af9a8ea0af9a75c239c28b5d13693838"
+        }
+      ],
+      "Rust_standard_library_notice_binding": null,
+      "native_path_comparison_to_x86": {
+        "arm_only": [
+          "yarl/_quoting_c.cpython-312-aarch64-linux-gnu.so"
+        ],
+        "x86_only": [
+          "yarl/_quoting_c.cpython-312-x86_64-linux-gnu.so"
+        ],
+        "same_path_set": false,
+        "binary_parity_claimed": false
+      }
+    }
+  ],
+  "pure_python_shared_notices_index": "pure-python-shared.json"
+}

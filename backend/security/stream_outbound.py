@@ -272,6 +272,15 @@ class ValidatedSubprocessInput:
 _HLS_URI_RE = re.compile(r'URI="([^"]+)"')
 _MAX_HLS_MANIFEST_BYTES = 2 * 1024 * 1024
 _MAX_RELAY_RESOURCES = 1024
+# Retain only public media-type hints, never a provider filename/path/query.
+# FFmpeg's HLS segment-extension checks remain enabled; opaque extensionless
+# tokens otherwise reject valid TS/fMP4 resources before the pinned fetch.
+_RELAY_MEDIA_SUFFIXES = frozenset({
+    ".m3u8", ".m3u", ".ts", ".m2ts", ".mts", ".m2t", ".mpegts",
+    ".mp4", ".m4s", ".m4v", ".mov", ".m4a", ".aac", ".ac3", ".ec3",
+    ".mp3", ".mp2", ".flac", ".ogg", ".opus", ".webm", ".mkv",
+    ".vtt", ".webvtt", ".ttml",
+})
 
 
 class _LocalStreamRelay:
@@ -310,9 +319,12 @@ class _LocalStreamRelay:
             return existing
         if len(self._targets) >= _MAX_RELAY_RESOURCES:
             raise SSRFError("Stream manifest exceeds the relay resource limit")
-        token = secrets.token_hex(16)
+        suffix = "." + urlsplit(url).path.rsplit(".", 1)[-1].lower()
+        if suffix not in _RELAY_MEDIA_SUFFIXES:
+            suffix = ""
+        token = secrets.token_hex(16) + suffix
         while token in self._targets:
-            token = secrets.token_hex(16)
+            token = secrets.token_hex(16) + suffix
         self._targets[token] = url
         self._tokens_by_target[url] = token
         return token

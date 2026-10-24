@@ -1,0 +1,26 @@
+{
+  "capture_date": "2026-10-23",
+  "base": "registry.opensuse.org/opensuse/tumbleweed@sha256:c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55",
+  "base_vendor_survey": {"openSUSE": 118},
+  "codec_vendor_survey": {"http://packman.links2linux.de": 5},
+  "inventory_columns": ["name", "version", "release", "arch", "vendor", "sourcerpm", "license"],
+  "metadata_repomd_sha256": "420e888227030085e81edeb091d2657b47b4edd04d8cb7527d9793fd8642fa24",
+  "metadata_note": "Compact field projection from the authenticated real src-oss primary; not itself a signed repository or production trust input.",
+  "system_user_root": {
+    "url": "https://download.opensuse.org/tumbleweed/repo/src-oss/src/system-user-root-20190513-2.20.src.rpm",
+    "sha256": "de2ac3be1e18dd34d8a0c23e23871a66a638b5afb6103cfd4dafe5c3e44710c8",
+    "primary_sha512": "6114778a97bcfbf1a05774cf7008e7d41d1f7ff0afb00abee0773463348dd156f5f28e50c70cba8c4b715b6bd43655dd0542b32b8e1b1fbdb845112e9c59d7cb",
+    "size": 10564,
+    "license": "MIT",
+    "vendor": "openSUSE",
+    "fingerprint": "AD485664E901B867051AB15F35A2F86E29B700A4"
+  },
+  "coreutils": {
+    "url": "https://download.opensuse.org/tumbleweed/repo/src-oss/src/coreutils-9.12-1.1.src.rpm",
+    "sha256": "3462b7c8300b2e1fe2f922b874f50a7d766ad607af9e8d53747304fec7ad96db",
+    "primary_sha512": "cb229c94eab5d0ade20642a704c1c8b82430e660af305ed7facdff2e6afd2e8d562614dc64dde4b316b19565bc5f962bb7f2d655004677dbf562310b4febc4b3",
+    "size": 7302033,
+    "license": "GPL-3.0-or-later",
+    "vendor": "openSUSE"
+  }
+}

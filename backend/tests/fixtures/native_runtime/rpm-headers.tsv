@@ -1,0 +1,14 @@
+libhdr10plus-4_1	4.1-1699.4.pm.10	aarch64	x265-4.1-1699.4.pm.10.src.rpm	(none)
+libhdr10plus-4_1	4.1-1699.4.pm.27	x86_64	x265-4.1-1699.4.pm.27.src.rpm	(none)
+libx264-165	20250608.b35605ac-1699.1.pm.18	x86_64	libx264-20250608.b35605ac-1699.1.pm.18.src.rpm	(none)
+libx264-165	20250608.b35605ac-1699.1.pm.9	aarch64	libx264-20250608.b35605ac-1699.1.pm.9.src.rpm	(none)
+libx264-devel	20250608.b35605ac-1699.1.pm.18	x86_64	libx264-20250608.b35605ac-1699.1.pm.18.src.rpm	(none)
+libx264-devel	20250608.b35605ac-1699.1.pm.9	aarch64	libx264-20250608.b35605ac-1699.1.pm.9.src.rpm	(none)
+libx265-215	4.1-1699.4.pm.10	aarch64	x265-4.1-1699.4.pm.10.src.rpm	(none)
+libx265-215	4.1-1699.4.pm.27	x86_64	x265-4.1-1699.4.pm.27.src.rpm	(none)
+libx265-devel	4.1-1699.4.pm.10	aarch64	x265-4.1-1699.4.pm.10.src.rpm	(none)
+libx265-devel	4.1-1699.4.pm.27	x86_64	x265-4.1-1699.4.pm.27.src.rpm	(none)
+libx264	20250608.b35605ac-1699.1.pm.18	x86_64	(none)	1
+libx264	20250608.b35605ac-1699.1.pm.9	aarch64	(none)	1
+x265	4.1-1699.4.pm.10	aarch64	(none)	1
+x265	4.1-1699.4.pm.27	x86_64	(none)	1

@@ -1,0 +1,27 @@
+{
+  "ffmpeg": {
+    "version": "8.1.3",
+    "url": "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz",
+    "sha256": "7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3",
+    "signature": {
+      "url": "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz.asc",
+      "sha256": "5f2880c7fea01f8694d30cb9d06362f77241ee67ce5926b157a226b18f08a538"
+    },
+    "key": {
+      "file": "ffmpeg-release.asc",
+      "sha256": "397b3becedcd5a98769967ff1ff8501ddc89f8368b8f766e4701377d7dbaabe5"
+    },
+    "fingerprint": "FCF986EA15E6E293A5644F10B4322F04D67658D8"
+  },
+  "gosu": {
+    "version": "1.19",
+    "commit": "6456aaa0f3c854d199d0f037f068eb97515b7513",
+    "url": "https://codeload.github.com/tianon/gosu/tar.gz/6456aaa0f3c854d199d0f037f068eb97515b7513",
+    "sha256": "33d7537d588ea49458b9509bcf4554bdf5ceacc66da71e5caa1058ea3b689c3b",
+    "modules": {
+      "github.com/moby/sys/user": "v0.4.1",
+      "golang.org/x/sys": "v0.44.0"
+    },
+    "go_version": "1.26.10"
+  }
+}

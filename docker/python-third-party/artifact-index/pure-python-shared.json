@@ -1,0 +1,773 @@
+{
+  "scope": "52 purelib wheels: unchanged architecture-agnostic notice bytes only; no claim of freshly downloaded or executed ARM pure-Python wheels.",
+  "distributions": [
+    {
+      "name": "aiofiles",
+      "version": "25.1.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "6b96b99073158a00ddb012a514834b48c3ec5f732ce059ffcde700481759a8b5",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/aiofiles-25.1.0.dist-info/licenses/LICENSE",
+          "sha256": "cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14"
+        },
+        {
+          "shared_candidate_path": "notices/wheels/aiofiles-25.1.0.dist-info/licenses/NOTICE",
+          "sha256": "104c58d1d450bd6474c09d8b64bc0182733a60ac3d8c253e334cde8294520ff1"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "aiohappyeyeballs",
+      "version": "2.7.1",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "e68d1bf48aec9dcc2767343dedec25e12860085cba180e10bc3d3bdd031602ba",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/aiohappyeyeballs-2.7.1.dist-info/licenses/LICENSE",
+          "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "aiosignal",
+      "version": "1.4.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "09247ef1da8bc696728d47130e702e4307f6f7d101d6c485bff9f3a71ce7008d",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/aiosignal-1.4.0.dist-info/licenses/LICENSE",
+          "sha256": "6fd5243e92dd7f98ec69c7ac377728e74905709ff527a5bf98d6d0263c04f5b6"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "alembic",
+      "version": "1.18.5",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "d7fd3308b0b854d58f6c3bddc2c8c8a841e13f45a90abeb02f5ebea70b008e09",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/alembic-1.18.5.dist-info/licenses/LICENSE",
+          "sha256": "6e68d94a03a0e3e327ddf3e86d1ebedc14eece3922022618fc246a36296fd0cc"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "annotated-doc",
+      "version": "0.0.5",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "8c24d70c5d9153d22123353a906042fd7603df2d15c2196290b0f8a962558c46",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/annotated_doc-0.0.5.dist-info/licenses/LICENSE",
+          "sha256": "fff170779a6acbf65abdb405c087f1cee1786691e4a96a4034517e4a504a0cdf"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "annotated-types",
+      "version": "0.8.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "614985b278f601b8ef863f82783b991cc3ada4b89f592eb71c7c48c5f2ef2298",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/annotated_types-0.8.0.dist-info/licenses/LICENSE",
+          "sha256": "fe1049884b1a0d9342901e88e07f32925d24b3121d9972b6a6805fb9824b095d"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "anyio",
+      "version": "4.14.2",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "c5e6fc4dfd833319913b287be7a30d9935e9208c7ef917630621855aaac4d419",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/anyio-4.14.2.dist-info/licenses/LICENSE",
+          "sha256": "5361ac9dc58f2ef5fd2e9b09c68297c17f04950909bbc8023bdb82eacf22c2b0"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "attrs",
+      "version": "26.1.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "4cd40e690f23bf37cbcad34efd6758e062df1df07c86833f7e3ce95bf1fa38cc",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/attrs-26.1.0.dist-info/licenses/LICENSE",
+          "sha256": "882115c95dfc2af1eeb6714f8ec6d5cbcabf667caff8729f42420da63f714e9f"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "boto3",
+      "version": "1.43.78",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "67f693e357f6826551327b04e95b9a542136eadea7f616161d85a3b57233a420",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/boto3-1.43.78.dist-info/LICENSE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "shared_candidate_path": "notices/wheels/boto3-1.43.78.dist-info/NOTICE",
+          "sha256": "04fb1e61484a7810f1ba09bb42bc01ca58c9af33927d7c5a21556e4c4d1c7fa4"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "botocore",
+      "version": "1.43.78",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "e6437cf82a2ddad229dc1a02ed8198cb51fbdd8b78e49ad733c9a20a8136cb4a",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/botocore-1.43.78.dist-info/LICENSE.txt",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "shared_candidate_path": "notices/wheels/botocore-1.43.78.dist-info/NOTICE",
+          "sha256": "1d1c5a6f3d68cb11f4fad1afa86a7450d0286f15c176ef0ea048f255b46d95b0"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "certifi",
+      "version": "2026.10.19",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "a5c0be3a42daeef0edfaf58e6ea5b7550f3e4e8eb35420f72e902df9bcf00f5c",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/certifi-2026.10.19.dist-info/licenses/LICENSE",
+          "sha256": "e93716da6b9c0d5a4a1df60fe695b370f0695603d21f6f83f053e42cfc10caf7"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "click",
+      "version": "8.4.2",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "194c9dd81d567f9081f026c7e401060fbafa7bc147c8e0a58b3668b40a64c031",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/click-8.4.2.dist-info/licenses/LICENSE.txt",
+          "sha256": "9a8ad106a394e853bfe21f42f4e72d592819a22805d991b5f3275029292b658d"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "croniter",
+      "version": "6.2.4",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "75cfeb8f533984a6adcc3a2f842f98b5a5b74f7ce97eeddf7d5aa0ff41c7577d",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/croniter-6.2.4.dist-info/licenses/LICENSE",
+          "sha256": "a8f952e6c6bb30b0cfcf71c304e3931160d2a9b578d6eddfa5cc18c832e17ed3"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "deprecated",
+      "version": "1.3.1",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "409767ac23878c1c694888ce4acc43dab6b37efa2b40499567fb5c7d9dce5852",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/deprecated-1.3.1.dist-info/licenses/LICENSE.rst",
+          "sha256": "1e83edd15be419b5d5bde372e325e527ff4f9915f548e7c75314b41f6699e83c"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "dnspython",
+      "version": "2.8.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "74f759539b89e299151b2d697c612307345b766dbb7e9435cf863a06981fd385",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/dnspython-2.8.0.dist-info/licenses/LICENSE",
+          "sha256": "c3ea3ff5654b329c19d3bc5f7481af623c3dded4a6145585499f843ad3d741cd"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "email-validator",
+      "version": "2.3.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "2a97b81eefcd856bc80b0346f47fa2d800b9a438bf8f9231ae00fe931d5c9fbc",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/email_validator-2.3.0.dist-info/licenses/LICENSE",
+          "sha256": "672179752e109134a3fb2bdd0780b29fdb7a03974f0f586a13aead5129562d4c"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "fastapi",
+      "version": "0.136.1",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "e2e9a1d58f484d775a3b0333e65dfc593ca39b7e1e1fd9573d2d5b18ea07beac",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/fastapi-0.136.1.dist-info/licenses/LICENSE",
+          "sha256": "4ec89ffc81485b97fec584b2d4a961032eeffe834453894fd9c1274906cc744e"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "h11",
+      "version": "0.16.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "28f326098ac09fcba79b8f180f96087c841fe2456215cb7b872a9c7d5cd19d64",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/h11-0.16.0.dist-info/licenses/LICENSE.txt",
+          "sha256": "37db5bb85926db28a427a25867f10b1232003aea1be69ccb851138adb8e6f361"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "httpcore",
+      "version": "1.0.9",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "fe2d4fda6199128978779e0cf27f3c045c531863fcdd987eacc74f3a18d41c21",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/httpcore-1.0.9.dist-info/licenses/LICENSE.md",
+          "sha256": "fdcb59154c74cbaba16a11242f7740bea9f23d6feb5547917d8c5f94a80392a5"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "httpx",
+      "version": "0.28.1",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "febb9b0f8f3e80d57c8199c304f35c4336e8581d1d18d7983c92766b82793b25",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/httpx-0.28.1.dist-info/licenses/LICENSE.md",
+          "sha256": "4ec59d544f12b5f539a3a716fd321ac58ccd8030b465221f2c880200cdf28d8d"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "idna",
+      "version": "3.19",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "4d113161aca8582e8d28fddf3ea50f19b607209c2b3e4364379a163454680084",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/idna-3.19.dist-info/licenses/LICENSE.md",
+          "sha256": "1a9a4f0e3d479a27240ddd59a9137a66ab4a0f9dfdc8ca6188cc0bfd85187f04"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "iniconfig",
+      "version": "2.3.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "40d773f84e4e112f495bbf4f1be9cbd2d456c0aeb6ef5311f75d1bf322f2165b",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/iniconfig-2.3.0.dist-info/licenses/LICENSE",
+          "sha256": "3409fa91f7ace557894632676656e32264fe5ef7581535725dc9a23774551bd4"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "jmespath",
+      "version": "1.1.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "81181e9a312f1b87e5be7c8376c57b0e8c962ba524a25a313d43dc2e2d3984f3",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/jmespath-1.1.0.dist-info/LICENSE",
+          "sha256": "6eefacfa4d71b82d08408c751470ac8d9854538da2142cb27be0287fb13d0ab9"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "josepy",
+      "version": "2.2.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "84c9c6d020acba000db1b08c582b02f41e14ad31b9f7ea04f5657360063506b8",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/josepy-2.2.0.dist-info/licenses/LICENSE.txt",
+          "sha256": "2cc5de715ae5a976f086fba4930880c9e421914173fc85111bff514d4757123f"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "limits",
+      "version": "5.8.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "d2b2f429fb52fc08c649b805137a48d781d271d86457d977776254a1e631b70c",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/limits-5.8.0.dist-info/licenses/LICENSE.txt",
+          "sha256": "4fa8bb92aec5e6020f7dc9e8f450b15391dcc26db6063ab4b87655dc495c8ec4"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "mako",
+      "version": "1.4.1",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "1f427af53f47988519af11a1a04136154eadbda5b9607fe30a64eb653d5118a8",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/mako-1.4.1.dist-info/licenses/LICENSE",
+          "sha256": "8c1d171bc5d341ad9cd33d5e2c39b96a82c7bd49b3ae89a470c37e5822232054"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "packaging",
+      "version": "26.3",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "70fdb89fc4d4a9a043bf7372b8972bcc883fddff34ab55e9cf80d73875384763",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/packaging-26.3.dist-info/licenses/LICENSE",
+          "sha256": "cad1ef5bd340d73e074ba614d26f7deaca5c7940c3d8c34852e65c4909686c48"
+        },
+        {
+          "shared_candidate_path": "notices/wheels/packaging-26.3.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "shared_candidate_path": "notices/wheels/packaging-26.3.dist-info/licenses/LICENSE.BSD",
+          "sha256": "b70e7e9b742f1cc6f948b34c16aa39ffece94196364bc88ff0d2180f0028fac5"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "pluggy",
+      "version": "1.6.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "7438c35ee25a095eb7416f84b461c2d74425c5e734ad54c3912453c65244e01c",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/pluggy-1.6.0.dist-info/licenses/LICENSE",
+          "sha256": "d6b65e6c213a5d0b577911d34d6e5949b9f59d76c238c5071a2f3fc16cfb2606"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "prometheus-client",
+      "version": "0.26.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "ea4a4f111b1723da4c588baa002fe7b7886f0e8f653c4dd3d05738686ea85004",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/prometheus_client-0.26.0.dist-info/licenses/LICENSE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        },
+        {
+          "shared_candidate_path": "notices/wheels/prometheus_client-0.26.0.dist-info/licenses/NOTICE",
+          "sha256": "4efa1874aeaa60f365f5797e617f1ff933e15e508eaf751e9848ed4413d7a7ae"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "py-cpuinfo2",
+      "version": "10.1.1",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "f269df8cd942c65b98e12bf08169a6fb0ffef5a92151928ef664870246fed73a",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/py_cpuinfo2-10.1.1.dist-info/licenses/LICENSE",
+          "sha256": "8b5335617b870f76baf0329d7135ee97cf087f2186d2245f0cafad3a84e6fee2"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "pycparser",
+      "version": "3.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "f547a60b0ab54cc2f242213d1f87960ad80df7dd5dfeb98d17a444d48bfb6b93",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/pycparser-3.0.dist-info/licenses/LICENSE",
+          "sha256": "0c846399369ea76ddd7b5c44fe6d16497415fcf015f5cbb508c24bf98b81c5b1"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "pydantic",
+      "version": "2.13.4",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "d1e56c3412492512fb6b59a9dfc25ab7af2a8204585cd7bca000513023133394",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/pydantic-2.13.4.dist-info/licenses/LICENSE",
+          "sha256": "a9e186f3ca16b5eef84318e7a701721351a00cb7b8ae3a4394b67b49e3529ef3"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "pygments",
+      "version": "2.21.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "1dde075570136774c706bf0009183a793fe0ee262e4a5590cc6eff8453eedd43",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/pygments-2.21.0.dist-info/licenses/AUTHORS",
+          "sha256": "71a83872ad82f57be692cf827e048e2cd51d45169cfa1ea3f28706d97a872c0f"
+        },
+        {
+          "shared_candidate_path": "notices/wheels/pygments-2.21.0.dist-info/licenses/LICENSE",
+          "sha256": "a9d66f1d526df02e29dce73436d34e56e8632f46c275bbdffc70569e882f9f17"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "pyjwt",
+      "version": "2.15.1",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "1ea0c9f139b8c928276b3628af165955f6f764491448a6ad8f103cdcbb382da3",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/pyjwt-2.15.1.dist-info/licenses/AUTHORS.rst",
+          "sha256": "925ce43461029eedbf558ec0b7cf7fc4b045def5120ebb97937c70814071cf07"
+        },
+        {
+          "shared_candidate_path": "notices/wheels/pyjwt-2.15.1.dist-info/licenses/LICENSE",
+          "sha256": "797a7a20231d4c433e9f1911db1731d06b5828b98f499819a034f7c0f56f5ce5"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "pytest",
+      "version": "9.1.1",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "c5d032518012789cabc870d46589aca3aeda36cf9fa4399ee88bda3d10438451",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/pytest-9.1.1.dist-info/licenses/LICENSE",
+          "sha256": "ca836a5f9ecca3b2f350230faa20a48fb8b145653b5568d784862df864706b9b"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "pytest-asyncio",
+      "version": "1.4.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "4e583f46befbdb780e30a98856ab46afb88da6e65b6c9fb94d3794746faa8516",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/pytest_asyncio-1.4.0.dist-info/licenses/LICENSE",
+          "sha256": "a8ad31b1c3f40dca5a84119351b8fa8ddc868edd77fad8a8ebf6d8f2d16fa4ae"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "pytest-benchmark",
+      "version": "5.3.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "ad2be47975d28174aee7f2eda28f19b71517056f53d45650fb00c684f23c38b3",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/pytest_benchmark-5.3.0.dist-info/licenses/LICENSE",
+          "sha256": "682a2108a42127a3b54318004a2618dd7325561ca977b72edad8a6bdd44f93da"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "pytest-cov",
+      "version": "7.1.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "d670e42439ea5a87c46d5659cfcbf64e29aaf7da3aca69dc03eecdafe7e4894c",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/pytest_cov-7.1.0.dist-info/licenses/AUTHORS.rst",
+          "sha256": "d7390c793c73c36265497ffac90a886a235c8b50948454c9af98f1aef2a00d2a"
+        },
+        {
+          "shared_candidate_path": "notices/wheels/pytest_cov-7.1.0.dist-info/licenses/LICENSE",
+          "sha256": "835586ae156766a24e3c103fbc55d9af6b1a16df57ca932c97482a2737fd83d5"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "python-dateutil",
+      "version": "2.9.0.post0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "a9d436da322be808332f98d88325998e87cb693a678a9969feb4cfad729a6e93",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/python_dateutil-2.9.0.post0.dist-info/LICENSE",
+          "sha256": "ba00f51a0d92823b5a1cde27d8b5b9d2321e67ed8da9bc163eff96d5e17e577e"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "python-dotenv",
+      "version": "1.2.3",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "2380ea9700796b7398fd8156e22f9028afe5eebf918eb84a6bd5ebb0a8fdd3b5",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/python_dotenv-1.2.3.dist-info/licenses/LICENSE",
+          "sha256": "80619b7049f08c81683ad0e01f08f257a840652dd71ee83146d36658c7d2c2b9"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "python-multipart",
+      "version": "0.0.32",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "e9d399d7dea5eddf0e4d24b5c24687a82e7e50bf2c2b30f8f8a06a64d887dd86",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/python_multipart-0.0.32.dist-info/licenses/LICENSE.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "pytz",
+      "version": "2026.3.post1",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "25ef8a562377a28d8c6bd8c5c9e80d761d0e22ac4a7bed24e512f589644ed33d",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/pytz-2026.3.post1.dist-info/LICENSE.txt",
+          "sha256": "be8b1a37ebe26c592a90f6c0eb33103a7f383ce2f4d7498c0af9a526990a07b8"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "respx",
+      "version": "0.23.1",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "2dafdf292b8e1ad27f4dae27f3b4157339a87109e64fe67b15f7857a62d4f9c8",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/respx-0.23.1.dist-info/LICENSE.md",
+          "sha256": "741b7f3f139d58c88ecf43de1ffedb4914936e914a93a95dfa33d3673b5137bd"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "s3transfer",
+      "version": "0.19.2",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "8730b9a4c6d5e9104a664b610d2297176eb42444b5369b37486b668dc9e27471",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/s3transfer-0.19.2.dist-info/LICENSE.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "shared_candidate_path": "notices/wheels/s3transfer-0.19.2.dist-info/NOTICE.txt",
+          "sha256": "d8354e0fa7fb762da7bc054a8a6774a0b310dfbbc78006393ee573a0e57612b5"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "six",
+      "version": "1.17.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "562042078c2752549f6d8a7c86dbc5dd708088a7be6d80672ec7b07100b72468",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/six-1.17.0.dist-info/LICENSE",
+          "sha256": "4375ba20e2b9c6c4e7cad2940a628fd90e95cc3d50ee92aae755715d8ba1fbd0"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "slowapi",
+      "version": "0.1.10",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "346b6a289c4d98e7d552d1d7467bd4d90ed911e8931174c4182b3f14275b99cd",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/slowapi-0.1.10.dist-info/LICENSE",
+          "sha256": "29eefa286ff3007c39c0040a15abfd1dca6211abceb38f48f5d138057467b34e"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "sortedcontainers",
+      "version": "2.4.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "eedf115109e215001e904da0882851beae50b03c0b0161a8b9e74b7cfd679473",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/sortedcontainers-2.4.0.dist-info/LICENSE",
+          "sha256": "1db7cae7fce6452e2e608e401a0f953e0133e4c2d75db69fb8ae851d2086f5b6"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "starlette",
+      "version": "1.6.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "43f6240f976044f4cf9a573506d96d895391094717c55682700c931d5cd3c5a2",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/starlette-1.6.0.dist-info/licenses/LICENSE.md",
+          "sha256": "dcb95677a02240243187e964f941847d19b17821cf99e5afae684fab328c19bf"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "typing-extensions",
+      "version": "4.16.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "b05084ca1d50879865178d9fff9fabeab61bdfb1f361bfbde95421ffc8f9be46",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/typing_extensions-4.16.0.dist-info/licenses/LICENSE",
+          "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "typing-inspection",
+      "version": "0.4.4",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "bad3d9e6342ef6750cf5128ec942327b8bebdce0b6e4d6f67cb15b27ae5118da",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/typing_inspection-0.4.4.dist-info/licenses/LICENSE",
+          "sha256": "804b59b25f2c31bd278f9202a19ae49a3945aa2664387e2d0a128c7cacc61ec3"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "urllib3",
+      "version": "2.8.0",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "10898c620e8007c030e07fa5622b68358a43010025dfbd78a1cb797699de2bb4",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/urllib3-2.8.0.dist-info/licenses/LICENSE.txt",
+          "sha256": "130e3a64d5fdd5d096a752694634a7d9df284469de86e5732100268041e3d686"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    },
+    {
+      "name": "uvicorn",
+      "version": "0.52.4",
+      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "original_wheel_purelib": true,
+      "current_x86_metadata_sha256": "6cea83c70e4f2746374ca19af72a52406aa706ad8735b11d72fbd5fd82f7cbff",
+      "shared_notices": [
+        {
+          "shared_candidate_path": "notices/wheels/uvicorn-0.52.4.dist-info/licenses/LICENSE.md",
+          "sha256": "efe1acf3e62fb99c288b0ec73e5a773b7268ef4320fe757ea994214e4b63c371"
+        }
+      ],
+      "new_pure_python_wheel_downloaded": false
+    }
+  ]
+}

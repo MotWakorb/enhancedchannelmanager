@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "ecm-0.18.2-0046",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0046/ecm-466babd38ef75d7dcbd18b3d75048b230980c17bbdffda631dcf41e3b8055d27",
+  "name": "ecm-0.18.2-0047",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0047/ecm-59f621c1cbe316f58aa41344bd00061cc7f4a4ebbd1071905921b6f48b5dd554",
   "creationInfo": {
-    "created": "2026-10-23T07:02:21Z",
+    "created": "2026-10-24T12:00:51Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-ecm",
       "name": "enhanced-channel-manager",
-      "versionInfo": "0.18.2-0046",
+      "versionInfo": "0.18.2-0047",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -26,6 +26,54 @@
       "licenseDeclared": "NOASSERTION",
       "copyrightText": "NOASSERTION",
       "primaryPackagePurpose": "CONTAINER"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-native-ffmpeg-8.1.3",
+      "name": "FFmpeg",
+      "versionInfo": "8.1.3",
+      "downloadLocation": "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz",
+      "filesAnalyzed": false,
+      "supplier": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/ffmpeg@8.1.3"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-native-gosu-1.19",
+      "name": "gosu",
+      "versionInfo": "1.19",
+      "downloadLocation": "https://codeload.github.com/tianon/gosu/tar.gz/6456aaa0f3c854d199d0f037f068eb97515b7513",
+      "filesAnalyzed": false,
+      "supplier": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/tianon/gosu@1.19"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "33d7537d588ea49458b9509bcf4554bdf5ceacc66da71e5caa1058ea3b689c3b"
+        }
+      ]
     },
     {
       "SPDXID": "SPDXRef-Package-native-kissfft-131.1.0",
@@ -6999,9 +7047,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-zod-4.4.3",
+      "SPDXID": "SPDXRef-Package-npm-zod-4.6.6",
       "name": "zod",
-      "versionInfo": "4.4.3",
+      "versionInfo": "4.6.6",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7012,7 +7060,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/zod@4.4.3"
+          "referenceLocator": "pkg:npm/zod@4.6.6"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -7087,9 +7135,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-oci-python.3.12-slim-trixie-a0f57064cbdc",
-      "name": "python:3.12-slim-trixie",
-      "versionInfo": "sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704",
+      "SPDXID": "SPDXRef-Package-oci-registry.opensuse.org.opensuse.tumbleweed-c807eabd03ac",
+      "name": "registry.opensuse.org/opensuse/tumbleweed",
+      "versionInfo": "sha256:c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7099,7 +7147,7 @@
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704"
+          "checksumValue": "c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55"
         }
       ],
       "comment": "Final base image of the published container. Its own OS package set is NOT enumerated by this document, and the Dockerfile applies OS security upgrades on top of it at build time.",
@@ -7107,7 +7155,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:oci/python@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704?repository_url=docker.io%2Flibrary%2Fpython&tag=3.12-slim-trixie"
+          "referenceLocator": "pkg:oci/tumbleweed@sha256:c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55?repository_url=registry.opensuse.org%2Fopensuse%2Ftumbleweed"
         }
       ]
     },
@@ -7418,9 +7466,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-cryptography-50.0.0",
+      "SPDXID": "SPDXRef-Package-pypi-cryptography-50.0.2",
       "name": "cryptography",
-      "versionInfo": "50.0.0",
+      "versionInfo": "50.0.2",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7431,7 +7479,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/cryptography@50.0.0"
+          "referenceLocator": "pkg:pypi/cryptography@50.0.2"
         }
       ]
     },
@@ -8728,12 +8776,22 @@
     {
       "spdxElementId": "SPDXRef-Package-ecm",
       "relationshipType": "CONTAINS",
-      "relatedSpdxElement": "SPDXRef-Package-oci-python.3.12-slim-trixie-a0f57064cbdc"
+      "relatedSpdxElement": "SPDXRef-Package-oci-registry.opensuse.org.opensuse.tumbleweed-c807eabd03ac"
     },
     {
       "spdxElementId": "SPDXRef-Package-ecm",
       "relationshipType": "CONTAINS",
       "relatedSpdxElement": "SPDXRef-Package-native-resdet-2.4.3"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-ecm",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-native-ffmpeg-8.1.3"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-ecm",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-native-gosu-1.19"
     },
     {
       "spdxElementId": "SPDXRef-Package-native-resdet-2.4.3",
@@ -10301,7 +10359,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-zod-4.4.3",
+      "spdxElementId": "SPDXRef-Package-npm-zod-4.6.6",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10396,7 +10454,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-cryptography-50.0.0",
+      "spdxElementId": "SPDXRef-Package-pypi-cryptography-50.0.2",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },

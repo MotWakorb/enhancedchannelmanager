@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import ipaddress
 from pathlib import Path
 import re
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
@@ -37,16 +37,21 @@ def _target(url: str, ip: str = "93.184.216.34"):
     )
 
 
-def test_relay_tokens_are_random_128_bit_values_and_deduplicate():
-    relay = _LocalStreamRelay("https://media.example/root.m3u8", None, None)
-    first = relay._initial_token
-    second = relay._register("https://media.example/segment.ts")
+def test_relay_tokens_request_128_random_bits_and_deduplicate():
+    with patch(
+        "security.stream_outbound.secrets.token_hex",
+        side_effect=["a" * 32, "b" * 32],
+    ) as random_token:
+        relay = _LocalStreamRelay("https://media.example/root.m3u8", None, None)
+        first = relay._initial_token
+        second = relay._register("https://media.example/segment.ts")
+        assert relay._register("https://media.example/segment.ts") == second
 
-    assert re.fullmatch(r"[0-9a-f]{32}", first)
-    assert re.fullmatch(r"[0-9a-f]{32}", second)
+    assert random_token.call_args_list == [call(16), call(16)]
+    assert re.fullmatch(r"[0-9a-f]{32}\.m3u8", first)
+    assert re.fullmatch(r"[0-9a-f]{32}\.ts", second)
     assert first != second
     assert second != "1"
-    assert relay._register("https://media.example/segment.ts") == second
 
 
 def test_relay_resource_cap_accepts_1024_unique_urls_and_rejects_1025th():

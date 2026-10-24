@@ -1,0 +1,13 @@
+get_mempolicy: Operation not permitted
+ffmpeg version 8.1.3 Copyright (c) 2000-2026 the FFmpeg developers
+built with gcc 16 (SUSE Linux)
+configuration: --prefix=/usr/local --libdir=/usr/local/lib64 --enable-shared --disable-static --disable-debug --disable-doc --disable-ffplay --disable-autodetect --enable-gpl --enable-version3 --enable-openssl --enable-zlib --enable-bzlib --enable-lzma --enable-iconv --enable-libx264 --enable-libx265 --enable-libvpx --enable-libaom --enable-libdav1d --enable-libopus --enable-libvorbis --enable-libmp3lame --enable-libass --enable-libfreetype --enable-libfontconfig --enable-libfribidi --enable-libharfbuzz --enable-libcodec2 --enable-libjxl --enable-librsvg --enable-libgme --enable-libopenmpt --enable-libwebp --enable-libzimg --enable-libxml2 --enable-libgsm --enable-libopenjpeg --enable-libspeex --enable-libtheora --enable-libtwolame --enable-libshine --enable-libxvid --enable-librav1e --enable-libsvtav1 --enable-libsnappy --disable-indevs --disable-outdevs --enable-indev=lavfi
+libavutil      60. 26.103 / 60. 26.103
+libavcodec     62. 28.103 / 62. 28.103
+libavformat    62. 12.103 / 62. 12.103
+libavdevice    62.  3.103 / 62.  3.103
+libavfilter    11. 14.103 / 11. 14.103
+libswscale      9.  5.103 /  9.  5.103
+libswresample   6.  3.103 /  6.  3.103
+
+Exiting with exit code 0

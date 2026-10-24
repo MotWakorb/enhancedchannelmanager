@@ -5,9 +5,10 @@ WHAT THIS DOCUMENT IS, AND WHAT IT IS NOT
 -----------------------------------------
 This is a **source-manifest** SBOM. It is derived from the dependency manifests
 in the repository -- ``backend/requirements.txt``, ``frontend/package-lock.json``,
-``mcp-server/requirements.txt``, and ``sbom/native-dependencies.json`` -- and from
+``mcp-server/requirements.txt``, ``sbom/native-dependencies.json``, and the current
+native-runtime recipe in ``docker/native/`` -- and from
 the digest-pinned base images named in the two Dockerfiles. It is **not** an image
-SBOM: it does not enumerate the Debian or Alpine packages inside those base
+SBOM: it does not enumerate the Debian, Alpine or SUSE packages inside those base
 images, and it does not name the published subject image digest, because at
 release-cut time no release image exists yet. Digest-pinned base and build image
 references are recorded.
@@ -71,6 +72,7 @@ import argparse
 import hashlib
 import json
 import re
+import ssl
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -115,10 +117,90 @@ RESDET_BUILDER_RUN = (
     "build-essential ca-certificates pkg-config && rm -rf /var/lib/apt/lists/* && "
     + RESDET_BUILD_COMMAND
 )
+NATIVE_RUNTIME_MANIFEST_PATH = "docker/native/manifest.json"
+SUSE_BASE_IMAGE = (
+    "registry.opensuse.org/opensuse/tumbleweed@sha256:"
+    "c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55"
+)
+SUSE_NATIVE_BUILDER_RUN = (
+    "zypper --non-interactive install --no-recommends python312-base && "
+    'case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac && '
+    "python3.12 /tmp/build_native_runtime.py --manifest /tmp/native/manifest.json "
+    '--work-dir /tmp/native-work --output-dir /tmp/native-output --arch "$arch"'
+)
+SUSE_RUNTIME_RUN = (
+    'case "$(uname -m)" in '
+    "x86_64) repository=https://download.opensuse.org/tumbleweed/repo/oss/ ;; "
+    "aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/ ;; "
+    "*) exit 1 ;; esac && rm -f /etc/zypp/repos.d/*.repo && "
+    'zypper --non-interactive addrepo --check --gpgcheck --refresh "$repository" oss && '
+    "zypper --non-interactive refresh && zypper --non-interactive update --no-recommends && "
+    "rpm --import /tmp/packman.asc && rpm --checksig /tmp/runtime-rpms/*.rpm && "
+    "zypper --non-interactive install --no-recommends /tmp/runtime-rpms/*.rpm "
+    "$(cat /tmp/runtime-packages.txt) python312 python312-base shadow coreutils bash "
+    "timezone ca-certificates && zypper clean --all"
+)
+SUSE_RUNTIME_INVENTORY_RUN = (
+    "ldconfig && for package in gcc gcc-c++ make go1.26 go1.27 libcjson1 libsndfile1; do "
+    'if rpm -q "$package"; then exit 1; fi; done && '
+    "rpm -qa --qf '%{NAME}\\t%{VERSION}\\t%{RELEASE}\\t%{ARCH}\\t%{VENDOR}\\t"
+    "%{SOURCERPM}\\t%{LICENSE}\\n' > /tmp/runtime-inventory.tsv"
+)
+SUSE_CA_BLACKLIST_COPY = (
+    "docker/trust/emsign-ecc-root-ca-g3.pem "
+    "/etc/pki/trust/blocklist/ecm-emsign-ecc-g3.pem"
+)
+SUSE_CA_BLACKLIST_RUN = (
+    'python3.12 -c "import hashlib, ssl; from pathlib import Path; assert '
+    "hashlib.sha256(ssl.PEM_cert_to_DER_cert("
+    "Path('/etc/pki/trust/blocklist/ecm-emsign-ecc-g3.pem').read_text())).hexdigest() "
+    "== '86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b'\" "
+    "&& update-ca-certificates"
+)
+SUSE_SOURCE_BUILDER_RUN = (
+    "rpm -q --qf '%{DESCRIPTION}\\n' gpg-pubkey-29b700a4 > /tmp/suse.asc && "
+    "python3.12 /tmp/collect_native_sources.py --inventory /tmp/runtime-inventory.tsv "
+    '--arch "$(uname -m)" --out /tmp/rpm-source-output --suse-key /tmp/suse.asc '
+    "--packman-key /tmp/native/packman.asc"
+)
+SUSE_RESDET_BUILDER_RUN = (
+    "zypper --non-interactive install --no-recommends gcc make pkgconf-pkg-config gawk && "
+    + RESDET_BUILD_COMMAND.replace("python ", "python3.12 ", 1)
+)
 RESDET_RUNTIME_ASSERTION = (
     'test "$(resdet -V)" = "$(printf \'resdet version 2.4.3\\n'
     'libresdet version 3.2.0\\nBuilt with image readers: Y4M\')"'
 )
+SUSE_RESDET_RUNTIME_SUFFIX = [
+    ("RUN", RESDET_RUNTIME_ASSERTION),
+    ("ENV", "PUID=1000"),
+    ("ENV", "PGID=1000"),
+    ("ENV", "CONFIG_DIR=/config"),
+    ("ENV", "ECM_PORT=6100"),
+    ("ENV", "ECM_HTTPS_PORT=6143"),
+    ("EXPOSE", "6100 6143"),
+    ("HEALTHCHECK", (
+        "--interval=30s --timeout=10s --start-period=120s --retries=3 "
+        'CMD /opt/venv/bin/python -c "import urllib.request, os; '
+        "port = os.environ.get('ECM_PORT', '6100'); "
+        "urllib.request.urlopen(f'http://localhost:{port}/api/health')\" || exit 1"
+    )),
+    ("ENTRYPOINT", '["/app/entrypoint.sh"]'),
+]
+SUSE_SOURCE_DELIVERY = [
+    ("COPY", "--from=source-builder /tmp/rpm-source-output/ /usr/share/ecm/sources/rpm/"),
+    ("COPY", "--from=native-builder /tmp/native-output/sources/ /usr/share/ecm/sources/owned/"),
+    ("COPY", "--from=native-builder /tmp/native-output/build-output.json /usr/share/ecm/provenance/native-build.json"),
+    ("COPY", "--from=native-builder /tmp/native-output/source-files.json /usr/share/ecm/provenance/native-sources.json"),
+    ("COPY", "--from=resdet-builder /tmp/resdet-work/resdet.tar.gz /usr/share/ecm/sources/resdet/resdet.tar.gz"),
+    ("COPY", "scripts/build_resdet.py scripts/generate_sbom.py sbom/native-dependencies.json /usr/share/ecm/sources/resdet/"),
+    ("COPY", "docker/python-third-party/notices/ /usr/share/doc/ecm/python-third-party/"),
+    ("COPY", "docker/python-third-party/sources/ /usr/share/ecm/sources/python/"),
+    ("COPY", "docker/python-third-party/component-manifest.json docker/python-third-party/SOURCE-AVAILABILITY.txt /usr/share/doc/ecm/python-third-party/"),
+    ("COPY", "docker/python-third-party/artifact-index/ /usr/share/doc/ecm/python-third-party/artifact-index/"),
+    ("COPY", "docker/trust/ /usr/share/ecm/sources/trust/"),
+    ("COPY", "Dockerfile /usr/share/ecm/sources/trust/Dockerfile"),
+]
 
 # SPDX 2.3 section 6.5 requires a new namespace when a document is updated.
 # Content-addressing the namespace-free document provides that uniqueness while
@@ -131,11 +213,6 @@ DOCKER_IMAGE_REF = re.compile(
 )
 DOCKER_INSTRUCTION_WHITESPACE = " \t\v\f\r"
 DOCKER_INSTRUCTION_WHITESPACE_PATTERN = r"[\t\v\f\r ]+"
-DOCKER_IMAGE_INSTRUCTION = re.compile(
-    rf"^(?P<instruction>FROM|COPY)(?:{DOCKER_INSTRUCTION_WHITESPACE_PATTERN}"
-    r"(?P<arguments>.*))?$",
-    re.IGNORECASE,
-)
 SPDX_ID_UNSAFE = re.compile(r"[^A-Za-z0-9.-]")
 
 # docs/versioning.md §Format: `BUILD` is a zero-padded CI build counter used on
@@ -316,40 +393,26 @@ def parse_dockerfile_images(text: str, source: str) -> list[dict[str, str]]:
         images.setdefault(key, entry)
         return key
 
-    # Docker physical lines end at LF; CR is also valid instruction whitespace
-    # and must not split an instruction when it appears anywhere else.
-    for number, raw in enumerate(text.split("\n"), start=1):
-        line = raw.strip(DOCKER_INSTRUCTION_WHITESPACE)
-        match = DOCKER_IMAGE_INSTRUCTION.fullmatch(line)
-        if match is None:
-            continue
-        instruction = match["instruction"].upper()
-        arguments = (match["arguments"] or "").strip(DOCKER_INSTRUCTION_WHITESPACE)
-        if instruction == "FROM":
-            tokens = (
-                re.split(DOCKER_INSTRUCTION_WHITESPACE_PATTERN, arguments)
-                if arguments
-                else []
-            )
-            if not tokens:
-                raise SbomError(f"{source} line {number} has a bare FROM")
-            reference = tokens[0]
-            if reference in stage_base:
-                key = stage_base[reference]
-            else:
-                key = _record(_pinned_image(reference, source, number, "base"))
-            if len(tokens) >= 3 and tokens[1].upper() == "AS":
-                stage_base[tokens[2]] = key
-            runtime_key = key
-        elif "--from=" in arguments:
-            reference = re.split(
-                DOCKER_INSTRUCTION_WHITESPACE_PATTERN,
-                arguments.split("--from=", 1)[1],
-                maxsplit=1,
-            )[0]
-            if reference in stage_base:
+    for stage in _docker_stages(text, source):
+        reference, number = stage["base"], stage["line"]
+        key = stage_base.get(reference)
+        if key is None:
+            key = _record(_pinned_image(reference, source, number, "base"))
+        runtime_key = key
+        # Only completed previous stages may be COPY sources (never self/future).
+        for instruction, arguments, number in stage["instructions"]:
+            if instruction != "COPY" or "--from" not in arguments:
                 continue
-            _record(_pinned_image(reference, source, number, "build"))
+            match = re.fullmatch(r"--from=(\S+) (?!.*--from)\S+ .+", arguments)
+            if match is None:
+                raise SbomError(f"{source} line {number} has an unsupported COPY --from")
+            reference = match[1]
+            if reference == stage["alias"]:
+                raise SbomError(f"{source} line {number} copies from its own stage")
+            if reference not in stage_base:
+                _record(_pinned_image(reference, source, number, "build"))
+        if stage["alias"] is not None:
+            stage_base[stage["alias"]] = key
     if runtime_key is None:
         raise SbomError(f"{source} has no FROM instruction")
     # An image that is both an intermediate base and the final base is one
@@ -551,21 +614,27 @@ def _docker_stages(dockerfile: str, source: str) -> list[dict[str, Any]]:
     logical: list[tuple[int, str]] = []
     pending = ""
     start = 0
-    for number, raw in enumerate(dockerfile.splitlines(), start=1):
-        stripped = raw.strip()
-        if not pending and (not stripped or stripped.startswith("#")):
+    # Docker physical lines end at LF, not at every Unicode whitespace character.
+    for number, raw in enumerate(dockerfile.split("\n"), start=1):
+        stripped = raw.strip(DOCKER_INSTRUCTION_WHITESPACE)
+        if stripped.startswith("#"):
+            if re.match(r"#\s*(syntax|escape|check)\s*=", stripped, re.IGNORECASE):
+                raise SbomError(f"{source} line {number} has an unreviewed parser directive")
+            continue
+        if not pending and not stripped:
             continue
         if not pending:
             start = number
         pending += (" " if pending else "") + stripped.removesuffix("\\").strip()
         if stripped.endswith("\\"):
             continue
-        logical.append((start, re.sub(r"\s+", " ", pending)))
+        logical.append((start, re.sub(DOCKER_INSTRUCTION_WHITESPACE_PATTERN, " ", pending)))
         pending = ""
     if pending:
         raise SbomError(f"{source} line {start} has an unterminated instruction")
 
     stages: list[dict[str, Any]] = []
+    aliases: set[str] = set()
     for number, text in logical:
         match = re.fullmatch(r"(?P<kind>[A-Za-z]+)\s+(?P<args>.+)", text)
         if match is None:
@@ -573,13 +642,117 @@ def _docker_stages(dockerfile: str, source: str) -> list[dict[str, Any]]:
         kind, arguments = match["kind"].upper(), match["args"]
         if kind == "FROM":
             tokens = arguments.split()
-            alias = tokens[2] if len(tokens) >= 3 and tokens[1].upper() == "AS" else None
-            stages.append({"alias": alias, "instructions": []})
+            if len(tokens) != 1 and not (len(tokens) == 3 and tokens[1].upper() == "AS"):
+                raise SbomError(f"{source} line {number} has an unsupported FROM")
+            alias = tokens[2] if len(tokens) == 3 else None
+            if alias is not None:
+                if re.fullmatch(r"[a-z][a-z0-9_-]*", alias) is None or alias in aliases:
+                    raise SbomError(f"{source} line {number} has an ambiguous stage alias")
+                aliases.add(alias)
+            stages.append({
+                "alias": alias, "base": tokens[0], "line": number, "instructions": [],
+            })
         elif not stages:
             raise SbomError(f"{source} line {number} precedes the first FROM")
         else:
             stages[-1]["instructions"].append((kind, arguments, number))
     return stages
+
+
+def _validate_suse_stages(stages: list[dict[str, Any]], source: str) -> None:
+    """Freeze instructions as well as inheritance: comments are not enforcement."""
+    if [stage["alias"] for stage in stages] != [
+        "frontend-builder", "native-builder", "runtime-base", "python-builder",
+        "resdet-builder", "source-builder", None,
+    ] or [stage["base"] for stage in stages[1:]] != [
+        SUSE_BASE_IMAGE, SUSE_BASE_IMAGE, "runtime-base", "runtime-base",
+        "native-builder", "runtime-base",
+    ]:
+        raise SbomError(f"{source} must use the reviewed SUSE seven-stage graph")
+    if re.fullmatch(r"node:20-alpine@sha256:[0-9a-f]{64}", stages[0]["base"]) is None:
+        raise SbomError(f"{source} frontend-builder requires its reviewed pinned Node base")
+
+    def require(stage_index: int, expected: list[tuple[str, str]]) -> None:
+        stage = stages[stage_index]
+        if [(kind, args) for kind, args, _line in stage["instructions"]] != expected:
+            name = stage["alias"] or "final resdet artifacts and source delivery"
+            raise SbomError(f"{source} {name} must contain only the exact reviewed SUSE recipe")
+
+    require(0, [
+        ("WORKDIR", "/app/frontend"),
+        ("COPY", "frontend/package.json frontend/package-lock.json* ./"),
+        ("RUN", "npm ci"), ("ARG", "GIT_COMMIT=unknown"),
+        ("ENV", "GIT_COMMIT=$GIT_COMMIT"), ("COPY", "frontend/ ./"),
+        ("RUN", "npm run build"),
+    ])
+    require(1, [
+        ("COPY", "scripts/build_native_runtime.py /tmp/build_native_runtime.py"),
+        ("COPY", "docker/native/ /tmp/native/"),
+        ("RUN", SUSE_NATIVE_BUILDER_RUN),
+    ])
+    require(2, [
+        ("COPY", "--from=native-builder /tmp/native-output/runtime-rpms/ /tmp/runtime-rpms/"),
+        ("COPY", "--from=native-builder /tmp/native-output/runtime-packages.txt /tmp/runtime-packages.txt"),
+        ("COPY", "--from=native-builder /tmp/native/packman.asc /tmp/packman.asc"),
+        ("RUN", SUSE_RUNTIME_RUN),
+        ("COPY", SUSE_CA_BLACKLIST_COPY),
+        ("RUN", SUSE_CA_BLACKLIST_RUN),
+        ("COPY", "--from=native-builder /tmp/native-output/root/ /"),
+        ("RUN", SUSE_RUNTIME_INVENTORY_RUN),
+    ])
+    python = [(kind, args) for kind, args, _line in stages[3]["instructions"]]
+    if (
+        len(python) != 3
+        or python[0][0] != "COPY"
+        or re.fullmatch(
+            r"--from=ghcr.io/astral-sh/uv:latest@sha256:[0-9a-f]{64} /uv /usr/local/bin/uv",
+            python[0][1],
+        ) is None
+        or python[1:] != [
+            ("COPY", "backend/requirements.txt /tmp/requirements.txt"),
+            ("RUN", (
+                "uv venv --python /usr/bin/python3.12 /opt/venv && uv pip install "
+                "--python /opt/venv/bin/python --no-cache -r /tmp/requirements.txt"
+            )),
+        ]
+    ):
+        raise SbomError(f"{source} python-builder must use the reviewed Python 3.12 recipe")
+    require(4, [
+        ("COPY", RESDET_BUILD_COPY.removeprefix("COPY ")),
+        ("RUN", SUSE_RESDET_BUILDER_RUN),
+    ])
+    require(5, [
+        ("COPY", "--from=runtime-base /tmp/runtime-inventory.tsv /tmp/runtime-inventory.tsv"),
+        ("COPY", "scripts/collect_native_sources.py /tmp/collect_native_sources.py"),
+        ("RUN", SUSE_SOURCE_BUILDER_RUN),
+    ])
+    require(6, [
+        ("ARG", "GIT_COMMIT=unknown"), ("ARG", "ECM_VERSION=unknown"),
+        ("ARG", "RELEASE_CHANNEL=latest"), ("ENV", "GIT_COMMIT=$GIT_COMMIT"),
+        ("ENV", "ECM_VERSION=$ECM_VERSION"), ("ENV", "RELEASE_CHANNEL=$RELEASE_CHANNEL"),
+        ("WORKDIR", "/app"),
+        ("RUN", "groupadd --gid 1000 appuser && useradd --uid 1000 --gid appuser --create-home --shell /bin/bash appuser"),
+        ("COPY", "--from=python-builder /opt/venv /opt/venv"),
+        ("ENV", 'PATH="/opt/venv/bin:$PATH"'), ("COPY", "backend/ ./"),
+        ("COPY", "--from=frontend-builder /app/frontend/dist ./static"),
+        *SUSE_SOURCE_DELIVERY,
+        ("RUN", (
+            "mkdir -p /config /config/tls /config/uploads/logos /run/ecm && "
+            "chown -R appuser:appuser /config /app && chown appuser:appuser /run/ecm && "
+            "chmod 700 /run/ecm && chmod 700 /config/tls && "
+            "sed -i 's/\\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh"
+        )),
+        ("COPY", "--from=resdet-builder /tmp/resdet-output/resdet /usr/local/bin/resdet"),
+        ("COPY", "--from=resdet-builder /tmp/resdet-output/licenses/ /usr/share/doc/resdet/"),
+        *SUSE_RESDET_RUNTIME_SUFFIX,
+    ])
+
+
+def validate_native_runtime_docker_contract(dockerfile: str, source: str) -> None:
+    """Publication accepts only the current graph, never historical compatibility."""
+    stages = _docker_stages(dockerfile, source)
+    parse_dockerfile_images(dockerfile, source)
+    _validate_suse_stages(stages, source)
 
 
 def validate_resdet_docker_contract(document: Any, dockerfile: str, source: str) -> None:
@@ -590,20 +763,46 @@ def validate_resdet_docker_contract(document: Any, dockerfile: str, source: str)
     if resdet is None or "build" not in resdet:
         raise SbomError(f"{NATIVE_DEPENDENCIES_PATH} has no resdet build metadata")
     stages = _docker_stages(dockerfile, source)
+    parse_dockerfile_images(dockerfile, source)
+    # The historical source-manifest fixtures remain reproducible, but no other
+    # graph can fall through into that weaker historical tail contract.
+    historical = (
+        [stage["alias"] for stage in stages]
+        == ["frontend-builder", "python-builder", "resdet-builder", None]
+        and all(
+            re.fullmatch(r"python:3.12-slim@sha256:[0-9a-f]{64}", stage["base"])
+            for stage in stages[1:]
+        )
+        and len({stage["base"] for stage in stages[1:]}) == 1
+    )
+    if not historical:
+        _validate_suse_stages(stages, source)
     builders = [stage for stage in stages if stage["alias"] == "resdet-builder"]
     if len(builders) != 1:
         raise SbomError(f"{source} must source the resdet build pin from {NATIVE_DEPENDENCIES_PATH}")
     instructions = builders[0]["instructions"]
-    copies = [f"{kind} {args}" for kind, args, _line in instructions if kind == "COPY"]
-    runs = [args for kind, args, _line in instructions if kind == "RUN"]
-    if (
-        copies != [RESDET_BUILD_COPY]
-        or runs != [RESDET_BUILDER_RUN]
-        or any(kind not in {"COPY", "RUN"} for kind, _args, _line in instructions)
-    ):
+    if [(kind, args) for kind, args, _line in instructions] != [
+        ("COPY", RESDET_BUILD_COPY.removeprefix("COPY ")),
+        ("RUN", RESDET_BUILDER_RUN if historical else SUSE_RESDET_BUILDER_RUN),
+    ]:
         raise SbomError(f"{source} resdet-builder must contain only the fixed dedicated build recipe")
 
     final_instructions = stages[-1]["instructions"]
+    allowed_environment = {
+        "GIT_COMMIT=$GIT_COMMIT", "ECM_VERSION=$ECM_VERSION",
+        "RELEASE_CHANNEL=$RELEASE_CHANNEL", 'PATH="/opt/venv/bin:$PATH"',
+        "PUID=1000", "PGID=1000", "CONFIG_DIR=/config", "ECM_PORT=6100",
+        "ECM_HTTPS_PORT=6143",
+    }
+    for kind, args, _line in final_instructions:
+        if (
+            kind in {"SHELL", "ONBUILD"}
+            or kind == "ENV" and args not in allowed_environment
+            or kind == "ARG" and args not in {
+                "GIT_COMMIT=unknown", "ECM_VERSION=unknown", "RELEASE_CHANNEL=latest",
+            }
+        ):
+            raise SbomError(f"{source} final resdet artifacts require the reviewed environment")
     binary_copy = "--from=resdet-builder /tmp/resdet-output/resdet /usr/local/bin/resdet"
     notice_copy = "--from=resdet-builder /tmp/resdet-output/licenses/ /usr/share/doc/resdet/"
     artifact_indexes = [
@@ -612,9 +811,16 @@ def validate_resdet_docker_contract(document: Any, dockerfile: str, source: str)
     ]
     if len(artifact_indexes) != 2 or artifact_indexes != list(range(artifact_indexes[0], artifact_indexes[0] + 2)):
         raise SbomError(f"{source} final resdet artifacts must be copied once from the fixed output")
-    for kind, args, _line in final_instructions[artifact_indexes[0] + 2:]:
-        if kind in {"COPY", "ADD"} or kind == "RUN" and args != RESDET_RUNTIME_ASSERTION:
-            raise SbomError(f"{source} final resdet artifacts may not be replaced after copy")
+    suffix = final_instructions[artifact_indexes[0] + 2:]
+    if not historical:
+        if [(kind, args) for kind, args, _line in suffix] != SUSE_RESDET_RUNTIME_SUFFIX:
+            raise SbomError(f"{source} final resdet artifacts require the exact reviewed SUSE suffix")
+    else:
+        # Historical Debian compatibility: this checks file-mutating steps only,
+        # not the complete runtime suffix enforced for the reviewed SUSE recipe.
+        for kind, args, _line in suffix:
+            if kind in {"COPY", "ADD"} or kind == "RUN" and args != RESDET_RUNTIME_ASSERTION:
+                raise SbomError(f"{source} final resdet artifacts may not be replaced after copy")
     for index, (kind, args, _line) in enumerate(final_instructions):
         if index < artifact_indexes[0] and kind == "COPY" and (
             args.endswith(" /usr/local/bin/resdet") or args.endswith(" /usr/share/doc/resdet/")
@@ -744,7 +950,7 @@ def _image_package(entry: dict[str, str]) -> dict[str, Any]:
 
 
 def _native_package(entry: dict[str, str]) -> dict[str, Any]:
-    return {
+    package = {
         "SPDXID": _spdx_id("Package", "native", entry["id"], entry["version"]),
         "name": entry["name"],
         "versionInfo": entry["version"],
@@ -762,6 +968,63 @@ def _native_package(entry: dict[str, str]) -> dict[str, Any]:
             }
         ],
     }
+    if "sha256" in entry:
+        package["checksums"] = [{"algorithm": "SHA256", "checksumValue": entry["sha256"]}]
+    return package
+
+
+def _runtime_native_inputs(root: Path, sources: dict[str, str]) -> list[dict[str, str]]:
+    """Project identities from the builder's existing manifest, not a second lock."""
+    manifest = _read_json(root / NATIVE_RUNTIME_MANIFEST_PATH)
+    if not isinstance(manifest, dict) or manifest.get("base_image") != SUSE_BASE_IMAGE:
+        raise SbomError(f"{NATIVE_RUNTIME_MANIFEST_PATH} does not match the reviewed SUSE base")
+    packages = []
+    for key, name, purl in (
+        ("ffmpeg", "FFmpeg", "pkg:generic/ffmpeg"),
+        ("gosu", "gosu", "pkg:github/tianon/gosu"),
+    ):
+        entry = manifest.get(key)
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("version"), str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", entry["version"]) is None
+            or not isinstance(entry.get("sha256"), str)
+            or SHA256.fullmatch(entry["sha256"]) is None
+        ):
+            raise SbomError(f"{NATIVE_RUNTIME_MANIFEST_PATH} has malformed {key} identity")
+        _validate_https_url(entry.get("url"), NATIVE_RUNTIME_MANIFEST_PATH, "ecm", 0)
+        packages.append({
+            "id": key, "name": name, "version": entry["version"],
+            # This manifest pins source identities, not SPDX license conclusions.
+            "purl": f"{purl}@{entry['version']}", "license": NOASSERTION,
+            "downloadLocation": entry["url"], "sha256": entry["sha256"],
+        })
+    for directory in ("docker/native", "docker/trust"):
+        native_root = root / directory
+        if native_root.is_symlink():
+            raise SbomError(f"native source input must not be a symlink: {native_root}")
+        for path in sorted(native_root.rglob("*")):
+            if path.is_symlink():
+                raise SbomError(f"native source input must not be a symlink: {path}")
+            if path.is_file():
+                sources[path.relative_to(root).as_posix()] = sha256_file(path)
+    certificate = _read_text(root / "docker/trust/emsign-ecc-root-ca-g3.pem")
+    try:
+        der = ssl.PEM_cert_to_DER_cert(certificate)
+    except ValueError as exc:
+        raise SbomError("SUSE blacklist requires the exact compromised G3 certificate") from exc
+    if (
+        certificate.count("-----BEGIN CERTIFICATE-----") != 1
+        or hashlib.sha256(der).hexdigest()
+        != "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b"
+    ):
+        raise SbomError("SUSE blacklist requires the exact compromised G3 certificate")
+    for relative in ("scripts/build_native_runtime.py", "scripts/collect_native_sources.py"):
+        path = root / relative
+        if path.is_symlink():
+            raise SbomError(f"native source input must not be a symlink: {path}")
+        sources[relative] = sha256_file(path)
+    return packages
 
 
 def _relationship(source: str, kind: str, target: str) -> dict[str, str]:
@@ -956,8 +1219,12 @@ def render(root: Path, version: str, created: str) -> dict[str, Any]:
     documents: dict[str, dict[str, Any]] = {}
     native_document = _read_json(root / NATIVE_DEPENDENCIES_PATH)
     sources[NATIVE_DEPENDENCIES_PATH] = sha256_file(root / NATIVE_DEPENDENCIES_PATH)
-    validate_resdet_docker_contract(
-        native_document, _read_text(root / "Dockerfile"), "Dockerfile"
+    dockerfile = _read_text(root / "Dockerfile")
+    validate_resdet_docker_contract(native_document, dockerfile, "Dockerfile")
+    runtime_packages = (
+        _runtime_native_inputs(root, sources)
+        if any(stage["alias"] == "native-builder" for stage in _docker_stages(dockerfile, "Dockerfile"))
+        else []
     )
 
     for subject, spec in SUBJECTS.items():
@@ -978,6 +1245,12 @@ def render(root: Path, version: str, created: str) -> dict[str, Any]:
         native_packages, native_relationships = parse_native_dependencies(
             native_document, subject, NATIVE_DEPENDENCIES_PATH
         )
+        if subject == "ecm":
+            native_packages.extend(runtime_packages)
+            native_relationships.extend(
+                {"source": "ecm", "type": "CONTAINS", "target": package["id"]}
+                for package in runtime_packages
+            )
         documents[subject] = build_document(
             subject=subject,
             subject_name=spec["subject_name"],
@@ -1032,7 +1305,17 @@ def render(root: Path, version: str, created: str) -> dict[str, Any]:
                 "are recorded; see sbom/README.md."
             ),
         },
-        "coverage": {"includes": list(COVERAGE_INCLUDES), "excludes": list(COVERAGE_EXCLUDES)},
+        "coverage": {
+            "includes": list(COVERAGE_INCLUDES) + ([
+                ("Source-built FFmpeg/gosu identities from docker/native/manifest.json; "
+                 "native recipe assets and builder/source-collector bytes are fingerprinted"),
+            ] if runtime_packages else []),
+            "excludes": ([
+                ("Operating-system RPM packages resolved at build time by zypper are not "
+                 "enumerated by this source-manifest SBOM; use the runtime image inventory"),
+                *COVERAGE_EXCLUDES[1:],
+            ] if runtime_packages else list(COVERAGE_EXCLUDES)),
+        },
         "sources": {path: f"sha256:{digest}" for path, digest in sorted(sources.items())},
         "documents": [
             {

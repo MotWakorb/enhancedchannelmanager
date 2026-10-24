@@ -1,0 +1,21 @@
+PYTHON THIRD-PARTY SOURCE AVAILABILITY
+
+Images built by the ECM Dockerfile include the following source files at:
+/usr/share/ecm/sources/python/
+
+The accompanying files are:
+
+- certifi-2026.10.19.tar.gz: exact public certifi source, including MPL-2.0 CA data.
+- hypothesis-6.165.10.tar.gz: exact public source including its Rust native source and Cargo.lock; retain if hypothesis is actually shipped.
+- certifi-2026.10.19-cacert.pem: actual editable CA Source Code Form.
+- botocore-1.43.78-cacert.pem: actual editable CA Source Code Form with MPL-2.0 component notice in botocore's NOTICE.
+- cryptography-50.0.2.tar.gz: exact public source for the repaired package and its seven current workspace crates, voluntarily supplied for provenance/attribution. Apache/BSD licensing does not itself create a GPL corresponding-source duty.
+
+From that directory, run `sha256sum --check SHA256SUMS` to verify the source files.
+The publisher must verify the delivered image and both architectures before publication.
+Preserve modifications to covered MPL files in the delivered Source Code Form.
+The separate FFmpeg/OS source bundle does not replace these Python sources.
+
+OpenSSL 4.0.3 and Rust library attribution are included under /usr/share/doc/ecm/python-third-party/.
+The OpenSSL source digest in component-manifest.json is upstream identity evidence from the actual wheel SBOM, not a claim its full source archive is included.
+These third-party terms do not alter ECM's own CC0 license.

@@ -584,9 +584,80 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # Native execution consumes the same OCI subjects as scanning/publication.
+  # Docker transport may rewrite a manifest, but must preserve its verified
+  # config ID, architecture and uncompressed rootfs. No rebuild or registry pull.
+  native-runtime-amd64:
+    name: Native Runtime (AMD64)
+    runs-on: ubuntu-latest
+    needs: [build-amd64]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: ecm-amd64-candidate
+          path: /tmp
+      - name: Verify and execute exact native candidate
+        run: |
+          set -euo pipefail
+          mkdir -p native-evidence
+          python scripts/candidate_image.py verify-archive /tmp/ecm-amd64.oci.tar --expected '${{ needs.build-amd64.outputs.digest }}'
+          python scripts/candidate_image.py runtime-config /tmp/ecm-amd64.oci.tar --expected '${{ needs.build-amd64.outputs.digest }}' --architecture amd64 > native-evidence/identity.json
+          test "$(skopeo --version)" = "skopeo version 1.13.3"
+          skopeo copy oci-archive:/tmp/ecm-amd64.oci.tar docker-archive:/tmp/ecm-amd64.runtime.docker.tar:ecm-native-amd64:candidate
+          docker load --input /tmp/ecm-amd64.runtime.docker.tar
+          image_id=$(jq -er '.ConfigDigest' native-evidence/identity.json)
+          docker image inspect "$image_id" > native-evidence/loaded-image.json
+          python scripts/candidate_image.py verify-loaded native-evidence/identity.json --inspect native-evidence/loaded-image.json
+          python scripts/native_image_gate.py --image "$image_id" > native-evidence/runtime.json
+          jq -n --arg sha '${{ github.sha }}' --slurpfile identity native-evidence/identity.json '{sha:$sha,identity:$identity[0]}' > native-evidence/subject.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: native-runtime-amd64-${{ github.sha }}
+          path: native-evidence/
+          retention-days: 14
+          if-no-files-found: error
+
+  native-runtime-arm64:
+    name: Native Runtime (ARM64)
+    runs-on: ubuntu-24.04-arm
+    needs: [build-arm64]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: ecm-arm64-candidate
+          path: /tmp
+      - name: Verify and execute exact native candidate
+        run: |
+          set -euo pipefail
+          mkdir -p native-evidence
+          python scripts/candidate_image.py verify-archive /tmp/ecm-arm64.oci.tar --expected '${{ needs.build-arm64.outputs.digest }}'
+          python scripts/candidate_image.py runtime-config /tmp/ecm-arm64.oci.tar --expected '${{ needs.build-arm64.outputs.digest }}' --architecture arm64 > native-evidence/identity.json
+          test "$(skopeo --version)" = "skopeo version 1.13.3"
+          skopeo copy oci-archive:/tmp/ecm-arm64.oci.tar docker-archive:/tmp/ecm-arm64.runtime.docker.tar:ecm-native-arm64:candidate
+          docker load --input /tmp/ecm-arm64.runtime.docker.tar
+          image_id=$(jq -er '.ConfigDigest' native-evidence/identity.json)
+          docker image inspect "$image_id" > native-evidence/loaded-image.json
+          python scripts/candidate_image.py verify-loaded native-evidence/identity.json --inspect native-evidence/loaded-image.json
+          python scripts/native_image_gate.py --image "$image_id" > native-evidence/runtime.json
+          jq -n --arg sha '${{ github.sha }}' --slurpfile identity native-evidence/identity.json '{sha:$sha,identity:$identity[0]}' > native-evidence/subject.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: native-runtime-arm64-${{ github.sha }}
+          path: native-evidence/
+          retention-days: 14
+          if-no-files-found: error
+
   # ECM candidate scans, one per architecture. The two jobs are deliberate
   # mirror images of each other: same Trivy action pin, same
-  # `exit-code: '1'`, same `ignore-unfixed: true`, same
+  # `exit-code: '1'`, no unfixed/suppression exemptions, same
   # `severity: 'CRITICAL,HIGH'`, each reading only the OCI archive its own
   # build job produced. Change one and change the other, or one
   # architecture publishes on a weaker bar than its twin.
@@ -599,6 +670,8 @@ jobs:
     name: Container Security Scan (Trivy)
     runs-on: ubuntu-24.04
     needs: [build-amd64]
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
@@ -607,22 +680,60 @@ jobs:
           path: /tmp
       - name: Verify exact candidate identity
         run: |
+          set -euo pipefail
+          mkdir -p native-scan
           python scripts/candidate_image.py verify-archive /tmp/ecm-amd64.oci.tar --expected '${{ needs.build-amd64.outputs.digest }}'
+          python scripts/candidate_image.py runtime-config /tmp/ecm-amd64.oci.tar --expected '${{ needs.build-amd64.outputs.digest }}' --architecture amd64 > native-scan/identity.json
           test "$(skopeo --version)" = "skopeo version 1.13.3"
           skopeo copy oci-archive:/tmp/ecm-amd64.oci.tar docker-archive:/tmp/trivy-ecm-amd64-scan.docker.tar
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+          printf '%s\n' '${{ github.sha }}' > native-scan/source-sha.txt
+      # Exit 0 collects every severity; the validator and exit-1 scan below
+      # independently block HIGH/CRITICAL (including unfixed) findings.
+      - name: Collect complete findings and inventory
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.76.1
+          input: /tmp/trivy-ecm-amd64-scan.docker.tar
+          format: json
+          output: native-scan/findings.json
+          list-all-pkgs: 'true'
+          exit-code: '0'
+          ignore-unfixed: false
+          vuln-type: os,library
+          scanners: vuln
+          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+      - name: Validate complete scan evidence
+        run: |
+          set -euo pipefail
+          trivy version --cache-dir "${{ github.workspace }}/.cache/trivy" --format json > native-scan/scanner.json
+          python scripts/check_native_image_scan.py --report native-scan/findings.json --identity native-scan/identity.json --scanner-identity native-scan/scanner.json --architecture amd64
+      - name: Block all HIGH and CRITICAL findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.1
           input: /tmp/trivy-ecm-amd64-scan.docker.tar
           format: table
           exit-code: '1'
-          ignore-unfixed: true
+          ignore-unfixed: false
           vuln-type: os,library
+          scanners: vuln
           severity: 'CRITICAL,HIGH'
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: native-scan-amd64-${{ github.sha }}
+          path: native-scan/
+          retention-days: 14
+          if-no-files-found: error
 
   trivy-scan-arm64:
     name: Container Security Scan (Trivy ARM64)
     runs-on: ubuntu-24.04-arm
     needs: [build-arm64]
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
@@ -631,17 +742,51 @@ jobs:
           path: /tmp
       - name: Verify exact candidate identity
         run: |
+          set -euo pipefail
+          mkdir -p native-scan
           python scripts/candidate_image.py verify-archive /tmp/ecm-arm64.oci.tar --expected '${{ needs.build-arm64.outputs.digest }}'
+          python scripts/candidate_image.py runtime-config /tmp/ecm-arm64.oci.tar --expected '${{ needs.build-arm64.outputs.digest }}' --architecture arm64 > native-scan/identity.json
           test "$(skopeo --version)" = "skopeo version 1.13.3"
           skopeo copy oci-archive:/tmp/ecm-arm64.oci.tar docker-archive:/tmp/trivy-ecm-arm64-scan.docker.tar
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+          printf '%s\n' '${{ github.sha }}' > native-scan/source-sha.txt
+      - name: Collect complete findings and inventory
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.76.1
+          input: /tmp/trivy-ecm-arm64-scan.docker.tar
+          format: json
+          output: native-scan/findings.json
+          list-all-pkgs: 'true'
+          exit-code: '0'
+          ignore-unfixed: false
+          vuln-type: os,library
+          scanners: vuln
+          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+      - name: Validate complete scan evidence
+        run: |
+          set -euo pipefail
+          trivy version --cache-dir "${{ github.workspace }}/.cache/trivy" --format json > native-scan/scanner.json
+          python scripts/check_native_image_scan.py --report native-scan/findings.json --identity native-scan/identity.json --scanner-identity native-scan/scanner.json --architecture arm64
+      - name: Block all HIGH and CRITICAL findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.1
           input: /tmp/trivy-ecm-arm64-scan.docker.tar
           format: table
           exit-code: '1'
-          ignore-unfixed: true
+          ignore-unfixed: false
           vuln-type: os,library
+          scanners: vuln
           severity: 'CRITICAL,HIGH'
+          cache-dir: ${{ github.workspace }}/.cache/trivy
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: native-scan-arm64-${{ github.sha }}
+          path: native-scan/
+          retention-days: 14
+          if-no-files-found: error
 
   trivy-scan-mcp-amd64:
     name: MCP Container Security Scan (Trivy AMD64)
@@ -653,10 +798,20 @@ jobs:
         with:
           name: mcp-amd64-candidate
           path: /tmp
-      - run: |
+      - name: Verify bundled OpenSSL in exact MCP candidate
+        run: |
+          set -euo pipefail
+          mkdir -p mcp-native-crypto
           python scripts/candidate_image.py verify-archive /tmp/mcp-amd64.oci.tar --expected '${{ needs.build-mcp-amd64.outputs.digest }}'
+          python scripts/candidate_image.py runtime-config /tmp/mcp-amd64.oci.tar --expected '${{ needs.build-mcp-amd64.outputs.digest }}' --architecture amd64 > mcp-native-crypto/identity.json
           test "$(skopeo --version)" = "skopeo version 1.13.3"
           skopeo copy oci-archive:/tmp/mcp-amd64.oci.tar docker-archive:/tmp/trivy-mcp-amd64-scan.docker.tar
+          docker load --input /tmp/trivy-mcp-amd64-scan.docker.tar
+          image_id=$(jq -er '.ConfigDigest' mcp-native-crypto/identity.json)
+          docker image inspect "$image_id" > mcp-native-crypto/loaded-image.json
+          python scripts/candidate_image.py verify-loaded mcp-native-crypto/identity.json --inspect mcp-native-crypto/loaded-image.json
+          printf '%s\n' '${{ github.sha }}' > mcp-native-crypto/source-sha.txt
+          docker run --rm --pull never --read-only --network none --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,source=$PWD/scripts/check_bundled_openssl.py,target=/check_bundled_openssl.py,readonly" --mount "type=bind,source=$PWD/mcp-native-crypto,target=/mcp-native-crypto,readonly" --entrypoint /usr/local/bin/python "$image_id" -I -B /check_bundled_openssl.py --identity /mcp-native-crypto/identity.json --loaded-image /mcp-native-crypto/loaded-image.json --source-sha /mcp-native-crypto/source-sha.txt --expected-image-id "$image_id" --expected-source-sha '${{ github.sha }}' --architecture amd64 > mcp-native-crypto/receipt.json
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           input: /tmp/trivy-mcp-amd64-scan.docker.tar
@@ -664,6 +819,14 @@ jobs:
           exit-code: '1'
           vuln-type: os,library
           severity: 'CRITICAL,HIGH'
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: mcp-native-crypto-amd64-${{ github.sha }}
+          path: mcp-native-crypto/
+          retention-days: 14
+          if-no-files-found: error
 
   trivy-scan-mcp-arm64:
     name: MCP Container Security Scan (Trivy ARM64)
@@ -675,10 +838,20 @@ jobs:
         with:
           name: mcp-arm64-candidate
           path: /tmp
-      - run: |
+      - name: Verify bundled OpenSSL in exact MCP candidate
+        run: |
+          set -euo pipefail
+          mkdir -p mcp-native-crypto
           python scripts/candidate_image.py verify-archive /tmp/mcp-arm64.oci.tar --expected '${{ needs.build-mcp-arm64.outputs.digest }}'
+          python scripts/candidate_image.py runtime-config /tmp/mcp-arm64.oci.tar --expected '${{ needs.build-mcp-arm64.outputs.digest }}' --architecture arm64 > mcp-native-crypto/identity.json
           test "$(skopeo --version)" = "skopeo version 1.13.3"
           skopeo copy oci-archive:/tmp/mcp-arm64.oci.tar docker-archive:/tmp/trivy-mcp-arm64-scan.docker.tar
+          docker load --input /tmp/trivy-mcp-arm64-scan.docker.tar
+          image_id=$(jq -er '.ConfigDigest' mcp-native-crypto/identity.json)
+          docker image inspect "$image_id" > mcp-native-crypto/loaded-image.json
+          python scripts/candidate_image.py verify-loaded mcp-native-crypto/identity.json --inspect mcp-native-crypto/loaded-image.json
+          printf '%s\n' '${{ github.sha }}' > mcp-native-crypto/source-sha.txt
+          docker run --rm --pull never --read-only --network none --cap-drop ALL --security-opt no-new-privileges --mount "type=bind,source=$PWD/scripts/check_bundled_openssl.py,target=/check_bundled_openssl.py,readonly" --mount "type=bind,source=$PWD/mcp-native-crypto,target=/mcp-native-crypto,readonly" --entrypoint /usr/local/bin/python "$image_id" -I -B /check_bundled_openssl.py --identity /mcp-native-crypto/identity.json --loaded-image /mcp-native-crypto/loaded-image.json --source-sha /mcp-native-crypto/source-sha.txt --expected-image-id "$image_id" --expected-source-sha '${{ github.sha }}' --architecture arm64 > mcp-native-crypto/receipt.json
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           input: /tmp/trivy-mcp-arm64-scan.docker.tar
@@ -686,6 +859,14 @@ jobs:
           exit-code: '1'
           vuln-type: os,library
           severity: 'CRITICAL,HIGH'
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: mcp-native-crypto-arm64-${{ github.sha }}
+          path: mcp-native-crypto/
+          retention-days: 14
+          if-no-files-found: error
 
   attest-image-candidates:
     name: Attest Verified Image Candidates
@@ -703,6 +884,8 @@ jobs:
       - trivy-scan-arm64
       - trivy-scan-mcp-amd64
       - trivy-scan-mcp-arm64
+      - native-runtime-amd64
+      - native-runtime-arm64
     if: >-
       always() && github.event_name == 'push'
       && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
@@ -714,6 +897,8 @@ jobs:
       && needs.trivy-scan-arm64.result == 'success'
       && needs.trivy-scan-mcp-amd64.result == 'success'
       && needs.trivy-scan-mcp-arm64.result == 'success'
+      && needs.native-runtime-amd64.result == 'success'
+      && needs.native-runtime-arm64.result == 'success'
       && needs.security-scan-mcp.result == 'success'
     steps:
       - name: Bind digests and per-SHA SCA evidence

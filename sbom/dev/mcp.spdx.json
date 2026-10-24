@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "mcp-0.18.2-0046",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0046/mcp-1f7a970fa473a64164a26c30f6203e6f8850d594887a7ddc9186a6192bc94539",
+  "name": "mcp-0.18.2-0047",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0047/mcp-2b3f93f0f19f4bd3497cd6c5d957ab21e894e3e38bc86121a73471ee3049dcdd",
   "creationInfo": {
-    "created": "2026-10-23T07:02:21Z",
+    "created": "2026-10-24T12:00:51Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-mcp",
       "name": "enhanced-channel-manager-mcp",
-      "versionInfo": "0.18.2-0046",
+      "versionInfo": "0.18.2-0047",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -179,9 +179,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-cryptography-50.0.0",
+      "SPDXID": "SPDXRef-Package-pypi-cryptography-50.0.2",
       "name": "cryptography",
-      "versionInfo": "50.0.0",
+      "versionInfo": "50.0.2",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -192,7 +192,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/cryptography@50.0.0"
+          "referenceLocator": "pkg:pypi/cryptography@50.0.2"
         }
       ]
     },
@@ -838,7 +838,7 @@
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-cryptography-50.0.0",
+      "spdxElementId": "SPDXRef-Package-pypi-cryptography-50.0.2",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },

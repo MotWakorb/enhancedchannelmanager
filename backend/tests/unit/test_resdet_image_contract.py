@@ -21,7 +21,7 @@ def test_resdet_image_build_is_y4m_only_and_copies_all_required_notices():
     assert "Built with image readers: Y4M" in dockerfile
     assert "resdet version 2.4.3" in dockerfile
     assert "libresdet version 3.2.0" in dockerfile
-    assert "pkg-config" in dockerfile
+    assert "zypper --non-interactive install --no-recommends gcc make pkgconf-pkg-config gawk" in dockerfile
     assert "ARG RESDET_COMMIT" not in dockerfile
     assert "ARG RESDET_SHA256" not in dockerfile
     assert "native-dependencies.json" in dockerfile

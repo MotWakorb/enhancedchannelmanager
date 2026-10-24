@@ -1,0 +1,3794 @@
+{
+  "registry_components": [
+    {
+      "name": "ahash",
+      "version": "0.8.12",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/ahash-0.8.12/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/ahash-0.8.12/LICENSE-MIT",
+          "sha256": "0444c6991eead6822f7b9102e654448d51624431119546492e8b231db42c48bb"
+        }
+      ]
+    },
+    {
+      "name": "aho-corasick",
+      "version": "1.1.3",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "8e60d3430d3a69478ad0993f19238d2df97c507009a52b3c10addcd7f6bcb916",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/aho-corasick-1.1.3/COPYING",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f"
+        },
+        {
+          "shared_path": "notices/rust-crates/aho-corasick-1.1.3/LICENSE-MIT",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f"
+        },
+        {
+          "shared_path": "notices/rust-crates/aho-corasick-1.1.3/UNLICENSE",
+          "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c"
+        }
+      ]
+    },
+    {
+      "name": "allocator-api2",
+      "version": "0.2.21",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/allocator-api2-0.2.21/LICENSE-APACHE",
+          "sha256": "20fe7b00e904ed690e3b9fd6073784d3fc428141dbd10b81c01fd143d0797f58"
+        },
+        {
+          "shared_path": "notices/rust-crates/allocator-api2-0.2.21/LICENSE-MIT",
+          "sha256": "36516aefdc84c5d5a1e7485425913a22dbda69eb1930c5e84d6ae4972b5194b9"
+        }
+      ]
+    },
+    {
+      "name": "asn1",
+      "version": "0.24.1",
+      "owners": [
+        "cryptography: actual ARM SBOM",
+        "cryptography: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "c9795210620c0cb3f9a7ce4f882808c38e1ef7b347c90591dceae0886e031fb1",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/asn1-0.24.1/LICENSE",
+          "sha256": "c6deb2d156619439e147f8b62e1b3928598c8e3652ec8b56cc039490696b3985"
+        }
+      ]
+    },
+    {
+      "name": "asn1_derive",
+      "version": "0.24.1",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "909e307f1cc32bb8bccbd98f446e6d1bf03fa30f7b53a4337da7181ad30fa11a",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/asn1_derive-0.24.1/LICENSE",
+          "sha256": "c6deb2d156619439e147f8b62e1b3928598c8e3652ec8b56cc039490696b3985"
+        }
+      ]
+    },
+    {
+      "name": "autocfg",
+      "version": "1.3.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "0c4b4d0bd25bd0b74681c0ad21497610ce1b7c91b1022cd21c80c6fbdd9476b0",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/autocfg-1.3.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/autocfg-1.3.0/LICENSE-MIT",
+          "sha256": "27995d58ad5c1145c1a8cd86244ce844886958a35eb2b78c6b772748669999ac"
+        }
+      ]
+    },
+    {
+      "name": "autocfg",
+      "version": "1.5.0",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/autocfg-1.5.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/autocfg-1.5.0/LICENSE-MIT",
+          "sha256": "27995d58ad5c1145c1a8cd86244ce844886958a35eb2b78c6b772748669999ac"
+        }
+      ]
+    },
+    {
+      "name": "base64",
+      "version": "0.22.1",
+      "owners": [
+        "bcrypt: actual embedded registry source path",
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)",
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/base64-0.22.1/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/base64-0.22.1/LICENSE-MIT",
+          "sha256": "0dd882e53de11566d50f8e8e2d5a651bcf3fabee4987d70f306233cf39094ba7"
+        }
+      ]
+    },
+    {
+      "name": "base64",
+      "version": "0.23.0",
+      "owners": [
+        "cryptography: actual ARM SBOM",
+        "cryptography: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "b25655df2c3cdd83c5e5b293b88acd880332b2ddadd7c30ac43144fdc0033da9",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/base64-0.23.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/base64-0.23.0/LICENSE-MIT",
+          "sha256": "ab499c75a0f0da8e0fe83bf9ba3a27e5c39705310f07107c6c66b69958d2401c"
+        }
+      ]
+    },
+    {
+      "name": "bcrypt",
+      "version": "0.17.1",
+      "owners": [
+        "bcrypt: actual embedded registry source path",
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "abaf6da45c74385272ddf00e1ac074c7d8a6c1a1dda376902bd6a427522a8b2c",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/bcrypt-0.17.1/LICENSE",
+          "sha256": "bb92dde0b21dc772d1a6446970082391984bdfc3dd7cb0ac44057c97c2dac181"
+        }
+      ]
+    },
+    {
+      "name": "bcrypt-pbkdf",
+      "version": "0.10.0",
+      "owners": [
+        "bcrypt: actual embedded registry source path",
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "6aeac2e1fe888769f34f05ac343bbef98b14d1ffb292ab69d4608b3abc86f2a2",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/bcrypt-pbkdf-0.10.0/LICENSE-APACHE",
+          "sha256": "3708458dee7f359ac6c9c5558023ed481be87e5372c43ebd7f2ca7ad23c12026"
+        },
+        {
+          "shared_path": "notices/rust-crates/bcrypt-pbkdf-0.10.0/LICENSE-MIT",
+          "sha256": "2fd18bfb8c046ba25fc4e31cdaf9c545310cb48aad8eee0f1b9e20e64033454b"
+        }
+      ]
+    },
+    {
+      "name": "bitflags",
+      "version": "2.13.1",
+      "owners": [
+        "cryptography: actual ARM SBOM",
+        "cryptography: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/bitflags-2.13.1/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/bitflags-2.13.1/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "name": "bitflags",
+      "version": "2.7.0",
+      "owners": [
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "1be3f42a67d6d345ecd59f675f3f012d6974981560836e938c22b424b85ce1be",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/bitflags-2.7.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/bitflags-2.7.0/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "name": "bitflags",
+      "version": "2.9.1",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "1b8e56985ec62d17e9c1001dc89c88ecd7dc08e47eba5ec7c29c7b5eeecde967",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/bitflags-2.9.1/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/bitflags-2.9.1/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "name": "bitvec",
+      "version": "1.0.1",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "1bc2832c24239b0141d5674bb9174f9d68a8b5b3f2753311927c172ca46f7e9c",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/bitvec-1.0.1/LICENSE.txt",
+          "sha256": "411781fd38700f2357a14126d0ab048164ab881f1dcb335c1bb932e232c9a2f5"
+        }
+      ]
+    },
+    {
+      "name": "block-buffer",
+      "version": "0.10.4",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/block-buffer-0.10.4/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+        },
+        {
+          "shared_path": "notices/rust-crates/block-buffer-0.10.4/LICENSE-MIT",
+          "sha256": "d5c22aa3118d240e877ad41c5d9fa232f9c77d757d4aac0c2f943afc0a95e0ef"
+        }
+      ]
+    },
+    {
+      "name": "blowfish",
+      "version": "0.9.1",
+      "owners": [
+        "bcrypt: actual embedded registry source path",
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "e412e2cd0f2b2d93e02543ceae7917b3c70331573df19ee046bcbc35e45e87d7",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/blowfish-0.9.1/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+        },
+        {
+          "shared_path": "notices/rust-crates/blowfish-0.9.1/LICENSE-MIT",
+          "sha256": "52232c2cee3bb7d8cabe47ef367f1bf8bb607c22bdfca0219d6156cb7f446e9d"
+        }
+      ]
+    },
+    {
+      "name": "bumpalo",
+      "version": "3.19.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "46c5e41b57b8bba42a04676d81cb89e9ee8e859a1a66f80a5a72e1cb76b34d43",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/bumpalo-3.19.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/bumpalo-3.19.0/LICENSE-MIT",
+          "sha256": "65f94e99ddaf4f5d1782a6dae23f35d4293a9a01444a13135a6887017d353cee"
+        }
+      ]
+    },
+    {
+      "name": "byteorder",
+      "version": "1.5.0",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/byteorder-1.5.0/COPYING",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f"
+        },
+        {
+          "shared_path": "notices/rust-crates/byteorder-1.5.0/LICENSE-MIT",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f"
+        },
+        {
+          "shared_path": "notices/rust-crates/byteorder-1.5.0/UNLICENSE",
+          "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c"
+        }
+      ]
+    },
+    {
+      "name": "cc",
+      "version": "1.0.101",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "ac367972e516d45567c7eafc73d24e1c193dcf200a8d94e9db7b3d38b349572d",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/cc-1.0.101/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/cc-1.0.101/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "name": "cc",
+      "version": "1.4.0",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "5add81bb678e6cb321aff7fa0dc7689ad82b112dbc032cea19f91d6b8e3582b9",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/cc-1.4.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/cc-1.4.0/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "name": "cfg-if",
+      "version": "1.0.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/cfg-if-1.0.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/cfg-if-1.0.0/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "name": "cfg-if",
+      "version": "1.0.3",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "2fd1289c04a9ea8cb22300a459a72a385d7c73d3259e2ed7dcb2af674838cfa9",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/cfg-if-1.0.3/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/cfg-if-1.0.3/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "name": "cfg-if",
+      "version": "1.0.4",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/cfg-if-1.0.4/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/cfg-if-1.0.4/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "name": "cipher",
+      "version": "0.4.4",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/cipher-0.4.4/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+        },
+        {
+          "shared_path": "notices/rust-crates/cipher-0.4.4/LICENSE-MIT",
+          "sha256": "5c7bd92d1f096f12203dc1b601e3cb17484fa1b023e30b6b8edcc80e416237ec"
+        }
+      ]
+    },
+    {
+      "name": "cpufeatures",
+      "version": "0.2.17",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/cpufeatures-0.2.17/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+        },
+        {
+          "shared_path": "notices/rust-crates/cpufeatures-0.2.17/LICENSE-MIT",
+          "sha256": "ae9baa7beea910273c2f384c2a6b721fb7bd02bda3436074a1072e4ee689f985"
+        }
+      ]
+    },
+    {
+      "name": "crossbeam-channel",
+      "version": "0.5.15",
+      "owners": [
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/crossbeam-channel-0.5.15/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/crossbeam-channel-0.5.15/LICENSE-MIT",
+          "sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab"
+        },
+        {
+          "shared_path": "notices/rust-crates/crossbeam-channel-0.5.15/LICENSE-THIRD-PARTY",
+          "sha256": "b16db96b93b1d7cf7bea533f572091ec6bca3234fbe0a83038be772ff391a44c"
+        }
+      ]
+    },
+    {
+      "name": "crossbeam-utils",
+      "version": "0.8.19",
+      "owners": [
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "248e3bacc7dc6baa3b21e405ee045c3047101a49145e7e9eca583ab4c2ca5345",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/crossbeam-utils-0.8.19/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/crossbeam-utils-0.8.19/LICENSE-MIT",
+          "sha256": "5734ed989dfca1f625b40281ee9f4530f91b2411ec01cb748223e7eb87e201ab"
+        }
+      ]
+    },
+    {
+      "name": "crypto-common",
+      "version": "0.1.6",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/crypto-common-0.1.6/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+        },
+        {
+          "shared_path": "notices/rust-crates/crypto-common-0.1.6/LICENSE-MIT",
+          "sha256": "3521672491a3479422d5fe1aca6645dd2984090f85da6e5205abfb18fb7a6897"
+        }
+      ]
+    },
+    {
+      "name": "digest",
+      "version": "0.10.7",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/digest-0.10.7/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+        },
+        {
+          "shared_path": "notices/rust-crates/digest-0.10.7/LICENSE-MIT",
+          "sha256": "9e0dfd2dd4173a530e238cb6adb37aa78c34c6bc7444e0e10c1ab5d8881f63ba"
+        }
+      ]
+    },
+    {
+      "name": "displaydoc",
+      "version": "0.2.5",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "97369cbbc041bc366949bc74d34658d6cda5621039731c6310521892a3a20ae0",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/displaydoc-0.2.5/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/displaydoc-0.2.5/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "enum_dispatch",
+      "version": "0.3.13",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "aa18ce2bc66555b3218614519ac839ddb759a7d6720732f979ef8d13be147ecd",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/enum_dispatch-0.3.13/LICENSE",
+          "sha256": "1e5d3ddaf5cbc111c8517df39e6f252e4c16dbda26b7cc1ad54c9e3efb0586be"
+        }
+      ]
+    },
+    {
+      "name": "equivalent",
+      "version": "1.0.2",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/equivalent-1.0.2/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/equivalent-1.0.2/LICENSE-MIT",
+          "sha256": "7365cc8878a1d7ce155a58c4ca09c3d7a6be413efa5334a80ea842912b669349"
+        }
+      ]
+    },
+    {
+      "name": "filetime",
+      "version": "0.2.24",
+      "owners": [
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "bf401df4a4e3872c4fe8151134cf483738e74b67fc934d6532c882b3d24a4550",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/filetime-0.2.24/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/filetime-0.2.24/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "name": "find-msvc-tools",
+      "version": "0.1.9",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/find-msvc-tools-0.1.9/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/find-msvc-tools-0.1.9/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "name": "foldhash",
+      "version": "0.2.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/foldhash-0.2.0/LICENSE",
+          "sha256": "b1181a40b2a7b25cf66fd01481713bc1005df082c53ef73e851e55071b102744"
+        }
+      ]
+    },
+    {
+      "name": "foreign-types",
+      "version": "0.3.2",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "f6f339eb8adc052cd2ca78910fda869aefa38d22d5cb648e6485e4d3fc06f3b1",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/foreign-types-0.3.2/LICENSE-APACHE",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "shared_path": "notices/rust-crates/foreign-types-0.3.2/LICENSE-MIT",
+          "sha256": "333ea3aaa3cadb819f4acd9f9153f9feee060a995ca8710f32bc5bd9a4b91734"
+        }
+      ]
+    },
+    {
+      "name": "foreign-types-shared",
+      "version": "0.1.1",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/foreign-types-shared-0.1.1/LICENSE-APACHE",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "shared_path": "notices/rust-crates/foreign-types-shared-0.1.1/LICENSE-MIT",
+          "sha256": "333ea3aaa3cadb819f4acd9f9153f9feee060a995ca8710f32bc5bd9a4b91734"
+        }
+      ]
+    },
+    {
+      "name": "form_urlencoded",
+      "version": "1.2.2",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/form_urlencoded-1.2.2/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/form_urlencoded-1.2.2/LICENSE-MIT",
+          "sha256": "20c7855c364d57ea4c97889a5e8d98470a9952dade37bd9248b9a54431670e5e"
+        }
+      ]
+    },
+    {
+      "name": "funty",
+      "version": "2.0.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/funty-2.0.0/LICENSE.txt",
+          "sha256": "f790cc576999f5998c766d3d26d7d64dc368e805a98461484f65e8d961ec6d9f"
+        }
+      ]
+    },
+    {
+      "name": "generic-array",
+      "version": "0.14.7",
+      "owners": [
+        "bcrypt: actual embedded registry source path",
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/generic-array-0.14.7/LICENSE",
+          "sha256": "c09aae9d3c77b531f56351a9947bc7446511d6b025b3255312d3e3442a9a7583"
+        }
+      ]
+    },
+    {
+      "name": "getrandom",
+      "version": "0.3.3",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)",
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "26145e563e54f2cadc477553f1ec5ee650b00862f0a58bcd12cbdc5f0ea2d2f4",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/getrandom-0.3.3/LICENSE-APACHE",
+          "sha256": "aaff376532ea30a0cd5330b9502ad4a4c8bf769c539c87ffe78819d188a18ebf"
+        },
+        {
+          "shared_path": "notices/rust-crates/getrandom-0.3.3/LICENSE-MIT",
+          "sha256": "29e9fe5074bd27e0e5d5d110394fbbcd841baee2651a3c4b4560a632702cede4"
+        }
+      ]
+    },
+    {
+      "name": "hashbrown",
+      "version": "0.16.1",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/hashbrown-0.16.1/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/hashbrown-0.16.1/LICENSE-MIT",
+          "sha256": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2"
+        }
+      ]
+    },
+    {
+      "name": "heck",
+      "version": "0.5.0",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)",
+        "cryptography: actual ARM SBOM",
+        "hypothesis: actual ARM SBOM",
+        "pydantic-core: actual ARM SBOM",
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/heck-0.5.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/heck-0.5.0/LICENSE-MIT",
+          "sha256": "7b63ecd5f1902af1b63729947373683c32745c16a10e8e6292e2e2dcd7e90ae0"
+        }
+      ]
+    },
+    {
+      "name": "hex",
+      "version": "0.4.3",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/hex-0.4.3/LICENSE-APACHE",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "shared_path": "notices/rust-crates/hex-0.4.3/LICENSE-MIT",
+          "sha256": "f7bdb3426d045cd50efd4953026e3eb5a83d0199f458a075602611b9344da5b9"
+        }
+      ]
+    },
+    {
+      "name": "icu_collections",
+      "version": "1.5.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "db2fa452206ebee18c4b5c2274dbf1de17008e874b4dc4f0aea9d01ca79e4526",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/icu_collections-1.5.0/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "icu_locid",
+      "version": "1.5.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "13acbb8371917fc971be86fc8057c41a64b521c184808a698c02acc242dbf637",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/icu_locid-1.5.0/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "icu_locid_transform",
+      "version": "1.5.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "01d11ac35de8e40fdeda00d9e1e9d92525f3f9d887cdd7aa81d727596788b54e",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/icu_locid_transform-1.5.0/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "icu_locid_transform_data",
+      "version": "1.5.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "fdc8ff3388f852bede6b579ad4e978ab004f139284d7b28715f773507b946f6e",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/icu_locid_transform_data-1.5.0/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "icu_normalizer",
+      "version": "1.5.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "19ce3e0da2ec68599d193c93d088142efd7f9c5d6fc9b803774855747dc6a84f",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/icu_normalizer-1.5.0/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "icu_normalizer_data",
+      "version": "1.5.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "f8cafbf7aa791e9b22bec55a167906f9e1215fd475cd22adfcf660e03e989516",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/icu_normalizer_data-1.5.0/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "icu_properties",
+      "version": "1.5.1",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "93d6020766cfc6302c15dbbc9c8778c37e62c14427cb7f6e601d849e092aeef5",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/icu_properties-1.5.1/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "icu_properties_data",
+      "version": "1.5.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "67a8effbc3dd3e4ba1afa8ad918d5684b8868b3b26500753effea8d2eed19569",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/icu_properties_data-1.5.0/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "icu_provider",
+      "version": "1.5.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "6ed421c8a8ef78d3e2dbc98a973be2f3770cb42b606e3ab18d6237c4dfde68d9",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/icu_provider-1.5.0/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "icu_provider_macros",
+      "version": "1.5.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "1ec89e9337638ecdc08744df490b221a7399bf8d164eb52a665454e60e075ad6",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/icu_provider_macros-1.5.0/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "idna",
+      "version": "1.1.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "3b0875f23caa03898994f6ddc501886a45c7d3d62d04d2d90788d47be1b1e4de",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/idna-1.1.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/idna-1.1.0/LICENSE-MIT",
+          "sha256": "b38f11f6096706e6de553dabe2a7ed142d59b6fa8c97e290c67496154745cdd5"
+        }
+      ]
+    },
+    {
+      "name": "idna_adapter",
+      "version": "1.2.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "daca1df1c957320b2cf139ac61e7bd64fed304c5040df000a745aa1de3b4ef71",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/idna_adapter-1.2.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/idna_adapter-1.2.0/LICENSE-MIT",
+          "sha256": "8b43ce8accd61e9d370b5ca9e9c4f953279b5c239926c62315b40e24df51b726"
+        }
+      ]
+    },
+    {
+      "name": "indoc",
+      "version": "2.0.6",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "f4c7245a08504955605670dbf141fceab975f15ca21570696aebe9d2e71576bd",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/indoc-2.0.6/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/indoc-2.0.6/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "inotify",
+      "version": "0.11.0",
+      "owners": [
+        "watchfiles: actual ARM SBOM",
+        "watchfiles: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "f37dccff2791ab604f9babef0ba14fbe0be30bd368dc541e2b08d07c8aa908f3",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/inotify-0.11.0/LICENSE",
+          "sha256": "7f78b31de4e7a3e2ac8de40e2b409eda313f03637aa62b8416fbde9bdc5ce4c9"
+        }
+      ]
+    },
+    {
+      "name": "inotify-sys",
+      "version": "0.1.5",
+      "owners": [
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "e05c02b5e89bff3b946cedeca278abc628fe811e604f027c45a8aa3cf793d0eb",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/inotify-sys-0.1.5/LICENSE",
+          "sha256": "f68878c9ca61b25d4b2c470de571cb85ce97804a62bb153607f7e0e0d2684c8a"
+        }
+      ]
+    },
+    {
+      "name": "inout",
+      "version": "0.1.4",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/inout-0.1.4/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+        },
+        {
+          "shared_path": "notices/rust-crates/inout-0.1.4/LICENSE-MIT",
+          "sha256": "304b898acad7f02e03d6d8832d682a3b43ee729ab5d3a069af5a36979083b6b4"
+        }
+      ]
+    },
+    {
+      "name": "itoa",
+      "version": "1.0.11",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "49f1f14873335454500d59611f1cf4a4b0f786f9ac11f4312a78e4cf2566695b",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/itoa-1.0.11/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/itoa-1.0.11/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "itoa",
+      "version": "1.0.18",
+      "owners": [
+        "cryptography: actual ARM SBOM",
+        "cryptography: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/itoa-1.0.18/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/itoa-1.0.18/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "jiter",
+      "version": "0.14.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "b6f3b5d3f84b36f4ad09fd1da896d23d9852a1aa86556578dd0289f43dce311d",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/jiter-0.14.0/LICENSE",
+          "sha256": "7c7134b9f7b978c03fca875517cf398db91f19bbb8109b6685e742aa3f57468e"
+        }
+      ]
+    },
+    {
+      "name": "js-sys",
+      "version": "0.3.77",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "1cfaf33c695fc6e08064efbc1f72ec937429614f25eef83af942d0e227c3a28f",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/js-sys-0.3.77/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/js-sys-0.3.77/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "name": "lexical-parse-float",
+      "version": "1.0.5",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "de6f9cb01fb0b08060209a057c048fcbab8717b4c1ecd2eac66ebfe39a65b0f2",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/lexical-parse-float-1.0.5/LICENSE-APACHE",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+        },
+        {
+          "shared_path": "notices/rust-crates/lexical-parse-float-1.0.5/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        },
+        {
+          "shared_path": "notices/rust-crates/lexical-parse-float-1.0.5/LICENSE.md",
+          "sha256": "99aab70a96f3ecab683d8a319d9070af2213ae4c1601fb053fbe85e1361e32fe"
+        }
+      ]
+    },
+    {
+      "name": "lexical-parse-integer",
+      "version": "1.0.5",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "72207aae22fc0a121ba7b6d479e42cbfea549af1479c3f3a4f12c70dd66df12e",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/lexical-parse-integer-1.0.5/LICENSE-APACHE",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+        },
+        {
+          "shared_path": "notices/rust-crates/lexical-parse-integer-1.0.5/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        },
+        {
+          "shared_path": "notices/rust-crates/lexical-parse-integer-1.0.5/LICENSE.md",
+          "sha256": "99aab70a96f3ecab683d8a319d9070af2213ae4c1601fb053fbe85e1361e32fe"
+        }
+      ]
+    },
+    {
+      "name": "lexical-util",
+      "version": "1.0.6",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "5a82e24bf537fd24c177ffbbdc6ebcc8d54732c35b50a3f28cc3f4e4c949a0b3",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/lexical-util-1.0.6/LICENSE-APACHE",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90"
+        },
+        {
+          "shared_path": "notices/rust-crates/lexical-util-1.0.6/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "libc",
+      "version": "0.2.169",
+      "owners": [
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "b5aba8db14291edd000dfcc4d620c7ebfb122c613afb886ca8803fa4e128a20a",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/libc-0.2.169/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/libc-0.2.169/LICENSE-MIT",
+          "sha256": "a8d47ff51ca256f56a8932dba07660672dbfe3004257ca8de708aac1415937a1"
+        }
+      ]
+    },
+    {
+      "name": "libc",
+      "version": "0.2.176",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "58f929b4d672ea937a23a1ab494143d968337a5f47e56d0815df1e0890ddf174",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/libc-0.2.176/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/libc-0.2.176/LICENSE-MIT",
+          "sha256": "a8d47ff51ca256f56a8932dba07660672dbfe3004257ca8de708aac1415937a1"
+        }
+      ]
+    },
+    {
+      "name": "libc",
+      "version": "0.2.185",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "52ff2c0fe9bc6cb6b14a0592c2ff4fa9ceb83eea9db979b0487cd054946a2b8f",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/libc-0.2.185/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/libc-0.2.185/LICENSE-MIT",
+          "sha256": "123a331b5dbf04c30097fa43b8f858bc85df671fe776de498d01f3d6b7c1f69e"
+        }
+      ]
+    },
+    {
+      "name": "libc",
+      "version": "0.2.186",
+      "owners": [
+        "hypothesis: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/libc-0.2.186/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/libc-0.2.186/LICENSE-MIT",
+          "sha256": "123a331b5dbf04c30097fa43b8f858bc85df671fe776de498d01f3d6b7c1f69e"
+        }
+      ]
+    },
+    {
+      "name": "libc",
+      "version": "0.2.189",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/libc-0.2.189/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/libc-0.2.189/LICENSE-MIT",
+          "sha256": "123a331b5dbf04c30097fa43b8f858bc85df671fe776de498d01f3d6b7c1f69e"
+        }
+      ]
+    },
+    {
+      "name": "litemap",
+      "version": "0.7.3",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "643cb0b8d4fcc284004d5fd0d67ccf61dfffadb7f75e1e71bc420f4688a3a704",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/litemap-0.7.3/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "log",
+      "version": "0.4.22",
+      "owners": [
+        "watchfiles: actual ARM SBOM",
+        "watchfiles: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "a7a70ba024b9dc04c27ea2f0c0548feb474ec5c54bba33a7f72f873a39d07b24",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/log-0.4.22/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/log-0.4.22/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "name": "log",
+      "version": "0.4.27",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/log-0.4.27/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/log-0.4.27/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "name": "lru",
+      "version": "0.16.3",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "a1dc47f592c06f33f8e3aea9591776ec7c9f9e4124778ff8a3c3b87159f7e593",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/lru-0.16.3/LICENSE",
+          "sha256": "061dc50af2cd9340703daf61978af3200cf681b12ea67a323c33ba109a23a45e"
+        }
+      ]
+    },
+    {
+      "name": "memchr",
+      "version": "2.7.4",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/memchr-2.7.4/COPYING",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f"
+        },
+        {
+          "shared_path": "notices/rust-crates/memchr-2.7.4/LICENSE-MIT",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f"
+        },
+        {
+          "shared_path": "notices/rust-crates/memchr-2.7.4/UNLICENSE",
+          "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c"
+        }
+      ]
+    },
+    {
+      "name": "memoffset",
+      "version": "0.9.1",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/memoffset-0.9.1/LICENSE",
+          "sha256": "3234ac55816264ee7b6c7ee27efd61cf0a1fe775806870e3d9b4c41ea73c5cb1"
+        }
+      ]
+    },
+    {
+      "name": "mio",
+      "version": "1.0.3",
+      "owners": [
+        "watchfiles: actual ARM SBOM",
+        "watchfiles: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "2886843bf800fba2e3377cff24abf6379b4c4d5c6681eaf9ea5b0d15090450bd",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/mio-1.0.3/LICENSE",
+          "sha256": "07919255c7e04793d8ea760d6c2ce32d19f9ff02bdbdde3ce90b1e1880929a9b"
+        }
+      ]
+    },
+    {
+      "name": "notify",
+      "version": "8.0.0",
+      "owners": [
+        "watchfiles: actual ARM SBOM",
+        "watchfiles: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "2fee8403b3d66ac7b26aee6e40a897d85dc5ce26f44da36b8b73e987cc52e943",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/notify-8.0.0/LICENSE-CC0",
+          "sha256": "e0456cbab4f7b5e7203e678faff37eadbdfef02e822db3b7a52a1dd9d3dc514a"
+        }
+      ]
+    },
+    {
+      "name": "notify-types",
+      "version": "2.0.0",
+      "owners": [
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "5e0826a989adedc2a244799e823aece04662b66609d96af8dff7ac6df9a8925d",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/notify-types-2.0.0/LICENSE-APACHE",
+          "sha256": "b5b413d7421d728c14f33d78198d6e255a0018beef717d78c4c3f6188be3dfb4"
+        },
+        {
+          "shared_path": "notices/rust-crates/notify-types-2.0.0/LICENSE-MIT",
+          "sha256": "b63e167d61ced1d872a588c5ac764b0dda477d62209dc4f6b6bfea5517d0a24c"
+        }
+      ]
+    },
+    {
+      "name": "num-bigint",
+      "version": "0.4.6",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/num-bigint-0.4.6/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/num-bigint-0.4.6/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "name": "num-integer",
+      "version": "0.1.46",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "7969661fd2958a5cb096e56c8e1ad0444ac2bbcd0061bd28660485a44879858f",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/num-integer-0.1.46/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/num-integer-0.1.46/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "name": "num-traits",
+      "version": "0.2.19",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/num-traits-0.2.19/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/num-traits-0.2.19/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "name": "once_cell",
+      "version": "1.21.3",
+      "owners": [
+        "bcrypt: actual embedded registry source path",
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)",
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path",
+        "watchfiles: actual ARM SBOM",
+        "watchfiles: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/once_cell-1.21.3/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/once_cell-1.21.3/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "once_cell",
+      "version": "1.21.4",
+      "owners": [
+        "cryptography: actual ARM SBOM",
+        "cryptography: actual embedded registry source path",
+        "hypothesis: actual ARM SBOM",
+        "hypothesis: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/once_cell-1.21.4/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/once_cell-1.21.4/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "openssl",
+      "version": "0.10.81",
+      "owners": [
+        "cryptography: actual ARM SBOM",
+        "cryptography: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "77823a27f0babb03091cb9ed9ef80af3b39dbc82f97e8fa530374b7dafd87a45",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/openssl-0.10.81/LICENSE",
+          "sha256": "f3d4287b4a21c5176fea2f9bd4ae800696004e2fb8e05cbc818be513f188a941"
+        },
+        {
+          "shared_path": "notices/rust-crates/openssl-0.10.81/LICENSE-APACHE",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        }
+      ]
+    },
+    {
+      "name": "openssl-macros",
+      "version": "0.1.1",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/openssl-macros-0.1.1/LICENSE-APACHE",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08"
+        },
+        {
+          "shared_path": "notices/rust-crates/openssl-macros-0.1.1/LICENSE-MIT",
+          "sha256": "ea5ab440900ab271811d5c2dc02a9de6e03a6956ac5727e85c11d76df5883d30"
+        }
+      ]
+    },
+    {
+      "name": "openssl-sys",
+      "version": "0.9.117",
+      "owners": [
+        "cryptography: actual ARM SBOM",
+        "cryptography: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "b47e7e6bb2c38cd930d25a23b40fa52e068c10e85f3e03a7f5ba5aaca5713695",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/openssl-sys-0.9.117/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "name": "pbkdf2",
+      "version": "0.12.2",
+      "owners": [
+        "bcrypt: actual embedded registry source path",
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pbkdf2-0.12.2/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+        },
+        {
+          "shared_path": "notices/rust-crates/pbkdf2-0.12.2/LICENSE-MIT",
+          "sha256": "8ea5cea8ddecc46a64a004406414d25529fca7eb71cfd8c0cfe49c343bff79c5"
+        }
+      ]
+    },
+    {
+      "name": "pem",
+      "version": "4.0.0",
+      "owners": [
+        "cryptography: actual ARM SBOM",
+        "cryptography: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pem-4.0.0/LICENSE.md",
+          "sha256": "b7c76ff4466a3aeb6a7d903e81b651335e97d64ecb857e2ee9812a36c6fd1acf"
+        }
+      ]
+    },
+    {
+      "name": "percent-encoding",
+      "version": "2.3.2",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/percent-encoding-2.3.2/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/percent-encoding-2.3.2/LICENSE-MIT",
+          "sha256": "b38f11f6096706e6de553dabe2a7ed142d59b6fa8c97e290c67496154745cdd5"
+        }
+      ]
+    },
+    {
+      "name": "pkg-config",
+      "version": "0.3.33",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pkg-config-0.3.33/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/pkg-config-0.3.33/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "name": "portable-atomic",
+      "version": "1.11.1",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "f84267b20a16ea918e43c6a88433c2d54fa145c92a811b5b047ccbe153674483",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/portable-atomic-1.11.1/LICENSE-APACHE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "shared_path": "notices/rust-crates/portable-atomic-1.11.1/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "portable-atomic",
+      "version": "1.14.0",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "3d20d5497ef88037a52ff98267d066e7f11fcc5e99bbfbd58a42336193aacec3",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/portable-atomic-1.14.0/LICENSE-APACHE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "shared_path": "notices/rust-crates/portable-atomic-1.14.0/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "portable-atomic",
+      "version": "1.6.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "7170ef9988bc169ba16dd36a7fa041e5c4cbeb6a35b76d4c03daded371eae7c0",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/portable-atomic-1.6.0/LICENSE-APACHE",
+          "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+        },
+        {
+          "shared_path": "notices/rust-crates/portable-atomic-1.6.0/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "proc-macro2",
+      "version": "1.0.101",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "89ae43fd86e4158d6db51ad8e2b80f313af9cc74f5c0e03ccb87de09998732de",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/proc-macro2-1.0.101/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/proc-macro2-1.0.101/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "proc-macro2",
+      "version": "1.0.106",
+      "owners": [
+        "hypothesis: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/proc-macro2-1.0.106/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/proc-macro2-1.0.106/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "proc-macro2",
+      "version": "1.0.107",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/proc-macro2-1.0.107/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/proc-macro2-1.0.107/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "proc-macro2",
+      "version": "1.0.81",
+      "owners": [
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "3d1597b0c024618f09a9c3b8655b7e430397a36d23fdafec26d6965e9eec3eba",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/proc-macro2-1.0.81/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/proc-macro2-1.0.81/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "proc-macro2",
+      "version": "1.0.86",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "5e719e8df665df0d1c8fbfd238015744736151d4445ec0836b8e628aae103b77",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/proc-macro2-1.0.86/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/proc-macro2-1.0.86/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "pyo3",
+      "version": "0.26.0",
+      "owners": [
+        "bcrypt: actual embedded registry source path",
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "7ba0117f4212101ee6544044dae45abe1083d30ce7b29c4b5cbdfa2354e07383",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pyo3-0.26.0/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-0.26.0/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-0.26.0/pyo3-runtime/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-0.26.0/pyo3-runtime/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        }
+      ]
+    },
+    {
+      "name": "pyo3",
+      "version": "0.28.3",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path",
+        "watchfiles: actual ARM SBOM",
+        "watchfiles: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "91fd8e38a3b50ed1167fb981cd6fd60147e091784c427b8f7183a7ee32c31c12",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pyo3-0.28.3/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-0.28.3/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-0.28.3/pyo3-runtime/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-0.28.3/pyo3-runtime/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        }
+      ]
+    },
+    {
+      "name": "pyo3",
+      "version": "0.29.2",
+      "owners": [
+        "cryptography: actual ARM SBOM",
+        "cryptography: actual embedded registry source path",
+        "hypothesis: actual ARM SBOM",
+        "hypothesis: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "4688ddedf473e32662b9b067670129a8afb8c18e351482c70d62ba4a88171e8b",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pyo3-0.29.2/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-0.29.2/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-0.29.2/pyo3-runtime/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-0.29.2/pyo3-runtime/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        }
+      ]
+    },
+    {
+      "name": "pyo3-build-config",
+      "version": "0.26.0",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "4fc6ddaf24947d12a9aa31ac65431fb1b851b8f4365426e182901eabfb87df5f",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pyo3-build-config-0.26.0/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-build-config-0.26.0/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        }
+      ]
+    },
+    {
+      "name": "pyo3-build-config",
+      "version": "0.28.3",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "e368e7ddfdeb98c9bca7f8383be1648fd84ab466bf2bc015e94008db6d35611e",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pyo3-build-config-0.28.3/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-build-config-0.28.3/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        }
+      ]
+    },
+    {
+      "name": "pyo3-build-config",
+      "version": "0.29.2",
+      "owners": [
+        "cryptography: actual ARM SBOM",
+        "hypothesis: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "f41027e41b4bd03f6e60f9f417fe24a6341a6bb744edd62b6f709f2a52ea30e9",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pyo3-build-config-0.29.2/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-build-config-0.29.2/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        }
+      ]
+    },
+    {
+      "name": "pyo3-ffi",
+      "version": "0.26.0",
+      "owners": [
+        "bcrypt: actual embedded registry source path",
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "025474d3928738efb38ac36d4744a74a400c901c7596199e20e45d98eb194105",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pyo3-ffi-0.26.0/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-ffi-0.26.0/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        }
+      ]
+    },
+    {
+      "name": "pyo3-ffi",
+      "version": "0.28.3",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path",
+        "watchfiles: actual ARM SBOM",
+        "watchfiles: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "7f29e10af80b1f7ccaf7f69eace800a03ecd13e883acfacc1e5d0988605f651e",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pyo3-ffi-0.28.3/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-ffi-0.28.3/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        }
+      ]
+    },
+    {
+      "name": "pyo3-ffi",
+      "version": "0.29.2",
+      "owners": [
+        "cryptography: actual ARM SBOM",
+        "cryptography: actual embedded registry source path",
+        "hypothesis: actual ARM SBOM",
+        "hypothesis: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "e591a95526fead067432c3b3a33fc74770b87b1e04e73671090d9c2055a2b327",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pyo3-ffi-0.29.2/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-ffi-0.29.2/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        }
+      ]
+    },
+    {
+      "name": "pyo3-macros",
+      "version": "0.26.0",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "2e64eb489f22fe1c95911b77c44cc41e7c19f3082fc81cce90f657cdc42ffded",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pyo3-macros-0.26.0/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-macros-0.26.0/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        }
+      ]
+    },
+    {
+      "name": "pyo3-macros",
+      "version": "0.28.3",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "df6e520eff47c45997d2fc7dd8214b25dd1310918bbb2642156ef66a67f29813",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pyo3-macros-0.28.3/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-macros-0.28.3/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        }
+      ]
+    },
+    {
+      "name": "pyo3-macros",
+      "version": "0.29.2",
+      "owners": [
+        "cryptography: actual ARM SBOM",
+        "hypothesis: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "73225868fc1cd84eef2c3c230ddb91273bf1de46aeb8a4248da76d32a0924a1c",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pyo3-macros-0.29.2/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-macros-0.29.2/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        }
+      ]
+    },
+    {
+      "name": "pyo3-macros-backend",
+      "version": "0.26.0",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "100246c0ecf400b475341b8455a9213344569af29a3c841d29270e53102e0fcf",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pyo3-macros-backend-0.26.0/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-macros-backend-0.26.0/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        }
+      ]
+    },
+    {
+      "name": "pyo3-macros-backend",
+      "version": "0.28.3",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "c4cdc218d835738f81c2338f822078af45b4afdf8b2e33cbb5916f108b813acb",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pyo3-macros-backend-0.28.3/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-macros-backend-0.28.3/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        }
+      ]
+    },
+    {
+      "name": "pyo3-macros-backend",
+      "version": "0.29.2",
+      "owners": [
+        "cryptography: actual ARM SBOM",
+        "hypothesis: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "571575aa3749fa6216757dd47d2a3e7ef360f329a40f0666a9fbd14889024952",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/pyo3-macros-backend-0.29.2/LICENSE-APACHE",
+          "sha256": "32c76dbe0e73d79100d5ece77c158399f2e2541bc5c78548a4ba45c1cb53c5c9"
+        },
+        {
+          "shared_path": "notices/rust-crates/pyo3-macros-backend-0.29.2/LICENSE-MIT",
+          "sha256": "afcbe3b2e6b37172b5a9ca869ee4c0b8cdc09316e5d4384864154482c33e5af6"
+        }
+      ]
+    },
+    {
+      "name": "python3-dll-a",
+      "version": "0.2.14",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "d381ef313ae70b4da5f95f8a4de773c6aa5cd28f73adec4b4a31df70b66780d8",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/python3-dll-a-0.2.14/LICENSE",
+          "sha256": "c760d1f2e4614d58f2b91cd41b9826457989c09041be0219158b8f7f6d3f8763"
+        }
+      ]
+    },
+    {
+      "name": "quote",
+      "version": "1.0.40",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "1885c039570dc00dcb4ff087a89e185fd56bae234ddc7f056a945bf36467248d",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/quote-1.0.40/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/quote-1.0.40/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "quote",
+      "version": "1.0.44",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "21b2ebcf727b7760c461f091f9f0f539b77b8e87f2fd88131e7f1b433b3cece4",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/quote-1.0.44/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/quote-1.0.44/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "quote",
+      "version": "1.0.45",
+      "owners": [
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/quote-1.0.45/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/quote-1.0.45/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "quote",
+      "version": "1.0.46",
+      "owners": [
+        "hypothesis: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/quote-1.0.46/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/quote-1.0.46/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "quote",
+      "version": "1.0.47",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/quote-1.0.47/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/quote-1.0.47/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "r-efi",
+      "version": "5.2.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "74765f6d916ee2faa39bc8e68e4f3ed8949b48cccdac59983d287a7cb71ce9c5",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/r-efi-5.2.0/AUTHORS",
+          "sha256": "c42285aa32440c3b5358fd4805b817cd8d6e1795111d2e4c547530be41896b2d"
+        }
+      ]
+    },
+    {
+      "name": "r-efi",
+      "version": "5.3.0",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/r-efi-5.3.0/AUTHORS",
+          "sha256": "ff92bed461f50338dd703a9ba9aee496a425957873df1d91192776e4bdf5dda7"
+        }
+      ]
+    },
+    {
+      "name": "radium",
+      "version": "0.7.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/radium-0.7.0/LICENSE.txt",
+          "sha256": "13f4cc9fbc8d4a447b28aa84019c10ad4abf4b5f6919db061bf6690ccc23bc02"
+        }
+      ]
+    },
+    {
+      "name": "regex",
+      "version": "1.12.3",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "e10754a14b9137dd7b1e3e5b0493cc9171fdd105e0ab477f51b72e7f3ac0e276",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/regex-1.12.3/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/regex-1.12.3/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "name": "regex-automata",
+      "version": "0.4.13",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "5276caf25ac86c8d810222b3dbb938e512c55c6831a10f3e6ed1c93b84041f1c",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/regex-automata-0.4.13/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/regex-automata-0.4.13/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        }
+      ]
+    },
+    {
+      "name": "regex-syntax",
+      "version": "0.8.5",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/regex-syntax-0.8.5/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/regex-syntax-0.8.5/LICENSE-MIT",
+          "sha256": "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+        },
+        {
+          "shared_path": "notices/rust-crates/regex-syntax-0.8.5/src/unicode_tables/LICENSE-UNICODE",
+          "sha256": "74db5baf44a41b1000312c673544b3374e4198af5605c7f9080a402cec42cfa3"
+        }
+      ]
+    },
+    {
+      "name": "rustversion",
+      "version": "1.0.17",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "955d28af4278de8121b7ebeb796b6a45735dc01436d898801014aced2773a3d6",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/rustversion-1.0.17/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/rustversion-1.0.17/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "same-file",
+      "version": "1.0.6",
+      "owners": [
+        "watchfiles: actual ARM SBOM",
+        "watchfiles: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/same-file-1.0.6/COPYING",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f"
+        },
+        {
+          "shared_path": "notices/rust-crates/same-file-1.0.6/LICENSE-MIT",
+          "sha256": "cb3c929a05e6cbc9de9ab06a4c57eeb60ca8c724bef6c138c87d3a577e27aa14"
+        },
+        {
+          "shared_path": "notices/rust-crates/same-file-1.0.6/UNLICENSE",
+          "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c"
+        }
+      ]
+    },
+    {
+      "name": "self_cell",
+      "version": "1.3.0",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "2ab42ca02749e120097e328d91d415325bdf43b1c72c4c8badf37375fe40a813",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/self_cell-1.3.0/LICENSE-APACHE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        },
+        {
+          "shared_path": "notices/rust-crates/self_cell-1.3.0/LICENSE-GPLv2",
+          "sha256": "f9c375a1be4a41f7b70301dd83c91cb89e41567478859b77eef375a52d782505"
+        }
+      ]
+    },
+    {
+      "name": "serde",
+      "version": "1.0.228",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/serde-1.0.228/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/serde-1.0.228/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "serde_core",
+      "version": "1.0.228",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "41d385c7d4ca58e59fc732af25c3983b67ac852c1a25000afe1175de458b67ad",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/serde_core-1.0.228/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/serde_core-1.0.228/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "serde_derive",
+      "version": "1.0.228",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/serde_derive-1.0.228/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/serde_derive-1.0.228/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "serde_json",
+      "version": "1.0.149",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/serde_json-1.0.149/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/serde_json-1.0.149/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "sha2",
+      "version": "0.10.9",
+      "owners": [
+        "bcrypt: actual embedded registry source path",
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/sha2-0.10.9/LICENSE-APACHE",
+          "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+        },
+        {
+          "shared_path": "notices/rust-crates/sha2-0.10.9/LICENSE-MIT",
+          "sha256": "b4eb00df6e2a4d22518fcaa6a2b4646f249b3a3c9814509b22bd2091f1392ff1"
+        }
+      ]
+    },
+    {
+      "name": "shlex",
+      "version": "2.0.1",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/shlex-2.0.1/LICENSE-APACHE",
+          "sha256": "553fffcd9b1cb158bc3e9edc35da85ca5c3b3d7d2e61c883ebcfa8a65814b583"
+        },
+        {
+          "shared_path": "notices/rust-crates/shlex-2.0.1/LICENSE-MIT",
+          "sha256": "4455bf75a91154108304cb283e0fea9948c14f13e20d60887cf2552449dea3b1"
+        }
+      ]
+    },
+    {
+      "name": "smallvec",
+      "version": "1.15.1",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/smallvec-1.15.1/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/smallvec-1.15.1/LICENSE-MIT",
+          "sha256": "0b28172679e0009b655da42797c03fd163a3379d5cfa67ba1f1655e974a2a1a9"
+        }
+      ]
+    },
+    {
+      "name": "speedate",
+      "version": "0.17.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "aba069c070b5e213f2a094deb7e5ed50ecb092be36102a4f4042e8d2056d060e",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/speedate-0.17.0/LICENSE",
+          "sha256": "2afdd30d54b4d62b6f488a6bcc1546e84ec5061f13f4209c03d012348783795a"
+        }
+      ]
+    },
+    {
+      "name": "stable_deref_trait",
+      "version": "1.2.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/stable_deref_trait-1.2.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/stable_deref_trait-1.2.0/LICENSE-MIT",
+          "sha256": "5e05b024f653a5ce199e77cbbbd42fb5553562ec714b819421ed0c3e552a75d7"
+        }
+      ]
+    },
+    {
+      "name": "static_assertions",
+      "version": "1.1.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/static_assertions-1.1.0/LICENSE-APACHE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "shared_path": "notices/rust-crates/static_assertions-1.1.0/LICENSE-MIT",
+          "sha256": "ea084a2373ebc1f0902c09266e7bf25a05ab3814c1805bb017ffa7308f90c061"
+        }
+      ]
+    },
+    {
+      "name": "strum",
+      "version": "0.27.2",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/strum-0.27.2/LICENSE",
+          "sha256": "8bce3b45e49ecd1461f223b46de133d8f62cd39f745cfdaf81bee554b908bd42"
+        }
+      ]
+    },
+    {
+      "name": "strum_macros",
+      "version": "0.27.2",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "7695ce3845ea4b33927c055a39dc438a45b059f7c1b3d91d38d10355fb8cbca7",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/strum_macros-0.27.2/LICENSE",
+          "sha256": "8bce3b45e49ecd1461f223b46de133d8f62cd39f745cfdaf81bee554b908bd42"
+        }
+      ]
+    },
+    {
+      "name": "subtle",
+      "version": "2.6.1",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/subtle-2.6.1/LICENSE",
+          "sha256": "d1fc1bc0d155df60b2e7705b6b2ae02a05c96f948e1cec6e2fb86360b09f346b"
+        }
+      ]
+    },
+    {
+      "name": "syn",
+      "version": "2.0.106",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "ede7c438028d4436d71104916910f5bb611972c5cfd7f89b8300a8186e6fada6",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/syn-2.0.106/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/syn-2.0.106/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "syn",
+      "version": "2.0.118",
+      "owners": [
+        "hypothesis: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "1b9ae57f904213ebb649ce6895b8a66c66f0203b9319718f69a5612a065b1422",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/syn-2.0.118/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/syn-2.0.118/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "syn",
+      "version": "2.0.119",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/syn-2.0.119/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/syn-2.0.119/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "syn",
+      "version": "2.0.60",
+      "owners": [
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "909518bc7b1c9b779f1bbf07f2929d35af9f0f37e47c6e9ef7f9dddc1e1821f3",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/syn-2.0.60/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/syn-2.0.60/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "syn",
+      "version": "2.0.82",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "83540f837a8afc019423a8edb95b52a8effe46957ee402287f4292fae35be021",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/syn-2.0.82/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/syn-2.0.82/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "synstructure",
+      "version": "0.13.1",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "c8af7666ab7b6390ab78131fb5b0fce11d6b7a6951602017c35fa82800708971",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/synstructure-0.13.1/LICENSE",
+          "sha256": "219920e865eee70b7dcfc948a86b099e7f4fe2de01bcca2ca9a20c0a033f2b59"
+        }
+      ]
+    },
+    {
+      "name": "tap",
+      "version": "1.0.1",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/tap-1.0.1/LICENSE.txt",
+          "sha256": "8b4e95f5cf0dc40269c99f7b787203ffe04ded245ca2427422c196efa2b2f42a"
+        }
+      ]
+    },
+    {
+      "name": "target-lexicon",
+      "version": "0.13.3",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "df7f62577c25e07834649fc3b39fafdc597c0a3527dc1c60129201ccfcbaa50c",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/target-lexicon-0.13.3/LICENSE",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ]
+    },
+    {
+      "name": "target-lexicon",
+      "version": "0.13.4",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "b1dd07eb858a2067e2f3c7155d54e929265c264e6f37efe3ee7a8d1b5a1dd0ba",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/target-lexicon-0.13.4/LICENSE",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ]
+    },
+    {
+      "name": "target-lexicon",
+      "version": "0.13.5",
+      "owners": [
+        "cryptography: actual ARM SBOM",
+        "hypothesis: actual ARM SBOM",
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/target-lexicon-0.13.5/LICENSE",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ]
+    },
+    {
+      "name": "tinystr",
+      "version": "0.7.6",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "9117f5d4db391c1cf6927e7bea3db74b9a1c1add8f7eda9ffd5364f40f57b82f",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/tinystr-0.7.6/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "typenum",
+      "version": "1.18.0",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "1dccffe3ce07af9386bfd29e80c0ab1a8205a2fc34e4bcd40364df902cfa8f3f",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/typenum-1.18.0/LICENSE",
+          "sha256": "db11fec9946737df39ca3898d9cd8c10ec6f6c3a884a6802b0ad0b81b4e8f23a"
+        },
+        {
+          "shared_path": "notices/rust-crates/typenum-1.18.0/LICENSE-APACHE",
+          "sha256": "516b24e051bf5630880ebbd55c40a25ce9552ebaf8970a53e8976eb70e522406"
+        },
+        {
+          "shared_path": "notices/rust-crates/typenum-1.18.0/LICENSE-MIT",
+          "sha256": "a825bd853ab71619a4923d7b4311221427848070ff44d990da39b0b274c1683f"
+        }
+      ]
+    },
+    {
+      "name": "unicode-ident",
+      "version": "1.0.12",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "watchfiles: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/unicode-ident-1.0.12/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/unicode-ident-1.0.12/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        },
+        {
+          "shared_path": "notices/rust-crates/unicode-ident-1.0.12/LICENSE-UNICODE",
+          "sha256": "68f5b9f5ea36881a0942ba02f558e9e1faf76cc09cb165ad801744c61b738844"
+        }
+      ]
+    },
+    {
+      "name": "unicode-ident",
+      "version": "1.0.19",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "f63a545481291138910575129486daeaf8ac54aee4387fe7906919f7830c7d9d",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/unicode-ident-1.0.19/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/unicode-ident-1.0.19/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        },
+        {
+          "shared_path": "notices/rust-crates/unicode-ident-1.0.19/LICENSE-UNICODE",
+          "sha256": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1"
+        }
+      ]
+    },
+    {
+      "name": "unicode-ident",
+      "version": "1.0.24",
+      "owners": [
+        "cryptography: actual ARM SBOM",
+        "hypothesis: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/unicode-ident-1.0.24/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/unicode-ident-1.0.24/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        },
+        {
+          "shared_path": "notices/rust-crates/unicode-ident-1.0.24/LICENSE-UNICODE",
+          "sha256": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1"
+        }
+      ]
+    },
+    {
+      "name": "unindent",
+      "version": "0.2.4",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "7264e107f553ccae879d21fbea1d6724ac785e8c3bfc762137959b5802826ef3",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/unindent-0.2.4/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "shared_path": "notices/rust-crates/unindent-0.2.4/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "url",
+      "version": "2.5.8",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/url-2.5.8/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/url-2.5.8/LICENSE-MIT",
+          "sha256": "b38f11f6096706e6de553dabe2a7ed142d59b6fa8c97e290c67496154745cdd5"
+        }
+      ]
+    },
+    {
+      "name": "utf16_iter",
+      "version": "1.0.5",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "c8232dd3cdaed5356e0f716d285e4b40b932ac434100fe9b7e0e8e935b9e6246",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/utf16_iter-1.0.5/COPYRIGHT",
+          "sha256": "b84efe109a420fa3ca98be33f4227327af7ffa426195812c270feb1268bc2426"
+        },
+        {
+          "shared_path": "notices/rust-crates/utf16_iter-1.0.5/LICENSE-APACHE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "shared_path": "notices/rust-crates/utf16_iter-1.0.5/LICENSE-MIT",
+          "sha256": "3fa4ca83dcc9237839b1bdeb2e6d16bdfb5ec0c5ce42b24694d8bbf0dcbef72c"
+        }
+      ]
+    },
+    {
+      "name": "utf8_iter",
+      "version": "1.0.4",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/utf8_iter-1.0.4/COPYRIGHT",
+          "sha256": "c30152c94a6d75e021adbc52b3a52470366a46edb917e17deae3259251af244c"
+        },
+        {
+          "shared_path": "notices/rust-crates/utf8_iter-1.0.4/LICENSE-APACHE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "shared_path": "notices/rust-crates/utf8_iter-1.0.4/LICENSE-MIT",
+          "sha256": "3fa4ca83dcc9237839b1bdeb2e6d16bdfb5ec0c5ce42b24694d8bbf0dcbef72c"
+        }
+      ]
+    },
+    {
+      "name": "uuid",
+      "version": "1.23.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM",
+        "pydantic-core: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "5ac8b6f42ead25368cf5b098aeb3dc8a1a2c05a3eee8a9a1a68c640edbfc79d9",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/uuid-1.23.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/uuid-1.23.0/LICENSE-MIT",
+          "sha256": "436bc5a105d8e57dcd8778730f3754f7bf39c14d2f530e4cde4bd2d17a83ec3d"
+        }
+      ]
+    },
+    {
+      "name": "vcpkg",
+      "version": "0.2.15",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/vcpkg-0.2.15/LICENSE-APACHE",
+          "sha256": "60c93a31f490375aadf64098b75f10715010379541021e00261045d7800611d3"
+        },
+        {
+          "shared_path": "notices/rust-crates/vcpkg-0.2.15/LICENSE-MIT",
+          "sha256": "016d20f335060a70e79d9fcf8dfaa6201114d65d592211f4bdfb8ae9ca2bc1dc"
+        }
+      ]
+    },
+    {
+      "name": "version_check",
+      "version": "0.9.5",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)",
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/version_check-0.9.5/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/version_check-0.9.5/LICENSE-MIT",
+          "sha256": "b7e650f3fce5c53249d1cdc608b54df156a97edd636cf9d23498d0cfe7aec63e"
+        }
+      ]
+    },
+    {
+      "name": "walkdir",
+      "version": "2.5.0",
+      "owners": [
+        "watchfiles: actual ARM SBOM",
+        "watchfiles: actual embedded registry source path"
+      ],
+      "exact_source_sha256_from_verified_receipt": "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/walkdir-2.5.0/COPYING",
+          "sha256": "01c266bced4a434da0051174d6bee16a4c82cf634e2679b6155d40d75012390f"
+        },
+        {
+          "shared_path": "notices/rust-crates/walkdir-2.5.0/LICENSE-MIT",
+          "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f"
+        },
+        {
+          "shared_path": "notices/rust-crates/walkdir-2.5.0/UNLICENSE",
+          "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c"
+        }
+      ]
+    },
+    {
+      "name": "wasi",
+      "version": "0.14.2+wasi-0.2.4",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "9683f9a5a998d873c0d21fcbe3c083009670149a8fab228644b8bd36b2c48cb3",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/wasi-0.14.2+wasi-0.2.4/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/wasi-0.14.2+wasi-0.2.4/LICENSE-Apache-2.0_WITH_LLVM-exception",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        },
+        {
+          "shared_path": "notices/rust-crates/wasi-0.14.2+wasi-0.2.4/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "wasi",
+      "version": "0.14.7+wasi-0.2.4",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "883478de20367e224c0090af9cf5f9fa85bed63a95c1abf3afc5c083ebc06e8c",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/wasi-0.14.7+wasi-0.2.4/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/wasi-0.14.7+wasi-0.2.4/LICENSE-Apache-2.0_WITH_LLVM-exception",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        },
+        {
+          "shared_path": "notices/rust-crates/wasi-0.14.7+wasi-0.2.4/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "wasip2",
+      "version": "1.0.1+wasi-0.2.4",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "0562428422c63773dad2c345a1882263bbf4d65cf3f42e90921f787ef5ad58e7",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [],
+      "coverage_boundary": "No named license file exists in this exact source crate; it occurs in a source-lock/SBOM superset, not an observed ARM embedded source path. Exact source getrandom -> target_os=wasi -> wasi -> this crate declarations establish foreign WASI gating, not inspected Linux/aarch64. Not asserted linked or automatically licensed away by a generic MIT fallback.",
+      "target_exclusion_source_evidence": [
+        {
+          "source_archive": "public-crates/getrandom-0.3.3.crate",
+          "target_expression": "cfg(all(target_arch = \"wasm32\", target_os = \"wasi\", target_env = \"p2\"))",
+          "dependency": {
+            "version": "0.14",
+            "default-features": false
+          },
+          "manifest_sha256": "c11a6fef961eec45202c915ccde2aeec475c0950f31cb3c5a74e65fea2262bbc"
+        }
+      ],
+      "wasi_to_wasip2_bridge_source_evidence": [
+        {
+          "source_archive": "public-crates/wasi-0.14.7+wasi-0.2.4.crate",
+          "package": "wasi",
+          "version": "0.14.7+wasi-0.2.4",
+          "foreign_dependency": {
+            "version": "1.0.1",
+            "default-features": false
+          },
+          "manifest_sha256": "dbbc819e9f4b9577b04899047b9cd886d7240a3049a2089d393b06a6dd50f6f7"
+        }
+      ]
+    },
+    {
+      "name": "wasm-bindgen",
+      "version": "0.2.100",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "1edc8929d7499fc4e8f0be2262a241556cfc54a0bea223790e71446f2aab1ef5",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/wasm-bindgen-0.2.100/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/wasm-bindgen-0.2.100/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "name": "wasm-bindgen-backend",
+      "version": "0.2.100",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "2f0a0651a5c2bc21487bde11ee802ccaf4c51935d0d3d42a6101f98161700bc6",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/wasm-bindgen-backend-0.2.100/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/wasm-bindgen-backend-0.2.100/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "name": "wasm-bindgen-macro",
+      "version": "0.2.100",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "7fe63fc6d09ed3792bd0897b314f53de8e16568c2b3f7982f468c0bf9bd0b407",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/wasm-bindgen-macro-0.2.100/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/wasm-bindgen-macro-0.2.100/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "name": "wasm-bindgen-macro-support",
+      "version": "0.2.100",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "8ae87ea40c9f689fc23f209965b6fb8a99ad69aeeb0231408be24920604395de",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/wasm-bindgen-macro-support-0.2.100/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/wasm-bindgen-macro-support-0.2.100/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "name": "wasm-bindgen-shared",
+      "version": "0.2.100",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "1a05d73b933a847d6cccdda8f838a22ff101ad9bf93e33684f39c1f5f0eece3d",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/wasm-bindgen-shared-0.2.100/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/wasm-bindgen-shared-0.2.100/LICENSE-MIT",
+          "sha256": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397"
+        }
+      ]
+    },
+    {
+      "name": "wit-bindgen",
+      "version": "0.46.0",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/wit-bindgen-0.46.0/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+        },
+        {
+          "shared_path": "notices/rust-crates/wit-bindgen-0.46.0/LICENSE-Apache-2.0_WITH_LLVM-exception",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        },
+        {
+          "shared_path": "notices/rust-crates/wit-bindgen-0.46.0/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    },
+    {
+      "name": "wit-bindgen-rt",
+      "version": "0.39.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "6f42320e61fe2cfd34354ecb597f86f413484a798ba44a8ca1165c58d42da6c1",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [],
+      "coverage_boundary": "No named license file exists in this exact source crate; it occurs in a source-lock/SBOM superset, not an observed ARM embedded source path. Exact source getrandom -> target_os=wasi -> wasi -> this crate declarations establish foreign WASI gating, not inspected Linux/aarch64. Not asserted linked or automatically licensed away by a generic MIT fallback.",
+      "target_exclusion_source_evidence": [
+        {
+          "source_archive": "public-crates/getrandom-0.3.3.crate",
+          "target_expression": "cfg(all(target_arch = \"wasm32\", target_os = \"wasi\", target_env = \"p2\"))",
+          "dependency": {
+            "version": "0.14",
+            "default-features": false
+          },
+          "manifest_sha256": "c11a6fef961eec45202c915ccde2aeec475c0950f31cb3c5a74e65fea2262bbc"
+        }
+      ],
+      "wasi_to_wasip2_bridge_source_evidence": [
+        {
+          "source_archive": "public-crates/wasi-0.14.2+wasi-0.2.4.crate",
+          "package": "wasi",
+          "version": "0.14.2+wasi-0.2.4",
+          "foreign_dependency": {
+            "version": "0.39.0",
+            "features": [
+              "bitflags"
+            ]
+          },
+          "manifest_sha256": "f43ee004589d9330d76d998fe7d9dd88ffd2a3daf5872b60fcaa495f47b02583"
+        }
+      ]
+    },
+    {
+      "name": "write16",
+      "version": "1.0.0",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "d1890f4022759daae28ed4fe62859b1236caebfc61ede2f63ed4e695f3f6d936",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/write16-1.0.0/COPYRIGHT",
+          "sha256": "3210be7332b5bdf48eb24a945258b9f38616a2cceb0dfc06e3c3c7e9740475a0"
+        },
+        {
+          "shared_path": "notices/rust-crates/write16-1.0.0/LICENSE-APACHE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "shared_path": "notices/rust-crates/write16-1.0.0/LICENSE-MIT",
+          "sha256": "3fa4ca83dcc9237839b1bdeb2e6d16bdfb5ec0c5ce42b24694d8bbf0dcbef72c"
+        }
+      ]
+    },
+    {
+      "name": "writeable",
+      "version": "0.5.5",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "1e9df38ee2d2c3c5948ea468a8406ff0db0b29ae1ffde1bcf20ef305bcc95c51",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/writeable-0.5.5/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "wyz",
+      "version": "0.5.1",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "05f360fc0b24296329c78fda852a1e9ae82de9cf7b27dae4b7f62f118f77b9ed",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/wyz-0.5.1/LICENSE.txt",
+          "sha256": "411781fd38700f2357a14126d0ab048164ab881f1dcb335c1bb932e232c9a2f5"
+        }
+      ]
+    },
+    {
+      "name": "yoke",
+      "version": "0.7.4",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "6c5b1314b079b0930c31e3af543d8ee1757b1951ae1e1565ec704403a7240ca5",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/yoke-0.7.4/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "yoke-derive",
+      "version": "0.7.4",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "28cc31741b18cb6f1d5ff12f5b7523e3d6eb0852bbbad19d73905511d9849b95",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/yoke-derive-0.7.4/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "zerocopy",
+      "version": "0.8.25",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "a1702d9583232ddb9174e01bb7c15a2ab8fb1bc6f227aa1233858c351a3ba0cb",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/zerocopy-0.8.25/LICENSE-APACHE",
+          "sha256": "9d185ac6703c4b0453974c0d85e9eee43e6941009296bb1f5eb0b54e2329e9f3"
+        },
+        {
+          "shared_path": "notices/rust-crates/zerocopy-0.8.25/LICENSE-BSD",
+          "sha256": "83c1763356e822adde0a2cae748d938a73fdc263849ccff6b27776dff213bd32"
+        },
+        {
+          "shared_path": "notices/rust-crates/zerocopy-0.8.25/LICENSE-MIT",
+          "sha256": "1a2f5c12ddc934d58956aa5dbdd3255fe55fd957633ab7d0d39e4f0daa73f7df"
+        }
+      ]
+    },
+    {
+      "name": "zerocopy-derive",
+      "version": "0.8.25",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "28a6e20d751156648aa063f3800b706ee209a32c0b4d9f24be3d980b01be55ef",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/zerocopy-derive-0.8.25/LICENSE-APACHE",
+          "sha256": "9d185ac6703c4b0453974c0d85e9eee43e6941009296bb1f5eb0b54e2329e9f3"
+        },
+        {
+          "shared_path": "notices/rust-crates/zerocopy-derive-0.8.25/LICENSE-BSD",
+          "sha256": "83c1763356e822adde0a2cae748d938a73fdc263849ccff6b27776dff213bd32"
+        },
+        {
+          "shared_path": "notices/rust-crates/zerocopy-derive-0.8.25/LICENSE-MIT",
+          "sha256": "1a2f5c12ddc934d58956aa5dbdd3255fe55fd957633ab7d0d39e4f0daa73f7df"
+        }
+      ]
+    },
+    {
+      "name": "zerofrom",
+      "version": "0.1.4",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "91ec111ce797d0e0784a1116d0ddcdbea84322cd79e5d5ad173daeba4f93ab55",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/zerofrom-0.1.4/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "zerofrom-derive",
+      "version": "0.1.4",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "0ea7b4a3637ea8669cedf0f1fd5c286a17f3de97b8dd5a70a6c167a1730e63a5",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/zerofrom-derive-0.1.4/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "zeroize",
+      "version": "1.8.1",
+      "owners": [
+        "bcrypt: exact 5.0.0 sdist Cargo.lock superset (not a claim all are linked)"
+      ],
+      "exact_source_sha256_from_verified_receipt": "ced3678a2879b30306d323f4542626697a464a97c0a07c9aebf7ebca65cd4dde",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/zeroize-1.8.1/LICENSE-APACHE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "shared_path": "notices/rust-crates/zeroize-1.8.1/LICENSE-MIT",
+          "sha256": "0b04ee3ce0021a922f43f37a17fee09a5a1ee6d1f4e149d5bf75b72395a49c72"
+        }
+      ]
+    },
+    {
+      "name": "zerovec",
+      "version": "0.10.4",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "aa2b893d79df23bfb12d5461018d408ea19dfafe76c2c7ef6d4eba614f8ff079",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/zerovec-0.10.4/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "zerovec-derive",
+      "version": "0.10.3",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "6eafa6dfb17584ea3e2bd6e76e0cc15ad7af12b09abdd1ca55961bed9b1063c6",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/zerovec-derive-0.10.3/LICENSE",
+          "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2"
+        }
+      ]
+    },
+    {
+      "name": "zmij",
+      "version": "1.0.6",
+      "owners": [
+        "pydantic-core: actual ARM SBOM"
+      ],
+      "exact_source_sha256_from_verified_receipt": "aac060176f7020d62c3bcc1cdbcec619d54f48b07ad1963a3f80ce7a0c17755f",
+      "exact_source_receipt": "crates.json",
+      "notice_files_hash_verified": [
+        {
+          "shared_path": "notices/rust-crates/zmij-1.0.6/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ]
+    }
+  ],
+  "workspace_components": [
+    {
+      "name": "cryptography-cffi",
+      "version": "0.50.2",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "manifest": "source-notices/cryptography-50.0.2/src/rust/cryptography-cffi/Cargo.toml",
+      "notices": [
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+        },
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.BSD",
+          "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+        }
+      ]
+    },
+    {
+      "name": "cryptography-crypto",
+      "version": "0.50.2",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "manifest": "source-notices/cryptography-50.0.2/src/rust/cryptography-crypto/Cargo.toml",
+      "notices": [
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+        },
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.BSD",
+          "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+        }
+      ]
+    },
+    {
+      "name": "cryptography-keepalive",
+      "version": "0.50.2",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "manifest": "source-notices/cryptography-50.0.2/src/rust/cryptography-keepalive/Cargo.toml",
+      "notices": [
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+        },
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.BSD",
+          "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+        }
+      ]
+    },
+    {
+      "name": "cryptography-key-parsing",
+      "version": "0.50.2",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "manifest": "source-notices/cryptography-50.0.2/src/rust/cryptography-key-parsing/Cargo.toml",
+      "notices": [
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+        },
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.BSD",
+          "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+        }
+      ]
+    },
+    {
+      "name": "cryptography-openssl",
+      "version": "0.50.2",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "manifest": "source-notices/cryptography-50.0.2/src/rust/cryptography-openssl/Cargo.toml",
+      "notices": [
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+        },
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.BSD",
+          "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+        }
+      ]
+    },
+    {
+      "name": "cryptography-x509",
+      "version": "0.50.2",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "manifest": "source-notices/cryptography-50.0.2/src/rust/cryptography-x509/Cargo.toml",
+      "notices": [
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+        },
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.BSD",
+          "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+        }
+      ]
+    },
+    {
+      "name": "cryptography-x509-verification",
+      "version": "0.50.2",
+      "owners": [
+        "cryptography: actual ARM SBOM"
+      ],
+      "manifest": "source-notices/cryptography-50.0.2/src/rust/cryptography-x509-verification/Cargo.toml",
+      "notices": [
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.APACHE",
+          "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+        },
+        {
+          "shared_path": "notices/wheels/cryptography-50.0.2.dist-info/licenses/LICENSE.BSD",
+          "sha256": "602c4c7482de6479dd2e9793cda275e5e63d773dacd1eca689232ab7008fb4fb"
+        }
+      ]
+    }
+  ],
+  "foreign_target_no_packaged_notice_exclusions": [
+    {
+      "name": "wasip2",
+      "version": "1.0.1+wasi-0.2.4",
+      "reason": "No named license file exists in this exact source crate; it occurs in a source-lock/SBOM superset, not an observed ARM embedded source path. Exact source getrandom -> target_os=wasi -> wasi -> this crate declarations establish foreign WASI gating, not inspected Linux/aarch64. Not asserted linked or automatically licensed away by a generic MIT fallback."
+    },
+    {
+      "name": "wit-bindgen-rt",
+      "version": "0.39.0",
+      "reason": "No named license file exists in this exact source crate; it occurs in a source-lock/SBOM superset, not an observed ARM embedded source path. Exact source getrandom -> target_os=wasi -> wasi -> this crate declarations establish foreign WASI gating, not inspected Linux/aarch64. Not asserted linked or automatically licensed away by a generic MIT fallback."
+    }
+  ],
+  "scope": "ARM SBOM/source-path plus bcrypt lock superset checked against retained exact source receipts and notice hashes. Not a claim all listed build/foreign-target crates are linked."
+}
