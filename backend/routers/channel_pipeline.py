@@ -701,7 +701,8 @@ async def analyze_auto_creation_rules_from_bundle(
         )
 
     try:
-        data = yaml.safe_load(rules_yaml_text)
+        from yaml_safety import safe_load_bounded
+        data = safe_load_bounded(rules_yaml_text)
     except yaml.YAMLError as e:
         raise HTTPException(
             status_code=400, detail=f"rules.yaml is not valid YAML: {e}"
@@ -2940,7 +2941,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
 
         # Parse YAML
         try:
-            data = yaml.safe_load(request.yaml_content)
+            from yaml_safety import safe_load_bounded
+            data = safe_load_bounded(request.yaml_content)
             logger.debug("[AUTO-CREATE-YAML] Parsed YAML with %s rules", len(data.get('rules', data) if isinstance(data, dict) else data))
         except yaml.YAMLError as e:
             raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")

@@ -185,7 +185,12 @@ def _decode_categories(zf: zipfile.ZipFile) -> list[PlanCategory]:
         entities: list[dict] = []
         if member in names and _is_safe_member(member):
             try:
-                parsed = yaml.safe_load(zf.read(member).decode("utf-8"))
+                from yaml_safety import YamlSafetyError, safe_load_bounded
+
+                parsed = safe_load_bounded(zf.read(member).decode("utf-8"))
+            except YamlSafetyError as exc:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=400, detail="Backup YAML exceeds the safety limit") from exc
             except (yaml.YAMLError, UnicodeDecodeError) as exc:
                 # A malformed category YAML is a per-category empty (logged), not
                 # a whole-restore crash. Pre-flight still sees a consistent plan.
@@ -233,7 +238,12 @@ def _decode_settings_category(zf: zipfile.ZipFile) -> PlanCategory:
         if member not in names or not _is_safe_member(member):
             continue
         try:
-            parsed = yaml.safe_load(zf.read(member).decode("utf-8"))
+            from yaml_safety import YamlSafetyError, safe_load_bounded
+
+            parsed = safe_load_bounded(zf.read(member).decode("utf-8"))
+        except YamlSafetyError as exc:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail="Backup YAML exceeds the safety limit") from exc
         except (yaml.YAMLError, UnicodeDecodeError) as exc:
             logger.warning(
                 "[DBAS-RESTORE] Settings section %s YAML unreadable; treating as empty: %s",
@@ -256,7 +266,12 @@ def _read_category_yaml(zf: zipfile.ZipFile, section_key: str) -> object:
     if member not in set(zf.namelist()) or not _is_safe_member(member):
         return None
     try:
-        return yaml.safe_load(zf.read(member).decode("utf-8"))
+        from yaml_safety import YamlSafetyError, safe_load_bounded
+
+        return safe_load_bounded(zf.read(member).decode("utf-8"))
+    except YamlSafetyError as exc:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Backup YAML exceeds the safety limit") from exc
     except (yaml.YAMLError, UnicodeDecodeError) as exc:
         logger.warning(
             "[DBAS-RESTORE] Category %s YAML unreadable; treating as empty: %s",

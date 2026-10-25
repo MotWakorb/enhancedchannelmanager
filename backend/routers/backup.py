@@ -133,7 +133,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.2-0047"
+APP_VERSION = "0.18.2-0051"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -2026,7 +2026,8 @@ async def _gather_redacted_categories(
             include_credentials=include_credentials,
             exempt_identity_keys=exempt,
         )
-        parsed = yaml.safe_load(yaml_text)
+        from yaml_safety import safe_load_bounded
+        parsed = safe_load_bounded(yaml_text)
         redacted = _redact_credentials_deep(
             parsed,
             preserve_keys,
@@ -6124,7 +6125,8 @@ RESTORABLE_SECTIONS = {
 def _parse_yaml_export(content: bytes) -> dict:
     """Parse and validate a YAML export file. Raises HTTPException on failure."""
     try:
-        data = yaml.safe_load(content)
+        from yaml_safety import safe_load_bounded
+        data = safe_load_bounded(content)
     except yaml.YAMLError as e:
         raise HTTPException(status_code=400, detail="Invalid YAML: %s" % str(e))
 

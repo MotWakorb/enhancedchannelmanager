@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 import database
+from yaml_safety import BoundedSafeLoader
 from channel_pipeline_schema import validate_event_sync_config, validate_rule
 from models import ChannelPipelineRule
 
@@ -29,31 +30,18 @@ _JSON_FIELDS = {
 }
 
 
-class _EditorLoader(yaml.SafeLoader):
+class _EditorLoader(BoundedSafeLoader):
     """Bound composition before construction; aliases cannot amplify the tree."""
 
-    def __init__(self, stream):
-        super().__init__(stream)
-        self.depth = 0
-        self.nodes = 0
+    max_nodes = _MAX_NODES
+    max_depth = _MAX_DEPTH
+    allow_aliases = False
 
-    def compose_node(self, parent, index):
-        self.nodes += 1
-        self.depth += 1
-        try:
-            if self.check_event(yaml.AliasEvent):
-                raise yaml.MarkedYAMLError(
-                    problem="Aliases are not supported; copy the block instead",
-                    problem_mark=self.peek_event().start_mark,
-                )
-            if self.depth > _MAX_DEPTH or self.nodes > _MAX_NODES:
-                raise yaml.MarkedYAMLError(
-                    problem="YAML structure exceeds the editor safety limit",
-                    problem_mark=self.peek_event().start_mark,
-                )
-            return super().compose_node(parent, index)
-        finally:
-            self.depth -= 1
+    def structure_limit_error(self, mark):
+        return yaml.MarkedYAMLError(
+            problem="YAML structure exceeds the editor safety limit",
+            problem_mark=mark,
+        )
 
     def construct_object(self, node, deep=False):
         if not isinstance(node, yaml.ScalarNode):

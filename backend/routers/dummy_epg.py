@@ -822,7 +822,8 @@ async def import_dummy_epg_profiles_yaml(request: ImportYAMLRequest):
     try:
         # Parse YAML
         try:
-            data = yaml.safe_load(request.yaml_content)
+            from yaml_safety import safe_load_bounded
+            data = safe_load_bounded(request.yaml_content)
         except yaml.YAMLError as e:
             raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
 
