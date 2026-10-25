@@ -157,10 +157,13 @@ _INPUT_DEMUXERS = frozenset(
 _INPUT_PROTOCOLS = frozenset(
     ("file", "pipe", "http", "https", "tcp", "tls", "crypto", "udp", "rtp", "rtmp")
 )
-# Same reviewed DER fingerprints as test_p1_dependency_security.py, not names
-# or package-version inference. Test both the environment-selected system store
+# Reviewed exact root DER fingerprints, not names or package-version inference.
+# Test both the environment-selected system store
 # and the explicitly selected certifi bundle on every image architecture.
 _COMPROMISED_G3 = "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b"
+_COMPROMISED_COMODO_AAA = (
+    "d7a7a0fb5d7e2731d771e9484ebcdef71d5f0c3e0a2948782bc83ee0ea699ef4"
+)
 _UNAFFECTED_G1 = "40f6af0346a99aa1cd1d555a4e9cce62c7f9634603ee406615833dc8c8d00367"
 _UPSTREAM_BASE = "https://synthetic-user:synthetic-password@media.example/live"
 _UPSTREAM_QUERY = "?provider_token=synthetic-resource-token"
@@ -569,9 +572,13 @@ def _trust_policy(context):
         for cert in context.get_ca_certs(binary_form=True)
     }
     assert _COMPROMISED_G3 not in anchors, "compromised emSign G3 is still trusted"
+    assert _COMPROMISED_COMODO_AAA not in anchors, (
+        "compromised Comodo AAA is still trusted"
+    )
     assert _UNAFFECTED_G1 in anchors, "unaffected emSign G1 positive control is missing"
     return {
         "compromised_g3_trusted": False,
+        "compromised_comodo_aaa_trusted": False,
         "unaffected_g1_trusted": True,
         "anchor_count": len(anchors),
     }

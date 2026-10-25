@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline check mounted into the verified MCP image; stdout is one JSON receipt.
+"""Offline MCP package/crypto check; stdout is one JSON receipt.
 
 The host must first hash-verify the OCI archive with candidate_image.py and
 verify-loaded after conversion. Host identity files bind this runtime evidence
@@ -16,6 +16,7 @@ import os
 import platform
 import re
 import struct
+import subprocess
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -125,6 +126,49 @@ def inspect_extension(path: Path, arch: str) -> dict:
     return {"path": str(path), "sha256": digest, "architecture": arch}
 
 
+def validate_musl(text: str) -> dict:
+    """Parse real apk installed-package output, denying missing/ambiguous versions."""
+    packages = {}
+    if not isinstance(text, str) or len(text) > 256:
+        raise ValueError("missing or malformed musl inventory")
+    for line in text.splitlines():
+        match = re.fullmatch(
+            r"(musl|musl-utils)-((0|[1-9][0-9]*)\."
+            r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-r(0|[1-9][0-9]*))",
+            line,
+        )
+        if match is None or match[1] in packages:
+            raise ValueError("missing or ambiguous musl package version")
+        if tuple(int(part) for part in match.groups()[2:]) < (1, 2, 6, 3):
+            raise ValueError("vulnerable musl package version; require >=1.2.6-r3")
+        packages[match[1]] = match[2]
+    if set(packages) != {"musl", "musl-utils"}:
+        raise ValueError("both musl and musl-utils must be installed")
+    return packages
+
+
+def inspect_musl() -> dict:
+    """Query installed packages in this image, not a repository or host fixture."""
+    result = subprocess.run(
+        ["/sbin/apk", "info", "--installed", "--verbose", "musl", "musl-utils"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    return validate_musl(result.stdout)
+
+
+def inspect_installer() -> dict:
+    """The retained Python-module installer must match the official 26.2 wheel."""
+    import pip
+
+    metadata_version = version("pip")
+    if pip.__version__ != "26.2" or metadata_version != "26.2":
+        raise ValueError("retained pip installer is not the reviewed 26.2 wheel")
+    return {"version": pip.__version__, "metadata_version": metadata_version}
+
+
 def check_runtime(arch: str) -> dict:
     if os.getuid() == 0 or os.getgid() == 0:
         raise ValueError("crypto check must execute as the default non-root image user")
@@ -153,6 +197,8 @@ def check_runtime(arch: str) -> dict:
     ciphertext = cipher.encrypt(nonce, message, b"image check")
     if cipher.decrypt(nonce, ciphertext, b"image check") != message:
         raise ValueError("AES-GCM roundtrip failed")
+    musl = inspect_musl()
+    pip = inspect_installer()
     return {
         "cryptography": cryptography.__version__,
         "openssl": openssl,
@@ -161,6 +207,8 @@ def check_runtime(arch: str) -> dict:
         "gid": os.getgid(),
         "native_extension": native,
         "operations": ["RSA-sign-verify", "AES-GCM-roundtrip"],
+        "musl": musl,
+        "pip": pip,
     }
 
 

@@ -19,14 +19,14 @@ RECIPE_SHA256 = "de91b41ea81123a4af8eb9ca8cd526ed6560f4f53e2e3152de42f2edf0cb7db
 PYTHON_SUMS = {
     "sources": "e21e0520773c78b5f16ee56ddb94073a4def902d8656b435fec9dc26eee8e2ab",
     # Complete sorted 556-entry manifest, including six newly audited ARM JSONs.
-    "notices": "68555090f8b5f1a58b00512048f1a9f468f2ed0fa8b06a10a8fcc3833ed07975",
+    "notices": "93e5d9125e15f9ae67c4e3ff9cfb5cd932adc2e2aec7da738d6723d75da1a006",
 }
 RESDET_SCRIPTS = {
     "build_resdet.py": "1f071637352c3e21abc94388dd4101c7d819998cc31b94cd5a34af939febf611",
 }
 PYTHON_INDEXES = {
-    "x86_64": "2c2345a3fbb95f6e2ea41fb9b9a04acdc118d5715a4dbd8c218358e4a27df3b0",
-    "aarch64": "0f6734132bdf44f6841a93ece87251d825935c9f01ec8f3df5b9b2aa079883de",
+    "x86_64": "ae61f69b63d43435e8afaa990f4c68a8e561ace7f51fab62b42792973e2a42cc",
+    "aarch64": "7316c140d663a3723cff51744428e6f2c47d48627f70d7e857591b6c7954d02a",
 }
 FIELDS = ("name", "version", "release", "arch", "vendor", "sourcerpm", "license")
 QUERY = "\\t".join("%{" + field.upper() + "}" for field in FIELDS) + "\\n"

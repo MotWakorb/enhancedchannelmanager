@@ -71,6 +71,9 @@ sqlalchemy>=2.0.0
 # the model so metadata matches the migration DDL — a schema-correctness change
 # that needs its own bead, not a currency bump.
 alembic>=1.13.0,<1.19
+# Existing Alembic dependency: fixes CVE-2026-102991 / GHSA-5639-2j2p-m4mx
+# TemplateLookup drive-designator traversal on Windows; no new distribution.
+Mako>=1.4.2
 aiofiles>=23.0.0
 croniter>=2.0.0
 # 3.14.4 fixes CVE-2026-111064/111066 and GHSA-2g87-pp6c-29x5 resource

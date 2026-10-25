@@ -138,7 +138,9 @@ SUSE_RUNTIME_RUN = (
     "rpm --import /tmp/packman.asc && rpm --checksig /tmp/runtime-rpms/*.rpm && "
     "zypper --non-interactive install --no-recommends /tmp/runtime-rpms/*.rpm "
     "$(cat /tmp/runtime-packages.txt) python312 python312-base shadow coreutils bash "
-    "timezone ca-certificates && zypper clean --all"
+    "timezone ca-certificates "
+    "'libbrotlicommon1>=1.2.1-1.1' 'libbrotlidec1>=1.2.1-1.1' 'libbrotlienc1>=1.2.1-1.1' "
+    "'ca-certificates-mozilla>=2.92-2.1' && zypper clean --all"
 )
 SUSE_RUNTIME_INVENTORY_RUN = (
     "ldconfig && for package in gcc gcc-c++ make go1.26 go1.27 libcjson1 libsndfile1; do "
@@ -240,6 +242,7 @@ CHANNEL_NOTE = {
 
 COVERAGE_INCLUDES = (
     "Python distributions pinned in the image's requirements.txt, with versions",
+    "MCP build/runtime pip installer: reviewed wheel version/hash and installer manifest binding",
     "npm packages resolved in frontend/package-lock.json, with versions (ECM only)",
     "Direct source-built native dependencies declared in sbom/native-dependencies.json",
     "Base and build images referenced by digest in the Dockerfile",
@@ -842,7 +845,7 @@ def _pinned_image(reference: str, source: str, line: int, role: str) -> dict[str
 
 
 def _pypi_package(entry: dict[str, str]) -> dict[str, Any]:
-    return {
+    package = {
         "SPDXID": _spdx_id("Package", "pypi", entry["name"], entry["version"]),
         "name": entry["name"],
         "versionInfo": entry["version"],
@@ -860,6 +863,12 @@ def _pypi_package(entry: dict[str, str]) -> dict[str, Any]:
             }
         ],
     }
+    if "sha256" in entry:
+        package["checksums"] = [
+            {"algorithm": "SHA256", "checksumValue": entry["sha256"]}
+        ]
+        package["comment"] = entry["comment"]
+    return package
 
 
 def _npm_package(entry: dict[str, Any]) -> dict[str, Any]:
@@ -1163,6 +1172,31 @@ SUBJECTS = {
 }
 
 
+MCP_INSTALLER_PATH = "mcp-server/pip-requirements.txt"
+MCP_PIP_WHEEL_SHA256 = "931c303696af6fa3417112103b1cad26890e5a07eccb5b99783700e33f2b8aad"
+
+
+def parse_mcp_installer(text: str) -> dict[str, str]:
+    """Recognize only the reviewed installer, without broadening app pin syntax."""
+    lines = [line.split("#", 1)[0].strip() for line in text.splitlines()]
+    if [line for line in lines if line] != [
+        f"pip==26.2.0 --hash=sha256:{MCP_PIP_WHEEL_SHA256}"
+    ]:
+        raise SbomError(
+            f"{MCP_INSTALLER_PATH}: installer must be the sole reviewed pip wheel pin"
+        )
+    return {
+        "name": "pip",
+        "version": "26.2",
+        "sha256": MCP_PIP_WHEEL_SHA256,
+        "comment": (
+            "Build/runtime installer retained in MCP. The pip==26.2.0 selector resolves "
+            "to the official pip-26.2-py3-none-any.whl (metadata Version: 26.2); "
+            "the SHA256 identifies that reviewed wheel, not an installed-file inventory."
+        ),
+    }
+
+
 def read_version(root: Path) -> str:
     document = _read_json(root / "frontend" / "package.json")
     version = document.get("version") if isinstance(document, dict) else None
@@ -1236,6 +1270,9 @@ def render(root: Path, version: str, created: str) -> dict[str, Any]:
         images = parse_dockerfile_images(_read_text(root / dockerfile_path), dockerfile_path)
         sources[requirements_path] = sha256_file(root / requirements_path)
         sources[dockerfile_path] = sha256_file(root / dockerfile_path)
+        if subject == "mcp":
+            pypi.append(parse_mcp_installer(_read_text(root / MCP_INSTALLER_PATH)))
+            sources[MCP_INSTALLER_PATH] = sha256_file(root / MCP_INSTALLER_PATH)
         npm: list[dict[str, Any]] = []
         if spec["lockfile"]:
             npm = parse_lockfile_packages(

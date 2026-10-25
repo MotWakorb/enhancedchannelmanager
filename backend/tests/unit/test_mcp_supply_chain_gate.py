@@ -100,7 +100,7 @@ def test_policy_alias_support_does_not_allow_external_or_ambiguous_refs(tmp_path
         ("&& apk add", "|| apk add"),
         ("&& apk add", "; false && apk add"),
         ("&& apk add", "&& echo apk add"),
-        ("RUN pip install", "RUN apk del libssl3 libcrypto3\nRUN pip install"),
+        ("RUN python -m pip install", "RUN apk del libssl3 libcrypto3\nRUN python -m pip install"),
         ("RUN chown", "RUN apk add --simulate libssl3\nRUN chown"),
         ("WORKDIR /app", 'SHELL ["/bin/true"]\nWORKDIR /app'),
         ("WORKDIR /app", "ENV PATH=/app\nWORKDIR /app"),
@@ -185,6 +185,100 @@ def test_policy_rejects_comment_only_mcp_openssl_package_floors(tmp_path):
     failures = gate.check_repository(tmp_path)
 
     assert sum("OpenSSL package floor" in failure for failure in failures) == 2, failures
+
+
+@pytest.mark.parametrize("package", ["musl", "musl-utils"])
+@pytest.mark.parametrize("replacement", ["", "{package}", "'{package}>=1.2.6-r2'"])
+def test_policy_enforces_fixed_mcp_musl_floors(tmp_path, package, replacement):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    dockerfile = tmp_path / "mcp-server/Dockerfile"
+    contents = dockerfile.read_text()
+    required = f"'{package}>=1.2.6-r3'"
+    assert required in contents
+    dockerfile.write_text(
+        f"# {required}\n"
+        + contents.replace(required, replacement.format(package=package), 1)
+    )
+    failures = gate.check_repository(tmp_path)
+    assert any("musl package floor" in failure for failure in failures), failures
+
+
+def test_recipe_installs_hash_checked_fixed_pip_before_app_requirements():
+    contents = (REPO_ROOT / "mcp-server/Dockerfile").read_text()
+    bootstrap = (
+        "RUN python -m pip install --no-cache-dir --upgrade --require-hashes "
+        "--only-binary=:all: --no-deps -r pip-requirements.txt"
+    )
+    assert "COPY pip-requirements.txt ." in contents
+    assert bootstrap in contents
+    assert contents.index(bootstrap) < contents.index("COPY requirements.txt .")
+    assert "RUN python -m pip install --no-cache-dir -r requirements.txt" in contents
+    manifest = (REPO_ROOT / "mcp-server/pip-requirements.txt").read_text()
+    requirements = [
+        line for line in manifest.splitlines() if line and not line.startswith("#")
+    ]
+    assert requirements == [
+        "pip==26.2.0 --hash=sha256:"
+        "931c303696af6fa3417112103b1cad26890e5a07eccb5b99783700e33f2b8aad"
+    ]
+
+
+@pytest.mark.parametrize("mutation", ["old", "hash", "extra", "comment-only"])
+def test_policy_rejects_unreviewed_pip_manifest(tmp_path, mutation):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    manifest = tmp_path / "mcp-server/pip-requirements.txt"
+    contents = manifest.read_text()
+    if mutation == "old":
+        contents = contents.replace("pip==26.2.0", "pip==25.0.1")
+    elif mutation == "hash":
+        contents = contents.replace("931c3036", "00000000")
+    elif mutation == "extra":
+        contents += "pip==25.0.1\n"
+    else:
+        contents = "\n".join("# " + line for line in contents.splitlines())
+    manifest.write_text(contents)
+    failures = gate.check_repository(tmp_path)
+    assert any("pip installer" in failure for failure in failures), failures
+
+
+def test_policy_denies_missing_pip_manifest(tmp_path):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    manifest = tmp_path / "mcp-server/pip-requirements.txt"
+    assert manifest.is_file()
+    manifest.unlink()
+    assert any(
+        "pip installer" in failure for failure in gate.check_repository(tmp_path)
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("--require-hashes", "--no-deps"),
+        ("--only-binary=:all:", "--only-binary=:none:"),
+        ("--upgrade", "--dry-run"),
+        ("-r pip-requirements.txt", "-r requirements.txt"),
+        ("COPY pip-requirements.txt .", "COPY requirements.txt pip-requirements.txt"),
+        ("RUN chown", "RUN python -m pip install pip==25.0.1\nRUN chown"),
+        ("USER appuser:appgroup", "ENV PYTHONPATH=/tmp\nUSER appuser:appgroup"),
+        ("USER appuser:appgroup", 'SHELL ["/bin/true"]\nUSER appuser:appgroup'),
+        ("USER appuser:appgroup", "COPY . /usr/local\nUSER appuser:appgroup"),
+        ("RUN chown", "RUN apk add musl=1.2.6-r2\nRUN chown"),
+    ],
+)
+def test_policy_denies_installer_bypasses_and_later_package_undo(tmp_path, old, new):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    dockerfile = tmp_path / "mcp-server/Dockerfile"
+    contents = dockerfile.read_text()
+    assert old in contents
+    dockerfile.write_text(contents.replace(old, new, 1))
+    failures = gate.check_repository(tmp_path)
+    assert any("pip installer" in failure for failure in failures), failures
+    assert any("musl package floor" in failure for failure in failures), failures
 
 
 @pytest.mark.parametrize(

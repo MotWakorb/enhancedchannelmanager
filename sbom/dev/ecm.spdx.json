@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "ecm-0.18.2-0047",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0047/ecm-59f621c1cbe316f58aa41344bd00061cc7f4a4ebbd1071905921b6f48b5dd554",
+  "name": "ecm-0.18.2-0048",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0048/ecm-8b3971b2e7aebfe34873bd8ca29f41e949ca607261fa9866131f103c2baa7ca4",
   "creationInfo": {
-    "created": "2026-10-24T12:00:51Z",
+    "created": "2026-10-25T14:08:46Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-ecm",
       "name": "enhanced-channel-manager",
-      "versionInfo": "0.18.2-0047",
+      "versionInfo": "0.18.2-0048",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7772,9 +7772,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-mako-1.4.1",
+      "SPDXID": "SPDXRef-Package-pypi-mako-1.4.2",
       "name": "mako",
-      "versionInfo": "1.4.1",
+      "versionInfo": "1.4.2",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7785,7 +7785,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/mako@1.4.1"
+          "referenceLocator": "pkg:pypi/mako@1.4.2"
         }
       ]
     },
@@ -10539,7 +10539,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-mako-1.4.1",
+      "spdxElementId": "SPDXRef-Package-pypi-mako-1.4.2",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },

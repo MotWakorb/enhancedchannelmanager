@@ -36,6 +36,7 @@ def policy():
         "frontend/package.json",
         "frontend/package-lock.json",
         "mcp-server/requirements.txt",
+        "mcp-server/pip-requirements.txt",
         "Dockerfile",
         "mcp-server/Dockerfile",
     ],

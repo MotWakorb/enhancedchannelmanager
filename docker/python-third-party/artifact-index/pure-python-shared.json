@@ -365,17 +365,17 @@
     },
     {
       "name": "mako",
-      "version": "1.4.1",
-      "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
+      "version": "1.4.2",
+      "coverage": "Fresh checksum-verified public py3-none-any wheel metadata and MIT notice; no architecture runtime or whole-image assertion",
       "original_wheel_purelib": true,
-      "current_x86_metadata_sha256": "1f427af53f47988519af11a1a04136154eadbda5b9607fe30a64eb653d5118a8",
+      "current_x86_metadata_sha256": "32439e6badb760e4d21261c1757305be873728b3e1921a49d7a8f5416dca591e",
       "shared_notices": [
         {
-          "shared_candidate_path": "notices/wheels/mako-1.4.1.dist-info/licenses/LICENSE",
+          "shared_candidate_path": "notices/wheels/mako-1.4.2.dist-info/licenses/LICENSE",
           "sha256": "8c1d171bc5d341ad9cd33d5e2c39b96a82c7bd49b3ae89a470c37e5822232054"
         }
       ],
-      "new_pure_python_wheel_downloaded": false
+      "new_pure_python_wheel_downloaded": true
     },
     {
       "name": "packaging",

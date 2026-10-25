@@ -1,0 +1,4 @@
+# Build/runtime installer only; application pins remain in requirements.txt.
+# PyPI pip==26.2.0 resolves to the official 26.2 release (wheel metadata Version: 26.2).
+# Reviewed universal wheel: https://pypi.org/project/pip/26.2/#files
+pip==26.2.0 --hash=sha256:931c303696af6fa3417112103b1cad26890e5a07eccb5b99783700e33f2b8aad

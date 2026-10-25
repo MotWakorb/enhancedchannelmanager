@@ -4,7 +4,7 @@
   "python": "CPython 3.12 standard ABI",
   "selection_glibc": "2.44",
   "proof_layer": "Expected official manylinux wheel archive metadata, ELF and notices only; final resolver choices, final image files and ARM execution not proved.",
-  "lock_sha256": "7fbaf818e6617efc2bbd54e07af7ef5a7eac300712ad7b29fa5c6b4ada17a2bf",
+  "lock_sha256": "d0518f0ce48a4a8749e33cbde71ab3d1b07484048d4978d9e931e3dcaec770f8",
   "native_distribution_count": 22,
   "native_ELF_count": 36,
   "native_distributions": [

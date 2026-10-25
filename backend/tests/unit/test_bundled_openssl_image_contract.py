@@ -10,6 +10,7 @@ import struct
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 import yaml
@@ -138,6 +139,143 @@ def test_runtime_library_identity_is_fail_closed(checker, text):
 @pytest.mark.parametrize("text", ["OpenSSL 4.0.3 29 Sep 2026", "OpenSSL 4.0.10"])
 def test_fixed_openssl_positive_control(checker, text):
     checker.validate_openssl(text)
+
+
+# Recorded verbatim from /sbin/apk info --installed --verbose musl musl-utils
+# in the reviewed official python:3.12-alpine digest, before/after apk upgrade.
+# Full command, official indexes and HTTP receipts accompany the remediation handoff.
+APK_MUSL_BEFORE = "musl-1.2.6-r2\nmusl-utils-1.2.6-r2\n"
+APK_MUSL_FIXED = "musl-1.2.6-r3\nmusl-utils-1.2.6-r3\n"
+
+
+def test_musl_parser_accepts_recorded_real_fixed_apk_output(checker):
+    assert checker.validate_musl(APK_MUSL_FIXED) == {
+        "musl": "1.2.6-r3",
+        "musl-utils": "1.2.6-r3",
+    }
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        APK_MUSL_BEFORE,
+        "",
+        "musl-1.2.6-r3\n",
+        APK_MUSL_FIXED.replace("musl-utils-1.2.6-r3", "musl-utils-1.2.6-r2"),
+        APK_MUSL_FIXED.replace("musl-1.2.6-r3", "musl-1.2.6-r2"),
+        APK_MUSL_FIXED + "musl-1.2.6-r3\n",
+        APK_MUSL_FIXED + "unexpected-field\n",
+        APK_MUSL_FIXED.replace("1.2.6-r3", "1.2.6-r03"),
+        APK_MUSL_FIXED.replace("1.2.6-r3", "1.2.6_rc1-r3"),
+        APK_MUSL_FIXED.replace("1.2.6-r3", "1.2.5-r99"),
+    ],
+)
+def test_musl_parser_denies_vulnerable_missing_and_ambiguous_packages(checker, output):
+    with pytest.raises(ValueError, match="musl"):
+        checker.validate_musl(output)
+
+
+@pytest.mark.parametrize("package_version", ["26.2", "26.2.0", "25.0.1", "26.2rc1"])
+@pytest.mark.parametrize("metadata_version", ["26.2", "25.0.1", ""])
+def test_retained_pip_must_match_reviewed_official_wheel(
+    checker, monkeypatch, package_version, metadata_version
+):
+    pip = ModuleType("pip")
+    pip.__version__ = package_version
+    monkeypatch.setitem(sys.modules, "pip", pip)
+    monkeypatch.setattr(checker, "version", lambda name: metadata_version)
+    if package_version == metadata_version == "26.2":
+        assert checker.inspect_installer() == {
+            "version": "26.2",
+            "metadata_version": "26.2",
+        }
+    else:
+        with pytest.raises(ValueError, match="pip"):
+            checker.inspect_installer()
+
+
+def test_musl_inventory_runs_real_apk_and_validates_output(checker, monkeypatch):
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, APK_MUSL_FIXED, "")
+
+    monkeypatch.setattr(checker.subprocess, "run", run)
+    assert checker.inspect_musl() == {"musl": "1.2.6-r3", "musl-utils": "1.2.6-r3"}
+    assert calls == [
+        (
+            ["/sbin/apk", "info", "--installed", "--verbose", "musl", "musl-utils"],
+            {"check": True, "capture_output": True, "text": True, "timeout": 10},
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired],
+)
+def test_musl_inventory_does_not_mask_package_manager_failures(
+    checker, monkeypatch, failure
+):
+    def run(*args, **kwargs):
+        if failure is FileNotFoundError:
+            raise FileNotFoundError("apk")
+        raise failure(1, "apk")
+
+    monkeypatch.setattr(checker.subprocess, "run", run)
+    with pytest.raises(failure):
+        checker.inspect_musl()
+
+
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
+@pytest.mark.parametrize("failure", [None, "musl", "pip"])
+def test_runtime_receipt_contains_musl_and_retained_pip(
+    checker, monkeypatch, arch, failure
+):
+    import cryptography
+    from cryptography.hazmat.backends.openssl.backend import backend
+
+    monkeypatch.setattr(checker.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(checker.os, "getgid", lambda: 1000)
+    monkeypatch.setattr(
+        checker.platform,
+        "machine",
+        lambda: {"amd64": "x86_64", "arm64": "aarch64"}[arch],
+    )
+    monkeypatch.setattr(cryptography, "__version__", "50.0.2")
+    monkeypatch.setattr(checker, "version", lambda name: "50.0.2")
+    monkeypatch.setattr(backend, "openssl_version_text", lambda: "OpenSSL 4.0.3")
+    monkeypatch.setattr(
+        checker, "inspect_extension", lambda path, arch: {"architecture": arch}
+    )
+    calls = []
+
+    def musl():
+        calls.append("musl")
+        return checker.validate_musl(
+            APK_MUSL_BEFORE if failure == "musl" else APK_MUSL_FIXED
+        )
+
+    def installer():
+        calls.append("pip")
+        if failure == "pip":
+            raise ValueError("old pip")
+        return {"version": "26.2", "metadata_version": "26.2"}
+
+    monkeypatch.setattr(checker, "inspect_musl", musl)
+    monkeypatch.setattr(checker, "inspect_installer", installer)
+    if failure:
+        with pytest.raises(ValueError, match=failure):
+            checker.check_runtime(arch)
+        assert calls == (["musl"] if failure == "musl" else ["musl", "pip"])
+        return
+    receipt = checker.check_runtime(arch)
+    assert calls == ["musl", "pip"]
+    assert receipt["musl"] == {"musl": "1.2.6-r3", "musl-utils": "1.2.6-r3"}
+    assert receipt["pip"] == {"version": "26.2", "metadata_version": "26.2"}
+    assert receipt["openssl"] == "OpenSSL 4.0.3"
+    assert receipt["operations"] == ["RSA-sign-verify", "AES-GCM-roundtrip"]
 
 
 @pytest.mark.parametrize(("arch", "machine"), [("amd64", 62), ("arm64", 183)])
