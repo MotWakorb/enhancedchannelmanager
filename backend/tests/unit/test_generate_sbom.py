@@ -1156,6 +1156,75 @@ def test_a_dockerfile_without_a_from_is_rejected(sbom):
         sbom.parse_dockerfile_images("RUN true\n", "Dockerfile")
 
 
+@pytest.mark.parametrize("copy", [
+    "COPY --fr\\\nom=busybox:latest /x /x",
+    "CO\\\nPY --from=busybox:latest /x /x",
+])
+def test_continuation_cannot_hide_an_external_image_pull(sbom, copy):
+    with pytest.raises(sbom.SbomError, match="floating image reference"):
+        sbom.parse_dockerfile_images(
+            f"FROM node@sha256:{NODE_DIGEST}\n{copy}\n", "Dockerfile"
+        )
+
+
+@pytest.mark.parametrize("leading", ["\u00a0", "\u2003", "\u2028", "\u3000"])
+@pytest.mark.parametrize("copy", [False, True])
+def test_unicode_leading_image_instructions_are_inventoried(sbom, leading, copy):
+    text = f"{leading}FROM node@sha256:{NODE_DIGEST} AS build\nFROM build\n"
+    if copy:
+        text += f"{leading}COPY --from=busybox@sha256:{UV_DIGEST} /x /x\n"
+    images = sbom.parse_dockerfile_images(text, "Dockerfile")
+    assert {image["image"] for image in images} == ({"node", "busybox"} if copy else {"node"})
+
+
+@pytest.mark.parametrize("leading", ["\u00a0", "\u2003", "\u2028", "\u3000"])
+@pytest.mark.parametrize("instruction", ["FROM busybox:latest", "COPY --from=busybox:latest /x /x"])
+def test_unicode_leading_floating_image_instructions_fail_closed(sbom, leading, instruction):
+    with pytest.raises(sbom.SbomError):
+        sbom.parse_dockerfile_images(
+            f"FROM node@sha256:{NODE_DIGEST}\n{leading}{instruction}\n", "Dockerfile"
+        )
+
+
+def test_continued_pinned_tokens_and_previous_stage_aliases_are_deterministic(sbom):
+    images = sbom.parse_dockerfile_images(
+        f"FR\\\nOM no\\\nde@sha256:{NODE_DIGEST} AS build\n"
+        "FROM build\nCOPY --fr\\\nom=build /x /x\n", "Dockerfile"
+    )
+    assert images == [{"image": "node", "digest": f"sha256:{NODE_DIGEST}", "role": "runtime"}]
+
+
+@pytest.mark.parametrize("escape", ["`", "\\", "invalid"])
+def test_explicit_escape_directives_remain_fail_closed(sbom, escape):
+    with pytest.raises(sbom.SbomError, match="unreviewed parser directive"):
+        sbom.parse_dockerfile_images(
+            f"# escape={escape}\nFROM node@sha256:{NODE_DIGEST}\n"
+            "COPY --fr`\nom=busybox:latest /x /x\n", "Dockerfile"
+        )
+
+
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"])
+@pytest.mark.parametrize("gap", ["", "# comment", "# comment \\", "\u2003"])
+def test_comments_and_blank_gaps_do_not_break_token_continuation(sbom, line_ending, gap):
+    text = line_ending.join([
+        f"FROM node@sha256:{NODE_DIGEST}", "COPY --fr\\", gap,
+        "om=busybox:latest /x /x", "",
+    ])
+    with pytest.raises(sbom.SbomError, match="floating image reference"):
+        sbom.parse_dockerfile_images(text, "Dockerfile")
+
+
+@pytest.mark.parametrize("trailing_escapes", [2, 3, 4])
+def test_escaped_trailing_backslash_cannot_swallow_a_later_copy(sbom, trailing_escapes):
+    text = (
+        f"FROM node@sha256:{NODE_DIGEST}\nRUN echo value "
+        + "\\" * trailing_escapes
+        + "\nCOPY --from=busybox:latest /x /x\n"
+    )
+    with pytest.raises(sbom.SbomError, match="floating image reference"):
+        sbom.parse_dockerfile_images(text, "Dockerfile")
+
+
 @pytest.mark.parametrize("document", [{"lockfileVersion": 1, "packages": {}}, {}, []])
 def test_an_unsupported_lockfile_is_rejected(sbom, document):
     with pytest.raises(sbom.SbomError):
