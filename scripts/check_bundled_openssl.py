@@ -15,10 +15,13 @@ import json
 import os
 import platform
 import re
+import stat
 import struct
 import subprocess
+import sysconfig
 from datetime import datetime
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
+from importlib.util import find_spec
 from pathlib import Path
 
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
@@ -160,13 +163,58 @@ def inspect_musl() -> dict:
 
 
 def inspect_installer() -> dict:
-    """The retained Python-module installer must match the official 26.2 wheel."""
-    import pip
+    """Deny installer code/metadata/wrappers/seeds in the final runtime rootfs."""
+    if find_spec("pip") is not None:
+        raise ValueError("build-only pip module remains importable")
+    try:
+        version("pip")
+    except PackageNotFoundError:
+        pass
+    else:
+        raise ValueError("build-only pip distribution metadata remains installed")
 
-    metadata_version = version("pip")
-    if pip.__version__ != "26.2" or metadata_version != "26.2":
-        raise ValueError("retained pip installer is not the reviewed 26.2 wheel")
-    return {"version": pip.__version__, "metadata_version": metadata_version}
+    def inventory(directory: Path, *, missing_ok: bool = False) -> list:
+        try:
+            metadata = directory.lstat()
+        except FileNotFoundError:
+            if missing_ok:
+                return []
+            raise
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError(
+                "pip inventory root must be a real directory, not a symlink"
+            )
+        # Unlike glob/rglob, scandir propagates unreadable-inventory errors.
+        with os.scandir(directory) as entries:
+            return list(entries)
+
+    for site in {Path(sysconfig.get_path(key)) for key in ("purelib", "platlib")}:
+        for entry in inventory(site):
+            if entry.name in {"pip", "pip.py", "pip.pyc"} or (
+                entry.name.startswith("pip")
+                and entry.name.endswith((".dist-info", ".egg-info"))
+            ):
+                raise ValueError(
+                    "build-only pip payload/vendor tree or metadata remains"
+                )
+    if any(
+        entry.name.startswith("pip")
+        for entry in inventory(Path(sysconfig.get_path("scripts")))
+    ):
+        raise ValueError("build-only pip command wrapper remains")
+    seeds = Path(sysconfig.get_path("stdlib")) / "ensurepip" / "_bundled"
+    pending = [seeds]
+    while pending:
+        directory = pending.pop()
+        for entry in inventory(directory, missing_ok=directory == seeds):
+            mode = entry.stat(follow_symlinks=False).st_mode
+            if stat.S_ISLNK(mode):
+                raise ValueError("ensurepip seed inventory must not contain symlinks")
+            if entry.name.lower().endswith(".whl"):
+                raise ValueError("ensurepip seed wheel remains in the runtime rootfs")
+            if stat.S_ISDIR(mode):
+                pending.append(Path(entry.path))
+    return {"role": "build-only", "status": "absent"}
 
 
 def check_runtime(arch: str) -> dict:

@@ -10,7 +10,6 @@ import struct
 import subprocess
 import sys
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 import yaml
@@ -175,23 +174,199 @@ def test_musl_parser_denies_vulnerable_missing_and_ambiguous_packages(checker, o
         checker.validate_musl(output)
 
 
-@pytest.mark.parametrize("package_version", ["26.2", "26.2.0", "25.0.1", "26.2rc1"])
-@pytest.mark.parametrize("metadata_version", ["26.2", "25.0.1", ""])
-def test_retained_pip_must_match_reviewed_official_wheel(
-    checker, monkeypatch, package_version, metadata_version
+@pytest.fixture
+def absent_installer(checker, monkeypatch, tmp_path):
+    paths = {
+        name: tmp_path / name for name in ("purelib", "platlib", "scripts", "stdlib")
+    }
+    for path in paths.values():
+        path.mkdir()
+    monkeypatch.setattr(checker.sysconfig, "get_path", lambda name: str(paths[name]))
+    monkeypatch.setattr(checker, "find_spec", lambda name: None)
+
+    def missing(name):
+        assert name == "pip"
+        raise checker.PackageNotFoundError(name)
+
+    monkeypatch.setattr(checker, "version", missing)
+    return paths
+
+
+def test_build_only_pip_absence_positive_control(checker, absent_installer):
+    assert checker.inspect_installer() == {"role": "build-only", "status": "absent"}
+
+
+def test_clean_nested_seed_inventory_is_inspectable_and_absent(
+    checker, absent_installer
 ):
-    pip = ModuleType("pip")
-    pip.__version__ = package_version
-    monkeypatch.setitem(sys.modules, "pip", pip)
-    monkeypatch.setattr(checker, "version", lambda name: metadata_version)
-    if package_version == metadata_version == "26.2":
-        assert checker.inspect_installer() == {
-            "version": "26.2",
-            "metadata_version": "26.2",
-        }
+    nested = absent_installer["stdlib"] / "ensurepip" / "_bundled" / "safe" / "nested"
+    nested.mkdir(parents=True)
+    (nested / "README.txt").write_text("no installer wheel")
+    assert checker.inspect_installer() == {"role": "build-only", "status": "absent"}
+
+
+@pytest.mark.parametrize("installed_version", ["25.0.1", "26.2", "26.2.2"])
+def test_reinstalled_pip_metadata_denies_runtime(
+    checker, absent_installer, monkeypatch, installed_version
+):
+    monkeypatch.setattr(checker, "version", lambda name: installed_version)
+    with pytest.raises(ValueError, match="pip"):
+        checker.inspect_installer()
+
+
+@pytest.mark.parametrize("namespace", [False, True])
+def test_importable_pip_denies_even_without_metadata(
+    checker, absent_installer, monkeypatch, namespace
+):
+    spec = importlib.util.spec_from_loader("pip", loader=None, is_package=namespace)
+    monkeypatch.setattr(checker, "find_spec", lambda name: spec)
+    with pytest.raises(ValueError, match="pip"):
+        checker.inspect_installer()
+
+
+@pytest.mark.parametrize(
+    ("directory", "residue", "kind"),
+    [
+        ("purelib", "pip", "directory"),
+        ("purelib", "pip/_vendor", "directory"),
+        ("purelib", "pip/_vendor/certifi/cacert.pem", "file"),
+        ("purelib", "pip/__init__.py", "file"),
+        ("platlib", "pip/__init__.py", "file"),
+        ("purelib", "pip.py", "file"),
+        ("purelib", "pip.pyc", "file"),
+        ("purelib", "pip-26.2.2.dist-info/METADATA", "file"),
+        ("platlib", "pip-99.0.dist-info", "directory"),
+        ("purelib", "pip-26.2.2.egg-info", "directory"),
+        ("scripts", "pip", "file"),
+        ("scripts", "pip3", "file"),
+        ("scripts", "pip3.12", "file"),
+        ("scripts", "pip9", "file"),
+        ("stdlib", "ensurepip/_bundled/pip-25.0.1-py3-none-any.whl", "file"),
+        ("stdlib", "ensurepip/_bundled/pip-26.2.2-py3-none-any.whl", "file"),
+        ("stdlib", "ensurepip/_bundled/setuptools-99-py3-none-any.whl", "file"),
+        ("stdlib", "ensurepip/_bundled/nested/pip-99-py3-none-any.whl", "file"),
+        ("stdlib", "ensurepip/_bundled/PIP-99.WHL", "file"),
+    ],
+)
+def test_installer_payload_metadata_wrappers_and_any_seed_wheel_must_be_absent(
+    checker, absent_installer, directory, residue, kind
+):
+    path = absent_installer[directory] / residue
+    path.parent.mkdir(exist_ok=True, parents=True)
+    if kind == "directory":
+        path.mkdir()
     else:
-        with pytest.raises(ValueError, match="pip"):
-            checker.inspect_installer()
+        path.write_text("synthetic residue; distribution metadata is mocked absent")
+    with pytest.raises(ValueError, match="pip"):
+        checker.inspect_installer()
+
+
+def test_broken_installer_symlink_is_not_absence(checker, absent_installer):
+    path = absent_installer["purelib"] / "pip"
+    path.symlink_to(path.parent / "missing")
+    with pytest.raises(ValueError, match="pip"):
+        checker.inspect_installer()
+
+
+@pytest.mark.parametrize(
+    "directory", ["purelib", "platlib", "scripts", "seeds", "nested"]
+)
+def test_installer_inventory_scandir_permission_errors_are_not_absence(
+    checker, absent_installer, monkeypatch, directory
+):
+    seeds = absent_installer["stdlib"] / "ensurepip" / "_bundled"
+    locations = {**absent_installer, "seeds": seeds, "nested": seeds / "nested"}
+    blocked = locations[directory]
+    blocked.mkdir(exist_ok=True, parents=True)
+    if directory in {"purelib", "platlib"}:
+        residue = blocked / "pip-hidden.dist-info" / "METADATA"
+    elif directory == "scripts":
+        residue = blocked / "pip3"
+    else:
+        residue = blocked / "pip-hidden-py3-none-any.whl"
+    residue.parent.mkdir(exist_ok=True, parents=True)
+    residue.write_text("synthetic marker behind an uninspectable inventory")
+    original_scandir = checker.os.scandir
+
+    def denied(path):
+        if Path(path) == blocked:
+            raise PermissionError("inventory access denied")
+        return original_scandir(path)
+
+    monkeypatch.setattr(checker.os, "scandir", denied)
+    with pytest.raises(PermissionError, match="inventory access denied"):
+        checker.inspect_installer()
+
+
+def test_seed_inventory_lstat_permission_error_is_not_absence(
+    checker, absent_installer, monkeypatch
+):
+    seeds = absent_installer["stdlib"] / "ensurepip" / "_bundled"
+    seeds.mkdir(parents=True)
+    original_lstat = Path.lstat
+
+    def denied(path, *args, **kwargs):
+        if path == seeds:
+            raise PermissionError("seed inventory stat denied")
+        return original_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", denied)
+    with pytest.raises(PermissionError, match="seed inventory stat denied"):
+        checker.inspect_installer()
+
+
+@pytest.mark.parametrize("location", ["root", "nested"])
+@pytest.mark.parametrize(
+    "target_kind", ["wheel-directory", "empty-directory", "missing"]
+)
+def test_seed_inventory_rejects_real_directory_and_broken_symlinks(
+    checker, absent_installer, tmp_path, location, target_kind
+):
+    seeds = absent_installer["stdlib"] / "ensurepip" / "_bundled"
+    external = tmp_path / "outside-bundled"
+    if target_kind != "missing":
+        external.mkdir()
+    if target_kind == "wheel-directory":
+        (external / "pip-hidden-py3-none-any.whl").write_text("synthetic seed marker")
+    link = seeds if location == "root" else seeds / "nested"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(external, target_is_directory=True)
+    if target_kind == "wheel-directory":
+        assert (link / "pip-hidden-py3-none-any.whl").is_file()
+    with pytest.raises(ValueError, match="pip"):
+        checker.inspect_installer()
+
+
+def test_seed_inventory_rejects_symlink_cycles_without_traversal(
+    checker, absent_installer
+):
+    seeds = absent_installer["stdlib"] / "ensurepip" / "_bundled"
+    seeds.mkdir(parents=True)
+    (seeds / "cycle").symlink_to(seeds, target_is_directory=True)
+    with pytest.raises(ValueError, match="pip"):
+        checker.inspect_installer()
+
+
+@pytest.mark.parametrize("directory", ["purelib", "platlib", "scripts"])
+def test_installer_inventory_rejects_symlinked_roots(
+    checker, absent_installer, tmp_path, directory
+):
+    path = absent_installer[directory]
+    path.rmdir()
+    external = tmp_path / "external-inventory"
+    external.mkdir()
+    path.symlink_to(external, target_is_directory=True)
+    with pytest.raises(ValueError, match="pip"):
+        checker.inspect_installer()
+
+
+@pytest.mark.parametrize("directory", ["purelib", "platlib", "scripts"])
+def test_required_installer_inventory_roots_cannot_silently_disappear(
+    checker, absent_installer, directory
+):
+    absent_installer[directory].rmdir()
+    with pytest.raises(FileNotFoundError):
+        checker.inspect_installer()
 
 
 def test_musl_inventory_runs_real_apk_and_validates_output(checker, monkeypatch):
@@ -230,7 +405,7 @@ def test_musl_inventory_does_not_mask_package_manager_failures(
 
 @pytest.mark.parametrize("arch", ["amd64", "arm64"])
 @pytest.mark.parametrize("failure", [None, "musl", "pip"])
-def test_runtime_receipt_contains_musl_and_retained_pip(
+def test_runtime_receipt_contains_musl_and_absent_build_only_pip(
     checker, monkeypatch, arch, failure
 ):
     import cryptography
@@ -261,7 +436,7 @@ def test_runtime_receipt_contains_musl_and_retained_pip(
         calls.append("pip")
         if failure == "pip":
             raise ValueError("old pip")
-        return {"version": "26.2", "metadata_version": "26.2"}
+        return {"role": "build-only", "status": "absent"}
 
     monkeypatch.setattr(checker, "inspect_musl", musl)
     monkeypatch.setattr(checker, "inspect_installer", installer)
@@ -273,7 +448,7 @@ def test_runtime_receipt_contains_musl_and_retained_pip(
     receipt = checker.check_runtime(arch)
     assert calls == ["musl", "pip"]
     assert receipt["musl"] == {"musl": "1.2.6-r3", "musl-utils": "1.2.6-r3"}
-    assert receipt["pip"] == {"version": "26.2", "metadata_version": "26.2"}
+    assert receipt["pip"] == {"role": "build-only", "status": "absent"}
     assert receipt["openssl"] == "OpenSSL 4.0.3"
     assert receipt["operations"] == ["RSA-sign-verify", "AES-GCM-roundtrip"]
 

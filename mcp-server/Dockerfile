@@ -17,13 +17,14 @@ RUN apk upgrade --no-cache \
     && addgroup -g 1000 appgroup \
     && adduser -D -u 1000 -G appgroup appuser
 
-# Upgrade the retained installer from its reviewed wheel before app dependencies.
-COPY pip-requirements.txt .
-RUN python -m pip install --no-cache-dir --upgrade --require-hashes --only-binary=:all: --no-deps -r pip-requirements.txt
-
-# Install dependencies
-COPY requirements.txt .
-RUN python -m pip install --no-cache-dir -r requirements.txt
+# Use the reviewed installer only during the build. Remove its complete recorded
+# payload and the base's obsolete ensurepip seed, not just package metadata.
+COPY pip-requirements.txt requirements.txt ./
+RUN python -m pip install --no-cache-dir --upgrade --require-hashes --only-binary=:all: --no-deps -r pip-requirements.txt \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && python -m pip check \
+    && python -m pip --disable-pip-version-check uninstall --yes pip \
+    && rm -f /usr/local/lib/python3.12/ensurepip/_bundled/pip-25.0.1-py3-none-any.whl
 
 # Copy application
 COPY . .

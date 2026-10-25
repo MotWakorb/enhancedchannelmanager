@@ -1,0 +1,40 @@
+{
+  "repository": "https://download.opensuse.org/tumbleweed/repo/oss/",
+  "repomd_sha256": "8ef5e633e147bf26fec0911256112a05f514230e048a6505dee9109c5dba5808",
+  "primary_sha256": "5686e9983bec817143b3c749ce9b72be479a4acb85d638b30df5be7dd02df0a1",
+  "signer": "AD485664E901B867051AB15F35A2F86E29B700A4",
+  "packages": [
+    {
+      "descriptor": {
+        "name": "libmp3lame-devel",
+        "arch": "x86_64",
+        "epoch": "0",
+        "version": "4.0-1.1",
+        "sourcerpm": "lame-4.0-1.1.src.rpm",
+        "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libmp3lame-devel-4.0-1.1.x86_64.rpm",
+        "metadata_checksum_type": "sha512",
+        "metadata_checksum": "107b511aad595300c40235c7b3ca93b7f72e57a48b703d22f062dbfce78516a7aada707de14b3b925fae0511416b7363ebfbadd145ee511c98066ed3a4a2283c"
+      },
+      "rpm_query_tsv": "libmp3lame-devel\t4.0\t1.1\tx86_64\topenSUSE\tlame-4.0-1.1.src.rpm\tLGPL-2.0-or-later\n",
+      "epoch": "0",
+      "binary_sha256": "81c4a49f6f5037f76a3fc09d00a9afac74cd781a8943e09ccc152a7771c4dcdf",
+      "source_sha256": "5b10d7539f833d4ef7cfa83a1a4304ff7d3702d60dfa4548c18b114166441c05"
+    },
+    {
+      "descriptor": {
+        "name": "python312-base",
+        "arch": "x86_64",
+        "epoch": "0",
+        "version": "3.12.15-2.1",
+        "sourcerpm": "python312-core-3.12.15-2.1.src.rpm",
+        "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/python312-base-3.12.15-2.1.x86_64.rpm",
+        "metadata_checksum_type": "sha512",
+        "metadata_checksum": "cf45faf0172c7576462de488de299dd64e10d9cda2e16b6926a872e9e73a904a4f3e00490cfc1741896bd2b01dec4b368ac960820a7914c32ff59adf36e6fab2"
+      },
+      "rpm_query_tsv": "python312-base\t3.12.15\t2.1\tx86_64\topenSUSE\tpython312-core-3.12.15-2.1.src.rpm\tPython-2.0\n",
+      "epoch": "0",
+      "binary_sha256": "10eacd6ca8c924e6ea919ee9f31d2b484a4eb72bd32b4b0cc510170b86994956",
+      "source_sha256": "9f2f161b28dbcbd97ee7098341e175d33c907d171948bf5a396b70a377d2fb17"
+    }
+  ]
+}

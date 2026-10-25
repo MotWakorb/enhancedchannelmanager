@@ -19,7 +19,7 @@ supported-format removal, severity filtering, or an exception to existing gates.
 | ECM Brotli | CVE-2026-111497 / openSUSE-SU-2026:12232-1 | Vendor runtime Brotli libraries at least **1.2.1-1.1** on both architectures. |
 | ECM Mozilla CA package | CVE-2026-114406 / openSUSE-SU-2026:12233-1 | Vendor `ca-certificates-mozilla` at least **2.92-2.1**, with both compromised roots distrusted. |
 | MCP musl | CVE-2026-107891 | Alpine `musl` and `musl-utils` at least **1.2.6-r3**. |
-| MCP pip | Six installer advisories below | Reviewed **pip 26.2.0** before application dependencies are installed, with actual final installer-version proof. |
+| MCP pip | Six installer advisories below | Hash-pinned **pip 26.2.2** for dependency installation only; remove its complete payload, wrappers and old ensurepip seed wheel from the final runtime rootfs. |
 | ECM Mako | CVE-2026-102991 / GHSA-5639-2j2p-m4mx | **Mako 1.4.2** with matching current dependency/source/notice attribution. |
 
 The pip findings are CVE-2025-8869, CVE-2026-13346, CVE-2026-3219,
@@ -43,13 +43,39 @@ extraction mitigation is not treated as a fix for all six.
   Low**. Direct MCP exposure was not established, and is not needed to justify
   taking the vendor's fixed package.
 - **pip:** installer/index/archive conditions differ from the ordinary MCP HTTP
-  request path. Nonetheless, both build-time and retained runtime installer copies
-  must be corrected. Preserve the source records' differing CVSS v3/v4 ratings.
+  request path. Bootstrap the corrected installer before dependency installation;
+  its complete self-uninstall and obsolete seed removal retire runtime installation.
+  Preserve the source records' differing CVSS v3/v4 ratings.
 - **Mako:** the named traversal mechanism requires Windows path behavior absent
   from the Linux images. The requested patch is still applied; no ignore rule or
   platform-based scanner suppression is substituted for it.
 
 ## Preservation and verification
+
+### Build-only installer boundary
+
+The first retained-pip candidate failed the full scan because its private bundled
+dependencies remain vulnerable. Official latest pip **26.2.2** updates its certifi
+bundle but still contains affected msgpack, pkg_resources and urllib3 versions.
+It is therefore used only for the existing dependency-installation task, followed
+by dependency validation and supported RECORD-based self-uninstallation. Remove
+the old `ensurepip/_bundled/pip-25.0.1-py3-none-any.whl` too: it is a separate
+inherited payload, not owned by pip's installed RECORD. Do not delete only scanner
+metadata or replace unrelated top-level application dependencies.
+
+The final runtime must lack pip's module/vendor tree, distribution metadata,
+command wrappers and every ensurepip seed wheel. Runtime `pip`/`ensurepip`
+bootstrapping is intentionally unavailable; standard-library `importlib.metadata`
+and all **41** exact application distributions remain intact. This claims absence
+from the merged runtime rootfs, not erasure of bytes from inherited OCI layers.
+The source SBOM records the reviewed wheel/hash as a **build dependency**, not
+runtime software. The fresh replacement-image scan and native import/health,
+crypto/rootless checks must independently prove this boundary.
+
+Wheel SHA-256: `fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70`.
+Official PyPI wheel bytes/hash and supplied-certificate signatures were checked;
+full Sigstore trust-chain/transparency verification was not performed. No claim
+that all build-tool vendor risks are fixed or fully provenance-verified is made.
 
 Keep the signed FFmpeg/gosu recipe, codec/input coverage, resdet, architecture
 boundaries, MCP rootless defaults, custom UID/GID startup, and source/notices
@@ -99,6 +125,38 @@ musl/pip findings but fails the complete scan: pip's bundled dependencies produc
 and urllib3). That candidate is rejected, not published. A successful replacement
 must correct the installer delivery without hiding its bundled dependencies or
 altering the unchanged application pins; its full scan must be reviewed again.
+
+The build-only replacement local amd64 MCP config
+`sha256:a243ebfec4596e7ee0c94359521e105852ab8640c3706d985e2f1a34c3bc9b04`
+passes the production absence/musl/crypto/rootless checks, all 41 exact app pins
+and imports, and actual in-process health/auth checks. Its complete unsuppressed
+Trivy 0.76.1 scan (same current October 25 database, unchanged bytes before/after)
+reports **38 APK packages, 41 Python packages, zero findings at all severities**.
+Report SHA-256: `525a310ba9cec55738bf9e7ff5829fba136be96b51c0c901332af0c2137cb9ce`.
+This closes the local retained-installer regression, not native ARM verification,
+exact-source-commit publication, historical-layer erasure or a complete code audit.
+
+Initial PR #1040 CI also demonstrated a separate AMD build-coherence failure:
+cached native provider output pins obsolete Brotli/util-linux/LAME packages, and
+a clean native builder cannot resolve the old LAME/Python descriptors. Refresh
+only the demonstrated stale official AMD builder descriptors and rebuild exact
+provider output. This necessarily changes the native recipe hash; the original
+`de91b41e…` receipt remains historical. Preserve all FFmpeg/gosu source/configure/
+key/patch/Packman inputs and native wheel objects; do not strip provider versions
+or lower the security floors to reuse the cache. Full rebuilt native/source
+verification is still required, not established by the descriptor update.
+
+The authenticated AMD descriptor refresh selects LAME **4.0-1.1** (previously
+3.100-5.16) and Python **3.12.15-2.1** (previously 3.12.15-1.1). LAME 4.0 is an
+upstream version change, not merely an RPM release bump: FFmpeg compilation,
+linkage and actual media compatibility remain required native CI evidence.
+All 47 AMD descriptors were checked against signed official metadata; only these
+two were stale. Both replacement binaries and exact signed SRPM closures passed
+the existing verification tools. No source/ABI compatibility is inferred solely
+from that result. The new recipe SHA-256 is
+`7ae24969cf1636679bdf766242ee2c716683b112241da009fe20899c76aa9a46`;
+ARM descriptors and FFmpeg/gosu source/configuration/key/patch/Packman inputs
+remain byte-exact.
 
 - `enhancedchannelmanager-l5z6r` — Brotli.
 - `enhancedchannelmanager-97j9u` — Mozilla CA package and trust coverage.

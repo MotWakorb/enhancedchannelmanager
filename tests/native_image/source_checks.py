@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
-RECIPE_SHA256 = "de91b41ea81123a4af8eb9ca8cd526ed6560f4f53e2e3152de42f2edf0cb7db9"
+RECIPE_SHA256 = "7ae24969cf1636679bdf766242ee2c716683b112241da009fe20899c76aa9a46"
 PYTHON_SUMS = {
     "sources": "e21e0520773c78b5f16ee56ddb94073a4def902d8656b435fec9dc26eee8e2ab",
     # Complete sorted 556-entry manifest, including six newly audited ARM JSONs.

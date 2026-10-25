@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "mcp-0.18.2-0048",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0048/mcp-6f04eafb8e522ee9cca3b6f97fa399ef161df7172f7992db6156759baff6e0dc",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0048/mcp-8896f4f6a04ce8c2be073c357e52f653568f7c752f23f4f01ada99c814eeca5d",
   "creationInfo": {
-    "created": "2026-10-25T14:08:46Z",
+    "created": "2026-10-25T14:37:07Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],
@@ -395,9 +395,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-pip-26.2",
+      "SPDXID": "SPDXRef-Package-pypi-pip-26.2.2",
       "name": "pip",
-      "versionInfo": "26.2",
+      "versionInfo": "26.2.2",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -408,16 +408,16 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/pip@26.2"
+          "referenceLocator": "pkg:pypi/pip@26.2.2"
         }
       ],
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "931c303696af6fa3417112103b1cad26890e5a07eccb5b99783700e33f2b8aad"
+          "checksumValue": "fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
         }
       ],
-      "comment": "Build/runtime installer retained in MCP. The pip==26.2.0 selector resolves to the official pip-26.2-py3-none-any.whl (metadata Version: 26.2); the SHA256 identifies that reviewed wheel, not an installed-file inventory."
+      "comment": "Build-only installer, not retained in the final MCP runtime rootfs. The SHA256 identifies the reviewed pip-26.2.2-py3-none-any.whl build input, not an installed-file inventory or erasure of inherited image layers."
     },
     {
       "SPDXID": "SPDXRef-Package-pypi-pycparser-3.0",
@@ -823,6 +823,11 @@
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },
     {
+      "spdxElementId": "SPDXRef-Package-pypi-pip-26.2.2",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-mcp"
+    },
+    {
       "spdxElementId": "SPDXRef-Package-mcp",
       "relationshipType": "CONTAINS",
       "relatedSpdxElement": "SPDXRef-Package-oci-python.3.12-alpine-d09d15e60962"
@@ -919,11 +924,6 @@
     },
     {
       "spdxElementId": "SPDXRef-Package-pypi-mdurl-0.1.2",
-      "relationshipType": "RUNTIME_DEPENDENCY_OF",
-      "relatedSpdxElement": "SPDXRef-Package-mcp"
-    },
-    {
-      "spdxElementId": "SPDXRef-Package-pypi-pip-26.2",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },

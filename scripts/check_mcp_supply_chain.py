@@ -38,8 +38,8 @@ MCP_BASE_IMAGE = "python:3.12-alpine@sha256:" + "".join(
 MCP_OPENSSL_MINIMUM = "3.5.8-r0"
 MCP_MUSL_MINIMUM = "1.2.6-r3"
 MCP_PIP_REQUIREMENT = (
-    "pip==26.2.0 --hash=sha256:"
-    "931c303696af6fa3417112103b1cad26890e5a07eccb5b99783700e33f2b8aad"
+    "pip==26.2.2 --hash=sha256:"
+    "fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
 )
 
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -64,11 +64,14 @@ def _has_canonical_mcp_instructions(dockerfile: str) -> bool:
         f"'musl>={MCP_MUSL_MINIMUM}' 'musl-utils>={MCP_MUSL_MINIMUM}' "
         "&& addgroup -g 1000 appgroup "
         "&& adduser -D -u 1000 -G appgroup appuser",
-        "COPY pip-requirements.txt .",
+        "COPY pip-requirements.txt requirements.txt ./",
         "RUN python -m pip install --no-cache-dir --upgrade --require-hashes "
-        "--only-binary=:all: --no-deps -r pip-requirements.txt",
-        "COPY requirements.txt .",
-        "RUN python -m pip install --no-cache-dir -r requirements.txt",
+        "--only-binary=:all: --no-deps -r pip-requirements.txt "
+        "&& python -m pip install --no-cache-dir -r requirements.txt "
+        "&& python -m pip check "
+        "&& python -m pip --disable-pip-version-check uninstall --yes pip "
+        "&& rm -f /usr/local/lib/python3.12/ensurepip/_bundled/"
+        "pip-25.0.1-py3-none-any.whl",
         "COPY . .",
         "RUN chown -R appuser:appgroup /app",
         "ENV MCP_SECRETS_DIR=/run/secrets/ecm-mcp",
@@ -149,8 +152,10 @@ def check_repository(root: Path) -> list[str]:
     )
     if not canonical_mcp or pip_requirements != [MCP_PIP_REQUIREMENT]:
         failures.append(
-            "MCP pip installer must use only the reviewed hash-pinned pip==26.2.0 "
-            "wheel before app requirements in the canonical MCP Docker sequence"
+            "MCP pip installer must use only the reviewed hash-pinned pip==26.2.2 "
+            "wheel before app requirements, then check dependencies and remove "
+            "the whole build-only installer and obsolete seed in the canonical "
+            "MCP Docker sequence"
         )
 
     if "pip-audit -r mcp-server/requirements.txt" not in build:

@@ -87,8 +87,8 @@ NATIVE_DEPENDENCIES = {
 
 MCP_DOCKERFILE = "FROM python:3.12-alpine@sha256:{alpine}\nRUN apk upgrade --no-cache\n"
 PIP_REQUIREMENT = (
-    "pip==26.2.0 --hash=sha256:"
-    "931c303696af6fa3417112103b1cad26890e5a07eccb5b99783700e33f2b8aad"
+    "pip==26.2.2 --hash=sha256:"
+    "fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
 )
 
 NODE_DIGEST = "a" * 64
@@ -234,18 +234,24 @@ def test_mcp_installer_has_actual_wheel_version_hash_and_manifest_binding(sbom, 
     document = json.loads(rendered["mcp.spdx.json"])
     pip = next(package for package in document["packages"] if package["name"] == "pip")
     # Official wheel metadata, not selector spelling.
-    assert pip["versionInfo"] == "26.2"
+    assert pip["versionInfo"] == "26.2.2"
     assert pip["checksums"] == [
         {"algorithm": "SHA256", "checksumValue": PIP_REQUIREMENT.split(":")[-1]}
     ]
-    assert pip["externalRefs"][0]["referenceLocator"] == "pkg:pypi/pip@26.2"
+    assert pip["externalRefs"][0]["referenceLocator"] == "pkg:pypi/pip@26.2.2"
     assert "installer" in pip["comment"].lower()
-    assert "pip==26.2.0" in pip["comment"]
+    assert "build-only" in pip["comment"].lower()
+    assert "not retained" in pip["comment"].lower()
     assert {
         "spdxElementId": pip["SPDXID"],
-        "relationshipType": "RUNTIME_DEPENDENCY_OF",
+        "relationshipType": "BUILD_DEPENDENCY_OF",
         "relatedSpdxElement": "SPDXRef-Package-mcp",
     } in document["relationships"]
+    assert not any(
+        entry["spdxElementId"] == pip["SPDXID"]
+        and entry["relationshipType"] == "RUNTIME_DEPENDENCY_OF"
+        for entry in document["relationships"]
+    )
     index = json.loads(rendered["index.json"])
     assert index["sources"]["mcp-server/pip-requirements.txt"] == (
         "sha256:" + sbom.sha256_file(tree / "mcp-server/pip-requirements.txt")
@@ -260,8 +266,9 @@ def test_mcp_installer_has_actual_wheel_version_hash_and_manifest_binding(sbom, 
     [
         "",
         "pip==25.0.1",
-        PIP_REQUIREMENT.replace("26.2.0", "26.1"),
-        PIP_REQUIREMENT.replace("931c3036", "031c3036"),
+        PIP_REQUIREMENT.replace("26.2.2", "26.1"),
+        PIP_REQUIREMENT.replace("fd7f4dfa", "0d7f4dfa"),
+        "pip==26.2.0 --hash=sha256:931c303696af6fa3417112103b1cad26890e5a07eccb5b99783700e33f2b8aad",
         PIP_REQUIREMENT + "\n" + PIP_REQUIREMENT,
         PIP_REQUIREMENT + "\nextra==1.0",
         PIP_REQUIREMENT + " --extra-index-url https://example.test",

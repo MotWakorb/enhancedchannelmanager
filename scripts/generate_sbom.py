@@ -242,7 +242,7 @@ CHANNEL_NOTE = {
 
 COVERAGE_INCLUDES = (
     "Python distributions pinned in the image's requirements.txt, with versions",
-    "MCP build/runtime pip installer: reviewed wheel version/hash and installer manifest binding",
+    "MCP build-only pip installer (not retained): reviewed wheel version/hash and installer manifest binding",
     "npm packages resolved in frontend/package-lock.json, with versions (ECM only)",
     "Direct source-built native dependencies declared in sbom/native-dependencies.json",
     "Base and build images referenced by digest in the Dockerfile",
@@ -1088,7 +1088,13 @@ def build_document(
         package = _pypi_package(entry)
         packages.append(package)
         relationships.append(
-            _relationship(package["SPDXID"], "RUNTIME_DEPENDENCY_OF", root_id)
+            _relationship(
+                package["SPDXID"],
+                "BUILD_DEPENDENCY_OF"
+                if entry.get("role") == "build"
+                else "RUNTIME_DEPENDENCY_OF",
+                root_id,
+            )
         )
 
     for entry in npm:
@@ -1173,26 +1179,27 @@ SUBJECTS = {
 
 
 MCP_INSTALLER_PATH = "mcp-server/pip-requirements.txt"
-MCP_PIP_WHEEL_SHA256 = "931c303696af6fa3417112103b1cad26890e5a07eccb5b99783700e33f2b8aad"
+MCP_PIP_WHEEL_SHA256 = "fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
 
 
 def parse_mcp_installer(text: str) -> dict[str, str]:
     """Recognize only the reviewed installer, without broadening app pin syntax."""
     lines = [line.split("#", 1)[0].strip() for line in text.splitlines()]
     if [line for line in lines if line] != [
-        f"pip==26.2.0 --hash=sha256:{MCP_PIP_WHEEL_SHA256}"
+        f"pip==26.2.2 --hash=sha256:{MCP_PIP_WHEEL_SHA256}"
     ]:
         raise SbomError(
             f"{MCP_INSTALLER_PATH}: installer must be the sole reviewed pip wheel pin"
         )
     return {
         "name": "pip",
-        "version": "26.2",
+        "version": "26.2.2",
+        "role": "build",
         "sha256": MCP_PIP_WHEEL_SHA256,
         "comment": (
-            "Build/runtime installer retained in MCP. The pip==26.2.0 selector resolves "
-            "to the official pip-26.2-py3-none-any.whl (metadata Version: 26.2); "
-            "the SHA256 identifies that reviewed wheel, not an installed-file inventory."
+            "Build-only installer, not retained in the final MCP runtime rootfs. "
+            "The SHA256 identifies the reviewed pip-26.2.2-py3-none-any.whl build input, "
+            "not an installed-file inventory or erasure of inherited image layers."
         ),
     }
 
