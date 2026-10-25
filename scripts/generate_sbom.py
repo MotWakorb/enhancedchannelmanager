@@ -213,6 +213,14 @@ DOCKER_IMAGE_REF = re.compile(
 )
 DOCKER_INSTRUCTION_WHITESPACE = " \t\v\f\r"
 DOCKER_INSTRUCTION_WHITESPACE_PATTERN = r"[\t\v\f\r ]+"
+# BuildKit trims Unicode IsSpace only at the start of a physical instruction;
+# token separation still uses the ASCII whitespace set above. Keep LF as the
+# physical-line delimiter (U+2028/U+2029 are not separate Dockerfile lines).
+DOCKER_LEADING_WHITESPACE = (
+    DOCKER_INSTRUCTION_WHITESPACE
+    + "\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006"
+    "\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+)
 SPDX_ID_UNSAFE = re.compile(r"[^A-Za-z0-9.-]")
 
 # docs/versioning.md §Format: `BUILD` is a zero-padded CI build counter used on
@@ -614,23 +622,33 @@ def _docker_stages(dockerfile: str, source: str) -> list[dict[str, Any]]:
     logical: list[tuple[int, str]] = []
     pending = ""
     start = 0
+    continued = False
     # Docker physical lines end at LF, not at every Unicode whitespace character.
     for number, raw in enumerate(dockerfile.split("\n"), start=1):
-        stripped = raw.strip(DOCKER_INSTRUCTION_WHITESPACE)
-        if stripped.startswith("#"):
-            if re.match(r"#\s*(syntax|escape|check)\s*=", stripped, re.IGNORECASE):
+        physical = raw.rstrip("\r")
+        leading_trimmed = physical.lstrip(DOCKER_LEADING_WHITESPACE)
+        if leading_trimmed.startswith("#"):
+            if re.match(r"#\s*(syntax|escape|check)\s*=", leading_trimmed, re.IGNORECASE):
                 raise SbomError(f"{source} line {number} has an unreviewed parser directive")
             continue
-        if not pending and not stripped:
+        if not leading_trimmed:
             continue
-        if not pending:
+        if not continued:
             start = number
-        pending += (" " if pending else "") + stripped.removesuffix("\\").strip()
-        if stripped.endswith("\\"):
+            physical = leading_trimmed
+        # BuildKit removes the escaped newline; it does NOT insert whitespace.
+        # Inserting a space can hide COPY --fr\<LF>om=<external image>.
+        continuation = re.search(r"(^|[^\\])\\[ \t]*$", physical)
+        pending += physical[:continuation.end(1)] if continuation else physical
+        continued = continuation is not None
+        if continued:
             continue
-        logical.append((start, re.sub(DOCKER_INSTRUCTION_WHITESPACE_PATTERN, " ", pending)))
+        logical.append((start, re.sub(
+            DOCKER_INSTRUCTION_WHITESPACE_PATTERN, " ",
+            pending.strip(DOCKER_INSTRUCTION_WHITESPACE),
+        )))
         pending = ""
-    if pending:
+    if continued:
         raise SbomError(f"{source} line {start} has an unterminated instruction")
 
     stages: list[dict[str, Any]] = []
