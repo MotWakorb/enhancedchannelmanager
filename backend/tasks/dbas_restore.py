@@ -219,11 +219,10 @@ class DbasRestoreTask(TaskScheduler):
         the more dangerous of the two: a stale ``True`` arms a DESTRUCTIVE apply
         on a run the operator asked nothing of.
 
-        ``cleanup_artifact`` is the fifth, and it defaults back to ``True``
-        rather than to its last value: ``/restore-dbas-saved`` sets it ``False``
-        DELIBERATELY, because the artifact there is the operator's own saved
-        backup and must survive the restore. Left sticky on the singleton, that
-        ``False`` governs whether a LATER run deletes the file it was handed.
+        ``cleanup_artifact`` is the fifth, and defaults back to ``True`` rather
+        than retaining a previous caller's setting. Both HTTP restore routes now
+        hand the task disposable input; saved restores use a private snapshot,
+        never the operator's original backup (0m06f.3.3).
 
         Called from execute()'s ``finally`` so it runs on EVERY exit path.
         """

@@ -133,7 +133,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.2-0047"
+APP_VERSION = "0.18.2-0050"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -7275,8 +7275,8 @@ async def restore_dbas_saved(
 
 
     Takes ``{"filename": "ecm-backup-<ts>.zip", "confirm_apply": false,
-    "passphrase": null}``, resolves the filename to its saved
-    ``/config/backups/`` path through the strict regex + containment guard, then
+    "passphrase": null}``, selects and snapshots a no-follow regular file from
+    ``/config/backups/`` before queuing, then
     kicks :class:`tasks.dbas_restore.DbasRestoreTask` in the background (the SAME
     fire-and-forget pattern as POST /restore-dbas) and returns its ``task_id`` so
     the caller can poll ``/api/tasks/{task_id}`` for the terminal RestoreReport.
@@ -7287,9 +7287,8 @@ async def restore_dbas_saved(
     old-format ZIPs.
 
     DRY-RUN is default-ON: without ``confirm_apply=True`` the run is a counts-only
-    plan that makes ZERO mutation. ``cleanup_artifact`` is DELIBERATELY False
-    here — the artifact is the operator's SAVED backup, NOT a throwaway temp, so
-    it MUST survive the restore.
+    plan that makes ZERO mutation. The task consumes a private temporary snapshot;
+    only that snapshot is cleaned up. The operator's SAVED backup is retained.
     """
     # The APPLY carve-out, raised BEFORE the filename is resolved so a refused
     # caller learns nothing about which artifacts exist on disk.
@@ -7312,37 +7311,62 @@ async def restore_dbas_saved(
     # NB: req.passphrase is intentionally NOT logged here (and is excluded from
     # the task's get_config) — it must never surface in a log line or response.
 
-    # Path resolution by TRUSTED ENUMERATION (CodeQL py/path-injection,
-    # CWE-22/23/36/73/99). Unlike restore_saved_backup — whose validated path is
-    # consumed in-function — this path ESCAPES as the dbas_restore task's
-    # ``artifact_path`` (used to open the file in another function), so an
-    # in-function containment barrier is not tracked to that sink. Instead of
-    # building a path FROM the request, we enumerate the real saved backups (a
-    # trusted filesystem source) and select the matching one: the path we use
-    # then originates from ``iterdir()`` — a direct-child listing of BACKUPS_DIR,
-    # so no traversal is representable and the user value never reaches the sink.
-    # Layer 1 (defense in depth): strict zip-only regex allowlist (fullmatch).
+    # Select from the direct-child listing, then bind the file descriptor before
+    # any await. Enumeration or is_file alone cannot stop symlink rebinding.
+    # Regression coverage: tests/routers/test_saved_restore_binding.py.
     if not _BACKUP_ZIP_FILENAME_RE.fullmatch(filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    # Layer 2: select from the trusted directory listing (breaks the taint flow —
-    # the chosen Path comes from iterdir, not from the request body).
     saved_backups = {}
     try:
         for entry in BACKUPS_DIR.iterdir():
-            if entry.is_file():
-                saved_backups[entry.name] = entry
+            saved_backups[entry.name] = entry
     except OSError:
         raise HTTPException(status_code=404, detail="Backup not found")
     path = saved_backups.get(filename)
     if path is None:
         raise HTTPException(status_code=404, detail="Backup not found")
 
-    # Kick the restore task against the SAVED path. cleanup_artifact=False so the
-    # operator's saved backup is NOT deleted after the restore.
+    try:
+        directory_fd = os.open(
+            BACKUPS_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        )
+        try:
+            descriptor = os.open(
+                path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=directory_fd,
+            )
+        finally:
+            os.close(directory_fd)
+    except OSError:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise HTTPException(status_code=404, detail="Backup not found")
+        source = os.fdopen(descriptor, "rb")
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+    # Reuse bounded streaming (including its size cap and cancellation cleanup),
+    # in an owner-only directory outside the operator-writable backup listing.
+    # Decrypt/header/manifest reads later all use these same snapshot bytes.
+    with source:
+        _DBAS_RESTORE_TMP_DIR.mkdir(parents=True, exist_ok=True)
+        snapshot = tempfile.TemporaryDirectory(
+            prefix="ecm-saved-restore-", dir=_DBAS_RESTORE_TMP_DIR
+        )
+        try:
+            snapshot_path = await _stream_upload_to_temp(
+                UploadFile(file=source), Path(snapshot.name)
+            )
+        except BaseException:
+            snapshot.cleanup()
+            raise
+
     parameters = {
-        "artifact_path": str(path),
+        "artifact_path": str(snapshot_path),
         "confirm_apply": bool(req.confirm_apply),
-        "cleanup_artifact": False,
+        "cleanup_artifact": True,
         "channel_reattach_mode": reattach_mode.value,
     }
     # Forward the passphrase only when present (encrypted artifact). The task
@@ -7350,16 +7374,29 @@ async def restore_dbas_saved(
     if req.passphrase:
         parameters["passphrase"] = req.passphrase
 
+    scheduled = None
     try:
         from task_engine import get_engine
 
         engine = get_engine()
-        # Fire-and-forget: schedule as a background asyncio task and return the
-        # task id immediately. The caller polls /api/tasks/{id} for progress.
-        asyncio.create_task(
-            engine.run_task(DBAS_RESTORE_TASK_ID, parameters=parameters, run_id=run_id)
-        )
+
+        async def run_bound_restore():
+            # Even task-not-found/ALREADY_RUNNING never reaches execute's
+            # cleanup. The wrapper owns this directory on every exit path.
+            with snapshot:
+                return await engine.run_task(
+                    DBAS_RESTORE_TASK_ID, parameters=parameters, run_id=run_id
+                )
+
+        scheduled = run_bound_restore()
+        task = asyncio.create_task(scheduled)
+        # A task cancelled before its first step never enters the with block.
+        # The completion callback also owns cleanup, even if task refs survive.
+        task.add_done_callback(lambda _task: snapshot.cleanup())
     except Exception as exc:
+        if scheduled is not None:
+            scheduled.close()
+        snapshot.cleanup()
         logger.exception("[BACKUP] Failed to schedule DBAS restore-from-saved task: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to start restore")
 

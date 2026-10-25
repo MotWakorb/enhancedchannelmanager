@@ -9,8 +9,8 @@ SAVED on-disk DBAS artifact by filename (no file upload over MCP).
   * a traversal / absolute / non-matching filename is rejected (400) at the
     inlined containment guard, BEFORE any task is scheduled;
   * a well-formed name that is not on disk returns 404;
-  * the saved path is forwarded to the task as artifact_path with
-    cleanup_artifact=False (the operator's saved file must survive the restore);
+  * a private snapshot is forwarded as artifact_path with cleanup_artifact=True,
+    while the operator's saved file survives the restore;
   * a passphrase, when present, is forwarded to the task parameters but is
     NEVER logged and NEVER echoed back in the response (load-bearing security
     assertion).
@@ -49,7 +49,16 @@ def _capture_create_task():
 
     def _fake_create_task(coro):
         captured["coro"] = coro
-        coro.close()
+        # The route wraps the mocked (immediately completing) engine call to own
+        # private-snapshot cleanup, so execute that wrapper rather than closing
+        # it before the engine sees the parameters under test.
+        try:
+            coro.send(None)
+        except StopIteration:
+            pass
+        else:
+            coro.close()
+            raise AssertionError("mocked restore engine unexpectedly suspended")
         return MagicMock()
 
     return _fake_create_task, captured
@@ -101,14 +110,14 @@ class TestRestoreDbasSavedEndpoint:
 
         assert resp.status_code == 200
         assert resp.json()["is_dry_run"] is False
-        # The task was kicked with the SAVED path, confirm_apply True,
-        # and cleanup_artifact False (do not delete the operator's saved backup).
+        # Only the private snapshot is disposable, never the saved backup.
         engine.run_task.assert_called_once()
         _args, kwargs = engine.run_task.call_args
         params = kwargs["parameters"]
-        assert params["artifact_path"] == str(saved.resolve())
+        assert params["artifact_path"] != str(saved.resolve())
+        assert saved.read_bytes() == _make_artifact_zip()
         assert params["confirm_apply"] is True
-        assert params["cleanup_artifact"] is False
+        assert params["cleanup_artifact"] is True
 
     # --- channel_reattach_mode (bead dfkbn, PR review W1) -------------------
 
