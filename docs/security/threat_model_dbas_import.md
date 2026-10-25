@@ -33,6 +33,24 @@ Attack surfaces modeled:
 6. **Endpoint authz**: admin-only gating, per-category opt-in, current-user preservation.
 7. **Audit logging**: who restored what, when, with what counts.
 
+### Saved-artifact selection (`enhancedchannelmanager-0m06f.3.3`)
+
+The saved DBAS route selects a direct-child filename and opens it relative to a
+no-follow directory descriptor with `O_NOFOLLOW | O_NONBLOCK`. It checks the
+opened file is regular before any asynchronous copy. A private 0700 directory
+holds a bounded 0600 snapshot; the queued decrypt, manifest and archive consumers
+use that snapshot rather than reopening the operator-controlled saved pathname.
+The background wrapper removes its private directory even when the task engine
+rejects the run or fails before execution. The saved original is retained.
+Tests: `backend/tests/routers/test_saved_restore_binding.py` covers planted and
+rebound symlinks, non-regular files, private modes, size limits and cleanup;
+`test_backup_collision_names.py` exercises real plain/encrypted producers through
+the HTTP route, decrypt and manifest consumer for preview and apply parameters.
+This does not protect against an actor who can modify ECM's private snapshot
+directory or process memory, nor prove transactional consistency against in-place
+writes to the source during copying. The existing manifest/crypto checks still
+validate the snapshot before restore; authentication and apply controls remain.
+
 ---
 
 ## 2. Data Flow (Trust Boundaries)
