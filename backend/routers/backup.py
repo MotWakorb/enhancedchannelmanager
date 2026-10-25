@@ -133,7 +133,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.2-0050"
+APP_VERSION = "0.18.2-0056"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -4884,6 +4884,12 @@ def _sweep_stale_restore_temps(dest_dir: Path) -> None:
     if not dest_dir.exists():
         return
     cutoff = time.time() - _DBAS_RESTORE_TMP_MAX_AGE_SECONDS
+    try:
+        from restore_snapshot_storage import sweep_private_restore_snapshots
+
+        sweep_private_restore_snapshots(dest_dir, cutoff)
+    except OSError as exc:
+        logger.warning("[BACKUP] Could not reclaim private restore snapshots: %s", exc)
     removed = 0
     try:
         candidates = list(dest_dir.glob("ecm-restore-*.zip"))
@@ -7351,10 +7357,11 @@ async def restore_dbas_saved(
     # in an owner-only directory outside the operator-writable backup listing.
     # Decrypt/header/manifest reads later all use these same snapshot bytes.
     with source:
-        _DBAS_RESTORE_TMP_DIR.mkdir(parents=True, exist_ok=True)
-        snapshot = tempfile.TemporaryDirectory(
-            prefix="ecm-saved-restore-", dir=_DBAS_RESTORE_TMP_DIR
-        )
+        _DBAS_RESTORE_TMP_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _sweep_stale_restore_temps(_DBAS_RESTORE_TMP_DIR)
+        from restore_snapshot_storage import PrivateRestoreSnapshot
+
+        snapshot = PrivateRestoreSnapshot(_DBAS_RESTORE_TMP_DIR)
         try:
             snapshot_path = await _stream_upload_to_temp(
                 UploadFile(file=source), Path(snapshot.name)
