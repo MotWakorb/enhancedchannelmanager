@@ -20,6 +20,7 @@ POLICY_FILES = (
     Path(".github/workflows/release-cut-gate.yml"),
     Path("Dockerfile"),
     Path("mcp-server/Dockerfile"),
+    Path("mcp-server/pip-requirements.txt"),
 )
 
 MCP_BASE_IMAGE = "python:3.12-alpine@sha256:" + "".join(
@@ -35,6 +36,11 @@ MCP_BASE_IMAGE = "python:3.12-alpine@sha256:" + "".join(
     )
 )
 MCP_OPENSSL_MINIMUM = "3.5.8-r0"
+MCP_MUSL_MINIMUM = "1.2.6-r3"
+MCP_PIP_REQUIREMENT = (
+    "pip==26.2.2 --hash=sha256:"
+    "fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
+)
 
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 _USES = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)", re.MULTILINE)
@@ -54,10 +60,18 @@ def _has_canonical_mcp_instructions(dockerfile: str) -> bool:
         "WORKDIR /app",
         "RUN apk upgrade --no-cache && apk add --no-cache "
         f"'libcrypto3>={MCP_OPENSSL_MINIMUM}' 'libssl3>={MCP_OPENSSL_MINIMUM}' "
-        "'libuuid>=2.42.3-r1' && addgroup -g 1000 appgroup "
+        "'libuuid>=2.42.3-r1' "
+        f"'musl>={MCP_MUSL_MINIMUM}' 'musl-utils>={MCP_MUSL_MINIMUM}' "
+        "&& addgroup -g 1000 appgroup "
         "&& adduser -D -u 1000 -G appgroup appuser",
-        "COPY requirements.txt .",
-        "RUN pip install --no-cache-dir -r requirements.txt",
+        "COPY pip-requirements.txt requirements.txt ./",
+        "RUN python -m pip install --no-cache-dir --upgrade --require-hashes "
+        "--only-binary=:all: --no-deps -r pip-requirements.txt "
+        "&& python -m pip install --no-cache-dir -r requirements.txt "
+        "&& python -m pip check "
+        "&& python -m pip --disable-pip-version-check uninstall --yes pip "
+        "&& rm -f /usr/local/lib/python3.12/ensurepip/_bundled/"
+        "pip-25.0.1-py3-none-any.whl",
         "COPY . .",
         "RUN chown -R appuser:appgroup /app",
         "ENV MCP_SECRETS_DIR=/run/secrets/ecm-mcp",
@@ -118,6 +132,30 @@ def check_repository(root: Path) -> list[str]:
         failures.append(
             "MCP image must enforce the reviewed libuuid package floor: "
             "'libuuid>=2.42.3-r1' requires the canonical MCP Docker instruction sequence"
+        )
+        for package in ("musl", "musl-utils"):
+            failures.append(
+                "MCP image must enforce the reviewed musl package floor: "
+                f"'{package}>={MCP_MUSL_MINIMUM}' requires the canonical "
+                "MCP Docker instruction sequence"
+            )
+
+    manifest = root / POLICY_FILES[5]
+    pip_requirements = (
+        [
+            line.strip()
+            for line in manifest.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        if manifest.is_file()
+        else []
+    )
+    if not canonical_mcp or pip_requirements != [MCP_PIP_REQUIREMENT]:
+        failures.append(
+            "MCP pip installer must use only the reviewed hash-pinned pip==26.2.2 "
+            "wheel before app requirements, then check dependencies and remove "
+            "the whole build-only installer and obsolete seed in the canonical "
+            "MCP Docker sequence"
         )
 
     if "pip-audit -r mcp-server/requirements.txt" not in build:

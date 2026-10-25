@@ -15,24 +15,36 @@ import subprocess
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
-RECIPE_SHA256 = "de91b41ea81123a4af8eb9ca8cd526ed6560f4f53e2e3152de42f2edf0cb7db9"
+RECIPE_SHA256 = "7ae24969cf1636679bdf766242ee2c716683b112241da009fe20899c76aa9a46"
 PYTHON_SUMS = {
     "sources": "e21e0520773c78b5f16ee56ddb94073a4def902d8656b435fec9dc26eee8e2ab",
     # Complete sorted 556-entry manifest, including six newly audited ARM JSONs.
-    "notices": "68555090f8b5f1a58b00512048f1a9f468f2ed0fa8b06a10a8fcc3833ed07975",
+    "notices": "93e5d9125e15f9ae67c4e3ff9cfb5cd932adc2e2aec7da738d6723d75da1a006",
 }
 RESDET_SCRIPTS = {
     "build_resdet.py": "1f071637352c3e21abc94388dd4101c7d819998cc31b94cd5a34af939febf611",
 }
 PYTHON_INDEXES = {
-    "x86_64": "2c2345a3fbb95f6e2ea41fb9b9a04acdc118d5715a4dbd8c218358e4a27df3b0",
-    "aarch64": "0f6734132bdf44f6841a93ece87251d825935c9f01ec8f3df5b9b2aa079883de",
+    "x86_64": "ae61f69b63d43435e8afaa990f4c68a8e561ace7f51fab62b42792973e2a42cc",
+    "aarch64": "7316c140d663a3723cff51744428e6f2c47d48627f70d7e857591b6c7954d02a",
 }
 FIELDS = ("name", "version", "release", "arch", "vendor", "sourcerpm", "license")
 QUERY = "\\t".join("%{" + field.upper() + "}" for field in FIELDS) + "\\n"
 VENDORS = {
     "openSUSE": "AD485664E901B867051AB15F35A2F86E29B700A4",
     "http://packman.links2linux.de": "F8875B880D518B6B8C530D1345A1D0671ABD1AFB",
+}
+# Independent consumer pins for the two authenticated historical AMD64 sources.
+# Exact URL/hash scope is exercised by test_native_source_delivery.
+EXACT_SOURCE_ROUTES = {
+    ("openSUSE", "x86_64", "harfbuzz-14.6.0-1.1.src.rpm"): {
+        "url": "https://slc-mirror.opensuse.org/source/tumbleweed/repo/oss/src/harfbuzz-14.6.0-1.1.src.rpm",
+        "sha256": "53e21e5cb510895c46935f1f6325415846549316e200fb88a69d2a66b3fbc65f",
+    },
+    ("openSUSE", "x86_64", "openSUSE-release-20261023-4366.1.src.rpm"): {
+        "url": "https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261023-4366.1.src.rpm",
+        "sha256": "0ca30fbc607834c8c5633ffe977f9d7bc1bd766a430976fec09185ae54d2869e",
+    },
 }
 LIBRARIES = {
     "avcodec",
@@ -209,7 +221,12 @@ def _rpm_sources(root, architecture):
             if architecture == "x86_64"
             else "https://download.opensuse.org/ports/aarch64/source/tumbleweed/repo/oss/"
         )
-        assert source["url"] == repository + "src/" + name
+        route = EXACT_SOURCE_ROUTES.get((vendor, architecture, name))
+        assert source["url"] == (route["url"] if route else repository + "src/" + name)
+        if route:
+            assert source["sha256"] == route["sha256"], (
+                "pinned source checksum mismatch"
+            )
         assert source["path"] == "sources/" + name
         assert source["authentication"] == "pinned-rpm-signature-and-exact-header"
         assert source["license"] and source["license"] != "(none)"

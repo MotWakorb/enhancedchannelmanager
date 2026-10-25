@@ -2,6 +2,8 @@
 
 Fixture digests and scanner DB times are unit-only, not publication evidence.
 FFmpeg source/build identity remains the parent runtime gate's responsibility.
+Patched positive controls explicitly overlay recorded amd64 fixed vendor fields;
+ARM fixed-version mappings are synthetic. Unchanged baseline fixtures fail floors.
 """
 
 from __future__ import annotations
@@ -20,6 +22,15 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "scripts/check_native_image_scan.py"
 FIXTURE = ROOT / "backend/tests/fixtures/native_scan/opensuse-tumbleweed.json"
+VENDOR_FIXTURE = (
+    Path(__file__).with_name("vendorfloor") / "suse-rpm-query-20261025.json"
+)
+VENDOR_PACKAGES = (
+    "libbrotlicommon1",
+    "libbrotlidec1",
+    "libbrotlienc1",
+    "ca-certificates-mozilla",
+)
 CONFIG = "sha256:" + "a" * 64
 DIFF = "sha256:" + "b" * 64
 # Independently reviewed identities, not read from the validator's constants.
@@ -58,7 +69,7 @@ def scan():
     return module
 
 
-def _evidence(arch="amd64"):
+def _evidence(arch="amd64", *, patched=True):
     report = json.loads(FIXTURE.read_text())
     identity = {
         "ManifestDigest": "sha256:" + "c" * 64,
@@ -82,11 +93,27 @@ def _evidence(arch="amd64"):
             "DownloadedAt": "2026-10-24T01:00:00Z",
         },
     }
+    if patched:
+        _project_fixed_vendor_rpms(report, arch)
     return report, identity, scanner
 
 
-def _recorded_arm_evidence():
-    report, identity, scanner = _evidence("arm64")
+def _project_fixed_vendor_rpms(report, arch):
+    # Explicit recorded amd64 vendor projection onto the unchanged old inventory.
+    # ARM uses a SYNTHETIC native-arch mapping of those fixed versions for logic
+    # tests only: the actual ARM repository still lacks these fixed packages.
+    rows = json.loads(VENDOR_FIXTURE.read_text())["amd64"]
+    packages = report["Results"][0]["Packages"]
+    for row in rows:
+        name, version, release, rpm_arch, _vendor, _source, _license = row.split("\t")
+        if arch == "arm64" and rpm_arch == "x86_64":
+            rpm_arch = "aarch64"
+        package = next(p for p in packages if p["Name"] == name)
+        package.update(Version=version, Release=release, Arch=rpm_arch)
+
+
+def _recorded_arm_evidence(*, patched=True):
+    report, identity, scanner = _evidence("arm64", patched=False)
     delta = json.loads((FIXTURE.parent / "arm64-delta.json").read_text())
     packages = report["Results"][0]["Packages"]
     packages[:] = [p for p in packages if p["Name"] not in delta["removed_names"]]
@@ -97,6 +124,8 @@ def _recorded_arm_evidence():
     assert hashlib.sha256(encoded).hexdigest() == delta["projection_sha256"]
     assert len(packages) == delta["package_count"] == 211
     report["Metadata"]["OS"]["Name"] = delta["os_version"]
+    if patched:
+        _project_fixed_vendor_rpms(report, "arm64")
     return report, identity, scanner
 
 
@@ -120,7 +149,7 @@ def test_each_architecture_rejects_its_own_truncated_complete_inventory(scan, ar
 
 
 @pytest.mark.parametrize("arch", ["amd64", "arm64"])
-def test_complete_recorded_inventory_and_unsuppressed_findings_are_accepted(scan, arch):
+def test_recorded_inventory_with_explicit_vendor_projection_is_accepted(scan, arch):
     report, identity, scanner = _evidence(arch)
     os_result, python_result, go_result = report["Results"]
     packages = os_result["Packages"]
@@ -138,6 +167,118 @@ def test_complete_recorded_inventory_and_unsuppressed_findings_are_accepted(scan
     # Custom FFmpeg is not RPM-owned; this does NOT prove its source/build pin.
     assert not any(p["Name"].startswith("ffmpeg") for p in packages)
     assert scan.MIN_OS_PACKAGES == 212
+    assert scan.check_report(report, identity, scanner, arch) == []
+
+
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
+def test_unchanged_recorded_image_inventory_is_not_vendor_fixed(scan, arch):
+    evidence = (
+        _evidence(patched=False)
+        if arch == "amd64"
+        else _recorded_arm_evidence(patched=False)
+    )
+    failures = scan.check_report(*evidence, arch)
+    assert all(
+        f"missing/outdated expected vendor package {name}" in failures
+        for name in VENDOR_PACKAGES
+    )
+
+
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
+def test_real_per_architecture_vendor_query_fixture_is_not_inferred(scan, arch):
+    report, identity, scanner = (
+        _evidence() if arch == "amd64" else _recorded_arm_evidence()
+    )
+    rows = json.loads(VENDOR_FIXTURE.read_text())[arch]
+    assert len(rows) == 4
+    for row in rows:
+        name, version, release, rpm_arch, vendor, sourcerpm, license_name = row.split(
+            "\t"
+        )
+        assert vendor == "openSUSE" and license_name in {"MIT", "MPL-2.0"}
+        assert sourcerpm.endswith(f"-{version}-{release}.src.rpm")
+        next(p for p in report["Results"][0]["Packages"] if p["Name"] == name).update(
+            Version=version, Release=release, Arch=rpm_arch
+        )
+    failures = scan.check_report(report, identity, scanner, arch)
+    assert failures == (
+        []
+        if arch == "amd64"
+        else [
+            f"missing/outdated expected vendor package {name}"
+            for name in sorted(VENDOR_PACKAGES)
+        ]
+    )
+
+
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
+@pytest.mark.parametrize("name", VENDOR_PACKAGES)
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "older-version",
+        "older-release",
+        "prerelease",
+        "release-prerelease",
+        "missing",
+        "duplicate-old",
+        "noarch",
+        "empty-release",
+        "padded-version-old-release",
+    ],
+)
+def test_vendor_floor_rejects_old_prerelease_missing_or_padded_inventory(
+    scan, arch, name, mutation
+):
+    report, identity, scanner = (
+        _evidence() if arch == "amd64" else _recorded_arm_evidence()
+    )
+    packages = report["Results"][0]["Packages"]
+    package = next(p for p in packages if p["Name"] == name)
+    if mutation == "duplicate-old":
+        package = copy.deepcopy(package)
+        packages.append(package)
+        package["Release"] = "1.9" if name == "ca-certificates-mozilla" else "1.0"
+    elif mutation == "older-version":
+        package["Version"] = "2.90" if name == "ca-certificates-mozilla" else "1.2.0"
+        package["Release"] = "999.9"
+    elif mutation in {"older-release", "padded-version-old-release"}:
+        package["Release"] = "1.9" if name == "ca-certificates-mozilla" else "1.0"
+        if mutation == "padded-version-old-release":
+            package["Version"] += ".0"
+    elif mutation == "prerelease":
+        package["Version"] += "~rc1"
+    elif mutation == "release-prerelease":
+        package["Release"] += "~rc1"
+    elif mutation == "missing":
+        package["Name"] = "unrelated-padding"
+    elif mutation == "empty-release":
+        package["Release"] = ""
+    elif mutation == "noarch":
+        package["Arch"] = "aarch64" if name == "ca-certificates-mozilla" else "noarch"
+    failures = scan.check_report(report, identity, scanner, arch)
+    assert failures
+    if mutation != "empty-release":
+        assert f"missing/outdated expected vendor package {name}" in failures
+
+
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
+@pytest.mark.parametrize("name", VENDOR_PACKAGES)
+@pytest.mark.parametrize("advance", ["release", "version"])
+def test_vendor_security_floors_allow_later_numeric_versions_and_releases(
+    scan, arch, name, advance
+):
+    report, identity, scanner = (
+        _evidence() if arch == "amd64" else _recorded_arm_evidence()
+    )
+    package = next(p for p in report["Results"][0]["Packages"] if p["Name"] == name)
+    if advance == "release":
+        package["Release"] = "10.1"
+    else:
+        package.update(
+            Version="2.93" if name == "ca-certificates-mozilla" else "1.2.2",
+            Release="1.1",
+        )
     assert scan.check_report(report, identity, scanner, arch) == []
 
 

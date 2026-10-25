@@ -1,0 +1,48 @@
+{
+  "recorded_at": "2026-10-25",
+  "mirror_report": "https://download.opensuse.org/report/mirrors/tumbleweed",
+  "scope": "Two complete HTTP GETs authenticated by the existing collector; not a final-image inventory",
+  "routes": [
+    {
+      "vendor": "openSUSE",
+      "architecture": "x86_64",
+      "filename": "harfbuzz-14.6.0-1.1.src.rpm",
+      "url": "https://slc-mirror.opensuse.org/source/tumbleweed/repo/oss/src/harfbuzz-14.6.0-1.1.src.rpm",
+      "sha256": "53e21e5cb510895c46935f1f6325415846549316e200fb88a69d2a66b3fbc65f",
+      "size": 20852648,
+      "fingerprint": "AD485664E901B867051AB15F35A2F86E29B700A4",
+      "inventory_row": "libharfbuzz0\t14.6.0\t1.1\tx86_64\topenSUSE\tharfbuzz-14.6.0-1.1.src.rpm\tMIT\n",
+      "payload": {
+        "files": [
+          {"name": "baselibs.conf", "size": 90, "sha256": "e97b24db39f96df9d545a420b5bc343c218fb1b54a59e417dc7d064e45c49785"},
+          {"name": "harfbuzz-14.6.0.tar.xz", "size": 20592500, "sha256": "9498bafbd2cebd57002f1d21cb82ec5b07a9163718bb73fa98bb2cc6916dbd72"},
+          {"name": "harfbuzz.spec", "size": 108832, "sha256": "a8dbbe4d44dcc68ee3dee6b7c026e45dfe9d44bced43e6b9c9f805c935ced6c5"}
+        ],
+        "spec_names": ["harfbuzz.spec"],
+        "source": ["baselibs.conf", "harfbuzz-14.6.0.tar.xz"],
+        "patch": [], "nosource": [], "nopatch": [],
+        "declared_input_payload_complete": true
+      }
+    },
+    {
+      "vendor": "openSUSE",
+      "architecture": "x86_64",
+      "filename": "openSUSE-release-20261023-4366.1.src.rpm",
+      "url": "https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261023-4366.1.src.rpm",
+      "sha256": "0ca30fbc607834c8c5633ffe977f9d7bc1bd766a430976fec09185ae54d2869e",
+      "size": 3385465,
+      "fingerprint": "AD485664E901B867051AB15F35A2F86E29B700A4",
+      "inventory_row": "openSUSE-release\t20261023\t4366.1\tx86_64\topenSUSE\topenSUSE-release-20261023-4366.1.src.rpm\tBSD-3-Clause\n",
+      "payload": {
+        "files": [
+          {"name": "openSUSE-release.spec", "size": 29927, "sha256": "9570f51844b04bff2877abc2f6ef4dd266ea1b26d2c9421336844df9cc8c8dc0"},
+          {"name": "weakremovers.inc", "size": 3025698, "sha256": "c00178b6d15e104d9b10e6cea417e33cd635f8798eb971b22eacfb62a7ba3377"}
+        ],
+        "spec_names": ["openSUSE-release.spec"],
+        "source": ["weakremovers.inc"],
+        "patch": [], "nosource": [], "nopatch": [],
+        "declared_input_payload_complete": true
+      }
+    }
+  ]
+}

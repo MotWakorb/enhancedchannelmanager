@@ -263,11 +263,11 @@
           "name": "libmp3lame-devel",
           "arch": "x86_64",
           "epoch": "0",
-          "version": "3.100-5.16",
-          "sourcerpm": "lame-3.100-5.16.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libmp3lame-devel-3.100-5.16.x86_64.rpm",
+          "version": "4.0-1.1",
+          "sourcerpm": "lame-4.0-1.1.src.rpm",
+          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libmp3lame-devel-4.0-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
-          "metadata_checksum": "e32b9fcd933ba2f92fe7a2f6f05fb5e5a269c917ad301b377f8519ba778df60f96108de842910698198c726e234b98e77a54d0134c5233947880674ab45a269d"
+          "metadata_checksum": "107b511aad595300c40235c7b3ca93b7f72e57a48b703d22f062dbfce78516a7aada707de14b3b925fae0511416b7363ebfbadd145ee511c98066ed3a4a2283c"
         },
         {
           "name": "libopenmpt-devel",
@@ -433,11 +433,11 @@
           "name": "python312-base",
           "arch": "x86_64",
           "epoch": "0",
-          "version": "3.12.15-1.1",
-          "sourcerpm": "python312-core-3.12.15-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/python312-base-3.12.15-1.1.x86_64.rpm",
+          "version": "3.12.15-2.1",
+          "sourcerpm": "python312-core-3.12.15-2.1.src.rpm",
+          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/python312-base-3.12.15-2.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
-          "metadata_checksum": "409542eecc9885e658c644bbb2cbefbcca0bb95d051193625471f73ca529352571d6a5c0744362734a5d57ccab48622ebcfe49878fd482e108cfa439c11b0b13"
+          "metadata_checksum": "cf45faf0172c7576462de488de299dd64e10d9cda2e16b6926a872e9e73a904a4f3e00490cfc1741896bd2b01dec4b368ac960820a7914c32ff59adf36e6fab2"
         },
         {
           "name": "rav1e-devel",

@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "mcp-0.18.2-0047",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0047/mcp-2b3f93f0f19f4bd3497cd6c5d957ab21e894e3e38bc86121a73471ee3049dcdd",
+  "name": "mcp-0.18.2-0048",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0048/mcp-8896f4f6a04ce8c2be073c357e52f653568f7c752f23f4f01ada99c814eeca5d",
   "creationInfo": {
-    "created": "2026-10-24T12:00:51Z",
+    "created": "2026-10-25T14:37:07Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-mcp",
       "name": "enhanced-channel-manager-mcp",
-      "versionInfo": "0.18.2-0047",
+      "versionInfo": "0.18.2-0048",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -393,6 +393,31 @@
           "referenceLocator": "pkg:pypi/mdurl@0.1.2"
         }
       ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-pip-26.2.2",
+      "name": "pip",
+      "versionInfo": "26.2.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "supplier": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pip@26.2.2"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
+        }
+      ],
+      "comment": "Build-only installer, not retained in the final MCP runtime rootfs. The SHA256 identifies the reviewed pip-26.2.2-py3-none-any.whl build input, not an installed-file inventory or erasure of inherited image layers."
     },
     {
       "SPDXID": "SPDXRef-Package-pypi-pycparser-3.0",
@@ -795,6 +820,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-mcp"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-pypi-pip-26.2.2",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },
     {

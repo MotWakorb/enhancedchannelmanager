@@ -100,7 +100,7 @@ def test_policy_alias_support_does_not_allow_external_or_ambiguous_refs(tmp_path
         ("&& apk add", "|| apk add"),
         ("&& apk add", "; false && apk add"),
         ("&& apk add", "&& echo apk add"),
-        ("RUN pip install", "RUN apk del libssl3 libcrypto3\nRUN pip install"),
+        ("RUN python -m pip install", "RUN apk del libssl3 libcrypto3\nRUN python -m pip install"),
         ("RUN chown", "RUN apk add --simulate libssl3\nRUN chown"),
         ("WORKDIR /app", 'SHELL ["/bin/true"]\nWORKDIR /app'),
         ("WORKDIR /app", "ENV PATH=/app\nWORKDIR /app"),
@@ -185,6 +185,148 @@ def test_policy_rejects_comment_only_mcp_openssl_package_floors(tmp_path):
     failures = gate.check_repository(tmp_path)
 
     assert sum("OpenSSL package floor" in failure for failure in failures) == 2, failures
+
+
+@pytest.mark.parametrize("package", ["musl", "musl-utils"])
+@pytest.mark.parametrize("replacement", ["", "{package}", "'{package}>=1.2.6-r2'"])
+def test_policy_enforces_fixed_mcp_musl_floors(tmp_path, package, replacement):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    dockerfile = tmp_path / "mcp-server/Dockerfile"
+    contents = dockerfile.read_text()
+    required = f"'{package}>=1.2.6-r3'"
+    assert required in contents
+    dockerfile.write_text(
+        f"# {required}\n"
+        + contents.replace(required, replacement.format(package=package), 1)
+    )
+    failures = gate.check_repository(tmp_path)
+    assert any("musl package floor" in failure for failure in failures), failures
+
+
+def test_recipe_uses_one_build_only_pip_lifecycle_before_copying_application():
+    contents = (REPO_ROOT / "mcp-server/Dockerfile").read_text()
+    lifecycle = (
+        "RUN python -m pip install --no-cache-dir --upgrade --require-hashes "
+        "--only-binary=:all: --no-deps -r pip-requirements.txt"
+        " && python -m pip install --no-cache-dir -r requirements.txt"
+        " && python -m pip check"
+        " && python -m pip --disable-pip-version-check uninstall --yes pip"
+        " && rm -f /usr/local/lib/python3.12/ensurepip/_bundled/"
+        "pip-25.0.1-py3-none-any.whl"
+    )
+    instructions = [
+        " ".join(line.split())
+        for line in contents.replace("\\\n", "").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    manifest_copy = "COPY pip-requirements.txt requirements.txt ./"
+    assert manifest_copy in instructions
+    assert lifecycle in instructions
+    assert instructions.index(manifest_copy) < instructions.index(lifecycle)
+    assert instructions.index(lifecycle) < instructions.index("COPY . .")
+    manifest = (REPO_ROOT / "mcp-server/pip-requirements.txt").read_text()
+    requirements = [
+        line for line in manifest.splitlines() if line and not line.startswith("#")
+    ]
+    assert requirements == [
+        "pip==26.2.2 --hash=sha256:"
+        "fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
+    ]
+
+
+@pytest.mark.parametrize("mutation", ["old", "hash", "extra", "comment-only"])
+def test_policy_rejects_unreviewed_pip_manifest(tmp_path, mutation):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    manifest = tmp_path / "mcp-server/pip-requirements.txt"
+    contents = manifest.read_text()
+    if mutation == "old":
+        contents = contents.replace("pip==26.2.2", "pip==25.0.1")
+    elif mutation == "hash":
+        contents = contents.replace("fd7f4dfa", "00000000")
+    elif mutation == "extra":
+        contents += "pip==25.0.1\n"
+    else:
+        contents = "\n".join("# " + line for line in contents.splitlines())
+    manifest.write_text(contents)
+    failures = gate.check_repository(tmp_path)
+    assert any("pip installer" in failure for failure in failures), failures
+
+
+def test_policy_denies_missing_pip_manifest(tmp_path):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    manifest = tmp_path / "mcp-server/pip-requirements.txt"
+    assert manifest.is_file()
+    manifest.unlink()
+    assert any(
+        "pip installer" in failure for failure in gate.check_repository(tmp_path)
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("--require-hashes", "--no-deps"),
+        ("--only-binary=:all:", "--only-binary=:none:"),
+        ("--upgrade", "--dry-run"),
+        ("-r pip-requirements.txt", "-r requirements.txt"),
+        (
+            "COPY pip-requirements.txt requirements.txt ./",
+            "COPY requirements.txt pip-requirements.txt",
+        ),
+        ("RUN chown", "RUN python -m pip install pip==25.0.1\nRUN chown"),
+        ("USER appuser:appgroup", "ENV PYTHONPATH=/tmp\nUSER appuser:appgroup"),
+        ("USER appuser:appgroup", 'SHELL ["/bin/true"]\nUSER appuser:appgroup'),
+        ("USER appuser:appgroup", "COPY . /usr/local\nUSER appuser:appgroup"),
+        ("RUN chown", "RUN apk add musl=1.2.6-r2\nRUN chown"),
+    ],
+)
+def test_policy_denies_installer_bypasses_and_later_package_undo(tmp_path, old, new):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    dockerfile = tmp_path / "mcp-server/Dockerfile"
+    contents = dockerfile.read_text()
+    assert old in contents
+    dockerfile.write_text(contents.replace(old, new, 1))
+    failures = gate.check_repository(tmp_path)
+    assert any("pip installer" in failure for failure in failures), failures
+    assert any("musl package floor" in failure for failure in failures), failures
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("&& python -m pip check", "&& true"),
+        ("uninstall --yes pip", "uninstall --yes certifi"),
+        ("uninstall --yes pip", "uninstall --yes pip || true"),
+        ("--disable-pip-version-check uninstall --yes pip", "--version"),
+        (
+            "&& python -m pip --disable-pip-version-check uninstall --yes pip",
+            "&& rm -rf /usr/local/lib/python3.12/site-packages/pip-26.2.2.dist-info",
+        ),
+        (
+            "&& rm -f /usr/local/lib/python3.12/ensurepip/_bundled/pip-25.0.1-py3-none-any.whl",
+            "&& true",
+        ),
+        ("pip-25.0.1-py3-none-any.whl", "pip-26.2.2-py3-none-any.whl"),
+        ("COPY . .", "RUN python -m ensurepip\nCOPY . ."),
+        ("COPY . .", "COPY . /usr/local/lib/python3.12/ensurepip/_bundled\nCOPY . ."),
+        ("COPY . .", "RUN python -m pip install pip==26.2.2\nCOPY . ."),
+    ],
+)
+def test_policy_denies_incomplete_removal_or_installer_restoration(tmp_path, old, new):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    dockerfile = tmp_path / "mcp-server/Dockerfile"
+    contents = dockerfile.read_text().replace("\\\n", "")
+    contents = "\n".join(" ".join(line.split()) for line in contents.splitlines())
+    assert old in contents
+    assert gate._has_canonical_mcp_instructions(contents)
+    dockerfile.write_text(contents.replace(old, new, 1))
+    failures = gate.check_repository(tmp_path)
+    assert any("pip installer" in failure for failure in failures), failures
 
 
 @pytest.mark.parametrize(

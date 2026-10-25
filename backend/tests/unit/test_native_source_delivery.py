@@ -66,6 +66,144 @@ def canonical(value):
     return digest(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
 
 
+MIRROR_ROUTES = json.loads(
+    (
+        ROOT / "backend/tests/fixtures/source_mirror_recovery_20261025/routes.json"
+    ).read_text()
+)["routes"]
+
+
+def test_consumer_mirror_policy_is_only_the_two_recorded_pins(gate):
+    assert gate.EXACT_SOURCE_ROUTES == {
+        (row["vendor"], row["architecture"], row["filename"]): {
+            "url": row["url"],
+            "sha256": row["sha256"],
+        }
+        for row in MIRROR_ROUTES
+    }
+
+
+def mirrored_rpm_projection(root, gate, monkeypatch, route):
+    """Explicit NEW route projection; never relabel the historical RECORDED fixture.
+
+    Outer archive bytes alone are tiny stand-ins. Payload witnesses, requested
+    URL, and the outer hash pin are from the authenticated full recovery receipt.
+    """
+    package = dict(zip(FIELDS, route["inventory_row"].strip().split("\t")))
+    data = b"modeled recovered SRPM delivery, not an actual archive"
+    source = {
+        key: copy.deepcopy(route[key])
+        for key in ("filename", "vendor", "url", "sha256", "fingerprint", "payload")
+    }
+    source.update(
+        path="sources/" + route["filename"],
+        size=len(data),
+        final_url=route["url"],
+        license=package["license"],
+        authentication="pinned-rpm-signature-and-exact-header",
+    )
+    archive = put(root, f"{RPM}/{source['path']}", data)
+    index = {
+        "schema": 1,
+        "architecture": "x86_64",
+        "packages": [package],
+        "excluded_public_keys": [],
+        "sources": [source],
+    }
+    refresh_rpm_projection(root, index)
+    real_sha = gate.sha256
+    monkeypatch.setattr(
+        gate,
+        "sha256",
+        lambda path: (
+            route["sha256"]
+            if path == archive and path.read_bytes() == data
+            else real_sha(path)
+        ),
+    )
+    monkeypatch.setattr(
+        gate.subprocess,
+        "run",
+        lambda *_a, **_k: type("Result", (), {"stdout": tsv(index["packages"])})(),
+    )
+    return index
+
+
+def refresh_rpm_projection(root, index):
+    inventory = tsv(index["packages"])
+    put(root, f"{RPM}/inventory.tsv", inventory)
+    index["inventory_sha256"] = digest(inventory.encode())
+    index["package_set_sha256"] = canonical(index["packages"])
+    index["source_set_sha256"] = canonical(
+        [
+            {
+                key: s[key]
+                for key in ("filename", "vendor", "url", "sha256", "fingerprint")
+            }
+            for s in index["sources"]
+        ]
+    )
+    document(root, f"{RPM}/index.json", index)
+
+
+@pytest.mark.parametrize("route", MIRROR_ROUTES, ids=lambda r: r["filename"])
+def test_consumer_accepts_new_exact_mirror_projection(
+    gate, tmp_path, monkeypatch, route
+):
+    mirrored_rpm_projection(tmp_path, gate, monkeypatch, route)
+    assert gate._rpm_sources(tmp_path, "x86_64") == (1, 1)
+
+
+@pytest.mark.parametrize("route", MIRROR_ROUTES, ids=lambda r: r["filename"])
+@pytest.mark.parametrize(
+    "mutation",
+    ["host", "canonical", "http", "query", "hash", "arm", "vendor", "other_file"],
+)
+def test_consumer_rejects_mirror_scope_or_hash_mutants(
+    gate, tmp_path, monkeypatch, route, mutation
+):
+    index = mirrored_rpm_projection(tmp_path, gate, monkeypatch, route)
+    assert gate._rpm_sources(tmp_path, "x86_64") == (1, 1), (
+        "positive route must pass first"
+    )
+    source = index["sources"][0]
+    architecture = "x86_64"
+    if mutation == "host":
+        source["url"] = source["url"].replace("https://", "https://untrusted.example/")
+    elif mutation == "canonical":
+        source["url"] = (
+            "https://download.opensuse.org/tumbleweed/repo/src-oss/src/"
+            + source["filename"]
+        )
+    elif mutation == "http":
+        source["url"] = source["url"].replace("https:", "http:")
+    elif mutation == "query":
+        source["url"] += "?override=1"
+    elif mutation == "hash":
+        # A self-consistent replacement archive/index must not redefine the pin.
+        source["sha256"] = digest((tmp_path / RPM / source["path"]).read_bytes())
+        monkeypatch.setattr(gate, "sha256", lambda path: digest(path.read_bytes()))
+    elif mutation == "arm":
+        architecture = index["architecture"] = "aarch64"
+        index["packages"][0]["arch"] = architecture
+    elif mutation == "vendor":
+        source["vendor"] = index["packages"][0]["vendor"] = (
+            "http://packman.links2linux.de"
+        )
+        source["fingerprint"] = gate.VENDORS[source["vendor"]]
+    else:
+        new_name = "other-1-1.src.rpm"
+        old_path = tmp_path / RPM / source["path"]
+        source.update(filename=new_name, path="sources/" + new_name)
+        old_path.rename(tmp_path / RPM / source["path"])
+        source["url"] = route["url"].replace(route["filename"], new_name)
+        source["sha256"] = digest((tmp_path / RPM / source["path"]).read_bytes())
+        index["packages"][0]["sourcerpm"] = new_name
+    refresh_rpm_projection(tmp_path, index)
+    with pytest.raises(AssertionError):
+        gate._rpm_sources(tmp_path, architecture)
+
+
 def put(root, name, data):
     path = root / name
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -6,17 +6,25 @@ WORKDIR /app
 # manifest was published. The digest makes the input reviewable; this upgrade
 # step closes fixed OS advisories until the next intentional digest refresh.
 # Alpine v3.24 secdb requires libuuid 2.42.3-r1 for CVE-2026-78408.
+# CVE-2026-107891 requires both musl packages at 1.2.6-r3 or newer.
 RUN apk upgrade --no-cache \
     && apk add --no-cache \
         'libcrypto3>=3.5.8-r0' \
         'libssl3>=3.5.8-r0' \
         'libuuid>=2.42.3-r1' \
+        'musl>=1.2.6-r3' \
+        'musl-utils>=1.2.6-r3' \
     && addgroup -g 1000 appgroup \
     && adduser -D -u 1000 -G appgroup appuser
 
-# Install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Use the reviewed installer only during the build. Remove its complete recorded
+# payload and the base's obsolete ensurepip seed, not just package metadata.
+COPY pip-requirements.txt requirements.txt ./
+RUN python -m pip install --no-cache-dir --upgrade --require-hashes --only-binary=:all: --no-deps -r pip-requirements.txt \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && python -m pip check \
+    && python -m pip --disable-pip-version-check uninstall --yes pip \
+    && rm -f /usr/local/lib/python3.12/ensurepip/_bundled/pip-25.0.1-py3-none-any.whl
 
 # Copy application
 COPY . .

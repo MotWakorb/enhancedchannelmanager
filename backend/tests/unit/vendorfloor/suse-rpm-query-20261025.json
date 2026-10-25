@@ -1,0 +1,24 @@
+{
+  "provenance": {
+    "retrieved_at": "2026-10-25T13:55:06Z",
+    "method": "Public official per-architecture repository GETs, then rpm -qp seven-column query and pinned rpmkeys verification in disposable amd64 SUSE container; ARM RPMs queried, never executed.",
+    "source_verifier": "scripts/collect_native_sources.py prepare_key/verify_source; all four exact SRPMs signed by AD485664E901B867051AB15F35A2F86E29B700A4; declared input payloads complete",
+    "amd64_repository": "https://download.opensuse.org/tumbleweed/repo/oss/",
+    "arm64_repository": "https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/",
+    "amd64_snapshot": "20261023",
+    "arm64_snapshot": "20261020",
+    "scope": "Recorded vendor package projections, NOT a rebuilt image inventory. Fixed ARM binaries and SRPMs returned 404; ARM patched positive controls are explicitly synthetic."
+  },
+  "amd64": [
+    "ca-certificates-mozilla\t2.92\t2.1\tnoarch\topenSUSE\tca-certificates-mozilla-2.92-2.1.src.rpm\tMPL-2.0",
+    "libbrotlicommon1\t1.2.1\t1.1\tx86_64\topenSUSE\tbrotli-1.2.1-1.1.src.rpm\tMIT",
+    "libbrotlidec1\t1.2.1\t1.1\tx86_64\topenSUSE\tbrotli-1.2.1-1.1.src.rpm\tMIT",
+    "libbrotlienc1\t1.2.1\t1.1\tx86_64\topenSUSE\tbrotli-1.2.1-1.1.src.rpm\tMIT"
+  ],
+  "arm64": [
+    "ca-certificates-mozilla\t2.90\t1.1\tnoarch\topenSUSE\tca-certificates-mozilla-2.90-1.1.src.rpm\tMPL-2.0",
+    "libbrotlicommon1\t1.2.0\t2.3\taarch64\topenSUSE\tbrotli-1.2.0-2.3.src.rpm\tMIT",
+    "libbrotlidec1\t1.2.0\t2.3\taarch64\topenSUSE\tbrotli-1.2.0-2.3.src.rpm\tMIT",
+    "libbrotlienc1\t1.2.0\t2.3\taarch64\topenSUSE\tbrotli-1.2.0-2.3.src.rpm\tMIT"
+  ]
+}

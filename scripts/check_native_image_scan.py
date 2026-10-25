@@ -57,6 +57,15 @@ REQUIRED_NATIVE_PACKAGES = set(PACKAGE_FLOORS) | {
     "libx264-165",
     "libx265-215",
 }
+# Narrow SUSE advisory floors: Version alone cannot distinguish CA 2.92-1.1
+# from fixed 2.92-2.1. Only numeric Version/Release fields are reviewed here;
+# prereleases/foreign EVRs fail closed rather than invoking a general RPM solver.
+VENDOR_RPM_FLOORS = {
+    "libbrotlicommon1": ((1, 2, 1), (1, 1)),
+    "libbrotlidec1": ((1, 2, 1), (1, 1)),
+    "libbrotlienc1": ((1, 2, 1), (1, 1)),
+    "ca-certificates-mozilla": ((2, 92), (2, 1)),
+}
 
 
 def _timestamp(value: object) -> bool:
@@ -236,6 +245,31 @@ def check_report(
                         valid &= version[:2] == (3, 12)
             if not valid:
                 failures.append(f"missing/outdated expected native package {name}")
+        for name, floor in sorted(VENDOR_RPM_FLOORS.items()):
+            installed = inventory.get(name, [])
+            valid = bool(installed)
+            required_arch = (
+                "noarch" if name == "ca-certificates-mozilla" else expected_arch
+            )
+            for package in installed:
+                valid &= package["Arch"] == required_arch
+                fields = (package["Version"], package["Release"])
+                if not all(
+                    re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", value) for value in fields
+                ):
+                    valid = False
+                    continue
+                version, release = (
+                    tuple(map(int, value.split("."))) for value in fields
+                )
+                # A trailing numeric zero is not a newer upstream version and
+                # must not let an old release evade the advisory's release floor.
+                width = max(len(version), len(floor[0]))
+                version += (0,) * (width - len(version))
+                minimum_version = floor[0] + (0,) * (width - len(floor[0]))
+                valid &= (version, release) >= (minimum_version, floor[1])
+            if not valid:
+                failures.append(f"missing/outdated expected vendor package {name}")
     for kind, label in (("python-pkg", "Python"), ("gobinary", "Go")):
         language_results = [
             r

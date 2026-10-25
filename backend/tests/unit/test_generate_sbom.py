@@ -86,6 +86,10 @@ NATIVE_DEPENDENCIES = {
 }
 
 MCP_DOCKERFILE = "FROM python:3.12-alpine@sha256:{alpine}\nRUN apk upgrade --no-cache\n"
+PIP_REQUIREMENT = (
+    "pip==26.2.2 --hash=sha256:"
+    "fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70"
+)
 
 NODE_DIGEST = "a" * 64
 PYTHON_DIGEST = "b" * 64
@@ -190,6 +194,7 @@ def tree(tmp_path: Path) -> Path:
         "# generated\nfastapi==0.136.1\n    # via -r backend/requirements.in\ncryptography==50.0.0\n",
     )
     _write(tmp_path / "mcp-server" / "requirements.txt", "mcp==1.29.0\npyjwt==2.13.0\n")
+    _write(tmp_path / "mcp-server" / "pip-requirements.txt", PIP_REQUIREMENT + "\n")
     _write(
         tmp_path / "Dockerfile",
         DOCKERFILE.format(node=NODE_DIGEST, python=PYTHON_DIGEST, uv=UV_DIGEST),
@@ -222,6 +227,76 @@ def suse_tree(tree: Path) -> Path:
 
 
 # ─── The document itself ───────────────────────────────────────────────
+
+
+def test_mcp_installer_has_actual_wheel_version_hash_and_manifest_binding(sbom, tree):
+    rendered = sbom.render(tree, "9.9.9", CREATED)
+    document = json.loads(rendered["mcp.spdx.json"])
+    pip = next(package for package in document["packages"] if package["name"] == "pip")
+    # Official wheel metadata, not selector spelling.
+    assert pip["versionInfo"] == "26.2.2"
+    assert pip["checksums"] == [
+        {"algorithm": "SHA256", "checksumValue": PIP_REQUIREMENT.split(":")[-1]}
+    ]
+    assert pip["externalRefs"][0]["referenceLocator"] == "pkg:pypi/pip@26.2.2"
+    assert "installer" in pip["comment"].lower()
+    assert "build-only" in pip["comment"].lower()
+    assert "not retained" in pip["comment"].lower()
+    assert {
+        "spdxElementId": pip["SPDXID"],
+        "relationshipType": "BUILD_DEPENDENCY_OF",
+        "relatedSpdxElement": "SPDXRef-Package-mcp",
+    } in document["relationships"]
+    assert not any(
+        entry["spdxElementId"] == pip["SPDXID"]
+        and entry["relationshipType"] == "RUNTIME_DEPENDENCY_OF"
+        for entry in document["relationships"]
+    )
+    index = json.loads(rendered["index.json"])
+    assert index["sources"]["mcp-server/pip-requirements.txt"] == (
+        "sha256:" + sbom.sha256_file(tree / "mcp-server/pip-requirements.txt")
+    )
+    assert any("installer" in item.lower() for item in index["coverage"]["includes"])
+    ecm = json.loads(rendered["ecm.spdx.json"])
+    assert not any(package["name"] == "pip" for package in ecm["packages"])
+
+
+@pytest.mark.parametrize(
+    "requirement",
+    [
+        "",
+        "pip==25.0.1",
+        PIP_REQUIREMENT.replace("26.2.2", "26.1"),
+        PIP_REQUIREMENT.replace("fd7f4dfa", "0d7f4dfa"),
+        "pip==26.2.0 --hash=sha256:931c303696af6fa3417112103b1cad26890e5a07eccb5b99783700e33f2b8aad",
+        PIP_REQUIREMENT + "\n" + PIP_REQUIREMENT,
+        PIP_REQUIREMENT + "\nextra==1.0",
+        PIP_REQUIREMENT + " --extra-index-url https://example.test",
+    ],
+)
+def test_mcp_installer_inventory_rejects_unreviewed_manifest(sbom, tree, requirement):
+    _write(tree / "mcp-server/pip-requirements.txt", requirement)
+    with pytest.raises(sbom.SbomError, match="installer"):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+def test_missing_installer_manifest_is_rejected(sbom, tree):
+    (tree / "mcp-server/pip-requirements.txt").unlink()
+    with pytest.raises(sbom.SbomError, match="pip-requirements"):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+def test_installer_comments_are_fingerprinted_without_changing_wheel(
+    sbom, tree, generated
+):
+    path = tree / "mcp-server/pip-requirements.txt"
+    _write(path, "# reviewed installer\n" + path.read_text())
+    assert sbom.verify(tree, generated, "9.9.9") == ["index.json"]
+
+
+def test_installer_hash_syntax_does_not_weaken_application_pin_parser(sbom):
+    with pytest.raises(sbom.SbomError):
+        sbom.parse_pinned_requirements(PIP_REQUIREMENT, "requirements.txt")
 
 
 def test_documents_are_spdx_2_3_with_purls_for_every_dependency(sbom, generated):

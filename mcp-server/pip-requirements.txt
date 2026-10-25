@@ -1,0 +1,4 @@
+# Build-only installer, uninstalled after application dependencies are checked.
+# Application pins remain in requirements.txt; no pip payload is retained at runtime.
+# Reviewed universal wheel: https://pypi.org/project/pip/26.2.2/#files
+pip==26.2.2 --hash=sha256:fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70

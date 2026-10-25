@@ -37,8 +37,10 @@ RUN case "$(uname -m)" in \
     && rpm --checksig /tmp/runtime-rpms/*.rpm \
     && zypper --non-interactive install --no-recommends /tmp/runtime-rpms/*.rpm \
         $(cat /tmp/runtime-packages.txt) python312 python312-base shadow coreutils bash timezone ca-certificates \
+        'libbrotlicommon1>=1.2.1-1.1' 'libbrotlidec1>=1.2.1-1.1' 'libbrotlienc1>=1.2.1-1.1' \
+        'ca-certificates-mozilla>=2.92-2.1' \
     && zypper clean --all
-# Selectively distrust compromised G3 even while an architecture's Mozilla RPM lags.
+# Retain exact G3 defense in depth alongside the vendor-fixed Mozilla RPM floor.
 # Keep SUSE/admin anchors and regenerate every distribution compatibility store.
 COPY docker/trust/emsign-ecc-root-ca-g3.pem /etc/pki/trust/blocklist/ecm-emsign-ecc-g3.pem
 RUN python3.12 -c "import hashlib, ssl; from pathlib import Path; assert hashlib.sha256(ssl.PEM_cert_to_DER_cert(Path('/etc/pki/trust/blocklist/ecm-emsign-ecc-g3.pem').read_text())).hexdigest() == '86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b'" \

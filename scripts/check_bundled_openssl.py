@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline check mounted into the verified MCP image; stdout is one JSON receipt.
+"""Offline MCP package/crypto check; stdout is one JSON receipt.
 
 The host must first hash-verify the OCI archive with candidate_image.py and
 verify-loaded after conversion. Host identity files bind this runtime evidence
@@ -15,9 +15,13 @@ import json
 import os
 import platform
 import re
+import stat
 import struct
+import subprocess
+import sysconfig
 from datetime import datetime
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
+from importlib.util import find_spec
 from pathlib import Path
 
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
@@ -125,6 +129,94 @@ def inspect_extension(path: Path, arch: str) -> dict:
     return {"path": str(path), "sha256": digest, "architecture": arch}
 
 
+def validate_musl(text: str) -> dict:
+    """Parse real apk installed-package output, denying missing/ambiguous versions."""
+    packages = {}
+    if not isinstance(text, str) or len(text) > 256:
+        raise ValueError("missing or malformed musl inventory")
+    for line in text.splitlines():
+        match = re.fullmatch(
+            r"(musl|musl-utils)-((0|[1-9][0-9]*)\."
+            r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-r(0|[1-9][0-9]*))",
+            line,
+        )
+        if match is None or match[1] in packages:
+            raise ValueError("missing or ambiguous musl package version")
+        if tuple(int(part) for part in match.groups()[2:]) < (1, 2, 6, 3):
+            raise ValueError("vulnerable musl package version; require >=1.2.6-r3")
+        packages[match[1]] = match[2]
+    if set(packages) != {"musl", "musl-utils"}:
+        raise ValueError("both musl and musl-utils must be installed")
+    return packages
+
+
+def inspect_musl() -> dict:
+    """Query installed packages in this image, not a repository or host fixture."""
+    result = subprocess.run(
+        ["/sbin/apk", "info", "--installed", "--verbose", "musl", "musl-utils"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    return validate_musl(result.stdout)
+
+
+def inspect_installer() -> dict:
+    """Deny installer code/metadata/wrappers/seeds in the final runtime rootfs."""
+    if find_spec("pip") is not None:
+        raise ValueError("build-only pip module remains importable")
+    try:
+        version("pip")
+    except PackageNotFoundError:
+        pass
+    else:
+        raise ValueError("build-only pip distribution metadata remains installed")
+
+    def inventory(directory: Path, *, missing_ok: bool = False) -> list:
+        try:
+            metadata = directory.lstat()
+        except FileNotFoundError:
+            if missing_ok:
+                return []
+            raise
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError(
+                "pip inventory root must be a real directory, not a symlink"
+            )
+        # Unlike glob/rglob, scandir propagates unreadable-inventory errors.
+        with os.scandir(directory) as entries:
+            return list(entries)
+
+    for site in {Path(sysconfig.get_path(key)) for key in ("purelib", "platlib")}:
+        for entry in inventory(site):
+            if entry.name in {"pip", "pip.py", "pip.pyc"} or (
+                entry.name.startswith("pip")
+                and entry.name.endswith((".dist-info", ".egg-info"))
+            ):
+                raise ValueError(
+                    "build-only pip payload/vendor tree or metadata remains"
+                )
+    if any(
+        entry.name.startswith("pip")
+        for entry in inventory(Path(sysconfig.get_path("scripts")))
+    ):
+        raise ValueError("build-only pip command wrapper remains")
+    seeds = Path(sysconfig.get_path("stdlib")) / "ensurepip" / "_bundled"
+    pending = [seeds]
+    while pending:
+        directory = pending.pop()
+        for entry in inventory(directory, missing_ok=directory == seeds):
+            mode = entry.stat(follow_symlinks=False).st_mode
+            if stat.S_ISLNK(mode):
+                raise ValueError("ensurepip seed inventory must not contain symlinks")
+            if entry.name.lower().endswith(".whl"):
+                raise ValueError("ensurepip seed wheel remains in the runtime rootfs")
+            if stat.S_ISDIR(mode):
+                pending.append(Path(entry.path))
+    return {"role": "build-only", "status": "absent"}
+
+
 def check_runtime(arch: str) -> dict:
     if os.getuid() == 0 or os.getgid() == 0:
         raise ValueError("crypto check must execute as the default non-root image user")
@@ -153,6 +245,8 @@ def check_runtime(arch: str) -> dict:
     ciphertext = cipher.encrypt(nonce, message, b"image check")
     if cipher.decrypt(nonce, ciphertext, b"image check") != message:
         raise ValueError("AES-GCM roundtrip failed")
+    musl = inspect_musl()
+    pip = inspect_installer()
     return {
         "cryptography": cryptography.__version__,
         "openssl": openssl,
@@ -161,6 +255,8 @@ def check_runtime(arch: str) -> dict:
         "gid": os.getgid(),
         "native_extension": native,
         "operations": ["RSA-sign-verify", "AES-GCM-roundtrip"],
+        "musl": musl,
+        "pip": pip,
     }
 
 

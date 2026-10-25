@@ -414,13 +414,25 @@ def test_relay_assertion_rejects_missing_forged_or_exposed_provider_details(
 
 @pytest.mark.parametrize("store", ["system_default_ca_trust", "certifi_ca_trust"])
 @pytest.mark.parametrize(
-    "anchors,passes", [([b"g1"], True), ([b"g1", b"g3"], False), ([], False)]
+    "anchors,passes",
+    [
+        ([b"g1"], True),
+        ([b"g1", b"g3"], False),
+        ([b"g1", b"comodo"], False),
+        ([], False),
+    ],
 )
-def test_trust_checks_require_g3_absent_and_g1_present(
+def test_trust_checks_require_both_compromised_roots_absent_and_g1_present(
     runtime_checks, monkeypatch, store, anchors, passes
 ):
     monkeypatch.setattr(
         runtime_checks, "_COMPROMISED_G3", hashlib.sha256(b"g3").hexdigest()
+    )
+    monkeypatch.setattr(
+        runtime_checks,
+        "_COMPROMISED_COMODO_AAA",
+        hashlib.sha256(b"comodo").hexdigest(),
+        raising=False,
     )
     monkeypatch.setattr(
         runtime_checks, "_UNAFFECTED_G1", hashlib.sha256(b"g1").hexdigest()
@@ -439,6 +451,7 @@ def test_trust_checks_require_g3_absent_and_g1_present(
     if passes:
         result = getattr(runtime_checks, store)()
         assert result[store]["compromised_g3_trusted"] is False
+        assert result[store]["compromised_comodo_aaa_trusted"] is False
         assert result[store]["unaffected_g1_trusted"] is True
     else:
         with pytest.raises(AssertionError):
