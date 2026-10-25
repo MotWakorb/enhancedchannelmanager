@@ -449,7 +449,8 @@ async def import_tags(request: ImportTagsRequest):
     """Import tag groups and tags from YAML."""
     logger.debug("[TAGS] POST /import - overwrite=%s", request.overwrite)
     try:
-        data = yaml.safe_load(request.yaml_content)
+        from yaml_safety import safe_load_bounded
+        data = safe_load_bounded(request.yaml_content)
     except yaml.YAMLError as e:
         raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
 
