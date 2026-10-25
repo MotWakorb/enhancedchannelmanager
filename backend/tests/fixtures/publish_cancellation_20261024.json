@@ -1,0 +1,55 @@
+{
+  "provenance": {
+    "description": "Selected real GitHub REST fields; not a captured webhook payload. Retrieved 2026-10-25.",
+    "build": "https://api.github.com/repos/MotWakorb/enhancedchannelmanager/actions/runs/40096441317",
+    "tests": "https://api.github.com/repos/MotWakorb/enhancedchannelmanager/actions/runs/40096441384/attempts/1",
+    "skipped": "https://api.github.com/repos/MotWakorb/enhancedchannelmanager/actions/runs/40098237067",
+    "authorizer": "https://api.github.com/repos/MotWakorb/enhancedchannelmanager/actions/runs/40096441384/attempts/1/jobs",
+    "inputs": "Historical authorizer runner log, 2026-10-24T13:26:57.620Z, job 120884685807",
+    "limitation": "Nested workflow_run payload and cancellation initiator are unavailable; projecting build into the event models the suspected race, not proof of historical attribution."
+  },
+  "build": {
+    "id": 40096441317,
+    "name": "Build and Push Docker Image",
+    "event": "push",
+    "head_branch": "dev",
+    "head_sha": "0bc126006d96c03637cb9e1b707ec04aca2d5804",
+    "status": "completed",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "updated_at": "2026-10-24T13:27:48Z"
+  },
+  "tests": {
+    "id": 40096441384,
+    "name": "Tests",
+    "event": "push",
+    "head_branch": "dev",
+    "head_sha": "0bc126006d96c03637cb9e1b707ec04aca2d5804",
+    "status": "completed",
+    "conclusion": "cancelled",
+    "run_attempt": 1
+  },
+  "skipped": {
+    "id": 40098237067,
+    "name": "Publish Verified Images",
+    "event": "workflow_run",
+    "head_branch": "main",
+    "head_sha": "d5e91a37cb758e64964ea4386b6ead0dcf2f0a23",
+    "status": "completed",
+    "conclusion": "skipped",
+    "created_at": "2026-10-24T13:27:50Z",
+    "run_attempt": 1
+  },
+  "authorizer": {
+    "id": 120884685807,
+    "name": "Publish Verified Dev Images / Authorize Exact-SHA Publication",
+    "conclusion": "cancelled",
+    "started_at": "2026-10-24T13:26:56Z",
+    "completed_at": "2026-10-24T13:28:06Z"
+  },
+  "inputs": {
+    "candidate_sha": "0bc126006d96c03637cb9e1b707ec04aca2d5804",
+    "candidate_branch": "dev",
+    "tests_attested": true
+  }
+}

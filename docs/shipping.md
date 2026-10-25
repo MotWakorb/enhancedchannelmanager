@@ -219,6 +219,30 @@ evidence is successful and the SHA is still the current `dev` head. There is
 no separate **Publish Verified Images** Actions run on the dev path. Until
 publication succeeds, mutable tags retain their last known-good image.
 
+**Publication concurrency (`enhancedchannelmanager-ydbiv`).** Workflow-level
+concurrency can cancel a run even if its authorization job will skip. The publisher
+therefore uses `publish-verified-images-dev` for attested dev calls and
+`publish-verified-images-main` for successful main push completions. Other events
+use a unique `publish-verified-images-ignored-<run_id>` group; disabling cancellation
+alone would still allow replacement of pending runs. New eligible candidates
+retain `cancel-in-progress: true` within their branch. These are scheduling groups,
+not authorization: current-head checks, successful Tests/Build evidence and the
+attestation binding all four candidate digests remain required by the authorizer.
+`workflow_run` also filters to `main`; dev publication remains the trusted reusable
+call, whose `github.event_name` is the caller's `push`, not `workflow_call`.
+
+The namespace differs from the older `publish-images-*` groups deliberately:
+`workflow_run` loads the default branch's workflow, so changing only a dev trigger
+filter cannot protect dev from the unchanged default-branch copy. After promotion,
+the filter prevents unnecessary dev/feature completion runs there as well.
+Regression tests in `backend/tests/unit/test_publish_concurrency.py` evaluate the
+actual YAML expression and replay the collision using recorded REST fields and
+logged inputs. They model the suspected completion payload; GitHub's historical
+REST response does not expose that payload or identify the cancellation initiator.
+The observed October 24 cancellation is consistent with the old collision but
+is not proved to have been caused by it. A post-merge run is still needed to
+validate the repaired scheduling path on GitHub; a green PR does not publish.
+
 The published `:dev` tag has silently lagged `dev` four times, from four unrelated causes:
 
 1. A Buildx flake that skipped the multi-arch manifest.
