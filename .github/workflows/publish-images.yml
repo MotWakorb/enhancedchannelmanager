@@ -4,6 +4,7 @@ on:
   workflow_run:
     workflows: [Tests, Build and Push Docker Image]
     types: [completed]
+    branches: [main]
   workflow_call:
     inputs:
       candidate_sha:
@@ -17,7 +18,18 @@ on:
         type: boolean
 
 concurrency:
-  group: publish-images-${{ inputs.candidate_branch || github.event.workflow_run.head_branch }}
+  # Workflow-level concurrency acts even when authorize will skip. Give inert
+  # events unique groups; eligible candidates still supersede by branch. The
+  # new namespace also isolates dev from the old default-branch workflow.
+  # Regression coverage: backend/tests/unit/test_publish_concurrency.py.
+  group: >-
+    publish-verified-images-${{
+      (inputs.tests_attested && inputs.candidate_branch == 'dev' && 'dev')
+      || (github.event_name == 'workflow_run'
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_branch == 'main'
+        && github.event.workflow_run.conclusion == 'success' && 'main')
+      || format('ignored-{0}', github.run_id) }}
   cancel-in-progress: true
 
 env:
