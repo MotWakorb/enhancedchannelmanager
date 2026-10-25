@@ -40,7 +40,7 @@ export default defineConfig({
   testMatch: '**/*.spec.ts',
   // These own a backend-less server and deny live execution. The root E2E
   // gate runs their dedicated config after this normal lane.
-  testIgnore: ['**/task-notifications.spec.ts', '**/verification-browser.spec.ts', '**/sync-target-preview-edit.spec.ts'],
+  testIgnore: ['**/task-notifications.spec.ts', '**/verification-browser.spec.ts', '**/sync-target-preview-edit.spec.ts', '**/sync-reporting.spec.ts'],
 
   // Maximum time a test can run
   timeout: 30 * 1000,

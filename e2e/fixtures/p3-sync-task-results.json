@@ -1,0 +1,20 @@
+{
+  "preview": {
+    "success": true,
+    "message": "Sync dry-run complete: would create 2, update 0, skip 0, 0 conflict(s) across 2 categories; counts cover predicted categories only; stream: not predicted — Streams cannot be predicted until destination refresh.",
+    "total_items": 2,
+    "success_count": 2,
+    "failed_count": 0,
+    "skipped_count": 0,
+    "error": null
+  },
+  "abortedApply": {
+    "success": false,
+    "message": "Cross-instance sync run could not read the destination it describes — cycle aborted before reading destination. No counts are reported because they would describe this instance, not the sync target.",
+    "total_items": 0,
+    "success_count": 0,
+    "failed_count": 0,
+    "skipped_count": 0,
+    "error": "SYNC_DESTINATION_UNREADABLE"
+  }
+}
