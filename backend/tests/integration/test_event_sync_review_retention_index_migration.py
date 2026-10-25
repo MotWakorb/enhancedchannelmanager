@@ -61,6 +61,16 @@ def test_migration_0052_adds_and_round_trips_retention_index(tmp_path):
             conn.execute(text(
                 "ALTER TABLE stream_stats ADD COLUMN is_low_bitrate BOOLEAN NOT NULL DEFAULT 0"
             ))
+            for column_ddl in (
+                "playback_samples TEXT",
+                "playback_seconds INTEGER NOT NULL DEFAULT 0",
+                "playback_discontinuities INTEGER NOT NULL DEFAULT 0",
+                "playback_reconnects INTEGER NOT NULL DEFAULT 0",
+                "playback_start_failures INTEGER NOT NULL DEFAULT 0",
+                "last_playback_probed DATETIME",
+                "is_unstable BOOLEAN",
+            ):
+                conn.execute(text(f"ALTER TABLE stream_stats ADD COLUMN {column_ddl}"))
             conn.execute(text(
                 "ALTER TABLE auto_creation_rules ADD COLUMN required_provider_ids TEXT"
             ))

@@ -86,10 +86,15 @@ class BlackScreenScanTask(TaskScheduler):
         return True, ""
 
     async def execute(self) -> TaskResult:
-        """Execute the black screen scan."""
-        started_at = datetime.utcnow()
+        """Execute the black screen scan.
 
-        if self._prober is None:
+        The prober is captured once, so a settings restart that installs a new
+        one with ``set_prober`` cannot move the guard or the cancel flag mid-run.
+        """
+        started_at = datetime.utcnow()
+        prober = self._prober
+
+        if prober is None:
             return TaskResult(
                 success=False,
                 message="StreamProber not initialized",
@@ -98,7 +103,8 @@ class BlackScreenScanTask(TaskScheduler):
                 completed_at=datetime.utcnow(),
             )
 
-        if self._prober._probing_in_progress:
+        guard = prober.try_acquire_probe_guard()
+        if guard is None:
             return TaskResult(
                 success=False,
                 message="A probe is already in progress — cannot run black screen scan concurrently",
@@ -107,6 +113,17 @@ class BlackScreenScanTask(TaskScheduler):
                 completed_at=datetime.utcnow(),
             )
 
+        try:
+            return await self._scan(prober, guard, started_at)
+        finally:
+            prober.release_probe_guard(guard)
+
+    async def _scan(self, prober, guard: object, started_at: datetime) -> TaskResult:
+        """Scan probed streams while the caller holds the probe guard.
+
+        Pause takes effect between streams: a running detection is not
+        interrupted, and the next one starts after resume.
+        """
         self._set_progress(status="starting", current_item="Finding probed streams...")
 
         # 1. Get successfully-probed stream IDs from StreamStats
@@ -133,7 +150,7 @@ class BlackScreenScanTask(TaskScheduler):
 
         # 2. Fetch streams from Dispatcharr to get URLs
         self._set_progress(status="fetching", current_item="Fetching stream URLs from Dispatcharr...")
-        all_streams = await self._prober._fetch_all_streams()
+        all_streams = await prober._fetch_all_streams()
         stream_map = {s["id"]: s for s in all_streams}
 
         # 3. Intersect: only scan streams we have both probe data and URLs for
@@ -144,8 +161,8 @@ class BlackScreenScanTask(TaskScheduler):
             logger.info("[%s] Auto-sync enabled, scanning all probed streams", self.task_id)
         elif self._channel_groups:
             try:
-                group_names = await self._resolve_group_names()
-                channel_stream_ids, _, _ = await self._prober._fetch_channel_stream_ids(
+                group_names = await self._resolve_group_names(prober)
+                channel_stream_ids, _, _ = await prober._fetch_channel_stream_ids(
                     channel_groups_override=group_names
                 )
                 candidate_ids = candidate_ids & channel_stream_ids
@@ -178,10 +195,10 @@ class BlackScreenScanTask(TaskScheduler):
                            current_item=f"Scanning {total} streams...")
 
         # 5. Save/restore prober sample duration
-        original_sample_duration = self._prober.black_screen_sample_duration
+        original_sample_duration = prober.black_screen_sample_duration
         if self._sample_duration_override is not None:
-            self._prober.black_screen_sample_duration = max(3, min(30, self._sample_duration_override))
-            logger.info("[%s] Using sample_duration=%ss", self.task_id, self._prober.black_screen_sample_duration)
+            prober.black_screen_sample_duration = max(3, min(30, self._sample_duration_override))
+            logger.info("[%s] Using sample_duration=%ss", self.task_id, prober.black_screen_sample_duration)
 
         max_concurrent = max(1, min(10, self._max_concurrent_override or 3))
         semaphore = asyncio.Semaphore(max_concurrent)
@@ -196,10 +213,12 @@ class BlackScreenScanTask(TaskScheduler):
         async def scan_one(stream_id: int, name: str, url: str):
             nonlocal black_count, clear_count, error_count, completed
             async with semaphore:
-                if self._cancel_requested:
+                while prober._probe_paused and not (self._cancel_requested or prober.probe_guard_cancelled(guard)):
+                    await asyncio.sleep(1)
+                if self._cancel_requested or prober.probe_guard_cancelled(guard):
                     return
                 try:
-                    is_black = await self._prober._detect_black_screen(url, stream_id=stream_id)
+                    is_black = await prober._detect_black_screen(url, stream_id=stream_id)
 
                     # None = indeterminate (ffmpeg timed out or returned no
                     # YAVG samples). Count as an error and leave the existing
@@ -250,7 +269,7 @@ class BlackScreenScanTask(TaskScheduler):
         reorder_group_names = None
         if self._channel_groups and not self._auto_sync_groups:
             try:
-                reorder_group_names = await self._resolve_group_names()
+                reorder_group_names = await self._resolve_group_names(prober)
             except Exception as resolve_err:
                 # Group-name lookup failure is non-fatal: post-scan reorder is a
                 # convenience step. Leaving reorder_group_names=None means the
@@ -275,7 +294,7 @@ class BlackScreenScanTask(TaskScheduler):
             )
         finally:
             # Restore original sample duration
-            self._prober.black_screen_sample_duration = original_sample_duration
+            prober.black_screen_sample_duration = original_sample_duration
 
             # Clear overrides
             self._sample_duration_override = None
@@ -283,7 +302,8 @@ class BlackScreenScanTask(TaskScheduler):
             self._channel_groups = None
             self._auto_sync_groups = False
 
-        status = "cancelled" if self._cancel_requested else "completed"
+        cancelled = self._cancel_requested or prober.probe_guard_cancelled(guard)
+        status = "cancelled" if cancelled else "completed"
         self._set_progress(
             status=status,
             current=completed,
@@ -295,11 +315,11 @@ class BlackScreenScanTask(TaskScheduler):
 
         # Re-sort channels if black screens were found and auto-reorder is enabled
         reorder_count = 0
-        if black_count > 0 and not self._cancel_requested and self._prober.auto_reorder_after_probe:
+        if black_count > 0 and not cancelled and prober.auto_reorder_after_probe:
             logger.info("[%s] %d black screen streams found, triggering smart sort reorder", self.task_id, black_count)
             self._set_progress(status="reordering", current_item="Reordering streams after black screen scan...")
             try:
-                reordered = await self._prober._auto_reorder_channels(reorder_group_names)
+                reordered = await prober._auto_reorder_channels(reorder_group_names)
                 reorder_count = len(reordered)
                 logger.info("[%s] Reordered %d channels after black screen scan", self.task_id, reorder_count)
             except Exception as e:
@@ -308,11 +328,11 @@ class BlackScreenScanTask(TaskScheduler):
         details = {
             "black_screen_streams": black_streams[:50],
             "error_streams": error_streams[:50],
-            "sample_duration": self._prober.black_screen_sample_duration,
+            "sample_duration": prober.black_screen_sample_duration,
             "reordered_channels": reorder_count,
         }
 
-        if self._cancel_requested:
+        if cancelled:
             return TaskResult(
                 success=False,
                 message="Black screen scan cancelled",
@@ -339,7 +359,7 @@ class BlackScreenScanTask(TaskScheduler):
             details=details,
         )
 
-    async def _resolve_group_names(self) -> list[str]:
+    async def _resolve_group_names(self, prober) -> list[str]:
         """Resolve channel_groups (which may be IDs or names) to group names."""
         if not self._channel_groups:
             return []
@@ -348,7 +368,7 @@ class BlackScreenScanTask(TaskScheduler):
             return self._channel_groups
         # IDs → names
         try:
-            all_groups = await self._prober.client.get_channel_groups()
+            all_groups = await prober.client.get_channel_groups()
             id_to_name = {g["id"]: g.get("name") for g in all_groups}
             return [id_to_name[gid] for gid in self._channel_groups if gid in id_to_name]
         except Exception as e:

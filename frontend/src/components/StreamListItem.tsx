@@ -199,6 +199,11 @@ export const StreamListItem = memo(function StreamListItem({
             <span className="material-icons">speed</span>
           </span>
         )}
+        {streamStats?.probe_status === 'success' && streamStats.is_unstable === true && (
+          <span className="meta-tag probe-low-fps" title="Unstable playback: frequent in-place reconnects in Playback Probe">
+            <span className="material-icons">sync_problem</span>
+          </span>
+        )}
         {/* Strike count badge */}
         {streamStats && streamStats.probe_status !== 'failed' && streamStats.probe_status !== 'timeout' && streamStats.consecutive_failures > 0 && strikeThreshold > 0 && (
           <span

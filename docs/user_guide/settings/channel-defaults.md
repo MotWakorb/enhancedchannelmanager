@@ -118,6 +118,11 @@ The health controls are evaluated before the enabled criteria:
   also subject to **Deprioritize Failed Streams**. It follows Low FPS in the
   default category order and when a stream has both flags. Existing custom
   orders are preserved, with Low Bitrate appended when missing.
+- **Deprioritize Unstable Streams** is off by default. Enable it to place
+  streams that Playback Probe marked unstable in a lower Priority category,
+  also subject to **Deprioritize Failed Streams**. It follows Low Bitrate in
+  the default category order and when a stream has several flags. Existing
+  custom orders are preserved, with Unstable Playback appended when missing.
 - **Failed Stream Ordering** controls which lower health category sits closer
   to working streams. The enabled criteria still order streams within the same
   health category.
@@ -134,8 +139,8 @@ and a stream with no matching rules scores 0.
 
 Displayed rule order is organizational only. It does not create precedence or
 change the result. The Priority health controls and health buckets do not apply
-in Points mode; add explicit Failed Streams, Black Screen, Low FPS, or Low Bitrate rules if
-health should affect the score.
+in Points mode; add explicit Failed Streams, Black Screen, Low FPS, Low Bitrate, or Unstable
+Playback rules if health should affect the score.
 
 Numeric and Video Codec conditions support every operator shown below. Boolean
 conditions support **Equals (=)** only.
@@ -165,6 +170,7 @@ conditions support **Equals (=)** only.
 | Black Screen | `True` or `False` | The saved black-screen detection result. |
 | Low FPS | `True` or `False` | The saved low-FPS detection result, based on the configured FPS threshold. |
 | Low Bitrate | `True` or `False` | The saved resolution-relative low-bitrate flag. No automatic penalty or default Points rule is added. |
+| Unstable Playback | `True` or `False` | The saved playback-stability flag; unknown below minimum exposure matches neither. No automatic penalty or default Points rule is added. |
 
 If a stream has no usable value for a Points condition, that rule does not
 match. Unknown is not treated as zero or `False`: for example, a stream with no
@@ -197,6 +203,35 @@ watchability guarantee or codec-specific quality model. Threshold changes apply
 to future probes; toggles and order apply to future sorts. Existing rows are
 not reclassified when settings change. Numeric Bitrate criteria and direct
 single-field sorting keep their existing behavior.
+
+#### Unstable playback
+
+Playback Probe plays the lead stream of your most-watched channels for a few
+minutes. It counts ffmpeg in-place reconnects (ffmpeg's
+`Will reconnect at <offset>` with a non-zero offset), the signature of a
+provider replaying its buffer after a connection reset, and failed starts.
+Timestamp discontinuities are recorded for information only and never
+count toward the rate.
+
+In **Settings > Maintenance > Stream Probing**, two thresholds decide the
+**Unstable Playback** flag:
+
+- A stream is unstable when consecutive failed starts reach **Playback
+  start-failure threshold** (default 2), regardless of exposure.
+- Otherwise, streams with under 10 minutes sampled stay unclassified, unless
+  they failed to start repeatedly, and sort as healthy.
+- Otherwise, a stream is unstable when in-place reconnects per played hour,
+  over its last three complete samples, reach **Playback reconnect threshold**
+  (default 4).
+
+Changing either threshold re-classifies every sampled stream immediately.
+
+- **Deprioritize Unstable Streams** (off by default): in Priority mode, move
+  unstable streams below working streams when Deprioritize Failed Streams is
+  on; drag **Unstable Playback** in the category order to choose where they
+  land among the other deprioritized categories.
+- In Points mode add an **Unstable Playback** rule instead, for example
+  `Unstable Playback eq true: -50`.
 
 After the selected strategy has finished, equal streams always sort by numeric
 stream ID in ascending order. This final tie-break makes the result
