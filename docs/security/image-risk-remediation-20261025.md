@@ -1,5 +1,12 @@
 # Published-image risk remediation — 2026-10-25
 
+> **Current status: draft, not published.** MCP native candidates pass on both
+> architectures with zero all-severity findings. ECM ARM awaits vendor-fixed
+> packages; ECM AMD's two missing exact source artifacts have been recovered and
+> authenticated, with selected hash-pinned routes implemented and live-tested.
+> Complete rebuilt-image/source verification is still required. Earlier receipts below
+> are retained as history, not the current MCP result.
+
 ## Scope and baseline
 
 The fresh all-severity Trivy 0.76.1 database from **2026-10-25 07:10 UTC**
@@ -157,6 +164,73 @@ from that result. The new recipe SHA-256 is
 `7ae24969cf1636679bdf766242ee2c716683b112241da009fe20899c76aa9a46`;
 ARM descriptors and FFmpeg/gosu source/configuration/key/patch/Packman inputs
 remain byte-exact.
+
+### GitHub follow-up: MCP green; ECM source availability still blocks
+
+PR #1040 head `1ff46f22652c2531a55107740dbb38dd0888eb3e` was tested in
+[build run 40203997657](https://github.com/MotWakorb/enhancedchannelmanager/actions/runs/40203997657)
+and [test run 40203997677](https://github.com/MotWakorb/enhancedchannelmanager/actions/runs/40203997677).
+Both native MCP builds, actual crypto/installer-absence checks and High/Critical
+container security gates pass. Backend/frontend tests, both CodeQL analyses and
+dependency security scans pass. The source-pinned FFmpeg producer compiles on
+both architectures, including AMD's refreshed LAME 4.0 dependency; complete final
+ECM runtime/media/bootstrap/source checks remain unexecuted, not inferred to pass.
+
+- **ECM ARM:** the vendor-fixed Brotli/CA floors remain unavailable.
+- **ECM AMD:** the refreshed runtime builds, then exact source collection fails
+  HTTP 404. Signed binary metadata is snapshot **20261023**, while signed source
+  metadata is **20261024**. Two required observed runtime source identities return
+  404: `harfbuzz-14.6.0-1.1.src.rpm` and
+  `openSUSE-release-20261023-4366.1.src.rpm`. Newer source versions are not valid
+  substitutes. The historical traceback did not log the failed URL; HarfBuzz is
+  the earliest currently failing candidate, not a directly logged request.
+- **MCP Server Tests job:** its ECM build for the live isolation test hits the
+  same source-collection 404; this is not a newly failing MCP unit test.
+
+An exact cached HarfBuzz SRPM was freshly reverified against the pinned vendor key,
+header and complete Source/Patch payload. Recovery of the exact release SRPM is
+still required before any source-cache route can be complete. Track the additional
+source-delivery blocker as `enhancedchannelmanager-7rsy7`; do not skip a package,
+substitute a newer SRPM, relax signatures or bypass this gate. Flushed public exact
+source-URL diagnostics make future failures attributable without changing failure
+or integrity semantics. They are not themselves a fix for missing source bytes.
+
+Subsequent bounded recovery authenticated the **exact** release SRPM at the source
+mirror published by openSUSE's official mirror report:
+`https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261023-4366.1.src.rpm`.
+SHA-256: `0ca30fbc607834c8c5633ffe977f9d7bc1bd766a430976fec09185ae54d2869e`.
+Pinned signer, exact source header and complete Source/Patch payload checks pass.
+The earlier “not recovered” status is superseded; production integration is still
+subject to complete rebuilt-image verification. The implementation selects only
+these two exact `(openSUSE, x86_64, filename)` routes, with the same independent
+URL/hash pins in the native-image consumer:
+
+| Exact source filename | Selected requested HTTPS URL | Required complete-file SHA-256 |
+|---|---|---|
+| `harfbuzz-14.6.0-1.1.src.rpm` | `https://slc-mirror.opensuse.org/source/tumbleweed/repo/oss/src/harfbuzz-14.6.0-1.1.src.rpm` | `53e21e5cb510895c46935f1f6325415846549316e200fb88a69d2a66b3fbc65f` |
+| `openSUSE-release-20261023-4366.1.src.rpm` | `https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261023-4366.1.src.rpm` | `0ca30fbc607834c8c5633ffe977f9d7bc1bd766a430976fec09185ae54d2869e` |
+
+The modified producer performed complete real GETs and unchanged signature/header/
+payload verification of both exact artifacts. That two-origin sample is **not** a
+complete final-image inventory. Hash pins apply to both downloads and existing
+cache reuse; a caller-supplied hash index cannot redefine them. Requested/final
+URL records remain truthful. Old ledgers naming canonical URLs for these two
+origins must be regenerated, not relabeled. Other vendor/architecture/filename
+routes, including all ARM and Packman routes, remain unchanged. No generic mirror
+prefix, automatic fallback/retry, newer source substitution or weaker key/header/
+payload check was added. Mirror loss or a one-byte mismatch remains fatal.
+
+The two immutable MCP candidates from that same CI run were independently scanned
+at **all severities**, not just the CI High/Critical threshold: **zero findings,
+38 APK / 41 Python packages each**, with unchanged current database bytes.
+Archive/config/rootfs IDs and native crypto/absence receipts match the actual PR
+test merge `0a5c3085d196b282d306e75c002a05c34132a3f2` (parents are protected base
+`0bc12600…` and PR head `1ff46f22…`). They are not published/final-merge subjects.
+
+| MCP platform | Verified OCI manifest | Fresh complete report SHA-256 |
+|---|---|---|
+| amd64 | `sha256:74eb5d62fd70dec69d385671ffe5a6c665595a815d34aa90b4f99db82cdf51b2` | `dc60a6126c4adb85287056ef987848ce0477f806f96a03909819c09cb2fda5f4` |
+| arm64 | `sha256:d54dbbec01104a79735a9a1b0e5a944044d569e533ff6f228e4b11cd4583008c` | `a3a354b99f3907c87f9e2972a5a7834569a002ddc8148ec436f6dc15854837b1` |
 
 - `enhancedchannelmanager-l5z6r` — Brotli.
 - `enhancedchannelmanager-97j9u` — Mozilla CA package and trust coverage.

@@ -42,7 +42,7 @@
     "mcp-server/requirements.txt": "sha256:de79f8bc7af6839295f4dfcb225e063fec46e841035468d17eaf84f48324833f",
     "sbom/native-dependencies.json": "sha256:530f7498262e5c38541513e01ca12b4f6964b61b80273f75ec8956ff5e17a82a",
     "scripts/build_native_runtime.py": "sha256:7a8f0d8487deed7f1eaa523b0369d2cca40ce86cb042eb79c6667c3197e2aff2",
-    "scripts/collect_native_sources.py": "sha256:0ef8ce572ca000a07d799f8bc78104e0ad15cff193e08b4739219b3f5c8afe55"
+    "scripts/collect_native_sources.py": "sha256:9141041192cc65d81977f1bf8ba65b9bc34e05db8c6adb024af9c3437a3a57cb"
   },
   "documents": [
     {

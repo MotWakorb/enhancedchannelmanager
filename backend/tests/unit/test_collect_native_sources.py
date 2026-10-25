@@ -9,6 +9,7 @@ import os
 import struct
 import subprocess
 import sys
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,281 @@ spec = importlib.util.spec_from_file_location(
 collector = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = collector
 spec.loader.exec_module(collector)
+
+MIRROR_ROUTES = json.loads(
+    (
+        ROOT / "backend/tests/fixtures/source_mirror_recovery_20261025/routes.json"
+    ).read_text()
+)["routes"]
+
+
+def test_reviewed_mirror_policy_has_only_two_exact_pinned_tuples():
+    assert collector.EXACT_SOURCE_ROUTES == {
+        (row["vendor"], row["architecture"], row["filename"]): {
+            "url": row["url"],
+            "sha256": row["sha256"],
+        }
+        for row in MIRROR_ROUTES
+    }
+
+
+@pytest.mark.parametrize("route", MIRROR_ROUTES, ids=lambda r: r["filename"])
+def test_only_reviewed_vendor_architecture_filename_selects_mirror(route):
+    assert (
+        collector.source_url(route["vendor"], route["architecture"], route["filename"])
+        == route["url"]
+    )
+    for vendor, arch, filename in [
+        ("openSUSE", "aarch64", route["filename"]),
+        ("http://packman.links2linux.de", "x86_64", route["filename"]),
+        ("openSUSE", "x86_64", route["filename"].replace(".src.rpm", "-new.src.rpm")),
+        ("openSUSE", "x86_64", "harfbuzz-15.0.0-1.1.src.rpm"),
+        ("openSUSE", "x86_64", "openSUSE-release-20261024-4368.1.src.rpm"),
+    ]:
+        assert collector.source_url(vendor, arch, filename) == (
+            collector.REPOSITORIES[vendor]["urls"][arch] + "src/" + filename
+        )
+
+
+def mirror_response(monkeypatch, route, body=b"modeled complete archive, not an RPM"):
+    """Tiny HTTP stand-in; live complete SRPM signature/closure proof is separate."""
+    requests = []
+
+    class Response(io.BytesIO):
+        def geturl(self):
+            return route["url"] + "?served=1"
+
+    def open_(_self, url, **_kwargs):
+        requests.append(url)
+        return Response(body)
+
+    monkeypatch.setattr(collector.urllib.request.OpenerDirector, "open", open_)
+    real_sha = collector.sha256
+    monkeypatch.setattr(
+        collector,
+        "sha256",
+        lambda path: route["sha256"] if path.read_bytes() == body else real_sha(path),
+    )
+    return requests
+
+
+@pytest.mark.parametrize("route", MIRROR_ROUTES, ids=lambda r: r["filename"])
+def test_mirror_download_retains_actual_requested_and_redirected_url(
+    monkeypatch, tmp_path, route
+):
+    requests = mirror_response(monkeypatch, route)
+    result = collector.download(
+        route["url"], tmp_path / "archive", collector.Budget(1, 1024, 5)
+    )
+    assert requests == [route["url"]]
+    assert result == {"url": route["url"], "final_url": route["url"] + "?served=1"}
+
+
+@pytest.mark.parametrize("route", MIRROR_ROUTES, ids=lambda r: r["filename"])
+@pytest.mark.parametrize("body", [b"", b"truncated", b"tainted archive"])
+def test_mirror_download_rejects_wrong_completed_bytes(
+    monkeypatch, tmp_path, route, body
+):
+    class Response(io.BytesIO):
+        def geturl(self):
+            return route["url"]
+
+    monkeypatch.setattr(
+        collector.urllib.request.OpenerDirector,
+        "open",
+        lambda *_a, **_k: Response(body),
+    )
+    with pytest.raises(ValueError, match="checksum"):
+        collector.download(route["url"], tmp_path / "bad", collector.Budget(1, 1024, 5))
+
+
+@pytest.mark.parametrize("route", MIRROR_ROUTES, ids=lambda r: r["filename"])
+@pytest.mark.parametrize("mutation", ["http", "other_file", "query", "host", "path"])
+def test_mirror_download_does_not_allow_other_urls(
+    monkeypatch, tmp_path, route, mutation
+):
+    url = route["url"]
+    url = {
+        "http": url.replace("https:", "http:"),
+        "other_file": url.replace(route["filename"], "other-1-1.src.rpm"),
+        "query": url + "?override=1",
+        "host": url.replace("https://", "https://untrusted.example/"),
+        "path": url.replace("/src/", "/src/../src/"),
+    }[mutation]
+    monkeypatch.setattr(
+        collector.urllib.request.OpenerDirector,
+        "open",
+        lambda *_a, **_k: pytest.fail("unreviewed URL reached HTTP"),
+    )
+    with pytest.raises(ValueError, match="URLs"):
+        collector.download(url, tmp_path / "bad", collector.Budget(1, 1024, 5))
+
+
+@pytest.mark.parametrize("route", MIRROR_ROUTES, ids=lambda r: r["filename"])
+@pytest.mark.parametrize("failure", [None, "signature", "header", "payload"])
+def test_mirror_main_keeps_diagnostic_ledger_and_verification_handoff(
+    monkeypatch, tmp_path, capsys, route, failure
+):
+    calls = fake_native(monkeypatch)
+    requests = mirror_response(monkeypatch, route)
+    verified = []
+
+    def verify(path, filename, vendor, database, seconds):
+        verified.append((filename, vendor, path.read_bytes(), seconds))
+        if failure:
+            raise ValueError(failure + " verification failed")
+        return {
+            "filename": filename,
+            "vendor": vendor,
+            "sha256": route["sha256"],
+            "fingerprint": route["fingerprint"],
+        }
+
+    monkeypatch.setattr(collector, "verify_source", verify)
+    inventory = tmp_path / "inventory.tsv"
+    inventory.write_text(route["inventory_row"])
+    output = tmp_path / "out"
+    args = [
+        "--inventory",
+        str(inventory),
+        "--arch",
+        "x86_64",
+        "--out",
+        str(output),
+        "--suse-key",
+        str(FIXTURES / "suse-key.asc"),
+    ]
+    if failure:
+        with pytest.raises(ValueError, match=failure):
+            collector.main(args)
+        assert not (output / "index.json").exists()
+    else:
+        collector.main(args)
+        source = json.loads((output / "index.json").read_text())["sources"][0]
+        assert source["url"] == route["url"]
+        assert source["final_url"] == route["url"] + "?served=1"
+    assert requests == [route["url"]]
+    assert verified[0][:2] == (route["filename"], "openSUSE")
+    assert any(command[0] == "gpg" for command in calls)
+    assert capsys.readouterr().out.splitlines() == [
+        "Collecting exact source: " + route["url"]
+    ]
+
+
+@pytest.mark.parametrize("route", MIRROR_ROUTES, ids=lambda r: r["filename"])
+def test_pinned_cache_cannot_replace_reviewed_digest(monkeypatch, tmp_path, route):
+    fake_native(monkeypatch)
+    archive = tmp_path / route["filename"]
+    archive.write_bytes(b"different signed build or tainted cache")
+    inventory = tmp_path / "inventory.tsv"
+    inventory.write_text(route["inventory_row"])
+    expected = tmp_path / "index.json"
+    expected.write_text(
+        json.dumps(
+            {
+                "architecture": "x86_64",
+                "sources": [
+                    {
+                        "filename": route["filename"],
+                        "url": route["url"],
+                        "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setattr(
+        collector,
+        "verify_source",
+        lambda *_a: pytest.fail("bad cache reached signature/header verifier"),
+    )
+    with pytest.raises(ValueError, match="checksum"):
+        collector.main(
+            [
+                "--inventory",
+                str(inventory),
+                "--arch",
+                "x86_64",
+                "--out",
+                str(tmp_path / "out"),
+                "--suse-key",
+                str(FIXTURES / "suse-key.asc"),
+                "--cache-dir",
+                str(tmp_path),
+                "--expected-sha256",
+                str(expected),
+            ]
+        )
+    assert not (tmp_path / "out/index.json").exists()
+
+
+@pytest.mark.parametrize("route", MIRROR_ROUTES, ids=lambda r: r["filename"])
+@pytest.mark.parametrize("failure", [404, 503, "checksum"])
+def test_mirror_failure_logs_selected_url_without_fallback_or_index(
+    monkeypatch, tmp_path, capsys, route, failure
+):
+    fake_native(monkeypatch)
+    requests = []
+
+    class Response(io.BytesIO):
+        def geturl(self):
+            return route["url"]
+
+    def open_(_self, url, **_kwargs):
+        requests.append(url)
+        if isinstance(failure, int):
+            raise urllib.error.HTTPError(url, failure, "unavailable", {}, None)
+        return Response(b"wrong or truncated source bytes")
+
+    monkeypatch.setattr(collector.urllib.request.OpenerDirector, "open", open_)
+    monkeypatch.setattr(
+        collector,
+        "verify_source",
+        lambda *_a: pytest.fail("failed fetch reached verifier"),
+    )
+    inventory = tmp_path / "inventory.tsv"
+    inventory.write_text(route["inventory_row"])
+    error = urllib.error.HTTPError if isinstance(failure, int) else ValueError
+    with pytest.raises(error):
+        collector.main(
+            [
+                "--inventory",
+                str(inventory),
+                "--arch",
+                "x86_64",
+                "--out",
+                str(tmp_path / "out"),
+                "--suse-key",
+                str(FIXTURES / "suse-key.asc"),
+            ]
+        )
+    assert requests == [route["url"]]
+    assert capsys.readouterr().out.splitlines() == [
+        "Collecting exact source: " + route["url"]
+    ]
+    assert not (tmp_path / "out/index.json").exists()
+
+
+@pytest.mark.parametrize("route", MIRROR_ROUTES, ids=lambda r: r["filename"])
+def test_mirror_expected_index_binds_selected_request_not_old_canonical(
+    tmp_path, route
+):
+    record = {key: route[key] for key in ("filename", "url", "sha256")}
+    index = {"architecture": "x86_64", "sources": [record]}
+    path = tmp_path / "index.json"
+    path.write_text(json.dumps(index))
+    origins = [(route["filename"], route["vendor"])]
+    assert collector.expected_hashes(path, "x86_64", origins) == {
+        route["filename"]: route["sha256"]
+    }
+    record["url"] = (
+        collector.REPOSITORIES["openSUSE"]["urls"]["x86_64"]
+        + "src/"
+        + route["filename"]
+    )
+    path.write_text(json.dumps(index))
+    with pytest.raises(ValueError, match="repository"):
+        collector.expected_hashes(path, "x86_64", origins)
 
 
 def test_recorded_inventory_and_actual_vendor_key_bindings():
@@ -382,6 +658,48 @@ def test_live_query_targets_runtime_root_not_builder_db(monkeypatch, tmp_path):
     assert queries == [
         ["rpm", "--root", str(tmp_path / "runtime"), "-qa", "--qf", collector.QUERY]
     ]
+
+
+@pytest.mark.parametrize("status", [404, 503])
+def test_failed_exact_source_is_logged_without_fallback_or_success_index(
+    monkeypatch, tmp_path, capsys, status
+):
+    fake_native(monkeypatch)
+    inventory = tmp_path / "inventory.tsv"
+    inventory.write_text(
+        (FIXTURES / "inventory.tsv").read_text().splitlines()[1] + "\n"
+    )
+    requests = []
+
+    def fail(url, destination, budget):
+        requests.append(url)
+        raise urllib.error.HTTPError(url, status, "source unavailable", {}, None)
+
+    monkeypatch.setattr(collector, "download", fail)
+    output = tmp_path / "out"
+    with pytest.raises(urllib.error.HTTPError) as error:
+        collector.main(
+            [
+                "--inventory",
+                str(inventory),
+                "--arch",
+                "x86_64",
+                "--out",
+                str(output),
+                "--suse-key",
+                str(FIXTURES / "suse-key.asc"),
+            ]
+        )
+    assert error.value.code == status
+    assert requests == [
+        collector.source_url(
+            "openSUSE", "x86_64", "system-user-root-20190513-2.20.src.rpm"
+        )
+    ]
+    assert capsys.readouterr().out.splitlines() == [
+        "Collecting exact source: " + requests[0]
+    ]
+    assert not (output / "index.json").exists()
 
 
 def test_count_bound_fails_before_output(monkeypatch, tmp_path):

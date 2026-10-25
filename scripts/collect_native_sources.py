@@ -42,12 +42,27 @@ REPOSITORIES = {
         "fingerprint": "F8875B880D518B6B8C530D1345A1D0671ABD1AFB",
     },
 }
+# Two authenticated historical SRPMs absent from the rolling source feed.
+# Exact routing (not fallback); scope/hash enforced by test_collect_native_sources.
+EXACT_SOURCE_ROUTES = {
+    ("openSUSE", "x86_64", "harfbuzz-14.6.0-1.1.src.rpm"): {
+        "url": "https://slc-mirror.opensuse.org/source/tumbleweed/repo/oss/src/harfbuzz-14.6.0-1.1.src.rpm",
+        "sha256": "53e21e5cb510895c46935f1f6325415846549316e200fb88a69d2a66b3fbc65f",
+    },
+    ("openSUSE", "x86_64", "openSUSE-release-20261023-4366.1.src.rpm"): {
+        "url": "https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261023-4366.1.src.rpm",
+        "sha256": "0ca30fbc607834c8c5633ffe977f9d7bc1bd766a430976fec09185ae54d2869e",
+    },
+}
 TOKEN = re.compile(r"[A-Za-z0-9_+~.-]+\Z")
 SOURCE_NAME = re.compile(r"[A-Za-z0-9_+~.-]+\.src\.rpm\Z")
 MAX_PAYLOAD = 2 * 1024**3
 
 
 def source_url(vendor: str, architecture: str, filename: str) -> str:
+    route = EXACT_SOURCE_ROUTES.get((vendor, architecture, filename))
+    if route:
+        return route["url"]
     return REPOSITORIES[vendor]["urls"][architecture] + "src/" + filename
 
 
@@ -432,7 +447,15 @@ class HTTPSRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def download(url: str, destination: Path, budget: Budget) -> dict:
-    if not any(
+    pinned_hash = next(
+        (
+            route["sha256"]
+            for route in EXACT_SOURCE_ROUTES.values()
+            if route["url"] == url
+        ),
+        None,
+    )
+    if pinned_hash is None and not any(
         url.startswith(base + "src/")
         and SOURCE_NAME.fullmatch(url[len(base + "src/") :])
         for repo in REPOSITORIES.values()
@@ -453,6 +476,8 @@ def download(url: str, destination: Path, budget: Budget) -> dict:
                 budget.consume(len(block))
                 output.write(block)
         budget.remaining()
+        if pinned_hash is not None and sha256(destination) != pinned_hash:
+            raise ValueError("pinned source checksum mismatch: " + url)
         return {"url": url, "final_url": response.geturl()}
 
 
@@ -568,6 +593,7 @@ def main(argv: list[str] | None = None) -> None:
             budget.remaining()
             path = directory / (filename + ".partial")
             url = source_url(vendor, options.arch, filename)
+            print(f"Collecting exact source: {url}", flush=True)
             cached = options.cache_dir / filename if options.cache_dir else None
             if cached is not None and cached.exists():
                 if not cached.is_file() or cached.is_symlink():
@@ -583,6 +609,9 @@ def main(argv: list[str] | None = None) -> None:
                 retrieval = download(url, path, budget)
             if filename in expected and sha256(path) != expected[filename]:
                 raise ValueError("expected source checksum mismatch: " + filename)
+            route = EXACT_SOURCE_ROUTES.get((vendor, options.arch, filename))
+            if route and sha256(path) != route["sha256"]:
+                raise ValueError("pinned source checksum mismatch: " + url)
             record = verify_source(
                 path, filename, vendor, databases[vendor], min(120, budget.remaining())
             )

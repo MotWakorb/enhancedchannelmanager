@@ -34,6 +34,18 @@ VENDORS = {
     "openSUSE": "AD485664E901B867051AB15F35A2F86E29B700A4",
     "http://packman.links2linux.de": "F8875B880D518B6B8C530D1345A1D0671ABD1AFB",
 }
+# Independent consumer pins for the two authenticated historical AMD64 sources.
+# Exact URL/hash scope is exercised by test_native_source_delivery.
+EXACT_SOURCE_ROUTES = {
+    ("openSUSE", "x86_64", "harfbuzz-14.6.0-1.1.src.rpm"): {
+        "url": "https://slc-mirror.opensuse.org/source/tumbleweed/repo/oss/src/harfbuzz-14.6.0-1.1.src.rpm",
+        "sha256": "53e21e5cb510895c46935f1f6325415846549316e200fb88a69d2a66b3fbc65f",
+    },
+    ("openSUSE", "x86_64", "openSUSE-release-20261023-4366.1.src.rpm"): {
+        "url": "https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261023-4366.1.src.rpm",
+        "sha256": "0ca30fbc607834c8c5633ffe977f9d7bc1bd766a430976fec09185ae54d2869e",
+    },
+}
 LIBRARIES = {
     "avcodec",
     "avdevice",
@@ -209,7 +221,12 @@ def _rpm_sources(root, architecture):
             if architecture == "x86_64"
             else "https://download.opensuse.org/ports/aarch64/source/tumbleweed/repo/oss/"
         )
-        assert source["url"] == repository + "src/" + name
+        route = EXACT_SOURCE_ROUTES.get((vendor, architecture, name))
+        assert source["url"] == (route["url"] if route else repository + "src/" + name)
+        if route:
+            assert source["sha256"] == route["sha256"], (
+                "pinned source checksum mismatch"
+            )
         assert source["path"] == "sources/" + name
         assert source["authentication"] == "pinned-rpm-signature-and-exact-header"
         assert source["license"] and source["license"] != "(none)"
