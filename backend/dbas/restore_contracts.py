@@ -157,6 +157,9 @@ class SkipReason(str, Enum):
     # divergence in CONTENTS is reported separately, after channels, as
     # :attr:`RestoreReport.channel_group_drift`.
     ALREADY_EXISTS_NAME_MATCH = "already_exists_name_match"
+    # A stream matcher chose a destination row for reuse, not a row update or
+    # proof that all archived fields are identical. Fuzzy warnings remain separate.
+    EXISTING_STREAM_REUSED = "existing_stream_reused"
     EXCLUDED_BY_OPERATOR = "excluded_by_operator"           # category opt-out / selection
     CURRENT_ADMIN_PRESERVED = "current_admin_preserved"     # …-l1p4p D11 guard
     UNSUPPORTED_IN_THIS_VERSION = "unsupported_in_this_version"  # e.g. plugins (ADR-012 D10)

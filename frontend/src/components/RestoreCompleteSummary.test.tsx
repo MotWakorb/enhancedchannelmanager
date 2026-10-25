@@ -539,6 +539,24 @@ describe('RestoreCompleteSummary — stream reattach', () => {
     expect(within(details).queryByText('Already exists (identical)')).not.toBeInTheDocument();
   });
 
+  it('labels a reused stream without claiming identical fields or an update', () => {
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          categories: [category({
+            entity_type: 'stream',
+            skipped: 1,
+            skip_details: [{ reason: 'existing_stream_reused', label: 'Matched stream' }],
+          })],
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('rcs-skip-toggle'));
+    const details = screen.getByTestId('rcs-skip-details');
+    expect(within(details).getByText('Reused existing stream (not updated)')).toBeInTheDocument();
+    expect(within(details).queryByText('Already exists (identical)')).not.toBeInTheDocument();
+  });
+
   it('renders a NOT-PREDICTED category as such instead of as four zeroes', () => {
     // Drill run 12: the apply reported "Streams 9 CREATED" and the preview had
     // no Streams row at all. Emitting the row with zeroes would just swap an

@@ -627,7 +627,12 @@ class DbasSyncTask(TaskScheduler):
         from dbas.restore_contracts import RestoreOutcome
 
         is_dry_run = bool(report.is_dry_run)
-        outcome = report.outcome.value if report.outcome else "dry_run"
+        # No realized outcome is not evidence of preview mode (c7ll3). Keep the
+        # report's enum/null contract and use the journal's existing unknown
+        # label for an apply that never computed an outcome.
+        outcome = report.outcome.value if report.outcome else (
+            "dry_run" if is_dry_run else "unknown"
+        )
         unreadable = getattr(report, "destination_unreadable", None)
         succeeded = unreadable is None and (
             is_dry_run or report.outcome == RestoreOutcome.SUCCESS
@@ -736,8 +741,11 @@ class DbasSyncTask(TaskScheduler):
         if is_dry_run:
             success_count = sum(
                 c.would_create + c.would_update for c in report.categories
+                if c.predicted is not False
             )
-            skipped_count = sum(c.would_skip for c in report.categories)
+            skipped_count = sum(
+                c.would_skip for c in report.categories if c.predicted is not False
+            )
         else:
             success_count = sum(c.created + c.updated for c in report.categories)
             skipped_count = sum(c.skipped for c in report.categories)
@@ -827,9 +835,11 @@ class DbasSyncTask(TaskScheduler):
     @staticmethod
     def _summary_message(report, is_dry_run: bool, outcome: str) -> str:
         if is_dry_run:
-            total_create = sum(c.would_create for c in report.categories)
-            total_update = sum(c.would_update for c in report.categories)
-            total_skip = sum(c.would_skip for c in report.categories)
+            predicted = [c for c in report.categories if c.predicted is not False]
+            unpredicted = [c for c in report.categories if c.predicted is False]
+            total_create = sum(c.would_create for c in predicted)
+            total_update = sum(c.would_update for c in predicted)
+            total_skip = sum(c.would_skip for c in predicted)
             # `failed` is populated on a dry-run preview by the per-item
             # conflict paths (source-side duplicate name, ambiguous
             # null-channel-number collision) — surface it here too so this
@@ -837,13 +847,27 @@ class DbasSyncTask(TaskScheduler):
             total_conflict = sum(c.failed for c in report.categories)
             from tasks.dbas_restore import DbasRestoreTask
 
-            return (
-                "Sync dry-run complete: would create %d, update %d, skip %d, "
-                "%d conflict(s) across %d categories" % (
-                    total_create, total_update, total_skip, total_conflict,
-                    len(report.categories),
+            caveats = ""
+            if unpredicted:
+                caveats = "; counts cover predicted categories only; " + "; ".join(
+                    f"{c.entity_type.value}: not predicted"
+                    + ((" — " + c.caveat) if c.caveat else "")
+                    for c in unpredicted
                 )
-            ) + DbasRestoreTask._credential_reentry_suffix(
+            if unpredicted and not predicted:
+                summary = (
+                    "Sync dry-run complete: no category counts predicted; "
+                    f"{total_conflict} conflict(s)"
+                )
+            else:
+                summary = (
+                    "Sync dry-run complete: would create %d, update %d, skip %d, "
+                    "%d conflict(s) across %d categories" % (
+                        total_create, total_update, total_skip, total_conflict,
+                        len(report.categories),
+                    )
+                )
+            return summary + caveats + DbasRestoreTask._credential_reentry_suffix(
                 report, is_preview=True
             ) + DbasSyncTask._account_field_convergence_suffix(
                 report, is_preview=True

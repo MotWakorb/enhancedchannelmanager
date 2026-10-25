@@ -34,7 +34,7 @@ fallback resolves), then the whole ordered list is sent in one ``update_channel`
 create_stream (``nav0c``) is used ONLY inside the fallback synthesizer for
 orphans; a matched stream is never created. The STREAM-category counts in the
 report distinguish them: synthesized orphans land in ``created`` (ahygg), matched
-existing streams in ``updated`` (attached-not-created).
+existing streams in ``skipped`` with a reuse reason (no stream-row write).
 
 FK remapping (the load-bearing correctness control). A Dispatcharr export records
 each entity's id *as it was on the source instance*; on restore the destination
@@ -331,8 +331,7 @@ async def import_channels(
             ``fuzzy_stream_matching`` flag (default off) so a continuous sync does
             not let a fuzzy name guess silently shadow a real stream every cycle.
             When fuzzy IS allowed and a Tier-4 hit wins, the attach is flagged
-            LOW-CONFIDENCE in ``report.notes`` rather than counted as a silent
-            ``updated``.
+            LOW-CONFIDENCE in ``report.notes`` alongside the reuse count.
         created_source_ids: OPTIONAL out-parameter. When given, every ARCHIVE
             (source) id this importer CREATED is added to it — and on a dry run,
             every id it WOULD create. It is the "did this restore make this
@@ -667,16 +666,16 @@ def _plan_streams(
 
     For each archived stream (in order) run :func:`match_stream`:
 
-    * a HIT records the matched destination id in the slot and counts the attach
-      as an ``updated`` STREAM in the report (attached, NOT created/ledgered);
+    * a HIT records the matched destination id in the slot and counts the stream
+      as reused (``skipped``), NOT updated, created or ledgered;
     * a MISS records the archived stream as an orphan slot for the batched
       fallback to synthesize.
 
     ``allow_fuzzy`` floors the matcher at Tier-3 exact-normalized when ``False``
     (spike ``xp6mp`` ruling 1b — the sync path's collision-safe stream floor). A
     Tier-4 fuzzy hit (only possible when ``allow_fuzzy`` is True) is still
-    attached, but is flagged LOW-CONFIDENCE in ``report.notes`` so it is never a
-    silent ``updated`` — the operator sees which attaches rest on a fuzzy guess.
+    attached, but is flagged LOW-CONFIDENCE in ``report.notes`` so the operator
+    sees which attaches rest on a fuzzy guess.
 
     A channel with no archived streams produces no plan (nothing to attach).
     """
@@ -693,11 +692,15 @@ def _plan_streams(
         )
         if tier != MatchTier.MISS and match_id is not None:
             plan.slots.append(_StreamSlot(dest_id=match_id))
-            # Matched an EXISTING destination stream: attached, not created — so
-            # it is an ``updated`` STREAM, never ledgered (nothing to roll back).
-            stream_cat.updated += 1
+            # Matching reuses a stream row; only the CHANNEL attachment is
+            # written later. It is not a stream-row update (zcnl5).
+            _skip(
+                stream_cat, SkipReason.EXISTING_STREAM_REUSED,
+                archived_stream.get("name") or "<unknown>",
+                archived_stream.get("id"), False,
+            )
             # A Tier-4 fuzzy hit is LOW-CONFIDENCE: surface it (ruling 1b) so it
-            # is not a silent ``updated``. The stream name is operator-trusted
+            # is not a silent reuse. The stream name is operator-trusted
             # (no secret) — safe to put in a sanitized note.
             if tier == MatchTier.FUZZY_NORMALIZED_NAME:
                 stream_label = archived_stream.get("name") or "<unknown>"
