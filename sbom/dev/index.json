@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": "0.18.2-0047",
+  "version": "0.18.2-0053",
   "created": "2026-10-24T12:00:51Z",
   "kind": "source-manifest",
   "channel": "dev",
@@ -35,7 +35,7 @@
     "docker/native/patches/CVE-2026-107696.patch": "sha256:7518b281a719aa41c5cdd1f259eaf38f6b1e3fb28c09ec254c441abbaad69095",
     "docker/trust/README.md": "sha256:bac4f29677b1a02e25bd767881a4e9047ce0ff1e013aa23600c0766b594d42ad",
     "docker/trust/emsign-ecc-root-ca-g3.pem": "sha256:36e68e205b53c67c7a013894e0d5c8583063468118d1ce78ecbc2200d1dd185c",
-    "frontend/package-lock.json": "sha256:ed0636d796d038afefb3e13bd7fa6829c8aa572b4bb83ae6178b6586f3fc3e6c",
+    "frontend/package-lock.json": "sha256:6a0430651c331afadf817d8493e7e8015a82f1857b433068493fad275a48e3d8",
     "mcp-server/Dockerfile": "sha256:58e90f5183dbf0e42069e3b752690a3f049721c1baa18f33f36aa9819433781c",
     "mcp-server/requirements.txt": "sha256:de79f8bc7af6839295f4dfcb225e063fec46e841035468d17eaf84f48324833f",
     "sbom/native-dependencies.json": "sha256:530f7498262e5c38541513e01ca12b4f6964b61b80273f75ec8956ff5e17a82a",
@@ -83,7 +83,7 @@
           ]
         ]
       },
-      "sha256": "38e0be27a24439b31c10ad99afb476c7814569b8a3713a7ef7698b0a87ad7737"
+      "sha256": "0963c2c975cd8ff20f9f954f71e42633d8f8076259cb77b8c8e1dff93e1e53c8"
     },
     {
       "path": "mcp.spdx.json",
@@ -94,7 +94,7 @@
         "packages": [],
         "relationships": []
       },
-      "sha256": "b702f9d149b2108b2a9219e8a83392965857269b9cf6570393aed74b675d170e"
+      "sha256": "ca76f9ca6fe957e894eb20e44ddd77dc73a81962877e18978c1bc272a7d9cbe0"
     }
   ]
 }
