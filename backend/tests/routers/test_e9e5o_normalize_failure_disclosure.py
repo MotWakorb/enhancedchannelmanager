@@ -78,7 +78,7 @@ class TestSingleCreateNormalizationDisclosure:
         assert data["normalization"]["requested"] is True
         assert data["normalization"]["applied"] is False
         assert data["normalization"]["nameApplied"] == "US: CNN"
-        assert "engine offline" in data["normalization"]["error"]
+        assert data["normalization"]["error"] == "Normalization failed; the original channel name was used."
 
     @pytest.mark.asyncio
     async def test_successful_normalization_reports_applied(self, async_client):
@@ -159,7 +159,7 @@ class TestBulkCommitNormalizationDisclosure:
         assert failure["tempId"] == -1
         assert failure["name"] == "US: CNN"
         assert failure["nameApplied"] == "US: CNN"
-        assert "engine offline" in failure["error"]
+        assert failure["error"] == "Normalization failed; the original channel name was used."
 
     @pytest.mark.asyncio
     async def test_a_create_that_never_persisted_is_not_listed_as_normalized_raw(

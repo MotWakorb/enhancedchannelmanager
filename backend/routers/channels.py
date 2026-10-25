@@ -53,6 +53,7 @@ from database import get_session
 from dispatcharr_client import get_client, logo_was_reused, strip_logo_reuse_marker, upstream_http_exception
 from match_fold import fold_match_key
 from normalization_engine import get_normalization_engine
+from cloud_storage.upload_security import redact_secrets
 import journal
 
 logger = logging.getLogger(__name__)
@@ -988,8 +989,8 @@ async def create_channel(request: CreateChannelRequest, _admin=RequireAdminIfEna
                     if channel_name != request.name:
                         logger.debug("[CHANNELS] Normalized channel name: '%s' -> '%s'", request.name, channel_name)
             except Exception as norm_err:
-                normalization_error = str(norm_err)
-                logger.warning("[CHANNELS] Failed to normalize channel name '%s': %s", request.name, norm_err)
+                normalization_error = "Normalization failed; the original channel name was used."
+                logger.warning("[CHANNELS] Failed to normalize channel name '%s': %s", request.name, redact_secrets(str(norm_err)))
                 # Continue with the original name, and disclose it below.
 
         data = {"name": channel_name}
@@ -3867,14 +3868,14 @@ async def _run_bulk_commit(
                                 if channel_name != op.name:
                                     logger.debug("[CHANNELS-BULK] Normalized channel name: '%s' -> '%s'", op.name, channel_name)
                         except Exception as norm_err:
-                            logger.warning("[CHANNELS-BULK] Failed to normalize channel name '%s': %s", op.name, norm_err)
+                            logger.warning("[CHANNELS-BULK] Failed to normalize channel name '%s': %s", op.name, redact_secrets(str(norm_err)))
                             # Continue with the original name, and disclose it
                             # once the channel exists.
                             pending_normalization_failure = {
                                 "tempId": op.tempId,
                                 "name": op.name,
                                 "nameApplied": op.name,
-                                "error": str(norm_err),
+                                "error": "Normalization failed; the original channel name was used.",
                             }
 
                     # Handle logo - if logoUrl provided but no logoId, resolve

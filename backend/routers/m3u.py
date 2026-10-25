@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from auth import RequireAdminIfEnabled
 from cache import get_cache
+from cloud_storage.upload_security import redact_secrets
 from config import (
     CONFIG_DIR,
     MCPApiKeyStorageError,
@@ -270,9 +271,9 @@ async def _reconcile_profiles_after_refresh(client, account_name: str):
             )
             return reason
     except Exception as e:
-        logger.warning("[M3U-REFRESH] Profile reconcile failed for '%s': %s", account_name, e)
-        return (f"the channel-profile reconcile failed ({e}) — it will retry on "
-                f"the next scheduled sync")
+        logger.warning("[M3U-REFRESH] Profile reconcile failed for '%s': %s", account_name, redact_secrets(str(e)))
+        return ("the channel-profile reconcile failed — it will retry on "
+                "the next scheduled sync")
     return None
 
 
@@ -1294,8 +1295,8 @@ async def _apply_enforced_global_save(
         try:
             all_accounts = await client.get_m3u_accounts()
         except Exception as e:  # noqa: BLE001
-            logger.warning("[M3U] enforced-global: could not list accounts: %s", e)
-            account_err = f"account list unavailable ({e})"
+            logger.warning("[M3U] enforced-global: could not list accounts: %s", redact_secrets(str(e)))
+            account_err = "account list unavailable"
         if not isinstance(all_accounts, list):
             all_accounts = []
 
@@ -1308,8 +1309,8 @@ async def _apply_enforced_global_save(
             try:
                 fresh = await client.get_m3u_accounts()
             except Exception as e:  # noqa: BLE001 - fail closed
-                logger.warning("[M3U] enforced-global clear: fresh account read FAILED: %s", e)
-                return None, f"account list unavailable ({e}); clear NOT applied", False, []
+                logger.warning("[M3U] enforced-global clear: fresh account read FAILED: %s", redact_secrets(str(e)))
+                return None, "account list unavailable; clear NOT applied", False, []
             if not isinstance(fresh, list):
                 logger.warning("[M3U] enforced-global clear: fresh account read malformed (%r)", type(fresh))
                 return None, "account list unavailable (malformed); clear NOT applied", False, []
@@ -1465,9 +1466,10 @@ async def update_m3u_group_settings(account_id: int, request: Request):
             except Exception as e:
                 # Blocker 3b: a SETUP failure must NOT leave the summary empty
                 # (an empty summary reads as a clean no-op) — emit an error entry.
-                logger.warning("[M3U] group-settings fetch for apply failed: %s", e)
+                logger.warning("[M3U] group-settings fetch for apply failed: %s", redact_secrets(str(e)))
                 profile_apply_summary.append({
-                    "status": "error", "group_id": None, "error": str(e),
+                    "status": "error", "group_id": None,
+                    "error": "Channel-profile apply could not read group settings; retry the save.",
                 })
 
         if settings_for_apply is not None:
@@ -1559,13 +1561,17 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                         profile_apply_summary.append(outcome)
                     except Exception as e:  # noqa: BLE001 - isolate per group
                         logger.warning(
-                            "[M3U] Profile reconcile for group %s failed: %s", gid, e
+                            "[M3U] Profile reconcile for group %s failed: %s", gid, redact_secrets(str(e))
                         )
-                        profile_apply_summary.append({"status": "error", "group_id": gid, "error": str(e)})
+                        profile_apply_summary.append({
+                            "status": "error", "group_id": gid,
+                            "error": "Channel-profile reconcile failed; retry the save.",
+                        })
             except Exception as e:
-                logger.warning("[M3U] Profile reconcile after group-settings save failed: %s", e)
+                logger.warning("[M3U] Profile reconcile after group-settings save failed: %s", redact_secrets(str(e)))
                 profile_apply_summary.append({
-                    "status": "error", "group_id": None, "error": str(e),
+                    "status": "error", "group_id": None,
+                    "error": "Channel-profile apply failed; retry the save.",
                 })
         elif changed_selections:
             # Finding D + Round-9 B1 (FAIL CLOSED): a selection CHANGE but the
