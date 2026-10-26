@@ -469,16 +469,14 @@ async def test_unregistered_url_token_is_scrubbed_in_real_profile_warning(
     token = "unregistered-url-token-68c312ae"
     request = httpx.Request("GET", f"http://{HOST}/profiles?token={token}")
     response = httpx.Response(503, request=request)
-    try:
+    with pytest.raises(httpx.HTTPStatusError) as caught:
         response.raise_for_status()
-    except httpx.HTTPStatusError as error:
-        failure = error
     client = _mock_client()
     client.get_channels.return_value = {
         "results": [{"id": 500, "custom_properties": {}}],
         "next": None,
     }
-    client.get_channel_profiles.side_effect = failure
+    client.get_channel_profiles.side_effect = caught.value
     with (
         patch("routers.m3u.get_client", return_value=client),
         patch("routers.m3u.journal"),

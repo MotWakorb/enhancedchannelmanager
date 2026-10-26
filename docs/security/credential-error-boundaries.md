@@ -10,6 +10,10 @@ URL-aware obfuscation policy for scoped diagnostics (including unregistered
 retired/encoded credential spellings remain covered. Unknown unlabelled non-URL
 secrets are not guaranteed to be recognized.
 
+URL query vocabulary and known-credential path rewriting live in the leaf
+`credential_sentinel` module, shared by backup and diagnostic obfuscation.
+The logging path does not import the backup router to obtain these rules.
+
 `redact_exception` formats and scrubs the exception chain before it is passed as
 a normal logging argument. Bulk-job catches must not use
 `logger.exception`/raw `exc_info` alongside that argument: doing so
@@ -42,6 +46,8 @@ Synthetic sentinels only; no production credentials or destination mutations.
 The original 20 HTTP/log regression cases were confirmed failing before the
 fix. Tests assert sanitized diagnostics are actually emitted and retain
 degraded/partial outcomes, failed IDs and successful-neighbor accounting.
+`backend/tests/unit/test_credential_redaction_dependencies.py` additionally
+checks cold-process URL scrubbing without router imports and shared-rule identity.
 
 This is API/service/transport integration verification, not a browser screenshot,
 live production test, release or proof of deployed remediation. Deployment
