@@ -2727,7 +2727,7 @@ class TestBulkCommitAsync:
 
     @pytest.mark.asyncio
     async def test_get_failed_job_returns_failed_status(self, async_client):
-        """A worker that raises is marked failed and exposed via GET status."""
+        """A worker failure stays pollable without exposing raw exception text."""
         import asyncio as _asyncio
 
         mock_client = AsyncMock()
@@ -2748,7 +2748,8 @@ class TestBulkCommitAsync:
             assert poll.status_code == 200
             body = poll.json()
             assert body["status"] == "failed"
-            assert "dispatcharr unreachable" in body["error"]
+            assert body["error"] == "Bulk commit failed; check server logs and current state before retrying."
+            assert "dispatcharr unreachable" not in body["error"]
             # Failed jobs stay in the dict until TTL prune so the operator
             # can re-poll and read the error (matches debug-bundle pattern).
             from routers.channels import _BULK_COMMIT_JOBS
