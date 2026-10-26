@@ -31,7 +31,7 @@ So the scrub is layered, VALUE first and SHAPE only as a fallback:
    ``/<user>/<pass>/<id>.<ext>`` at ANY prefix depth. This is what reaches a
    credential no account record holds: a stale stream row, a hand-entered URL.
 3. **Query name** — a credential-named query parameter
-   (:data:`routers.backup._URL_CREDENTIAL_QUERY_KEYS`) loses its value even when
+   (:data:`credential_sentinel.URL_CREDENTIAL_QUERY_KEYS`) loses its value even when
    the value itself is unknown.
 4. **Authority** — hostname/IP and userinfo are replaced wholesale, which is
    what kills the ``user:pass@host`` form.
@@ -44,7 +44,6 @@ URL-shaped byte. Callers building a multi-member artifact should run it over
 every member as a final stage rather than trusting each producer.
 """
 import json
-import logging
 import re
 from urllib.parse import (
     parse_qsl,
@@ -56,7 +55,10 @@ from urllib.parse import (
     urlunparse,
 )
 
-logger = logging.getLogger(__name__)
+from credential_sentinel import URL_CREDENTIAL_QUERY_KEYS
+from credential_sentinel import (
+    rewrite_known_credential_segments as _rewrite_known_credential_values,
+)
 
 # The sentinel. Same spelling the backup artifact uses, so an operator reading
 # either artifact sees one vocabulary for "a credential was here".
@@ -153,35 +155,6 @@ def scrub_credential_values(
     return text
 
 
-def _rewrite_known_credential_values(
-    url: str, secrets: frozenset, identities: frozenset
-):
-    """Layer 1 — delegate to the backup router's value-based path rewriter.
-
-    Imported lazily rather than at module scope on purpose: this module is a
-    leaf utility that :mod:`routers.client_errors` imports on a request path,
-    and :mod:`routers.backup` is a large router module. A module-level import
-    would make every consumer of the scrubber pull in a router, and would create
-    a cycle the first time the backup router wanted to scrub something.
-
-    Reusing that function rather than re-deriving the rule here is the point:
-    it already encodes the secret-gated, percent-decoding, whole-segment
-    containment semantics argued out under bead …-msqf7, and a second
-    implementation of the same rule is a second implementation to keep correct.
-    """
-    if not secrets:
-        return None
-    try:
-        from routers.backup import _rewrite_known_credential_segments
-    except Exception:  # pragma: no cover - defensive; import must never sink a scrub
-        logger.warning(
-            "[OBFUSCATE] Value-based credential rewrite unavailable; "
-            "falling back to the shape rule only"
-        )
-        return None
-    return _rewrite_known_credential_segments(url, secrets, identities)
-
-
 def _redact_xc_path_shape(path: str) -> str:
     """Layer 2 — blank the credential pair of an XtreamCodes stream path.
 
@@ -239,11 +212,6 @@ def _redact_query_credentials(
     """
     if not query:
         return query
-    try:
-        from routers.backup import _URL_CREDENTIAL_QUERY_KEYS as _CRED_KEYS
-    except Exception:  # pragma: no cover - defensive
-        _CRED_KEYS = frozenset({"username", "password", "user", "pass", "token"})
-
     known = {v for v in (set(secrets) | set(identities)) if v and v != REDACTED}
     pairs = parse_qsl(query, keep_blank_values=True)
     if not pairs:
@@ -252,7 +220,7 @@ def _redact_query_credentials(
     out = []
     for key, value in pairs:
         if value and (
-            key.lower() in _CRED_KEYS
+            key.lower() in URL_CREDENTIAL_QUERY_KEYS
             or value in known
             or unquote(value) in known
         ):

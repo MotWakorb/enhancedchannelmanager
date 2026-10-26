@@ -39,6 +39,7 @@ regardless of which field carries it, including keys nested inside
 from __future__ import annotations
 
 import re
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 # The single placeholder the backup pipeline substitutes for a credential-class
 # value. Kept verbatim (not derived) because it is part of the on-disk artifact
@@ -99,6 +100,17 @@ CREDENTIAL_SECRET_KEYS: frozenset[str] = frozenset(
     }
 )
 PROVIDER_IDENTITY_KEYS: frozenset[str] = frozenset({"username"})
+
+# Query-parameter names that make a URL credential-bearing. Providers routinely
+# put the whole credential in the query string (``get.php?username=…&password=…``
+# for a plain-M3U account, ``xmltv.php?username=…&password=…`` for an XC-derived
+# EPG source), where NO credential-named dict key carries it and a key denylist
+# is therefore blind. Short aliases are included because provider URLs use them.
+URL_CREDENTIAL_QUERY_KEYS = frozenset(
+    CREDENTIAL_SECRET_KEYS
+    | PROVIDER_IDENTITY_KEYS
+    | {"user", "pass", "pwd", "token", "apikey", "auth", "key", "sig", "signature"}
+)
 
 # The ``[0]`` list positions ``strip_redaction_sentinels`` writes into a
 # dotted path, read back by :func:`value_at_path`. Pre-compiled on a literal
@@ -307,6 +319,93 @@ def value_at_path(payload: object, path: str) -> object:
                 return None
             node = node[position]
     return node
+
+
+def rewrite_known_credential_segments(
+    candidate: str, secrets: frozenset, identities: frozenset
+) -> str | None:
+    """Replace path segments that LITERALLY carry a known credential.
+
+    THE SHAPE THIS EXISTS FOR (bead …-msqf7, measured against a real Xtream Codes
+    provider on 2026-08-20). Every one of the 1,409,363 stream URLs in that
+    provider's playlist put the account's username and password in path
+    segments — ``/live/<user>/<pass>/<id>.ts`` and the ``movie`` / ``series``
+    variants — while the SAME provider authenticated its guide endpoint by query
+    string. Neither the key-name denylist (a stream's key is ``url``) nor
+    :func:`routers.backup._url_carries_credentials` could see it, so the pair
+    crossed to a sync destination intact, on every scheduled cycle, while the
+    run reported that credentials had been stripped.
+
+    WHY THIS IS NOT THE GUESSING THE OLD DOCSTRING REFUSED. It is still true that
+    no GENERAL rule separates ``/live/u/p/1.ts`` from an ordinary path. This rule
+    is not general: it compares each segment against the values the source
+    instance ACTUALLY holds, raw and percent-decoded. A path is rewritten because
+    it contains this operator's password, not because it looks like it might
+    contain someone's.
+
+    THE PASSWORD IS THE GATE, and that is the whole of the false-positive
+    defence. A URL is only rewritten once one of its segments carries a known
+    SECRET; only then is the IDENTITY half redacted alongside it. Without that
+    gate an operator whose XC username happened to be a structural path word
+    (``live``, ``movie``, ``news``) would have every URL on the instance mangled,
+    including credential-free ones belonging to other providers. With it, a
+    username collision can only occur inside a URL already proven to carry the
+    password — where the address needs the operator's attention regardless, so
+    the extra sentinel costs nothing.
+
+    WHAT THE REPLICA GETS. The scheme, host, port, kind marker and stream id all
+    survive; only the credential segments become the sentinel. Blanking the value
+    instead would reproduce bead …-v7d37's outcome one layer down — a replica
+    holding streams with nowhere to point and no record of where they pointed.
+    The destination reports the rewrite as a post-restore action item
+    (``RestoreReport.stream_urls_redacted``) rather than absorbing it silently.
+
+    Args:
+        candidate: A single URL-shaped string.
+        secrets: Known credential values (the authenticating half).
+        identities: Known identity values (the identifying half).
+
+    Returns:
+        The rewritten URL, or ``None`` when no segment matched and the value must
+        be left byte-identical.
+    """
+    if not secrets:
+        return None
+    try:
+        parts = urlsplit(candidate)
+    except ValueError:
+        return None
+    if not parts.scheme or not parts.netloc or "/" not in parts.path:
+        return None
+
+    def carries(segment: str, values: frozenset) -> bool:
+        # CONTAINMENT, not equality, and the whole segment then goes. A provider
+        # that decorates the credential segment (``/<pass>-hd/``) is still
+        # handing over the password, so equality would let it through; and a
+        # segment that carries the password is not an address component worth
+        # preserving byte-for-byte, so there is nothing to gain from splicing
+        # only the matched run out of it. Whole-segment replacement is also the
+        # only well-defined answer for a percent-encoded match, where the
+        # matched span exists in the DECODED string and has no single
+        # corresponding span in the encoded one.
+        #
+        # ``unquote`` never raises. A credential holding URL-reserved characters
+        # arrives percent-encoded, and ``p%40ss`` is the same secret as ``p@ss``,
+        # so an escape must not be a way through.
+        return any(v in segment or v in unquote(segment) for v in values)
+
+    segments = parts.path.split("/")
+    if not any(carries(seg, secrets) for seg in segments):
+        return None
+    rewritten = [
+        REDACTION_SENTINEL if carries(seg, secrets) or carries(seg, identities) else seg
+        for seg in segments
+    ]
+    if rewritten == segments:
+        return None
+    return urlunsplit(
+        (parts.scheme, parts.netloc, "/".join(rewritten), parts.query, parts.fragment)
+    )
 
 
 def url_is_redacted(value: object) -> bool:
