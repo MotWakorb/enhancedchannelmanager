@@ -18,6 +18,7 @@ import resource
 from collections import Counter, defaultdict
 from datetime import datetime
 from numbers import Real
+from time import monotonic
 from typing import Optional
 
 import safe_regex
@@ -62,6 +63,20 @@ from smart_sort_evaluator import (
 
 
 logger = logging.getLogger(__name__)
+
+
+class _PipelineWorkBudget:
+    """Cooperate between sync work items without moving ORM/client state."""
+
+    _SLICE_SECONDS = 0.01
+
+    def __init__(self) -> None:
+        self._deadline = monotonic() + self._SLICE_SECONDS
+
+    async def checkpoint(self) -> None:
+        if monotonic() >= self._deadline:
+            await asyncio.sleep(0)
+            self._deadline = monotonic() + self._SLICE_SECONDS
 
 
 # enhancedchannelmanager-ti939.2.1 (Event Sync Phase 1B): the ONLY
@@ -2003,6 +2018,7 @@ class ChannelPipelineEngine:
 
         if not excluded_terms and not excluded_groups and not exclude_auto_sync:
             return streams, []
+        work_budget = _PipelineWorkBudget()
 
         # Build auto-sync group ID set if needed
         auto_sync_group_ids = set()
@@ -2028,6 +2044,7 @@ class ChannelPipelineEngine:
         exclusion_log = []
 
         for stream in streams:
+            await work_budget.checkpoint()
             reason = None
 
             # Check excluded terms (case-insensitive word-boundary match
@@ -2036,6 +2053,7 @@ class ChannelPipelineEngine:
                 name_lower = (stream.stream_name or "").lower()
                 group_lower = (stream.group_name or "").lower()
                 for term, pattern in terms_with_patterns:
+                    await work_budget.checkpoint()
                     if pattern.search(name_lower) or pattern.search(group_lower):
                         reason = f"Excluded: matched term '{term}'"
                         break
@@ -2044,6 +2062,7 @@ class ChannelPipelineEngine:
             if reason is None and groups_lower:
                 group_lower = (stream.group_name or "").lower()
                 for grp in groups_lower:
+                    await work_budget.checkpoint()
                     if group_lower == grp:
                         reason = f"Excluded: group '{stream.group_name}'"
                         break
@@ -2824,6 +2843,7 @@ class ChannelPipelineEngine:
         planning = PlanningContext(enabled=plan_only)
         # Load user settings once for the entire pipeline run
         settings = get_settings()
+        work_budget = _PipelineWorkBudget()
         if not rules and any(
             getattr(rule, "stream_sort_field", None) == "smart_sort"
             for rule in (event_sync_rules or [])
@@ -3150,6 +3170,7 @@ class ChannelPipelineEngine:
         matched_entries = []  # list of (stream, winning_rule, losing_rules, stream_rules_log)
 
         for stream in streams:
+            await work_budget.checkpoint()
             results["streams_evaluated"] += 1
             logger.debug(
                 "[AUTO-CREATE-ENGINE] Evaluating stream id=%s name=%r "
@@ -3165,6 +3186,9 @@ class ChannelPipelineEngine:
             stream_rules_log = []
 
             for rule in rules:
+                # Before the provider skip, and inside the stream's rule loop:
+                # unmatched/skipped workloads must also share the event loop.
+                await work_budget.checkpoint()
                 # Check if rule applies to this M3U account
                 required_provider_ids = set(_required_provider_ids(rule))
                 eligible_provider_ids = (
@@ -3201,6 +3225,7 @@ class ChannelPipelineEngine:
                 for group in or_groups:
                     group_matched = True
                     for condition in group:
+                        await work_budget.checkpoint()
                         result = evaluator.evaluate(condition, stream)
                         conditions_log.append({
                             "type": result.condition_type,
@@ -3330,10 +3355,21 @@ class ChannelPipelineEngine:
                             "unsorted order for stream_name_regex",
                             rule.name, e,
                         )
-                entries.sort(
-                    key=lambda e: _sort_key(e[0], rule.sort_field, precompiled_sort_regex),
+                # Extract potentially regex-heavy keys cooperatively; list.sort
+                # itself cannot await. Keep its stable ordering for equal keys.
+                keyed_entries = []
+                for entry in entries:
+                    await work_budget.checkpoint()
+                    keyed_entries.append((
+                        _sort_key(entry[0], rule.sort_field, precompiled_sort_regex),
+                        entry,
+                    ))
+                keyed_entries.sort(
+                    key=lambda item: item[0],
                     reverse=(rule.sort_order == "desc")
                 )
+                entries[:] = [entry for _key, entry in keyed_entries]
+                del keyed_entries
             sorted_entries.extend(entries)
 
         logger.debug("[AUTO-CREATE-ENGINE] Total sorted entries: %s", len(sorted_entries))
@@ -3392,445 +3428,450 @@ class ChannelPipelineEngine:
         _channel_cap = results.get("channel_cap", 0)
         _cap_active = bool(_channel_cap) and not dry_run
         _admitted_provider_cohorts = set()
-        for _idx, (stream, winning_rule, losing_rules, stream_rules_log) in enumerate(sorted_entries):
-            _provider_cohort = self._required_provider_cohort_keys.get(
-                (winning_rule.id, stream.stream_id)
-            )
-            if (
-                _cap_active
-                and results["channels_created"] >= _channel_cap
-                and _provider_cohort not in _admitted_provider_cohorts
-            ):
-                # Soft-abort: stop creating further channels, leave what we have
-                # consistent, record N-of-M for a non-silent surface.
-                remaining = len(sorted_entries) - _idx
-                results["capped"] = True
-                results["cap_would_create"] = remaining
-                results.setdefault("rule_cap_ids", set()).update(
-                    entry[1].id for entry in sorted_entries[_idx:]
+        # Cover the first live action and every later checkpoint with the same
+        # journal cleanup boundary as the later pipeline passes.
+        processing_failed = False
+        try:
+            for _idx, (stream, winning_rule, losing_rules, stream_rules_log) in enumerate(sorted_entries):
+                # Dry-run/no-op actions and struck streams may never await I/O.
+                await work_budget.checkpoint()
+                _provider_cohort = self._required_provider_cohort_keys.get(
+                    (winning_rule.id, stream.stream_id)
                 )
-                logger.warning(
-                    "[AUTO-CREATE] Created-channel cap reached: %s created, "
-                    "stopping with %s matched stream(s) unprocessed (cap=%s). "
-                    "Review the rule or raise max_auto_created_channels_per_run "
-                    "(bd-h2xnl / GH #473).",
-                    results["channels_created"], remaining, _channel_cap,
-                )
-                results["execution_log"].append({
-                    "stream_id": None,
-                    "stream_name": "[AUTO-CREATE] created-channel cap reached",
-                    "m3u_account_id": None,
-                    "rules_evaluated": [],
-                    "actions_executed": [{
-                        "type": "capped",
-                        "description": (
-                            f"Auto-creation capped at {results['channels_created']} "
-                            f"channel(s); {remaining} more matched stream(s) were not "
-                            f"processed. Auto-creation is idempotent — run it again "
-                            f"to continue (created channels persist), or raise the "
-                            f"cap in Settings > Auto Creation (currently {_channel_cap})."
-                        ),
-                        "success": True,
-                        "entity_id": None,
-                        "error": None,
-                    }],
-                })
-                break
-            if _provider_cohort is not None:
-                _admitted_provider_cohorts.add(_provider_cohort)
-
-            # Skip struck-out streams if the winning rule has skip_struck_streams enabled
-            if getattr(winning_rule, 'skip_struck_streams', False) and stream.stream_id in self._struck_stream_ids:
-                logger.info("[AUTO-CREATE-ENGINE] Skipping struck stream %r (id=%s) for rule '%s'",
-                            stream.stream_name, stream.stream_id, winning_rule.name)
-                results["streams_skipped_struck"] = results.get("streams_skipped_struck", 0) + 1
-                continue
-
-            results["streams_matched"] += 1
-            logger.debug(
-                "[AUTO-CREATE-ENGINE] Stream %r (id=%s): "
-                "executing rule '%s' actions",
-                stream.stream_name, stream.stream_id, winning_rule.name
-            )
-
-            # Track per-rule match counts
-            results["rule_match_counts"][winning_rule.id] = results["rule_match_counts"].get(winning_rule.id, 0) + 1
-
-            # Mark winner in log
-            for rl in stream_rules_log:
-                if rl["rule_id"] == winning_rule.id and rl["matched"]:
-                    rl["was_winner"] = True
+                if (
+                    _cap_active
+                    and results["channels_created"] >= _channel_cap
+                    and _provider_cohort not in _admitted_provider_cohorts
+                ):
+                    # Soft-abort: stop creating further channels, leave what we have
+                    # consistent, record N-of-M for a non-silent surface.
+                    remaining = len(sorted_entries) - _idx
+                    results["capped"] = True
+                    results["cap_would_create"] = remaining
+                    results.setdefault("rule_cap_ids", set()).update(
+                        entry[1].id for entry in sorted_entries[_idx:]
+                    )
+                    logger.warning(
+                        "[AUTO-CREATE] Created-channel cap reached: %s created, "
+                        "stopping with %s matched stream(s) unprocessed (cap=%s). "
+                        "Review the rule or raise max_auto_created_channels_per_run "
+                        "(bd-h2xnl / GH #473).",
+                        results["channels_created"], remaining, _channel_cap,
+                    )
+                    results["execution_log"].append({
+                        "stream_id": None,
+                        "stream_name": "[AUTO-CREATE] created-channel cap reached",
+                        "m3u_account_id": None,
+                        "rules_evaluated": [],
+                        "actions_executed": [{
+                            "type": "capped",
+                            "description": (
+                                f"Auto-creation capped at {results['channels_created']} "
+                                f"channel(s); {remaining} more matched stream(s) were not "
+                                f"processed. Auto-creation is idempotent — run it again "
+                                f"to continue (created channels persist), or raise the "
+                                f"cap in Settings > Auto Creation (currently {_channel_cap})."
+                            ),
+                            "success": True,
+                            "entity_id": None,
+                            "error": None,
+                        }],
+                    })
                     break
+                if _provider_cohort is not None:
+                    _admitted_provider_cohorts.add(_provider_cohort)
 
-            # Record conflict if multiple rules matched
-            if losing_rules:
-                if plan_only:
-                    results.setdefault("planned_conflicts", []).append({
+                # Skip struck-out streams if the winning rule has skip_struck_streams enabled
+                if getattr(winning_rule, 'skip_struck_streams', False) and stream.stream_id in self._struck_stream_ids:
+                    logger.info("[AUTO-CREATE-ENGINE] Skipping struck stream %r (id=%s) for rule '%s'",
+                                stream.stream_name, stream.stream_id, winning_rule.name)
+                    results["streams_skipped_struck"] = results.get("streams_skipped_struck", 0) + 1
+                    continue
+
+                results["streams_matched"] += 1
+                logger.debug(
+                    "[AUTO-CREATE-ENGINE] Stream %r (id=%s): "
+                    "executing rule '%s' actions",
+                    stream.stream_name, stream.stream_id, winning_rule.name
+                )
+
+                # Track per-rule match counts
+                results["rule_match_counts"][winning_rule.id] = results["rule_match_counts"].get(winning_rule.id, 0) + 1
+
+                # Mark winner in log
+                for rl in stream_rules_log:
+                    if rl["rule_id"] == winning_rule.id and rl["matched"]:
+                        rl["was_winner"] = True
+                        break
+
+                # Record conflict if multiple rules matched
+                if losing_rules:
+                    if plan_only:
+                        results.setdefault("planned_conflicts", []).append({
+                            "stream_id": stream.stream_id,
+                            "stream_name": stream.stream_name,
+                            "winning_rule_id": winning_rule.id,
+                            "losing_rule_ids": [rule.id for rule in losing_rules],
+                            "conflict_type": "duplicate_match",
+                        })
+                    else:
+                        await self._record_conflict(
+                            execution=execution,
+                            stream=stream,
+                            winning_rule=winning_rule,
+                            losing_rules=losing_rules,
+                            conflict_type="duplicate_match"
+                        )
+                    results["conflicts"].append({
                         "stream_id": stream.stream_id,
                         "stream_name": stream.stream_name,
                         "winning_rule_id": winning_rule.id,
-                        "losing_rule_ids": [rule.id for rule in losing_rules],
-                        "conflict_type": "duplicate_match",
+                        "losing_rule_ids": [r.id for r in losing_rules]
                     })
-                else:
-                    await self._record_conflict(
-                        execution=execution,
-                        stream=stream,
-                        winning_rule=winning_rule,
-                        losing_rules=losing_rules,
-                        conflict_type="duplicate_match"
+
+                # Execute actions and capture results
+                exec_ctx = ExecutionContext(dry_run=dry_run)
+                # PR #1012 review item 5: deferred work (Pass 5) records terminal
+                # failures against the originating rule, not rule_id=None.
+                exec_ctx.rule_id = winning_rule.id
+                exec_ctx.rule_name = winning_rule.name
+                actions = winning_rule.get_actions()
+                actions_log = []
+                stop_processing = False
+
+                for action_data in actions:
+                    action = Action.from_dict(action_data)
+
+                    action_result = await executor.execute(
+                        action, stream, exec_ctx, winning_rule.target_group_id,
+                        normalization_group_ids=winning_rule.get_normalization_group_ids(),
+                        match_scope_target_group=bool(getattr(winning_rule, 'match_scope_target_group', False)),
+                        rule_scope_group_id=getattr(winning_rule, 'match_scope_group_id', None),
+                        allow_manual_channel_merge=bool(getattr(winning_rule, 'allow_manual_channel_merge', False)),
+                        # GH #645 / bead 0vao3: opt-in whitespace/case fold on the
+                        # create_channel if_exists merge lookup's comparison key.
+                        fold_match_key=bool(getattr(winning_rule, 'fold_match_key', False)),
+                        rule_id=winning_rule.id,
                     )
-                results["conflicts"].append({
+
+                    action_entry = {
+                        "type": action_result.action_type,
+                        "description": action_result.description,
+                        "success": action_result.success,
+                        "entity_id": action_result.entity_id,
+                        "error": action_result.error
+                    }
+                    if action_result.details:
+                        action_entry["details"] = action_result.details
+                    actions_log.append(action_entry)
+
+                    # y3m6o.1 (0152): aggregate any FAILED action at run level so
+                    # finalization can surface a non-green outcome. Skipped actions
+                    # report success=True, so this fires only on genuine failures
+                    # (e.g. an assign_channel_profile that could not enforce
+                    # exclusive membership — GH #720).
+                    if not action_result.success:
+                        self._record_failed_action(
+                            results, winning_rule.id, winning_rule.name,
+                            stream.stream_id, stream.stream_name, action_result,
+                        )
+
+                    # Check for stop_processing action.
+                    # NOTE: by the time we reach Pass 2, Pass 1 has already
+                    # resolved exactly one winning rule per stream — there are no
+                    # "further rules" left to stop here (the rule-level
+                    # short-circuit is `rule.stop_on_first_match`, handled in
+                    # Pass 1). So at the Pass 2 / per-stream level STOP_PROCESSING
+                    # is effectively a no-op: it must NOT abort the remaining
+                    # streams (bd-iqm50 / GH #225 — `break` here used to kill the
+                    # entire sorted_entries loop after the first such stream), and
+                    # it does NOT abort the current rule's remaining actions
+                    # either (the action's own description is "stop processing
+                    # further *rules*", not further actions of this rule).
+                    if action.type == ActionType.STOP_PROCESSING.value:
+                        stop_processing = True
+
+                    # Record dry-run result
+                    if dry_run:
+                        results["dry_run_results"].append({
+                            "stream_id": stream.stream_id,
+                            "stream_name": stream.stream_name,
+                            "rule_id": winning_rule.id,
+                            "rule_name": winning_rule.name,
+                            "action": action_result.description,
+                            "would_create": action_result.created,
+                            "would_modify": action_result.modified
+                        })
+
+                # Add stream log entry (only for matched streams)
+                results["execution_log"].append({
                     "stream_id": stream.stream_id,
                     "stream_name": stream.stream_name,
-                    "winning_rule_id": winning_rule.id,
-                    "losing_rule_ids": [r.id for r in losing_rules]
+                    "m3u_account_id": stream.m3u_account_id,
+                    "rules_evaluated": stream_rules_log,
+                    "actions_executed": actions_log
                 })
 
-            # Execute actions and capture results
-            exec_ctx = ExecutionContext(dry_run=dry_run)
-            # PR #1012 review item 5: deferred work (Pass 5) records terminal
-            # failures against the originating rule, not rule_id=None.
-            exec_ctx.rule_id = winning_rule.id
-            exec_ctx.rule_name = winning_rule.name
-            actions = winning_rule.get_actions()
-            actions_log = []
-            stop_processing = False
-
-            for action_data in actions:
-                action = Action.from_dict(action_data)
-
-                action_result = await executor.execute(
-                    action, stream, exec_ctx, winning_rule.target_group_id,
-                    normalization_group_ids=winning_rule.get_normalization_group_ids(),
-                    match_scope_target_group=bool(getattr(winning_rule, 'match_scope_target_group', False)),
-                    rule_scope_group_id=getattr(winning_rule, 'match_scope_group_id', None),
-                    allow_manual_channel_merge=bool(getattr(winning_rule, 'allow_manual_channel_merge', False)),
-                    # GH #645 / bead 0vao3: opt-in whitespace/case fold on the
-                    # create_channel if_exists merge lookup's comparison key.
-                    fold_match_key=bool(getattr(winning_rule, 'fold_match_key', False)),
-                    rule_id=winning_rule.id,
+                # Aggregate results from execution context
+                results["channels_created"] += exec_ctx.channels_created
+                results["channels_updated"] += exec_ctx.channels_updated
+                results["groups_created"] += exec_ctx.groups_created
+                results["streams_merged"] += exec_ctx.streams_merged
+                results["streams_skipped"] += exec_ctx.streams_skipped
+                results["streams_removed"] += exec_ctx.streams_removed
+                # Union this stream's merged-into channels into the run-wide set
+                # (bd-0emgo.4); len() becomes channels_touched after the loop.
+                channels_touched_ids.update(exec_ctx.merged_channel_ids)
+                # BD-F (bd-a5lb2): aggregate per-stream pending-merge enqueues
+                # so the pipeline result surfaces a total the M3U-refresh
+                # response can pass to BD-J's toast handler. Includes both
+                # fresh inserts and ADR-008 §D5 idempotent collisions —
+                # operationally both are "would have created a channel, now
+                # waiting on operator review".
+                results["pending_merges_added"] += exec_ctx.pending_merges_added
+                for merge_id in exec_ctx.pending_merge_ids:
+                    if merge_id not in results["pending_merge_ids"]:
+                        results["pending_merge_ids"].append(merge_id)
+                results["pending_merge_stream_ids"].update(exec_ctx.pending_merge_stream_ids)
+                results["created_entities"].extend(exec_ctx.created_entities)
+                results["modified_entities"].extend(exec_ctx.modified_entities)
+                results["probe_stream_ids"].update(exec_ctx.probe_stream_ids)
+                # enhancedchannelmanager-vy4fl: last-write-wins per group_id if
+                # two DIFFERENT sort_group actions (different rules, or the
+                # same rule fired with different params across streams) target
+                # the same group — an edge case, since a rule's sort_group
+                # action params are static for the whole run. Whichever stream
+                # is processed LAST this run decides the group's sort params.
+                results["sort_group_requests"].update(exec_ctx.sort_group_requests)
+                # y3m6o.1 review (Finding 3): fold this stream's non-reversible
+                # profile-membership mutations into the run-wide set (disclosed at
+                # finalization). (Finding 1 reversal): escalate any default-profile
+                # assignment failure into the run-level aggregation so a run that
+                # could not enforce a new channel's default membership is not green.
+                results["non_reversible_channel_ids"].update(
+                    exec_ctx.non_reversible_channel_ids
+                )
+                results["profile_ownership_unestablished_channel_ids"].update(
+                    exec_ctx.profile_ownership_unestablished_channel_ids
+                )
+                self._record_default_profile_failures(
+                    results, exec_ctx,
+                    stream_id=stream.stream_id, stream_name=stream.stream_name,
                 )
 
-                action_entry = {
-                    "type": action_result.action_type,
-                    "description": action_result.description,
-                    "success": action_result.success,
-                    "entity_id": action_result.entity_id,
-                    "error": action_result.error
-                }
-                if action_result.details:
-                    action_entry["details"] = action_result.details
-                actions_log.append(action_entry)
-
-                # y3m6o.1 (0152): aggregate any FAILED action at run level so
-                # finalization can surface a non-green outcome. Skipped actions
-                # report success=True, so this fires only on genuine failures
-                # (e.g. an assign_channel_profile that could not enforce
-                # exclusive membership — GH #720).
-                if not action_result.success:
-                    self._record_failed_action(
-                        results, winning_rule.id, winning_rule.name,
-                        stream.stream_id, stream.stream_name, action_result,
+                # Track channel ID for Pass 3 renumber.
+                # Only include channels this rule actually OWNS — either just
+                # created this run, or already in the rule's pre-run managed set.
+                # This prevents Pass 3 from renumbering foreign-group channels
+                # that were matched via the normalized-name fallback introduced
+                # in PR #107 (bd-yj5yi / GH-104).
+                if exec_ctx.current_channel_id:
+                    cid = exec_ctx.current_channel_id
+                    owned_by_this_rule = (
+                        cid in exec_ctx.created_channel_ids
+                        or cid in pre_run_managed_ids.get(winning_rule.id, set())
                     )
+                    if owned_by_this_rule:
+                        rule_channel_order[winning_rule.id].append(cid)
+                    else:
+                        logger.debug(
+                            "[AUTO-CREATE-ENGINE] Rule '%s': skipping Pass 3 append for "
+                            "channel_id=%s — matched via fallback into foreign/unmanaged "
+                            "channel (not created this run, not pre-run managed)",
+                            winning_rule.name, cid
+                        )
 
-                # Check for stop_processing action.
-                # NOTE: by the time we reach Pass 2, Pass 1 has already
-                # resolved exactly one winning rule per stream — there are no
-                # "further rules" left to stop here (the rule-level
-                # short-circuit is `rule.stop_on_first_match`, handled in
-                # Pass 1). So at the Pass 2 / per-stream level STOP_PROCESSING
-                # is effectively a no-op: it must NOT abort the remaining
-                # streams (bd-iqm50 / GH #225 — `break` here used to kill the
-                # entire sorted_entries loop after the first such stream), and
-                # it does NOT abort the current rule's remaining actions
-                # either (the action's own description is "stop processing
-                # further *rules*", not further actions of this rule).
-                if action.type == ActionType.STOP_PROCESSING.value:
-                    stop_processing = True
+                    # Track channel ID for Pass 3.5 stream reorder.
+                    # For stream sorting we also want to include channels that the rule actually
+                    # modified (e.g. merge added/removed streams) during this run; otherwise
+                    # stream_sort can silently never run when Channels Created=0.
+                    modified_this_run = any(
+                        (a.get("entity_id") == cid and a.get("type") in ("merge_stream", "merge_streams_prune"))
+                        for a in actions_log
+                    )
+                    if owned_by_this_rule or modified_this_run:
+                        # Avoid duplicates when multiple matched streams touch the same channel.
+                        # Preserve first-seen order (mirrors later dict.fromkeys de-dupe, but keeps
+                        # the intermediate structure stable for tests and debug logging).
+                        if cid not in rule_channel_order_streams[winning_rule.id]:
+                            rule_channel_order_streams[winning_rule.id].append(cid)
 
-                # Record dry-run result
+                if stop_processing:
+                    # bd-iqm50 / GH #225: continue (NOT break) — STOP_PROCESSING
+                    # has no remaining rules to stop in Pass 2, so it must not
+                    # terminate the loop over the other matched streams.
+                    logger.debug(
+                        "[AUTO-CREATE-ENGINE] Stream %r: STOP_PROCESSING action "
+                        "(no-op at Pass 2 level — one winning rule per stream); "
+                        "continuing to next stream",
+                        stream.stream_name,
+                    )
+                    continue
+
+            # =====================================================================
+            # Event Sync attach phase (bead ti939.2.1 — Phase 1B).
+            # Runs AFTER Pass 2 so its merges share the same executor (journal
+            # buffer + flush-in-finally) and results plumbing, and BEFORE the
+            # channels_touched derivation at Pass 2.75 so attach merges count.
+            # Rides the existing per-stream merge internals — no new engine pass
+            # semantics: each secondary stream independently resolves to at most
+            # one master channel.
+            # =====================================================================
+            if event_sync_rules:
+                if selected_rules is not None and rules:
+                    await self._persist_selected_rule_checkpoints(
+                        execution.id,
+                        self._selected_rule_outcomes(rules, results),
+                    )
+                await self._run_event_sync_rules(
+                    event_sync_rules, executor, results, dry_run,
+                    triggered_by=triggered_by,
+                    channels_touched_ids=channels_touched_ids,
+                    # bead io0tv: the attach phase registers each rule's touched
+                    # master channels for Pass 3.5 stream reorder, and extends
+                    # stream_m3u_map with provider ids for the master + secondary
+                    # streams so provider_order / quality-tie-break sorts score
+                    # them correctly.
+                    rule_channel_order_streams=rule_channel_order_streams,
+                    stream_m3u_map=stream_m3u_map,
+                    custom_stream_ids=custom_stream_ids,
+                    catchup_stream_ids=catchup_stream_ids,
+                    stream_metadata_known_ids=stream_metadata_known_ids,
+                    settings=settings,
+                    # bead ti939.4.1: promotion-enabled rules register their
+                    # PROMOTED channel ids here — the managed set Pass 4
+                    # reconciles. Attach-only rules never write it.
+                    rule_channel_order=rule_channel_order,
+                    plan_only=plan_only,
+                    skip_prerefresh=skip_prerefresh,
+                    execution_id=(execution.id if selected_rules is not None else None),
+                )
+
+            # =====================================================================
+            # Pass 2.5: Verify EPG assignments on newly created channels
+            # =====================================================================
+            if not dry_run and planning.allow_internal_side_effects:
+                verified_ok, re_patched, failed = await executor.verify_epg_assignments()
+                if re_patched or failed:
+                    logger.info(
+                        "[AUTO-CREATE-ENGINE] EPG verification: %s ok, %s re-patched, %s failed",
+                        verified_ok, re_patched, failed
+                    )
+                    results["channels_updated"] += re_patched
+                    if re_patched:
+                        results["execution_log"].append({
+                            "stream_id": None,
+                            "stream_name": "[AUTO-CREATE-ENGINE] EPG verification",
+                            "m3u_account_id": None,
+                            "rules_evaluated": [],
+                            "actions_executed": [{
+                                "type": "verify_epg",
+                                "description": f"Re-patched EPG on {re_patched} newly created channel(s)",
+                                "success": True,
+                                "entity_id": None,
+                                "error": None
+                            }]
+                        })
+
+            # =====================================================================
+            # Pass 2.75: Merge reconciliation — prune non-matching streams (optional)
+            # =====================================================================
+            await executor.prune_merge_streams(results, dry_run)
+
+            # Distinct-channel count: how many channels had at least one stream
+            # merged into them this run. Unioned across streams from the add_result
+            # chokepoint (exec_ctx.merged_channel_ids), which fires for EVERY
+            # merge_stream result — merge_streams action AND create_channel
+            # if_exists=merge AND any future merge path — so it can never drift from
+            # streams_merged (bd-0emgo.4: a live dry-run reported streams_merged=26
+            # but channels_touched=0 when the count was derived from a scattered
+            # call-site dict that the create_channel merge path missed). This is the
+            # honest label for "Channels touched by merges" as opposed to
+            # channels_updated, which counts only genuine property updates
+            # (logo/tvg/epg/number/etc.).
+            results["channels_touched"] = len(channels_touched_ids)
+
+            # =====================================================================
+            # Pass 3: Re-sort existing channels for rules with sort_field
+            # =====================================================================
+            logger.debug("[AUTO-CREATE-ENGINE] Starting channel renumbering pass")
+            for rule in rules:
+                if not rule.sort_field:
+                    continue
+                channel_ids = list(dict.fromkeys(rule_channel_order.get(rule.id, [])))
+                if not channel_ids or len(channel_ids) < 2:
+                    continue
+
+                starting_number = _get_rule_starting_number(rule)
+                if starting_number is None:
+                    continue
+
                 if dry_run:
                     results["dry_run_results"].append({
-                        "stream_id": stream.stream_id,
-                        "stream_name": stream.stream_name,
-                        "rule_id": winning_rule.id,
-                        "rule_name": winning_rule.name,
-                        "action": action_result.description,
-                        "would_create": action_result.created,
-                        "would_modify": action_result.modified
+                        "stream_id": None,
+                        "stream_name": "[AUTO-CREATE-ENGINE]",
+                        "rule_id": rule.id,
+                        "rule_name": rule.name,
+                        "action": f"Would renumber {len(channel_ids)} channels starting at #{starting_number} "
+                                  f"(sorted by {rule.sort_field} {rule.sort_order or 'asc'})",
+                        "would_create": False,
+                        "would_modify": True
                     })
-
-            # Add stream log entry (only for matched streams)
-            results["execution_log"].append({
-                "stream_id": stream.stream_id,
-                "stream_name": stream.stream_name,
-                "m3u_account_id": stream.m3u_account_id,
-                "rules_evaluated": stream_rules_log,
-                "actions_executed": actions_log
-            })
-
-            # Aggregate results from execution context
-            results["channels_created"] += exec_ctx.channels_created
-            results["channels_updated"] += exec_ctx.channels_updated
-            results["groups_created"] += exec_ctx.groups_created
-            results["streams_merged"] += exec_ctx.streams_merged
-            results["streams_skipped"] += exec_ctx.streams_skipped
-            results["streams_removed"] += exec_ctx.streams_removed
-            # Union this stream's merged-into channels into the run-wide set
-            # (bd-0emgo.4); len() becomes channels_touched after the loop.
-            channels_touched_ids.update(exec_ctx.merged_channel_ids)
-            # BD-F (bd-a5lb2): aggregate per-stream pending-merge enqueues
-            # so the pipeline result surfaces a total the M3U-refresh
-            # response can pass to BD-J's toast handler. Includes both
-            # fresh inserts and ADR-008 §D5 idempotent collisions —
-            # operationally both are "would have created a channel, now
-            # waiting on operator review".
-            results["pending_merges_added"] += exec_ctx.pending_merges_added
-            for merge_id in exec_ctx.pending_merge_ids:
-                if merge_id not in results["pending_merge_ids"]:
-                    results["pending_merge_ids"].append(merge_id)
-            results["pending_merge_stream_ids"].update(exec_ctx.pending_merge_stream_ids)
-            results["created_entities"].extend(exec_ctx.created_entities)
-            results["modified_entities"].extend(exec_ctx.modified_entities)
-            results["probe_stream_ids"].update(exec_ctx.probe_stream_ids)
-            # enhancedchannelmanager-vy4fl: last-write-wins per group_id if
-            # two DIFFERENT sort_group actions (different rules, or the
-            # same rule fired with different params across streams) target
-            # the same group — an edge case, since a rule's sort_group
-            # action params are static for the whole run. Whichever stream
-            # is processed LAST this run decides the group's sort params.
-            results["sort_group_requests"].update(exec_ctx.sort_group_requests)
-            # y3m6o.1 review (Finding 3): fold this stream's non-reversible
-            # profile-membership mutations into the run-wide set (disclosed at
-            # finalization). (Finding 1 reversal): escalate any default-profile
-            # assignment failure into the run-level aggregation so a run that
-            # could not enforce a new channel's default membership is not green.
-            results["non_reversible_channel_ids"].update(
-                exec_ctx.non_reversible_channel_ids
-            )
-            results["profile_ownership_unestablished_channel_ids"].update(
-                exec_ctx.profile_ownership_unestablished_channel_ids
-            )
-            self._record_default_profile_failures(
-                results, exec_ctx,
-                stream_id=stream.stream_id, stream_name=stream.stream_name,
-            )
-
-            # Track channel ID for Pass 3 renumber.
-            # Only include channels this rule actually OWNS — either just
-            # created this run, or already in the rule's pre-run managed set.
-            # This prevents Pass 3 from renumbering foreign-group channels
-            # that were matched via the normalized-name fallback introduced
-            # in PR #107 (bd-yj5yi / GH-104).
-            if exec_ctx.current_channel_id:
-                cid = exec_ctx.current_channel_id
-                owned_by_this_rule = (
-                    cid in exec_ctx.created_channel_ids
-                    or cid in pre_run_managed_ids.get(winning_rule.id, set())
-                )
-                if owned_by_this_rule:
-                    rule_channel_order[winning_rule.id].append(cid)
                 else:
-                    logger.debug(
-                        "[AUTO-CREATE-ENGINE] Rule '%s': skipping Pass 3 append for "
-                        "channel_id=%s — matched via fallback into foreign/unmanaged "
-                        "channel (not created this run, not pre-run managed)",
-                        winning_rule.name, cid
-                    )
+                    try:
+                        await self.client.assign_channel_numbers(channel_ids, starting_number)
+                        # Auto-rename channel names after renumber
+                        rename_count = await _auto_rename_after_renumber(
+                            self.client, channel_ids, starting_number, settings
+                        )
+                        rename_note = f", renamed {rename_count} channel names" if rename_count else ""
+                        results["execution_log"].append({
+                            "stream_id": None,
+                            "stream_name": f"[AUTO-CREATE-ENGINE] Rule '{rule.name}'",
+                            "m3u_account_id": None,
+                            "rules_evaluated": [],
+                            "actions_executed": [{
+                                "type": "renumber_channels",
+                                "description": f"Renumbered {len(channel_ids)} channels starting at #{starting_number} "
+                                               f"(sorted by {rule.sort_field} {rule.sort_order or 'asc'}){rename_note}",
+                                "success": True,
+                                "entity_id": None,
+                                "error": None
+                            }]
+                        })
+                        logger.info(
+                            "[AUTO-CREATE-ENGINE] Rule '%s': renumbered %s channels "
+                            "starting at #%s%s",
+                            rule.name, len(channel_ids), starting_number, rename_note
+                        )
+                    except Exception as e:
+                        logger.error("[AUTO-CREATE-ENGINE] Rule '%s': failed to renumber channels: %s", rule.name, e)
+                        results["execution_log"].append({
+                            "stream_id": None,
+                            "stream_name": f"[AUTO-CREATE-ENGINE] Rule '{rule.name}'",
+                            "m3u_account_id": None,
+                            "rules_evaluated": [],
+                            "actions_executed": [{
+                                "type": "renumber_channels",
+                                "description": f"Failed to renumber channels: {e}",
+                                "success": False,
+                                "entity_id": None,
+                                "error": str(e)
+                            }]
+                        })
+                        # y3m6o.1 review: as with sort_group, the execution_log entry
+                        # alone does NOT flip the run's terminal status — finalization
+                        # keys off results["failed_actions"]. Funnel this rule-level
+                        # renumber failure through the same aggregation chokepoint so
+                        # the run finalizes ``completed_with_errors``. This IS
+                        # rule-scoped (unlike sort_group), so carry rule_id/rule_name.
+                        self._record_failed_phase(
+                            results, phase="renumber_channels",
+                            rule_id=rule.id, rule_name=rule.name,
+                            error=f"Failed to renumber channels for rule "
+                                  f"'{rule.name}': {e}",
+                        )
 
-                # Track channel ID for Pass 3.5 stream reorder.
-                # For stream sorting we also want to include channels that the rule actually
-                # modified (e.g. merge added/removed streams) during this run; otherwise
-                # stream_sort can silently never run when Channels Created=0.
-                modified_this_run = any(
-                    (a.get("entity_id") == cid and a.get("type") in ("merge_stream", "merge_streams_prune"))
-                    for a in actions_log
-                )
-                if owned_by_this_rule or modified_this_run:
-                    # Avoid duplicates when multiple matched streams touch the same channel.
-                    # Preserve first-seen order (mirrors later dict.fromkeys de-dupe, but keeps
-                    # the intermediate structure stable for tests and debug logging).
-                    if cid not in rule_channel_order_streams[winning_rule.id]:
-                        rule_channel_order_streams[winning_rule.id].append(cid)
-
-            if stop_processing:
-                # bd-iqm50 / GH #225: continue (NOT break) — STOP_PROCESSING
-                # has no remaining rules to stop in Pass 2, so it must not
-                # terminate the loop over the other matched streams.
-                logger.debug(
-                    "[AUTO-CREATE-ENGINE] Stream %r: STOP_PROCESSING action "
-                    "(no-op at Pass 2 level — one winning rule per stream); "
-                    "continuing to next stream",
-                    stream.stream_name,
-                )
-                continue
-
-        # =====================================================================
-        # Event Sync attach phase (bead ti939.2.1 — Phase 1B).
-        # Runs AFTER Pass 2 so its merges share the same executor (journal
-        # buffer + flush-in-finally) and results plumbing, and BEFORE the
-        # channels_touched derivation at Pass 2.75 so attach merges count.
-        # Rides the existing per-stream merge internals — no new engine pass
-        # semantics: each secondary stream independently resolves to at most
-        # one master channel.
-        # =====================================================================
-        if event_sync_rules:
-            if selected_rules is not None and rules:
-                await self._persist_selected_rule_checkpoints(
-                    execution.id,
-                    self._selected_rule_outcomes(rules, results),
-                )
-            await self._run_event_sync_rules(
-                event_sync_rules, executor, results, dry_run,
-                triggered_by=triggered_by,
-                channels_touched_ids=channels_touched_ids,
-                # bead io0tv: the attach phase registers each rule's touched
-                # master channels for Pass 3.5 stream reorder, and extends
-                # stream_m3u_map with provider ids for the master + secondary
-                # streams so provider_order / quality-tie-break sorts score
-                # them correctly.
-                rule_channel_order_streams=rule_channel_order_streams,
-                stream_m3u_map=stream_m3u_map,
-                custom_stream_ids=custom_stream_ids,
-                catchup_stream_ids=catchup_stream_ids,
-                stream_metadata_known_ids=stream_metadata_known_ids,
-                settings=settings,
-                # bead ti939.4.1: promotion-enabled rules register their
-                # PROMOTED channel ids here — the managed set Pass 4
-                # reconciles. Attach-only rules never write it.
-                rule_channel_order=rule_channel_order,
-                plan_only=plan_only,
-                skip_prerefresh=skip_prerefresh,
-                execution_id=(execution.id if selected_rules is not None else None),
-            )
-
-        # =====================================================================
-        # Pass 2.5: Verify EPG assignments on newly created channels
-        # =====================================================================
-        if not dry_run and planning.allow_internal_side_effects:
-            verified_ok, re_patched, failed = await executor.verify_epg_assignments()
-            if re_patched or failed:
-                logger.info(
-                    "[AUTO-CREATE-ENGINE] EPG verification: %s ok, %s re-patched, %s failed",
-                    verified_ok, re_patched, failed
-                )
-                results["channels_updated"] += re_patched
-                if re_patched:
-                    results["execution_log"].append({
-                        "stream_id": None,
-                        "stream_name": "[AUTO-CREATE-ENGINE] EPG verification",
-                        "m3u_account_id": None,
-                        "rules_evaluated": [],
-                        "actions_executed": [{
-                            "type": "verify_epg",
-                            "description": f"Re-patched EPG on {re_patched} newly created channel(s)",
-                            "success": True,
-                            "entity_id": None,
-                            "error": None
-                        }]
-                    })
-
-        # =====================================================================
-        # Pass 2.75: Merge reconciliation — prune non-matching streams (optional)
-        # =====================================================================
-        await executor.prune_merge_streams(results, dry_run)
-
-        # Distinct-channel count: how many channels had at least one stream
-        # merged into them this run. Unioned across streams from the add_result
-        # chokepoint (exec_ctx.merged_channel_ids), which fires for EVERY
-        # merge_stream result — merge_streams action AND create_channel
-        # if_exists=merge AND any future merge path — so it can never drift from
-        # streams_merged (bd-0emgo.4: a live dry-run reported streams_merged=26
-        # but channels_touched=0 when the count was derived from a scattered
-        # call-site dict that the create_channel merge path missed). This is the
-        # honest label for "Channels touched by merges" as opposed to
-        # channels_updated, which counts only genuine property updates
-        # (logo/tvg/epg/number/etc.).
-        results["channels_touched"] = len(channels_touched_ids)
-
-        # =====================================================================
-        # Pass 3: Re-sort existing channels for rules with sort_field
-        # =====================================================================
-        logger.debug("[AUTO-CREATE-ENGINE] Starting channel renumbering pass")
-        for rule in rules:
-            if not rule.sort_field:
-                continue
-            channel_ids = list(dict.fromkeys(rule_channel_order.get(rule.id, [])))
-            if not channel_ids or len(channel_ids) < 2:
-                continue
-
-            starting_number = _get_rule_starting_number(rule)
-            if starting_number is None:
-                continue
-
-            if dry_run:
-                results["dry_run_results"].append({
-                    "stream_id": None,
-                    "stream_name": "[AUTO-CREATE-ENGINE]",
-                    "rule_id": rule.id,
-                    "rule_name": rule.name,
-                    "action": f"Would renumber {len(channel_ids)} channels starting at #{starting_number} "
-                              f"(sorted by {rule.sort_field} {rule.sort_order or 'asc'})",
-                    "would_create": False,
-                    "would_modify": True
-                })
-            else:
-                try:
-                    await self.client.assign_channel_numbers(channel_ids, starting_number)
-                    # Auto-rename channel names after renumber
-                    rename_count = await _auto_rename_after_renumber(
-                        self.client, channel_ids, starting_number, settings
-                    )
-                    rename_note = f", renamed {rename_count} channel names" if rename_count else ""
-                    results["execution_log"].append({
-                        "stream_id": None,
-                        "stream_name": f"[AUTO-CREATE-ENGINE] Rule '{rule.name}'",
-                        "m3u_account_id": None,
-                        "rules_evaluated": [],
-                        "actions_executed": [{
-                            "type": "renumber_channels",
-                            "description": f"Renumbered {len(channel_ids)} channels starting at #{starting_number} "
-                                           f"(sorted by {rule.sort_field} {rule.sort_order or 'asc'}){rename_note}",
-                            "success": True,
-                            "entity_id": None,
-                            "error": None
-                        }]
-                    })
-                    logger.info(
-                        "[AUTO-CREATE-ENGINE] Rule '%s': renumbered %s channels "
-                        "starting at #%s%s",
-                        rule.name, len(channel_ids), starting_number, rename_note
-                    )
-                except Exception as e:
-                    logger.error("[AUTO-CREATE-ENGINE] Rule '%s': failed to renumber channels: %s", rule.name, e)
-                    results["execution_log"].append({
-                        "stream_id": None,
-                        "stream_name": f"[AUTO-CREATE-ENGINE] Rule '{rule.name}'",
-                        "m3u_account_id": None,
-                        "rules_evaluated": [],
-                        "actions_executed": [{
-                            "type": "renumber_channels",
-                            "description": f"Failed to renumber channels: {e}",
-                            "success": False,
-                            "entity_id": None,
-                            "error": str(e)
-                        }]
-                    })
-                    # y3m6o.1 review: as with sort_group, the execution_log entry
-                    # alone does NOT flip the run's terminal status — finalization
-                    # keys off results["failed_actions"]. Funnel this rule-level
-                    # renumber failure through the same aggregation chokepoint so
-                    # the run finalizes ``completed_with_errors``. This IS
-                    # rule-scoped (unlike sort_group), so carry rule_id/rule_name.
-                    self._record_failed_phase(
-                        results, phase="renumber_channels",
-                        rule_id=rule.id, rule_name=rule.name,
-                        error=f"Failed to renumber channels for rule "
-                              f"'{rule.name}': {e}",
-                    )
-
-        try:
             # =================================================================
             # Pass 3.5: Reorder streams within channels by smart sort
             # =================================================================
@@ -3958,11 +3999,18 @@ class ChannelPipelineEngine:
             results.pop("channel_cap", None)
 
             return results
+        except BaseException:
+            processing_failed = True
+            raise
         finally:
-            # Flush buffered live-merge journal rows even when a later pipeline
-            # pass raises. The flush helper no-ops on empty buffers and logs its
-            # own failures so it does not mask the original exception.
-            executor._flush_journal_buffer()
+            # Keep the original failure/cancellation if cleanup itself raises.
+            # False returns are already logged by the existing flush helper.
+            try:
+                executor._flush_journal_buffer()
+            except BaseException:  # Preserve the primary unwinding error, even cancellation.
+                logger.exception("[AUTO-CREATE-ENGINE] Failed to flush buffered merge journal during pipeline cleanup")
+                if not processing_failed:
+                    raise
 
     # =========================================================================
     # Event Sync attach phase (bead ti939.2.1 — Phase 1B)
