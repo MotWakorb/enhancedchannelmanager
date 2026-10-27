@@ -113,7 +113,7 @@ async def backend_http(async_client):
         async def ready():
             while not server.started:
                 if task.done():
-                    await task
+                    task.result()  # Propagate a completed server task's startup error.
                     raise AssertionError("disposable backend stopped before serving")
                 await asyncio.sleep(0.01)
 
