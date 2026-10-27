@@ -37,6 +37,10 @@ let holdReadback: boolean;
 let releaseRead: (() => void) | undefined;
 let faultHits: number;
 let activeFetches: Set<Promise<Response>>;
+let trace: unknown[];
+let responseConnections: (string | null)[];
+let onSaved = vi.fn<() => void>();
+let settledOperations: number;
 const nativeFetch = globalThis.fetch;
 
 function profile() {
@@ -61,9 +65,17 @@ beforeEach(async () => {
   activeWrites = 0; maxActiveWrites = 0; holdWrites = false; releaseWrite = undefined; faultHits = 0;
   holdReadback = false; releaseRead = undefined;
   activeFetches = new Set();
+  trace = [];
+  responseConnections = [];
+  onSaved = vi.fn<() => void>(); settledOperations = 0;
   server = createServer(async (req, res) => {
+    trace.push({ event: 'request', at: Date.now(), method: req.method, path: req.url, port: req.socket.remotePort });
     const path = req.url;
     res.setHeader('Content-Type', 'application/json');
+    // This peer tests membership, not keep-alive expiry. Large synchronous DOM
+    // edits under CI coverage can outlast the idle socket deadline before Node
+    // gets a turn to retire it, making the next real fetch fail with ECONNRESET.
+    res.setHeader('Connection', 'close');
     if (req.method === 'GET') {
       events.push('read');
       if (holdReadback && writes.length > 0) await new Promise<void>(resolve => { releaseRead = resolve; });
@@ -108,20 +120,34 @@ beforeEach(async () => {
       res.writeHead(503).end(JSON.stringify({ detail: 'Synthetic write unavailable' }));
     } else res.end(JSON.stringify({ success: true }));
   });
+  server.on('connection', socket => {
+    const port = socket.remotePort;
+    trace.push({ event: 'connection', at: Date.now(), port });
+    socket.on('close', () => trace.push({ event: 'socket-close', at: Date.now(), port }));
+  });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Expected TCP address');
   const origin = `http://127.0.0.1:${address.port}`;
   vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+    trace.push({ event: 'fetch', at: Date.now(), method: init?.method ?? 'GET', path: String(input) });
     const request = nativeFetch(new URL(String(input), origin), init);
     activeFetches.add(request);
-    void request.then(() => activeFetches.delete(request), () => activeFetches.delete(request));
+    void request.then(response => {
+      responseConnections.push(response.headers.get('connection'));
+      trace.push({ event: 'response', at: Date.now(), status: response.status, connection: response.headers.get('connection') });
+      activeFetches.delete(request);
+    }, error => {
+      trace.push({ event: 'fetch-error', at: Date.now(), message: String(error), cause: String(error.cause), code: error.cause?.code });
+      activeFetches.delete(request);
+    });
     return request;
   });
 });
 
-afterEach(async () => {
+afterEach(async ({ task }) => {
+  if (task.result?.state === 'fail') console.error('PROFILE_HTTP_TRACE', JSON.stringify({ trace, events, writes, errors: notices.error.mock.calls }));
   holdWrites = false; releaseWrite?.(); holdReadback = false; releaseRead?.();
   do {
     await Promise.allSettled([...activeFetches]);
@@ -133,20 +159,26 @@ afterEach(async () => {
 });
 
 async function open(count = 8, overrides: Partial<ComponentProps<typeof ChannelProfilesListModal>> = {}) {
-  const onSaved = vi.fn(); const onClose = vi.fn();
+  const onClose = vi.fn();
   render(<ChannelProfilesListModal isOpen onClose={onClose} onSaved={onSaved}
     channels={channels(count)} channelGroups={[
       { id: 1, name: 'Synthetic first', channel_count: Math.min(count, 107) },
       { id: 2, name: 'Synthetic second', channel_count: Math.max(0, count - 107) },
     ]} {...overrides} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Manage channels' }));
+  expect(responseConnections).toEqual(['close']);
   return { onSaved, onClose };
 }
 function toggle(id: number) { fireEvent.click(screen.getByText(`Synthetic channel ${id}`)); }
 function select(id: number) { fireEvent.click(screen.getByLabelText(`Select Synthetic channel ${id} for bulk apply`)); }
 function save() { fireEvent.click(screen.getByRole('button', { name: /^Save Changes/ })); }
 async function settled() {
+  // onSaved runs after the actual write/readback outcome, including unknown and
+  // partial outcomes. An absent busy label alone does not prove a save ran.
+  const expectedOperations = ++settledOperations;
+  await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(expectedOperations), { timeout: 10000 });
   await waitFor(() => expect(screen.queryByRole('button', { name: /Saving|Applying/ })).not.toBeInTheDocument(), { timeout: 10000 });
+  trace.push({ event: 'settled-dom', at: Date.now(), status: screen.queryByRole('status')?.textContent, errors: notices.error.mock.calls });
 }
 
 describe('profile membership terminal truth over real HTTP (71imf)', () => {
