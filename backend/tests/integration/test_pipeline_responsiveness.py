@@ -190,12 +190,18 @@ async def test_other_catalog_phases_share_the_loop(
     phase,
 ):
     engine, _client, prepare, _sessions, settings = pipeline_workload
-    execution, rules, streams = prepare()
+    # Keep all 1200 streams and the 330 exclusion terms below. One rule is
+    # enough after filtering (and for sort/actions/struck); repeating Pass 1's
+    # full rule matrix here adds coverage cost without testing this phase.
+    execution, rules, streams = prepare(rule_count=1)
     started = asyncio.Event()
     finished = asyncio.Event()
     count_seen = 0
 
     if phase in {"filters", "excluded"}:
+        # These cases own the stream x exclusion-term workload, not another
+        # stream x rule evaluation (covered above, including the real clock).
+        _, evaluations = observe_evaluation(monkeypatch)
         settings.auto_creation_excluded_terms = [f"Forbidden {i}" for i in range(330)]
         if phase == "excluded":
             settings.auto_creation_excluded_terms.append("Other")
@@ -285,9 +291,11 @@ async def test_other_catalog_phases_share_the_loop(
     if phase == "excluded":
         assert result["streams_excluded"] == len(streams)
         assert result["streams_evaluated"] == 0
+        assert evaluations["conditions"] == 0
     elif phase == "filters":
         assert result["streams_excluded"] == 0
         assert result["streams_evaluated"] == len(streams)
+        assert evaluations["conditions"] == len(streams) * 3
     elif phase == "struck":
         assert result["streams_skipped_struck"] == len(streams)
         assert result["streams_matched"] == 0
