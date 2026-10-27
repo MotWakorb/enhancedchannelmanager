@@ -327,7 +327,7 @@ async def test_cancel_actual_run_during_evaluation(
     await asyncio.wait_for(started.wait(), timeout=30)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.wait_for(task, timeout=30)
     assert 0 < counts["conditions"] < len(streams) * len(rules) * 3
     stopped_at = dict(counts)
     await asyncio.sleep(0)
@@ -488,7 +488,7 @@ async def test_pass2_merge_journal_cleanup_preserves_primary_exit(
     task = asyncio.create_task(run() if cancel_run else run_from_exception_handler())
     expected_error = asyncio.CancelledError if cancel_run else type(flush_error)
     with pytest.raises(expected_error) as caught:
-        await task
+        await asyncio.wait_for(task, timeout=30)
     if cancel_run:
         assert caught.value.args == ("cancelled at next Pass 2 checkpoint",)
         assert checkpoint_reached and task.cancelled()
