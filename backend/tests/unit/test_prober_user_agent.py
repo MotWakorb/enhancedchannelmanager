@@ -17,7 +17,12 @@ from stream_prober import StreamProber
 async def test_full_probe_and_retry_send_account_ua_at_provider_boundary(tmp_path, monkeypatch):
     monkeypatch.setattr(get_settings(), "stream_user_agent", "dispatcharr")
     client = AsyncMock()
-    client.get_stream.return_value = {"m3u_account": 8, "stream_profile_id": 999}
+    client.get_stream.return_value = {"id": 42, "url": "https://provider.example/live.ts", "m3u_account": 8, "stream_profile_id": 999}
+    client.get_m3u_accounts.return_value = [{
+        "id": 8, "max_streams": 0,
+        "profiles": [{"id": 12, "is_default": True, "is_active": True, "max_streams": 0}],
+    }]
+    client.get_channel_stats.return_value = {"channels": []}
     client.get_m3u_account.return_value = {"user_agent": 2}
     client.get_user_agents.return_value = [{"id": 2, "user_agent": "Account/7", "is_active": False}]
     prober = StreamProber(client, use_resdet_for_resolution=True, black_screen_detection_enabled=True,
