@@ -1,7 +1,8 @@
-import { useState, useEffect, useMemo, useCallback, memo } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, memo } from 'react';
 import type { ChannelProfile, Channel, ChannelGroup, StagedSideEffects } from '../types';
 import { EMPTY_STAGED_SIDE_EFFECTS, profileMembershipKey } from '../types/editMode';
 import * as api from '../services/api';
+import { applyProfileMembership } from '../services/profileMembership';
 import { useNotifications } from '../contexts/NotificationContext';
 import { naturalCompare } from '../utils/naturalSort';
 import { ModalOverlay } from './ModalOverlay';
@@ -36,6 +37,7 @@ interface ChannelProfilesListModalProps {
 interface ProfileWithState extends ChannelProfile {
   isEditing?: boolean;
   editName?: string;
+  membershipUnknown?: boolean;
 }
 
 type ViewMode = 'list' | 'channels';
@@ -71,18 +73,16 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   const [hideDisabledChannels, setHideDisabledChannels] = useState(false);
   const [channelChanges, setChannelChanges] = useState<Map<number, boolean>>(new Map());
   const [savingChannels, setSavingChannels] = useState(false);
+  const [membershipUnknown, setMembershipUnknown] = useState(false);
+  const [membershipMessage, setMembershipMessage] = useState('');
+  const membershipBusy = useRef(false);
 
-  // Bulk apply-to-selected (enhancedchannelmanager-hq3de.i) — a SEPARATE
-  // selection from the per-row enable/disable toggle above. Uses
-  // PATCH .../channels/bulk-update directly (applies immediately, no pending
-  // "Save Changes" step) for channels ALREADY known to the profile. Per
-  // dispatcharr_client.bulk_update_profile_channels, the bulk endpoint only
-  // updates EXISTING ChannelProfileMembership rows — it does not create new
-  // ones — so this selection excludes channels the profile has never
-  // tracked before; those still go through "Save Changes" (individual PATCH
-  // calls), which does create new membership rows.
+  // Separate selection from the pending toggles, sharing the same confirmed
+  // readback/save path. Missing membership rows are supported too.
   const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<number>>(new Set());
   const [bulkApplying, setBulkApplying] = useState(false);
+  const busy = savingChannels || bulkApplying;
+  const handleClose = () => { if (!membershipBusy.current) onClose(); };
 
   const loadProfiles = useCallback(async () => {
     setLoading(true);
@@ -90,6 +90,7 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
       const data = await api.getChannelProfiles();
       setProfiles(data);
     } catch (err) {
+      setProfiles(prev => prev.map(profile => ({ ...profile, membershipUnknown: true })));
       notifications.error(err instanceof Error ? err.message : 'Failed to load profiles', 'Profiles');
     } finally {
       setLoading(false);
@@ -176,16 +177,20 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   };
 
   // Channel assignment view
-  const handleOpenChannels = (profile: ChannelProfile) => {
+  const handleOpenChannels = (profile: ProfileWithState) => {
+    if (membershipBusy.current) return;
     setSelectedProfile(profile);
     setViewMode('channels');
     setChannelSearch('');
     setHideDisabledChannels(false);
     setChannelChanges(new Map());
     setBulkSelectedIds(new Set());
+    setMembershipUnknown(profile.membershipUnknown ?? false);
+    setMembershipMessage('');
   };
 
   const handleBackToList = () => {
+    if (membershipBusy.current) return;
     setViewMode('list');
     setSelectedProfile(null);
     setChannelChanges(new Map());
@@ -194,9 +199,8 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   };
 
   // Build channel list with enabled state from profile
-  // NOTE: Dispatcharr uses ChannelProfileMembership records to track channel-profile relationships
-  // - Empty channels array = no membership records exist (no channels assigned to profile)
-  // - Non-empty array = only those channels have membership records with enabled=true
+  // Profile.channels is the enabled-ID set. It does not enumerate disabled or
+  // missing membership rows; neither makes the channel visible in this profile.
   const channelsWithState = useMemo(() => {
     if (!selectedProfile) return [];
 
@@ -259,8 +263,10 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   };
 
   const handleToggleChannel = (channelId: number) => {
+    if (membershipBusy.current) return;
     const channel = channelsWithState.find(ch => ch.id === channelId);
     if (!channel) return;
+    setMembershipMessage('');
 
     setChannelChanges(prev => {
       const newChanges = new Map(prev);
@@ -268,8 +274,10 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
       const pendingChange = prev.get(channelId);
 
       if (pendingChange !== undefined) {
-        // Toggle back to original state
-        newChanges.delete(channelId);
+        // Unknown state may already have changed upstream. Keep reversals
+        // explicit until readback can prove them satisfied.
+        if (membershipUnknown && !stagesMembership) newChanges.set(channelId, !pendingChange);
+        else newChanges.delete(channelId);
       } else {
         // Set opposite of current state
         newChanges.set(channelId, !currentEnabled);
@@ -284,10 +292,12 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   }, [channelChanges]);
 
   const handleEnableAllVisible = () => {
+    if (membershipBusy.current) return;
+    setMembershipMessage('');
     setChannelChanges(prev => {
       const newChanges = new Map(prev);
       for (const ch of filteredChannels) {
-        if (!ch.enabled) {
+        if (!ch.enabled || (membershipUnknown && !stagesMembership)) {
           newChanges.set(ch.id, true);
         } else {
           // Remove any pending disable
@@ -301,10 +311,12 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   };
 
   const handleDisableAllVisible = () => {
+    if (membershipBusy.current) return;
+    setMembershipMessage('');
     setChannelChanges(prev => {
       const newChanges = new Map(prev);
       for (const ch of filteredChannels) {
-        if (ch.enabled) {
+        if (ch.enabled || (membershipUnknown && !stagesMembership)) {
           newChanges.set(ch.id, false);
         } else {
           // Remove any pending enable
@@ -319,9 +331,15 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
 
   // Toggle all channels in a group
   const handleToggleGroup = (groupChannels: typeof channelsWithState, enable: boolean) => {
+    if (membershipBusy.current) return;
+    setMembershipMessage('');
     setChannelChanges(prev => {
       const newChanges = new Map(prev);
       for (const ch of groupChannels) {
+        if (membershipUnknown && !stagesMembership) {
+          newChanges.set(ch.id, enable);
+          continue;
+        }
         if (enable) {
           // Enable: if currently disabled, add change; if already enabled, remove any pending disable
           if (!ch.enabled) {
@@ -347,8 +365,60 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
     return groupChannels.every(ch => getChannelEnabled(ch));
   };
 
+  const persistMembership = async (intents: Map<number, boolean>, bulk: boolean) => {
+    if (!selectedProfile || membershipBusy.current) return;
+    membershipBusy.current = true;
+    if (bulk) setBulkApplying(true);
+    else setSavingChannels(true);
+    setMembershipMessage('Saving and checking profile membership...');
+    try {
+      const outcome = await applyProfileMembership(selectedProfile.id, intents);
+      if (outcome.profile) setSelectedProfile(outcome.profile);
+      setProfiles(prev => prev.map(p => p.id === selectedProfile.id
+        ? { ...(outcome.profile ?? p), membershipUnknown: !outcome.verified } : p));
+      // Apply to Selected supersedes only its selected IDs. Other local intents
+      // are not written, and are dropped only if fresh readback satisfies them.
+      setChannelChanges(prev => {
+        const next = new Map(prev);
+        for (const id of intents.keys()) next.delete(id);
+        for (const [id, enabled] of outcome.remaining) next.set(id, enabled);
+        if (outcome.verified && outcome.profile) {
+          const enabledIds = new Set(outcome.profile.channels);
+          for (const [id, enabled] of next) {
+            if (enabledIds.has(id) === enabled) next.delete(id);
+          }
+        }
+        return next;
+      });
+      setBulkSelectedIds(prev => new Set([...prev].filter(id =>
+        !intents.has(id) || outcome.remaining.has(id))));
+      setMembershipUnknown(!outcome.verified);
+      if (!outcome.verified) {
+        const message = 'Could not confirm current membership. Pending changes are retained; retry reads the profile before writing.';
+        setMembershipMessage(message);
+        notifications.error(message, 'Profiles');
+      } else if (outcome.remaining.size > 0) {
+        const message = `${outcome.remaining.size} change(s) still pending after readback. Confirmed counts are shown; retry to apply the remainder.`;
+        setMembershipMessage(message);
+        notifications.error(message, 'Profiles');
+      } else {
+        const message = outcome.failedRequests > 0
+          ? 'A request failed, but readback confirmed all requested changes.'
+          : 'Readback confirmed all requested changes.';
+        setMembershipMessage(message);
+        if (outcome.failedRequests > 0) notifications.warning(message, 'Profiles');
+        else if (bulk) notifications.success(message, 'Profiles');
+      }
+      onSaved();
+    } finally {
+      membershipBusy.current = false;
+      setSavingChannels(false);
+      setBulkApplying(false);
+    }
+  };
+
   const handleSaveChannelChanges = async () => {
-    if (!selectedProfile || channelChanges.size === 0) return;
+    if (!selectedProfile || channelChanges.size === 0 || membershipBusy.current) return;
 
     // In Edit Mode this stages, exactly as the selection bar's "Profile
     // visibility" does — same data, same wire operation, one change count
@@ -376,35 +446,13 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
       return;
     }
 
-    setSavingChannels(true);
-
-    try {
-      // Use individual channel updates to ensure membership records are created
-      // (Dispatcharr's bulk API only updates existing records, doesn't create new ones)
-      const updatePromises = Array.from(channelChanges.entries()).map(
-        ([channelId, enabled]) =>
-          api.updateProfileChannel(selectedProfile.id, channelId, { enabled })
-      );
-
-      // Run updates in parallel for performance
-      await Promise.all(updatePromises);
-
-      // Refresh the profile to get updated channel list
-      const updated = await api.getChannelProfile(selectedProfile.id);
-      setSelectedProfile(updated);
-      setChannelChanges(new Map());
-      onSaved();
-    } catch (err) {
-      notifications.error(err instanceof Error ? err.message : 'Failed to save channel changes', 'Profiles');
-    } finally {
-      setSavingChannels(false);
-    }
+    await persistMembership(new Map(channelChanges), false);
   };
 
   // Bulk apply-to-selected (bead hq3de.i). Applies immediately via the bulk
   // endpoint — separate from the pending-diff "Save Changes" flow above.
   const handleBulkApply = async (enabled: boolean) => {
-    if (!selectedProfile || bulkSelectedIds.size === 0) return;
+    if (!selectedProfile || bulkSelectedIds.size === 0 || membershipBusy.current) return;
 
     // Same staging rule as Save Changes above. This path used the BULK
     // endpoint, which made it invisible to the change count by a second route
@@ -421,25 +469,11 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
       return;
     }
 
-    setBulkApplying(true);
-    try {
-      await api.bulkUpdateProfileChannels(selectedProfile.id, Array.from(bulkSelectedIds), enabled);
-      const updated = await api.getChannelProfile(selectedProfile.id);
-      setSelectedProfile(updated);
-      setBulkSelectedIds(new Set());
-      onSaved();
-      notifications.success(
-        `${enabled ? 'Enabled' : 'Disabled'} ${bulkSelectedIds.size} channel(s) for "${selectedProfile.name}"`,
-        'Profiles'
-      );
-    } catch (err) {
-      notifications.error(err instanceof Error ? err.message : 'Bulk apply failed', 'Profiles');
-    } finally {
-      setBulkApplying(false);
-    }
+    await persistMembership(new Map([...bulkSelectedIds].map(id => [id, enabled])), true);
   };
 
   const toggleBulkSelected = (channelId: number) => {
+    if (membershipBusy.current) return;
     setBulkSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(channelId)) next.delete(channelId);
@@ -449,17 +483,18 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   };
 
   const enabledCount = useMemo(() => {
+    if (!stagesMembership) return selectedProfile?.channels.length ?? 0;
     let count = 0;
     for (const ch of channelsWithState) {
       if (getChannelEnabled(ch)) count++;
     }
     return count;
-  }, [channelsWithState, getChannelEnabled]);
+  }, [channelsWithState, getChannelEnabled, selectedProfile, stagesMembership]);
 
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+    <ModalOverlay onClose={handleClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <div className="modal-container modal-lg channel-profiles-modal" ref={containerRef}>
         {viewMode === 'list' ? (
           <>
@@ -563,7 +598,7 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                               onClick={() => handleOpenChannels(profile)}
                               title="Click to manage channels"
                             >
-                              {profile.channels.length}
+                              {profile.membershipUnknown ? '?' : profile.channels.length}
                             </span>
                           </div>
                           <div className="profile-actions">
@@ -632,15 +667,15 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
             {/* Channel assignment view */}
             <div className="modal-header">
               <div className="modal-header-with-back">
-                <button className="modal-back-btn" onClick={handleBackToList} aria-label="Back to profiles list" title="Back to profiles list">
+                <button className="modal-back-btn" onClick={handleBackToList} disabled={busy} aria-label="Back to profiles list" title="Back to profiles list">
                   <span className="material-icons" aria-hidden="true">arrow_back</span>
                 </button>
                 <div className="modal-header-info">
-                  <h2>Manage Channels</h2>
+                  <h2 id={titleId}>Manage Channels</h2>
                   <span className="modal-header-subtitle">{selectedProfile?.name}</span>
                 </div>
               </div>
-              <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+              <button className="modal-close-btn" onClick={handleClose} disabled={busy} aria-label="Close" title="Close">
                 <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
@@ -661,14 +696,18 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                     </button>
                   )}
                 </div>
-                <span className="modal-toolbar-count">{enabledCount} / {channels.length} enabled</span>
+                <span className="modal-toolbar-count">
+                  {membershipUnknown && !stagesMembership
+                    ? `Enabled count unknown (last confirmed: ${enabledCount} / ${channels.length})`
+                    : `${enabledCount} / ${channels.length} enabled`}
+                </span>
               </div>
               <div className="modal-toolbar-row">
                 <div className="modal-toolbar-actions">
-                  <button className="modal-btn-small enable" onClick={handleEnableAllVisible}>
+                  <button className="modal-btn-small enable" onClick={handleEnableAllVisible} disabled={busy}>
                     Enable Visible
                   </button>
-                  <button className="modal-btn-small disable" onClick={handleDisableAllVisible}>
+                  <button className="modal-btn-small disable" onClick={handleDisableAllVisible} disabled={busy}>
                     Disable Visible
                   </button>
                 </div>
@@ -681,6 +720,12 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                   <span>Hide disabled</span>
                 </label>
               </div>
+              {!stagesMembership && (membershipMessage || channelChanges.size > 0) && (
+                <div className="modal-toolbar-row" role="status">
+                  <span>{membershipMessage} {channelChanges.size > 0 &&
+                    `${channelChanges.size} pending change(s); toggles show desired state, counts show confirmed state.`}</span>
+                </div>
+              )}
               {bulkSelectedIds.size > 0 && (
                 <div className="modal-toolbar-row bulk-apply-row">
                   <span className="modal-toolbar-count">{bulkSelectedIds.size} selected</span>
@@ -688,22 +733,22 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                     <button
                       className="modal-btn-small enable"
                       onClick={() => handleBulkApply(true)}
-                      disabled={bulkApplying}
-                      title="Apply this profile (enabled) to the selected channels — for channels already tracked by this profile"
+                      disabled={busy}
+                      title="Apply this profile (enabled) to the selected channels"
                     >
                       {bulkApplying ? 'Applying...' : `${stagesMembership ? 'Stage' : 'Apply'} to Selected: Enable`}
                     </button>
                     <button
                       className="modal-btn-small disable"
                       onClick={() => handleBulkApply(false)}
-                      disabled={bulkApplying}
+                      disabled={busy}
                     >
                       {bulkApplying ? 'Applying...' : `${stagesMembership ? 'Stage' : 'Apply'} to Selected: Disable`}
                     </button>
                     <button
                       className="modal-btn-small"
                       onClick={() => setBulkSelectedIds(new Set())}
-                      disabled={bulkApplying}
+                      disabled={busy}
                     >
                       Clear Selection
                     </button>
@@ -731,13 +776,15 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                         <input
                           type="checkbox"
                           checked={groupEnabled}
+                          disabled={busy}
                           onChange={() => handleToggleGroup(groupChannels, !groupEnabled)}
                         />
                         <span className="modal-toggle-slider"></span>
                       </label>
                       <span className="group-name">{getGroupName(groupId)}</span>
                       <span className="group-channel-count">
-                        {groupChannels.filter(ch => getChannelEnabled(ch)).length} / {groupChannels.length}
+                        {membershipUnknown && !stagesMembership ? '?' : groupChannels.filter(ch =>
+                          stagesMembership ? getChannelEnabled(ch) : ch.enabled).length} / {groupChannels.length}
                       </span>
                     </div>
                     <div className="channel-list">
@@ -758,6 +805,7 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                             <input
                               type="checkbox"
                               className="bulk-select-checkbox"
+                              disabled={busy}
                               checked={bulkSelectedIds.has(channel.id)}
                               onChange={() => toggleBulkSelected(channel.id)}
                               onClick={(e) => e.stopPropagation()}
@@ -768,6 +816,8 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                               <input
                                 type="checkbox"
                                 checked={isEnabled}
+                                disabled={busy}
+                                aria-label={`Enable ${channel.name}${!stagesMembership && hasChange ? ` (pending; ${membershipUnknown ? 'current state unknown' : `confirmed ${channel.enabled ? 'enabled' : 'not enabled'}`})` : ''}`}
                                 onChange={() => handleToggleChannel(channel.id)}
                               />
                               <span className="modal-toggle-slider"></span>
@@ -788,13 +838,13 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
             </div>
 
             <div className="modal-footer">
-              <button className="modal-btn modal-btn-secondary" onClick={handleBackToList} disabled={savingChannels}>
+              <button className="modal-btn modal-btn-secondary" onClick={handleBackToList} disabled={busy}>
                 Back
               </button>
               <button
                 className="modal-btn modal-btn-primary"
                 onClick={handleSaveChannelChanges}
-                disabled={savingChannels || channelChanges.size === 0}
+                disabled={busy || channelChanges.size === 0}
               >
                 {savingChannels
                   ? 'Saving...'
