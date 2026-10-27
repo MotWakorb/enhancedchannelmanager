@@ -2176,11 +2176,17 @@ class ChannelPipelineEngine:
 
         # Probe with concurrency limit
         semaphore = asyncio.Semaphore(3)
+        probed = skipped = 0
 
         async def probe_one(stream_id, url, name):
+            nonlocal probed, skipped
             async with semaphore:
                 try:
-                    await prober.probe_stream(stream_id, url, name)
+                    result = await prober.probe_stream(stream_id, url, name)
+                    if result.get("probe_status") == "skipped":
+                        skipped += 1
+                    else:
+                        probed += 1
                 except Exception as e:
                     logger.warning("[AUTO-CREATE-ENGINE] Failed to probe stream %s (%s): %s", stream_id, name, e)
 
@@ -2211,7 +2217,7 @@ class ChannelPipelineEngine:
             "rules_evaluated": [],
             "actions_executed": [{
                 "type": "probe_streams",
-                "description": f"Probed {count} unprobed stream(s) for quality sorting",
+                "description": f"Probed {probed}/{count} unprobed stream(s) for quality sorting; {skipped} skipped",
                 "success": True,
                 "entity_id": None,
                 "error": None
@@ -5602,13 +5608,17 @@ class ChannelPipelineEngine:
 
         semaphore = asyncio.Semaphore(3)
         probed = 0
+        skipped = 0
 
         async def probe_one(stream_id, url, name):
-            nonlocal probed
+            nonlocal probed, skipped
             async with semaphore:
                 try:
-                    await prober.probe_stream(stream_id, url, name)
-                    probed += 1
+                    result = await prober.probe_stream(stream_id, url, name)
+                    if result.get("probe_status") == "skipped":
+                        skipped += 1
+                    else:
+                        probed += 1
                 except Exception as e:
                     logger.warning("[AUTO-CREATE-ENGINE] Pass 6: failed to probe stream %s (%s): %s", stream_id, name, e)
 
@@ -5625,7 +5635,7 @@ class ChannelPipelineEngine:
             "stream_name": "[Pass 6] Probe Streams",
             "actions_executed": [{
                 "type": "probe_streams",
-                "description": f"Probed {probed}/{count} stream(s)"
+                "description": f"Probed {probed}/{count} stream(s); {skipped} skipped"
             }]
         })
 

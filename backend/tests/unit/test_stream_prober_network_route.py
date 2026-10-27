@@ -11,6 +11,7 @@ from stream_prober import (
     ProbeNetworkRouteError,
     StreamProber,
 )
+from tests.conftest import accountless_probe_stream
 
 
 SYNTHETIC_URL = "http://provider.invalid/account/token/stream.ts"
@@ -112,7 +113,7 @@ async def test_direct_probe_network_failure_returns_route_guidance_without_url(c
         "probe_status": args[3], "error_message": args[4]
     })
 
-    result = await prober.probe_stream(42, SYNTHETIC_URL, "Synthetic")
+    result = await prober.probe_stream(42, SYNTHETIC_URL, "Synthetic", stream=accountless_probe_stream(prober, 42, SYNTHETIC_URL))
 
     assert result["probe_status"] == "failed"
     assert result["error_message"] == PROBE_NETWORK_ROUTE_GUIDANCE
@@ -128,7 +129,7 @@ async def test_direct_probe_timeout_returns_same_route_guidance():
         "probe_status": args[3], "error_message": args[4]
     })
 
-    result = await prober.probe_stream(43, SYNTHETIC_URL, "Synthetic")
+    result = await prober.probe_stream(43, SYNTHETIC_URL, "Synthetic", stream=accountless_probe_stream(prober, 43, SYNTHETIC_URL))
 
     assert result == {
         "probe_status": "timeout",
@@ -144,7 +145,7 @@ async def test_non_network_probe_failure_keeps_generic_error():
         "probe_status": args[3], "error_message": args[4]
     })
 
-    result = await prober.probe_stream(44, SYNTHETIC_URL, "Synthetic")
+    result = await prober.probe_stream(44, SYNTHETIC_URL, "Synthetic", stream=accountless_probe_stream(prober, 44, SYNTHETIC_URL))
 
     assert result["error_message"] == "Probe failed"
 

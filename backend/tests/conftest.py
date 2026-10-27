@@ -5,7 +5,7 @@ import inspect
 import os
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy import create_engine
@@ -188,6 +188,17 @@ def vlc_stream_user_agent(monkeypatch):
     """Legacy probe tests select VLC explicitly; UA resolution has its own coverage."""
     from config import get_settings
     monkeypatch.setattr(get_settings(), "stream_user_agent", "vlc")
+
+
+def accountless_probe_stream(prober, stream_id: int, url: str) -> dict:
+    """Complete synthetic metadata, returned by the real admission read as well.
+
+    Media/security tests still exercise stream identity checks; this configures
+    their control-plane mock rather than bypassing admission.
+    """
+    stream = {"id": stream_id, "url": url, "m3u_account": None}
+    prober.client.get_stream = AsyncMock(return_value=dict(stream))
+    return stream
 
 
 @pytest.fixture(scope="function")
