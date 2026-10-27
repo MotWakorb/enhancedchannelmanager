@@ -264,7 +264,7 @@ async def test_one_free_slot_cannot_be_claimed_by_concurrent_entrypoints(
         assert prober._run_ffprobe.await_count == 1
     finally:
         release.set()
-        await first
+        await asyncio.wait_for(first, timeout=10)
     assert (await prober.probe_stream(9, URL, stream={**stream, "id": 9}))[
         "probe_status"
     ] == "success"
@@ -489,7 +489,7 @@ async def test_cancelling_admission_waiter_does_not_leak_or_release_other_permit
         await asyncio.sleep(0)
         second.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await second
+            await asyncio.wait_for(second, timeout=10)
     finally:
         release.set()
         await asyncio.gather(
