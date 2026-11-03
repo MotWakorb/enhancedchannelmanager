@@ -912,7 +912,10 @@ class TestProbeSingleStream:
             response = await async_client.post("/api/stream-stats/probe/42")
 
         assert response.status_code == 200
-        mock_prober.probe_stream.assert_called_once_with(42, "http://example.com/42", "ESPN")
+        mock_prober.probe_stream.assert_called_once_with(
+            42, "http://example.com/42", "ESPN",
+            stream=mock_prober._fetch_all_streams.return_value[0],
+        )
 
     @pytest.mark.asyncio
     async def test_returns_404_when_stream_not_found(self, async_client):

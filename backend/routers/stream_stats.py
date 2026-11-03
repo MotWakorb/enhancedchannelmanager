@@ -838,7 +838,7 @@ async def probe_single_stream(stream_id: int):
 
         logger.debug("[STREAM-STATS-PROBE] Probing single stream %s", stream_id)
         result = await prober.probe_stream(
-            stream_id, stream.get("url"), stream.get("name")
+            stream_id, stream.get("url"), stream.get("name"), stream=stream
         )
     except HTTPException:
         raise

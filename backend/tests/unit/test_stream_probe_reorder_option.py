@@ -162,7 +162,7 @@ async def test_probe_all_reorder_gate_preserves_metadata_and_channel_order(
         "_fetch_all_streams",
         AsyncMock(
             return_value=[
-                {"id": 20, "name": "1080p", "url": "http://example.test/20"}
+                {"id": 20, "name": "1080p", "url": "http://example.test/20", "m3u_account": None}
             ]
         ),
     ), patch.object(
@@ -182,6 +182,7 @@ async def test_probe_all_reorder_gate_preserves_metadata_and_channel_order(
     ) as reorder_mock, patch(
         "stream_prober.asyncio.sleep", AsyncMock()
     ):
+        client.get_stream.return_value = prober._fetch_all_streams.return_value[0]
         result = await prober.probe_all_streams(**kwargs)
 
     assert result["status"] == "completed"
