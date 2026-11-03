@@ -18,15 +18,15 @@ from urllib.parse import urlsplit
 RECIPE_SHA256 = "de91b41ea81123a4af8eb9ca8cd526ed6560f4f53e2e3152de42f2edf0cb7db9"
 PYTHON_SUMS = {
     "sources": "e21e0520773c78b5f16ee56ddb94073a4def902d8656b435fec9dc26eee8e2ab",
-    # Complete sorted 556-entry manifest, including six newly audited ARM JSONs.
-    "notices": "68555090f8b5f1a58b00512048f1a9f468f2ed0fa8b06a10a8fcc3833ed07975",
+    # Complete sorted 557-entry manifest, including the dnspython 2.9.0 notice.
+    "notices": "cc1790cbfca9d206333084155cbf8f1a0c66fb6512615dea692a9c0a5daa903d",
 }
 RESDET_SCRIPTS = {
     "build_resdet.py": "1f071637352c3e21abc94388dd4101c7d819998cc31b94cd5a34af939febf611",
 }
 PYTHON_INDEXES = {
-    "x86_64": "2c2345a3fbb95f6e2ea41fb9b9a04acdc118d5715a4dbd8c218358e4a27df3b0",
-    "aarch64": "0f6734132bdf44f6841a93ece87251d825935c9f01ec8f3df5b9b2aa079883de",
+    "x86_64": "08ed75d9a94dae5cb10fa8353dfc01ea27a9a531d199c786b29eaecacc4ca1f0",
+    "aarch64": "2d24f53e8aeec9f3e96aeb188c26941a2270206995a365788fd50ef6fe42f094",
 }
 FIELDS = ("name", "version", "release", "arch", "vendor", "sourcerpm", "license")
 QUERY = "\\t".join("%{" + field.upper() + "}" for field in FIELDS) + "\\n"

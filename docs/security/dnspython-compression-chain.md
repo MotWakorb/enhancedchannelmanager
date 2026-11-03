@@ -42,6 +42,11 @@ byte-identical to the retained earlier notice. Artifact details are recorded in
 Historical native/wheel evidence is not relabeled as new. The shared pure-Python
 index and current lock/component manifest identify the targeted replacement;
 the older x86 snapshot remains a historical record for its original packages.
+The native architecture indexes explicitly rebind the new lock hash while
+retaining every native distribution record unchanged; their proof-layer limits
+still apply. The runtime verifier pins those exact index hashes and the sorted
+557-entry notice manifest. Its fixture copies the shipped manifest unchanged,
+so tests cannot silently repair a broken notice bundle before exercising it.
 Final image selection, native checks and unsuppressed scans still need actual
 execution after the independent vendor/base delivery blockers are resolved.
 
