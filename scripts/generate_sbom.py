@@ -123,14 +123,19 @@ SUSE_BASE_IMAGE = (
     "c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55"
 )
 SUSE_NATIVE_BUILDER_RUN = (
-    "zypper --non-interactive install --no-recommends python312-base && "
+    'case "$(uname -m)" in '
+    "x86_64) repository=https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/ ;; "
+    "aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/ ;; "
+    "*) exit 1 ;; esac && rm -f /etc/zypp/repos.d/*.repo && "
+    'zypper --non-interactive addrepo --check --gpgcheck --refresh "$repository" oss && '
+    "zypper --non-interactive refresh && zypper --non-interactive install --no-recommends python312-base && "
     'case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac && '
     "python3.12 /tmp/build_native_runtime.py --manifest /tmp/native/manifest.json "
-    '--work-dir /tmp/native-work --output-dir /tmp/native-output --arch "$arch"'
+    '--work-dir /tmp/native-work --output-dir /tmp/native-output --arch "$arch" --cache-dir /tmp/native-cache'
 )
 SUSE_RUNTIME_RUN = (
     'case "$(uname -m)" in '
-    "x86_64) repository=https://download.opensuse.org/tumbleweed/repo/oss/ ;; "
+    "x86_64) repository=https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/ ;; "
     "aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/ ;; "
     "*) exit 1 ;; esac && rm -f /etc/zypp/repos.d/*.repo && "
     'zypper --non-interactive addrepo --check --gpgcheck --refresh "$repository" oss && '
@@ -161,7 +166,8 @@ SUSE_SOURCE_BUILDER_RUN = (
     "rpm -q --qf '%{DESCRIPTION}\\n' gpg-pubkey-29b700a4 > /tmp/suse.asc && "
     "python3.12 /tmp/collect_native_sources.py --inventory /tmp/runtime-inventory.tsv "
     '--arch "$(uname -m)" --out /tmp/rpm-source-output --suse-key /tmp/suse.asc '
-    "--packman-key /tmp/native/packman.asc"
+    "--packman-key /tmp/native/packman.asc --cache-dir /tmp/native-source-cache/sources "
+    "--expected-sha256 /tmp/native-source-cache/index.json"
 )
 SUSE_RESDET_BUILDER_RUN = (
     "zypper --non-interactive install --no-recommends gcc make pkgconf-pkg-config gawk && "
@@ -192,6 +198,7 @@ SUSE_SOURCE_DELIVERY = [
     ("COPY", "--from=native-builder /tmp/native-output/sources/ /usr/share/ecm/sources/owned/"),
     ("COPY", "--from=native-builder /tmp/native-output/build-output.json /usr/share/ecm/provenance/native-build.json"),
     ("COPY", "--from=native-builder /tmp/native-output/source-files.json /usr/share/ecm/provenance/native-sources.json"),
+    ("COPY", "--from=ecm-native-sources /recovery.json /usr/share/ecm/provenance/native-source-recovery.json"),
     ("COPY", "--from=resdet-builder /tmp/resdet-work/resdet.tar.gz /usr/share/ecm/sources/resdet/resdet.tar.gz"),
     ("COPY", "scripts/build_resdet.py scripts/generate_sbom.py sbom/native-dependencies.json /usr/share/ecm/sources/resdet/"),
     ("COPY", "docker/python-third-party/notices/ /usr/share/doc/ecm/python-third-party/"),
@@ -409,7 +416,19 @@ def parse_dockerfile_images(text: str, source: str) -> list[dict[str, str]]:
             reference = match[1]
             if reference == stage["alias"]:
                 raise SbomError(f"{source} line {number} copies from its own stage")
-            if reference not in stage_base:
+            if reference == "ecm-native-sources":
+                # This exact named filesystem context is materialized from the
+                # two pinned source carriers, not an unpinned runtime image.
+                # Account for both build inputs rather than silently skipping it.
+                for identity in (
+                    "13cbcfffff8d5091f857583656b91ed8fe40ad3b472b54f7a67ab50e22846c01",
+                    "98722bea0ddb8f7c52398151751b89d4173b775f6612afc5bb75aa133d091d48",
+                ):
+                    _record(_pinned_image(
+                        "ghcr.io/motwakorb/enhancedchannelmanager@sha256:" + identity,
+                        source, number, "build",
+                    ))
+            elif reference not in stage_base:
                 _record(_pinned_image(reference, source, number, "build"))
         if stage["alias"] is not None:
             stage_base[stage["alias"]] = key
@@ -688,6 +707,7 @@ def _validate_suse_stages(stages: list[dict[str, Any]], source: str) -> None:
     require(1, [
         ("COPY", "scripts/build_native_runtime.py /tmp/build_native_runtime.py"),
         ("COPY", "docker/native/ /tmp/native/"),
+        ("COPY", "docker/native-cache/ /tmp/native-cache/"),
         ("RUN", SUSE_NATIVE_BUILDER_RUN),
     ])
     require(2, [
@@ -724,6 +744,7 @@ def _validate_suse_stages(stages: list[dict[str, Any]], source: str) -> None:
     require(5, [
         ("COPY", "--from=runtime-base /tmp/runtime-inventory.tsv /tmp/runtime-inventory.tsv"),
         ("COPY", "scripts/collect_native_sources.py /tmp/collect_native_sources.py"),
+        ("COPY", "--from=ecm-native-sources / /tmp/native-source-cache/"),
         ("RUN", SUSE_SOURCE_BUILDER_RUN),
     ])
     require(6, [

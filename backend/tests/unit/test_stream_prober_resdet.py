@@ -23,6 +23,7 @@ from stream_prober import (
     ResolutionDetectionError,
     StreamProber,
 )
+from tests.conftest import accountless_probe_stream
 
 
 FFPROBE_RESULT = {
@@ -66,7 +67,7 @@ async def test_default_probe_uses_ffprobe_resolution_without_running_resdet():
     prober._push_stats_to_dispatcharr = AsyncMock()
     prober._save_probe_result = MagicMock(return_value={"probe_status": "success"})
 
-    await prober.probe_stream(7, "https://provider.example/live.ts", "Test")
+    await prober.probe_stream(7, "https://provider.example/live.ts", "Test", stream=accountless_probe_stream(prober, 7, "https://provider.example/live.ts"))
 
     prober._run_resdet.assert_not_awaited()
     saved_ffprobe_data = prober._save_probe_result.call_args.args[2]
@@ -83,7 +84,7 @@ async def test_enabled_probe_replaces_only_ffprobe_video_dimensions():
     prober._push_stats_to_dispatcharr = AsyncMock()
     prober._save_probe_result = MagicMock(return_value={"probe_status": "success"})
 
-    await prober.probe_stream(7, "https://provider.example/live.ts", "Test")
+    await prober.probe_stream(7, "https://provider.example/live.ts", "Test", stream=accountless_probe_stream(prober, 7, "https://provider.example/live.ts"))
 
     prober._run_resdet.assert_awaited_once_with("https://provider.example/live.ts", user_agent="VLC/3.0.20 LibVLC/3.0.20")
     saved_ffprobe_data = prober._save_probe_result.call_args.args[2]
@@ -110,7 +111,7 @@ async def test_enabled_resdet_failure_fails_probe_without_ffprobe_fallback():
     )
 
     result = await prober.probe_stream(
-        7, "https://user:password@provider.example/live.ts", "Test"
+        7, "https://user:password@provider.example/live.ts", "Test", stream=accountless_probe_stream(prober, 7, "https://user:password@provider.example/live.ts")
     )
 
     assert result == {

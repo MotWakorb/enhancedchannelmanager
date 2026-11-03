@@ -1151,6 +1151,37 @@ def test_pinned_images_and_stage_aliases_work_for_every_buildkit_instruction_whi
     ]
 
 
+def test_named_source_context_accounts_for_both_pinned_carrier_images(sbom):
+    text = (ROOT / "Dockerfile").read_text()
+    images = sbom.parse_dockerfile_images(text, "Dockerfile")
+    carriers = [item for item in images if item["image"] == "ghcr.io/motwakorb/enhancedchannelmanager"]
+    assert {item["digest"] for item in carriers} == {
+        "sha256:13cbcfffff8d5091f857583656b91ed8fe40ad3b472b54f7a67ab50e22846c01",
+        "sha256:98722bea0ddb8f7c52398151751b89d4173b775f6612afc5bb75aa133d091d48",
+    }
+    assert {item["role"] for item in carriers} == {"build"}
+    assert next(item for item in images if item["role"] == "runtime")["image"] == "registry.opensuse.org/opensuse/tumbleweed"
+
+
+def test_current_native_recovery_contract_validates(sbom):
+    sbom.validate_native_runtime_docker_contract((ROOT / "Dockerfile").read_text(), "Dockerfile")
+
+
+@pytest.mark.parametrize("before,after", [
+    (" --cache-dir /tmp/native-cache", ""),
+    (" --expected-sha256 /tmp/native-source-cache/index.json", ""),
+    ("COPY --from=ecm-native-sources / /tmp/native-source-cache/\n", ""),
+    ("COPY docker/native-cache/ /tmp/native-cache/\n", ""),
+    ("https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/", "https://download.opensuse.org/tumbleweed/repo/oss/"),
+])
+def test_recovery_does_not_relax_exact_native_docker_contract(sbom, before, after):
+    original = (ROOT / "Dockerfile").read_text()
+    mutant = original.replace(before, after)
+    assert mutant != original, "the dangerous mutant must actually change the recipe"
+    with pytest.raises(sbom.SbomError):
+        sbom.validate_native_runtime_docker_contract(mutant, "Dockerfile")
+
+
 def test_a_dockerfile_without_a_from_is_rejected(sbom):
     with pytest.raises(sbom.SbomError):
         sbom.parse_dockerfile_images("RUN true\n", "Dockerfile")

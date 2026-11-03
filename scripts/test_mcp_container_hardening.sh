@@ -47,6 +47,9 @@
 #   COMPOSE_BUILD if "false", require the images to exist already.
 #   MCP_GATE_PROJECT
 #                 compose project name (default "ecmmcpgate").
+#   ECM_RECOVER_NATIVE_BASE
+#                 "true" prepares the exact pinned base as a verified local
+#                 OCI context and uses a private docker-container builder.
 #
 # Pass --build-only to build the two images and exit, so CI can report a
 # transient registry/mirror build failure under its own step name instead of
@@ -59,6 +62,9 @@ repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # serial by nature; override MCP_GATE_PROJECT if you need two on one host.
 project="${MCP_GATE_PROJECT:-ecmmcpgate}"
 projection_dir=/run/secrets/ecm-mcp
+native_compose_override=""
+native_builder=""
+native_recovery_root=""
 
 build_only=false
 if [ "${1:-}" = "--build-only" ]; then
@@ -91,10 +97,15 @@ pick_ports() {
 pick_ports
 
 compose() {
+  local recovery_args=()
+  if [ -n "$native_compose_override" ]; then
+    recovery_args=(-f "$native_compose_override")
+  fi
   docker compose \
     -p "$project" \
     -f "$repository_root/docker-compose.yml" \
     -f "$repository_root/docker-compose.mcp.yml" \
+    "${recovery_args[@]}" \
     "$@"
 }
 
@@ -120,6 +131,13 @@ cleanup() {
     compose logs --no-color --tail 200 >&2 2>&1 || true
   fi
   compose down -v --remove-orphans --timeout 5 >/dev/null 2>&1 || true
+  if [ -n "$native_builder" ]; then
+    docker buildx rm "$native_builder" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$native_recovery_root" ]; then
+    # This exact private directory was created by this invocation's mktemp.
+    rm -rf -- "$native_recovery_root"
+  fi
   return $status
 }
 
@@ -134,7 +152,26 @@ echo "== ports: ecm=$ECM_PORT https=$ECM_HTTPS_PORT mcp=$MCP_PORT"
 compose down -v --remove-orphans >/dev/null 2>&1 || true
 
 if [ "${COMPOSE_BUILD:-true}" != "false" ] || [ "$build_only" = true ]; then
-  compose build
+  if [ "${ECM_RECOVER_NATIVE_BASE:-false}" = "true" ]; then
+    # Compose's Bake reader permits workspace inputs, not arbitrary sibling
+    # paths. Keep this private context inside the checkout instead of granting
+    # broad fs.read privileges. The default Docker context ignores it below.
+    native_recovery_root="$(mktemp -d "$repository_root/.native-ci-inputs.XXXXXX")"
+    case "$(uname -m)" in
+      x86_64) native_arch=amd64 ;;
+      aarch64) native_arch=arm64 ;;
+      *) fail "unsupported native base architecture" ;;
+    esac
+    native_compose_override="$native_recovery_root/compose.json"
+    python3 "$repository_root/scripts/recover_native_base.py" --arch "$native_arch" --with-sources \
+      --output "$native_recovery_root/base" --compose-output "$native_compose_override"
+    native_builder="ecm-$(basename "$native_recovery_root" | tr '[:upper:]' '[:lower:]')"
+    docker buildx create --name "$native_builder" --driver docker-container \
+      --driver-opt image=moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+    compose build --builder "$native_builder"
+  else
+    compose build
+  fi
 fi
 if [ "$build_only" = true ]; then
   echo "built $project images for the MCP isolation gate"

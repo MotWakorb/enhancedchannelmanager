@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from tests.conftest import accountless_probe_stream
 from aiohttp import ClientPayloadError, ClientSession
 
 from models import StreamStats
@@ -172,7 +173,7 @@ async def test_optional_network_failure_preserves_success_and_prior_black_state(
     prober._run_ffprobe = AsyncMock(return_value=METADATA)
     prober._measure_stream_bitrate = AsyncMock(return_value=5_000_000)
     prober._push_stats_to_dispatcharr = AsyncMock()
-    saved = await prober.probe_stream(7, URL, "Test")
+    saved = await prober.probe_stream(7, URL, "Test", stream=accountless_probe_stream(prober, 7, URL))
     persisted = test_session.query(StreamStats).filter_by(stream_id=7).one()
     assert saved["probe_status"] == persisted.probe_status == "success"
     assert persisted.resolution == "1920x1080"
@@ -357,7 +358,7 @@ async def test_optional_sampling_cancellation_does_not_save_or_increment_strikes
     prober._measure_stream_bitrate = AsyncMock(return_value=5_000_000)
     prober._save_probe_result = MagicMock()
     with pytest.raises(asyncio.CancelledError):
-        await prober.probe_stream(7, URL, "Test")
+        await prober.probe_stream(7, URL, "Test", stream=accountless_probe_stream(prober, 7, URL))
     prober._save_probe_result.assert_not_called()
 
 
@@ -571,7 +572,7 @@ async def test_optional_later_resource_failure_persistence(
     prober._run_ffprobe = AsyncMock(return_value=METADATA)
     prober._measure_stream_bitrate = AsyncMock(return_value=5_000_000)
     prober._push_stats_to_dispatcharr = AsyncMock()
-    saved = await prober.probe_stream(7, HLS_URL, "Test")
+    saved = await prober.probe_stream(7, HLS_URL, "Test", stream=accountless_probe_stream(prober, 7, HLS_URL))
     persisted = test_session.query(StreamStats).filter_by(stream_id=7).one()
     if failure == "policy":
         assert saved["probe_status"] == persisted.probe_status == "failed"

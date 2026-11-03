@@ -276,6 +276,7 @@ def image(tmp_path, gate, monkeypatch):
         "architecture": "amd64",
         "rpm_architecture": "x86_64",
         "base_image": recipe["base_image"],
+        "builder_repository": recipe["architectures"]["amd64"]["builder_repository"],
         "manifest_sha256": real_sha(tmp_path / OWNED / "recipe/manifest.json"),
         "helper_sha256": real_sha(tmp_path / OWNED / "recipe/build_native_runtime.py"),
         "source_identity": {key: recipe[key] for key in ("ffmpeg", "gosu")},
@@ -339,17 +340,9 @@ def image(tmp_path, gate, monkeypatch):
         ROOT / "docker/python-third-party/notices",
         tmp_path / "usr/share/doc/ecm/python-third-party",
     )
-    # Parent is regenerating the real notice manifest after adding six ARM
-    # metadata files. Model that coherent delivery, without editing its files or
-    # accepting an incomplete manifest in the runtime helper.
+    # Exercise the actual shipped manifest; never repair it inside the fixture.
     notices = tmp_path / "usr/share/doc/ecm/python-third-party"
-    sums = "".join(
-        f"{digest(path.read_bytes())}  {path.relative_to(notices)}\n"
-        for path in sorted(notices.rglob("*"))
-        if path.is_file() and path.name != "SHA256SUMS"
-    )
-    (notices / "SHA256SUMS").write_text(sums)
-    assert digest(sums.encode()) == gate.PYTHON_SUMS["notices"]
+    assert digest((notices / "SHA256SUMS").read_bytes()) == gate.PYTHON_SUMS["notices"]
     install_wheels(tmp_path, gate, monkeypatch)
     return tmp_path, index, record, calls
 
@@ -856,17 +849,15 @@ def test_frozen_recipe_and_python_manifest_pins_match_real_files(gate):
     assert gate.sha256(ROOT / "docker/native/manifest.json") == gate.RECIPE_SHA256
     for group, expected in gate.PYTHON_SUMS.items():
         directory = ROOT / f"docker/python-third-party/{group}"
+        assert gate.sha256(directory / "SHA256SUMS") == expected
         if group == "notices":
-            # Verify all actual bytes, including the six ARM JSONs pending the
-            # parent's real SHA256SUMS regeneration. No source files are edited.
+            # The shipped manifest must describe every actual file, in order.
             sums = "".join(
                 f"{digest(path.read_bytes())}  {path.relative_to(directory)}\n"
                 for path in sorted(directory.rglob("*"))
                 if path.is_file() and path.name != "SHA256SUMS"
             )
             assert digest(sums.encode()) == expected
-        else:
-            assert gate.sha256(directory / "SHA256SUMS") == expected
     for name, expected in gate.RESDET_SCRIPTS.items():
         assert gate.sha256(ROOT / "scripts" / name) == expected
 
@@ -911,6 +902,7 @@ def test_rehashed_owned_source_index_cannot_hide_bad_delivery(gate, image, mutat
         "patch_tree",
         "no_patch",
         "duplicate_modules",
+        "builder_repository",
     ],
 )
 def test_self_consistent_pass_record_still_requires_producer_contract(
@@ -949,6 +941,8 @@ def test_self_consistent_pass_record_still_requires_producer_contract(
         record["source_files_sha256"] = digest(listing.read_bytes())
     elif mutation == "no_patch":
         record["ffmpeg"]["patches"] = []
+    elif mutation == "builder_repository":
+        record["builder_repository"] = "https://download.opensuse.org/tumbleweed/repo/oss/"
     else:
         record["gosu"]["modules"].append(record["gosu"]["modules"][-1])
     document(root, f"{PROOF}/native-build.json", record)

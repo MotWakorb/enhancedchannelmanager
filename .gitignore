@@ -174,3 +174,5 @@ frontend/test-results/
 !/SECURITY.md
 !/USER_GUIDE.md
 !/rebuild-instructions.md
+# Private, invocation-owned OCI/source contexts for cold CI isolation builds.
+/.native-ci-inputs.*/

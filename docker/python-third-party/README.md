@@ -8,6 +8,14 @@ Actual ARM notice text bytes match the shared x86 notice files. Exact ARM SBOM/s
 
 **Still unproved:** final ARM native execution/CI, final whole-image artifact selection/content, and recipient source delivery. Match actual final wheels/native files to these expected indexes and run final native ARM checks. No MCP, musllinux, new advisory clearance or architecture-runtime equivalence claim is made. Compiler archives and ARM wheel binaries are not shipped in this notice tree.
 
+**Targeted dnspython update:** build 0064 uses 2.9.0. Its pure-Python artifact,
+metadata and upstream ISC notice are recorded in `artifact-index/dnspython-2.9.0.json`
+and the refreshed shared index. The published wheel and sdist omit LICENSE;
+the exact release-commit notice was independently retrieved and Git-blob/hash
+checked, and its text matches the retained 2.8.0 notice. The old 2.8.0 entry in
+the historical x86 snapshot is not evidence for the new package. No native
+architecture evidence or final-image verification is silently refreshed.
+
 The proposed accompanying-image source path is `/usr/share/ecm/sources/python/`; integration and recipient access remain **not implemented or verified here**. Keep the source/notice files for components actually shipped and preserve ECM's separate CC0 root license.
 
 Details: `../../arm64-current/REPORT.md`; new tree integrity: `SHA256SUMS`.
