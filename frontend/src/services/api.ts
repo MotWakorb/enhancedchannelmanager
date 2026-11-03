@@ -2151,11 +2151,11 @@ export async function createStreamProfile(data: StreamProfileCreateRequest): Pro
 
 // Channel Profiles
 export async function getChannelProfiles(): Promise<ChannelProfile[]> {
-  return fetchJson(`${API_BASE}/channel-profiles`);
+  return fetchJson(`${API_BASE}/channel-profiles`, { cache: 'no-store' });
 }
 
-export async function getChannelProfile(id: number): Promise<ChannelProfile> {
-  return fetchJson(`${API_BASE}/channel-profiles/${id}`);
+export async function getChannelProfile(id: number, options?: { fresh?: boolean }): Promise<ChannelProfile> {
+  return fetchJson(`${API_BASE}/channel-profiles/${id}`, options?.fresh ? { cache: 'no-store' } : undefined);
 }
 
 export async function createChannelProfile(data: { name: string }): Promise<ChannelProfile> {
@@ -2196,13 +2196,9 @@ export async function updateProfileChannel(
  * Bulk enable/disable a batch of channels for a profile in one call
  * (enhancedchannelmanager-hq3de.i).
  *
- * NOTE: per dispatcharr_client.bulk_update_profile_channels, the underlying
- * Dispatcharr bulk endpoint only UPDATES existing ChannelProfileMembership
- * rows — it does not create new ones for a channel the profile has never
- * tracked before. `updateProfileChannel` (individual PATCH, used by
- * ChannelProfilesListModal's "Save Changes") is the safe path when new
- * memberships may need to be created. Prefer this bulk call only for
- * channels already known to the profile.
+ * Older deployments may only update existing membership rows. Callers must
+ * confirm enabled IDs by fresh readback, not infer completion from the write
+ * response's counts/status. Missing rows may require individual PATCH fallback.
  */
 export async function bulkUpdateProfileChannels(
   profileId: number,

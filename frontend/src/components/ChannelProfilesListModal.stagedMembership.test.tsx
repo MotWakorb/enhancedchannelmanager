@@ -119,6 +119,7 @@ describe('Save Changes in Edit Mode', () => {
     await user.click(screen.getByRole('button', { name: /Stage Changes/ }));
 
     expect(api.updateProfileChannel).not.toHaveBeenCalled();
+    expect(api.bulkUpdateProfileChannels).not.toHaveBeenCalled();
     expect(staged).toEqual(
       expect.arrayContaining([
         { profileId: PROFILE_ID, channelIds: [2], enabled: true },
@@ -135,7 +136,7 @@ describe('Save Changes in Edit Mode', () => {
     await user.click(screen.getByText('Bravo'));
     await user.click(screen.getByRole('button', { name: /Save Changes/ }));
 
-    await waitFor(() => expect(api.updateProfileChannel).toHaveBeenCalled());
+    await waitFor(() => expect(api.bulkUpdateProfileChannels).toHaveBeenCalled());
     expect(staged).toEqual([]);
   });
 });

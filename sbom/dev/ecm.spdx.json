@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "ecm-0.18.2-0047",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0047/ecm-59f621c1cbe316f58aa41344bd00061cc7f4a4ebbd1071905921b6f48b5dd554",
+  "name": "ecm-0.18.2-0064",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0064/ecm-81d5f9a7196ccc54c8940e88cccba53886db321e03b30aefa04a576c7bee9393",
   "creationInfo": {
-    "created": "2026-10-24T12:00:51Z",
+    "created": "2026-11-03T02:52:38Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-ecm",
       "name": "enhanced-channel-manager",
-      "versionInfo": "0.18.2-0047",
+      "versionInfo": "0.18.2-0064",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7502,9 +7502,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-dnspython-2.8.0",
+      "SPDXID": "SPDXRef-Package-pypi-dnspython-2.9.0",
       "name": "dnspython",
-      "versionInfo": "2.8.0",
+      "versionInfo": "2.9.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7515,7 +7515,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/dnspython@2.8.0"
+          "referenceLocator": "pkg:pypi/dnspython@2.9.0"
         }
       ]
     },
@@ -10464,7 +10464,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-dnspython-2.8.0",
+      "spdxElementId": "SPDXRef-Package-pypi-dnspython-2.9.0",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },

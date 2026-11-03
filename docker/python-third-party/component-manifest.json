@@ -1,7 +1,14 @@
 {
   "generated_utc": "2026-10-24T10:21:14.203598+00:00",
   "status": "Shared x86+expected ARM notice/component coverage complete at file layer; final native ARM CI and whole-image proof remain unperformed.",
-  "lock_sha256": "7fbaf818e6617efc2bbd54e07af7ef5a7eac300712ad7b29fa5c6b4ada17a2bf",
+  "lock_sha256": "c4ff84ae271e902235e2d4024066b0d3e679fce8ccc403ce3b6e9e544518bf0e",
+  "targeted_updates": {
+    "dnspython": {
+      "version": "2.9.0",
+      "evidence": "artifact-index/dnspython-2.9.0.json",
+      "scope": "Verified pure-Python wheel and pinned upstream license only; historical native architecture/image evidence unchanged."
+    }
+  },
   "locked_distributions": [
     {
       "name": "aiofiles",
@@ -81,7 +88,7 @@
     },
     {
       "name": "dnspython",
-      "version": "2.8.0"
+      "version": "2.9.0"
     },
     {
       "name": "email-validator",

@@ -339,17 +339,9 @@ def image(tmp_path, gate, monkeypatch):
         ROOT / "docker/python-third-party/notices",
         tmp_path / "usr/share/doc/ecm/python-third-party",
     )
-    # Parent is regenerating the real notice manifest after adding six ARM
-    # metadata files. Model that coherent delivery, without editing its files or
-    # accepting an incomplete manifest in the runtime helper.
+    # Exercise the actual shipped manifest; never repair it inside the fixture.
     notices = tmp_path / "usr/share/doc/ecm/python-third-party"
-    sums = "".join(
-        f"{digest(path.read_bytes())}  {path.relative_to(notices)}\n"
-        for path in sorted(notices.rglob("*"))
-        if path.is_file() and path.name != "SHA256SUMS"
-    )
-    (notices / "SHA256SUMS").write_text(sums)
-    assert digest(sums.encode()) == gate.PYTHON_SUMS["notices"]
+    assert digest((notices / "SHA256SUMS").read_bytes()) == gate.PYTHON_SUMS["notices"]
     install_wheels(tmp_path, gate, monkeypatch)
     return tmp_path, index, record, calls
 
@@ -856,17 +848,15 @@ def test_frozen_recipe_and_python_manifest_pins_match_real_files(gate):
     assert gate.sha256(ROOT / "docker/native/manifest.json") == gate.RECIPE_SHA256
     for group, expected in gate.PYTHON_SUMS.items():
         directory = ROOT / f"docker/python-third-party/{group}"
+        assert gate.sha256(directory / "SHA256SUMS") == expected
         if group == "notices":
-            # Verify all actual bytes, including the six ARM JSONs pending the
-            # parent's real SHA256SUMS regeneration. No source files are edited.
+            # The shipped manifest must describe every actual file, in order.
             sums = "".join(
                 f"{digest(path.read_bytes())}  {path.relative_to(directory)}\n"
                 for path in sorted(directory.rglob("*"))
                 if path.is_file() and path.name != "SHA256SUMS"
             )
             assert digest(sums.encode()) == expected
-        else:
-            assert gate.sha256(directory / "SHA256SUMS") == expected
     for name, expected in gate.RESDET_SCRIPTS.items():
         assert gate.sha256(ROOT / "scripts" / name) == expected
 
