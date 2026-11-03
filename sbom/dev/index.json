@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "version": "0.18.2-0063",
-  "created": "2026-11-03T02:08:53Z",
+  "created": "2026-11-03T02:09:16Z",
   "kind": "source-manifest",
   "channel": "dev",
   "permanent": false,
@@ -83,7 +83,7 @@
           ]
         ]
       },
-      "sha256": "f427c7afa34a8bb3d2046319ddacba5ce94e2993d939c8feb30671ac01c24786"
+      "sha256": "0df6098de8d8b13d67005f893fad6563426e56b93f6b180a1d362b74209581b0"
     },
     {
       "path": "mcp.spdx.json",
@@ -94,7 +94,7 @@
         "packages": [],
         "relationships": []
       },
-      "sha256": "0e57731591ec0271e0c2ff61f674c28c7e7a79e0db620aaef5de2689a80ad2c5"
+      "sha256": "1f33257876e98a6cbf951c3c64e60beada2686d4c3a03cb2366b11703619fb54"
     }
   ]
 }
