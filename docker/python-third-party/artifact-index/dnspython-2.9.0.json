@@ -1,0 +1,40 @@
+{
+  "name": "dnspython",
+  "version": "2.9.0",
+  "scope": "Public artifact/hash and pure-Python source/notice verification; not final image selection or native execution.",
+  "wheel": {
+    "filename": "dnspython-2.9.0-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/10/02/cdcc9b7c051786a103c3b09e1003a82fa0c66bcb91ffbdabcfbf7b4163b9/dnspython-2.9.0-py3-none-any.whl",
+    "sha256": "9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9",
+    "bytes": 354822,
+    "root_is_purelib": true,
+    "tag": "py3-none-any",
+    "native_files": [],
+    "metadata_sha256": "d25dbd09b39758cd5cebe518701012a6278731986cd384fc4a7f25e78f7de929",
+    "record_sha256": "799d25adf58608fbfe8d7b65e8d7173734c8c63743516a6f6a348cf69f938569",
+    "wheel_metadata_sha256": "de2431d790b25f01a2e1d6f281e7730383394f57aa3bf4a3c1d3df526aadd82c"
+  },
+  "sdist": {
+    "filename": "dnspython-2.9.0.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/ef/4a/50822184bd67cc6493f0fb6a880749158fcd31ab3fa07409acfd91f9fc85/dnspython-2.9.0.tar.gz",
+    "sha256": "b44dc6b18f07a8b1c56676a19fbfdb5209415b046a9cece286baafa87ff3f7f1",
+    "bytes": 423560
+  },
+  "license": {
+    "expression": "ISC",
+    "missing_from_pypi_wheel_and_sdist": true,
+    "source_url": "https://raw.githubusercontent.com/rthalley/dnspython/e790c8f20a67ad439c7aafef2321e161c6028eee/LICENSE",
+    "upstream_commit": "e790c8f20a67ad439c7aafef2321e161c6028eee",
+    "git_blob_sha1": "390a726dceb02e67bae01849000eb44632f01703",
+    "sha256": "c3ea3ff5654b329c19d3bc5f7481af623c3dded4a6145585499f843ad3d741cd",
+    "delivered_path": "notices/upstream/dnspython-2.9.0/LICENSE",
+    "equal_to_retained_2_8_notice_text": true
+  },
+  "source_comparison": {
+    "commit": "e790c8f20a67ad439c7aafef2321e161c6028eee",
+    "path": "dns/name.py",
+    "sha256": "747fb6cee70306a89955fd8651d6712e0803aa463593f4e8c30ed27d0a9d5902",
+    "wheel_bytes_equal": true
+  },
+  "historical_snapshot": "The dnspython 2.8.0 row in x86-current-component-manifest.json is historical; this targeted update and pure-python-shared.json supersede that package row only."
+}

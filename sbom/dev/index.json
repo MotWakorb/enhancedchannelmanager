@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "version": "0.18.2-0063",
-  "created": "2026-11-03T02:09:37Z",
+  "version": "0.18.2-0064",
+  "created": "2026-11-03T02:27:50Z",
   "kind": "source-manifest",
   "channel": "dev",
   "permanent": false,
@@ -26,7 +26,7 @@
   },
   "sources": {
     "Dockerfile": "sha256:299ad422c5c8d9c46832811421f502e2f4e04b230b4a4af334267b931c03b3e1",
-    "backend/requirements.txt": "sha256:7fbaf818e6617efc2bbd54e07af7ef5a7eac300712ad7b29fa5c6b4ada17a2bf",
+    "backend/requirements.txt": "sha256:c4ff84ae271e902235e2d4024066b0d3e679fce8ccc403ce3b6e9e544518bf0e",
     "docker/native/README.md": "sha256:86a33034cf6d4b9b7f6611ed40a7b0cd971598c46fd732eba0d0bc44e073852f",
     "docker/native/ffmpeg-release.asc": "sha256:397b3becedcd5a98769967ff1ff8501ddc89f8368b8f766e4701377d7dbaabe5",
     "docker/native/ffmpeg.args": "sha256:8815506c9fd2a54139123c49a3b4c06facfb06008b125662aff3b7dc323ab8d3",
@@ -83,7 +83,7 @@
           ]
         ]
       },
-      "sha256": "ea33ae62468e78d30f179ee34676815d462093b7d7329dd970ccc1486dbc108b"
+      "sha256": "7481af1a0041a41de4f47178165f65c0a33fcc2a8f9ad0157a912edc7db08acc"
     },
     {
       "path": "mcp.spdx.json",
@@ -94,7 +94,7 @@
         "packages": [],
         "relationships": []
       },
-      "sha256": "95f79b17e798da4969e3d0007a300c896d7f064a78949cefe7c764e88c9d43c0"
+      "sha256": "20f180ef68b47c926012a2d367009639612dd23be88ff25bc50341c72d103782"
     }
   ]
 }

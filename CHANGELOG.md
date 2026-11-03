@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Bound DNS decompression pointer chains (build 0.18.2-0064; `enhancedchannelmanager-8falz`).** Update only the backend's dnspython lock from 2.8.0 to 2.9.0 for CVE-2026-114605. The upstream parser now refuses chains longer than 16 pointers. Pydantic email validation remains syntax-only; no DNS, SSRF or authentication policy is relaxed. The matched upstream ISC notice accompanies the pure-Python package even though its published archives omit that notice file. Native image and vendor delivery holds remain separate.
+
 - **Combined P1 application integration candidate (build 0.18.2-0063; `enhancedchannelmanager-tj3d7`).** Brings together the independently reviewed MCP authentication, profile-save and pipeline-responsiveness repairs plus the explicitly partial direct-probe admission repair. Candidate branches remain preserved; this is not a release, deployment, image-scan clearance or a claim that the external late-viewer race is fixed.
 
 - **Shared account-capacity admission for direct stream probes (build 0.18.2-0059; #1032, `enhancedchannelmanager-0m06f.6.2`, partial repair).** Single, bulk, pipeline and probe-all paths now use fresh capacity checks and serialized local reservations, so concurrent ECM probes cannot each claim the same free slot. Saturated or unverifiable capacity is explicitly skipped without overwriting prior stream health. Direct measurements and SSRF routing remain unchanged. This does **not** eliminate the separate race where a Dispatcharr viewer arrives during an admitted direct probe; full protection still requires upstream coordination or an explicitly reviewed routing/policy change.
