@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "version": "0.18.2-0064",
-  "created": "2026-11-03T02:52:38Z",
+  "created": "2026-11-03T04:15:31Z",
   "kind": "source-manifest",
   "channel": "dev",
   "permanent": false,
@@ -25,12 +25,13 @@
     ]
   },
   "sources": {
-    "Dockerfile": "sha256:299ad422c5c8d9c46832811421f502e2f4e04b230b4a4af334267b931c03b3e1",
+    "Dockerfile": "sha256:35bcdfa06e1c2c7fc2371b810b9aea1cc7d361635483ad0179dac0ea2b2d9b80",
     "backend/requirements.txt": "sha256:c4ff84ae271e902235e2d4024066b0d3e679fce8ccc403ce3b6e9e544518bf0e",
     "docker/native/README.md": "sha256:86a33034cf6d4b9b7f6611ed40a7b0cd971598c46fd732eba0d0bc44e073852f",
+    "docker/native/base-recovery.json": "sha256:d9e516d050b43f102ebb87183472d253710ca1e087e1f2117aea7e9d0de766c9",
     "docker/native/ffmpeg-release.asc": "sha256:397b3becedcd5a98769967ff1ff8501ddc89f8368b8f766e4701377d7dbaabe5",
     "docker/native/ffmpeg.args": "sha256:8815506c9fd2a54139123c49a3b4c06facfb06008b125662aff3b7dc323ab8d3",
-    "docker/native/manifest.json": "sha256:de91b41ea81123a4af8eb9ca8cd526ed6560f4f53e2e3152de42f2edf0cb7db9",
+    "docker/native/manifest.json": "sha256:e4d082ee870fa2d9003c91cad1e6ecddd1089f4fb4d122042da9252d474830dc",
     "docker/native/packman.asc": "sha256:9ad00d51db9644a12945ce780f5e013eaa1d72d5d212b040d296925b9aec50c7",
     "docker/native/patches/CVE-2026-107696.patch": "sha256:7518b281a719aa41c5cdd1f259eaf38f6b1e3fb28c09ec254c441abbaad69095",
     "docker/trust/README.md": "sha256:bac4f29677b1a02e25bd767881a4e9047ce0ff1e013aa23600c0766b594d42ad",
@@ -39,15 +40,15 @@
     "mcp-server/Dockerfile": "sha256:58e90f5183dbf0e42069e3b752690a3f049721c1baa18f33f36aa9819433781c",
     "mcp-server/requirements.txt": "sha256:de79f8bc7af6839295f4dfcb225e063fec46e841035468d17eaf84f48324833f",
     "sbom/native-dependencies.json": "sha256:530f7498262e5c38541513e01ca12b4f6964b61b80273f75ec8956ff5e17a82a",
-    "scripts/build_native_runtime.py": "sha256:7a8f0d8487deed7f1eaa523b0369d2cca40ce86cb042eb79c6667c3197e2aff2",
+    "scripts/build_native_runtime.py": "sha256:378c59d6b3e513f2dfdfda96a910ecf8fc9b8335b2073ac8c971cbe7dd18b379",
     "scripts/collect_native_sources.py": "sha256:0ef8ce572ca000a07d799f8bc78104e0ad15cff193e08b4739219b3f5c8afe55"
   },
   "documents": [
     {
       "path": "ecm.spdx.json",
       "subject": "ecm",
-      "packages": 449,
-      "relationships": 450,
+      "packages": 451,
+      "relationships": 452,
       "nativeGraph": {
         "packages": [
           "SPDXRef-Package-native-ffmpeg-8.1.3",
@@ -83,7 +84,7 @@
           ]
         ]
       },
-      "sha256": "4e228f53e92b3a4b5c97f9950ad2219f0f819ab6ba962da1b9fdf031acfacf08"
+      "sha256": "9b6e3e954595ef191287a6fffe4d7cf2537b8252119abfc9526c2a3a1cd238a9"
     },
     {
       "path": "mcp.spdx.json",
@@ -94,7 +95,7 @@
         "packages": [],
         "relationships": []
       },
-      "sha256": "c353f9f955d12f6809e6b67838f589830ff08ea233f8a735f4731dd75f53ecbd"
+      "sha256": "8947c4fb6e2abd10934a58dd2f58de5ca8cfe0d1995e9fde84f8d06fa24def1a"
     }
   ]
 }

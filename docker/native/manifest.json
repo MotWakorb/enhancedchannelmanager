@@ -56,6 +56,7 @@
     "amd64": {
       "rpm_arch": "x86_64",
       "official_repository": "https://download.opensuse.org/tumbleweed/repo/oss/",
+      "builder_repository": "https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/",
       "official_source_repository": "https://download.opensuse.org/tumbleweed/repo/src-oss/",
       "builder_status": "ready",
       "builder_rpms": [

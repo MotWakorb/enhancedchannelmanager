@@ -15,9 +15,18 @@ RUN npm run build
 FROM registry.opensuse.org/opensuse/tumbleweed@sha256:c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55 AS native-builder
 COPY scripts/build_native_runtime.py /tmp/build_native_runtime.py
 COPY docker/native/ /tmp/native/
-RUN zypper --non-interactive install --no-recommends python312-base \
+COPY docker/native-cache/ /tmp/native-cache/
+RUN case "$(uname -m)" in \
+        x86_64) repository=https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/ ;; \
+        aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/ ;; \
+        *) exit 1 ;; \
+    esac \
+    && rm -f /etc/zypp/repos.d/*.repo \
+    && zypper --non-interactive addrepo --check --gpgcheck --refresh "$repository" oss \
+    && zypper --non-interactive refresh \
+    && zypper --non-interactive install --no-recommends python312-base \
     && case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \
-    && python3.12 /tmp/build_native_runtime.py --manifest /tmp/native/manifest.json --work-dir /tmp/native-work --output-dir /tmp/native-output --arch "$arch"
+    && python3.12 /tmp/build_native_runtime.py --manifest /tmp/native/manifest.json --work-dir /tmp/native-work --output-dir /tmp/native-output --arch "$arch" --cache-dir /tmp/native-cache
 
 # Resolve one runtime graph, without retaining compilers or development headers.
 FROM registry.opensuse.org/opensuse/tumbleweed@sha256:c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55 AS runtime-base
@@ -25,7 +34,7 @@ COPY --from=native-builder /tmp/native-output/runtime-rpms/ /tmp/runtime-rpms/
 COPY --from=native-builder /tmp/native-output/runtime-packages.txt /tmp/runtime-packages.txt
 COPY --from=native-builder /tmp/native/packman.asc /tmp/packman.asc
 RUN case "$(uname -m)" in \
-        x86_64) repository=https://download.opensuse.org/tumbleweed/repo/oss/ ;; \
+        x86_64) repository=https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/ ;; \
         aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/ ;; \
         *) exit 1 ;; \
     esac \
@@ -70,8 +79,9 @@ RUN zypper --non-interactive install --no-recommends gcc make pkgconf-pkg-config
 FROM native-builder AS source-builder
 COPY --from=runtime-base /tmp/runtime-inventory.tsv /tmp/runtime-inventory.tsv
 COPY scripts/collect_native_sources.py /tmp/collect_native_sources.py
+COPY --from=ecm-native-sources / /tmp/native-source-cache/
 RUN rpm -q --qf '%{DESCRIPTION}\n' gpg-pubkey-29b700a4 > /tmp/suse.asc \
-    && python3.12 /tmp/collect_native_sources.py --inventory /tmp/runtime-inventory.tsv --arch "$(uname -m)" --out /tmp/rpm-source-output --suse-key /tmp/suse.asc --packman-key /tmp/native/packman.asc
+    && python3.12 /tmp/collect_native_sources.py --inventory /tmp/runtime-inventory.tsv --arch "$(uname -m)" --out /tmp/rpm-source-output --suse-key /tmp/suse.asc --packman-key /tmp/native/packman.asc --cache-dir /tmp/native-source-cache/sources --expected-sha256 /tmp/native-source-cache/index.json
 
 # Production image
 FROM runtime-base
@@ -106,6 +116,7 @@ COPY --from=source-builder /tmp/rpm-source-output/ /usr/share/ecm/sources/rpm/
 COPY --from=native-builder /tmp/native-output/sources/ /usr/share/ecm/sources/owned/
 COPY --from=native-builder /tmp/native-output/build-output.json /usr/share/ecm/provenance/native-build.json
 COPY --from=native-builder /tmp/native-output/source-files.json /usr/share/ecm/provenance/native-sources.json
+COPY --from=ecm-native-sources /recovery.json /usr/share/ecm/provenance/native-source-recovery.json
 COPY --from=resdet-builder /tmp/resdet-work/resdet.tar.gz /usr/share/ecm/sources/resdet/resdet.tar.gz
 COPY scripts/build_resdet.py scripts/generate_sbom.py sbom/native-dependencies.json /usr/share/ecm/sources/resdet/
 COPY docker/python-third-party/notices/ /usr/share/doc/ecm/python-third-party/

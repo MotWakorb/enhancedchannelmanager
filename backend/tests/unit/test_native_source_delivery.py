@@ -276,6 +276,7 @@ def image(tmp_path, gate, monkeypatch):
         "architecture": "amd64",
         "rpm_architecture": "x86_64",
         "base_image": recipe["base_image"],
+        "builder_repository": recipe["architectures"]["amd64"]["builder_repository"],
         "manifest_sha256": real_sha(tmp_path / OWNED / "recipe/manifest.json"),
         "helper_sha256": real_sha(tmp_path / OWNED / "recipe/build_native_runtime.py"),
         "source_identity": {key: recipe[key] for key in ("ffmpeg", "gosu")},
@@ -901,6 +902,7 @@ def test_rehashed_owned_source_index_cannot_hide_bad_delivery(gate, image, mutat
         "patch_tree",
         "no_patch",
         "duplicate_modules",
+        "builder_repository",
     ],
 )
 def test_self_consistent_pass_record_still_requires_producer_contract(
@@ -939,6 +941,8 @@ def test_self_consistent_pass_record_still_requires_producer_contract(
         record["source_files_sha256"] = digest(listing.read_bytes())
     elif mutation == "no_patch":
         record["ffmpeg"]["patches"] = []
+    elif mutation == "builder_repository":
+        record["builder_repository"] = "https://download.opensuse.org/tumbleweed/repo/oss/"
     else:
         record["gosu"]["modules"].append(record["gosu"]["modules"][-1])
     document(root, f"{PROOF}/native-build.json", record)

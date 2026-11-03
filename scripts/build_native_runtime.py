@@ -222,6 +222,14 @@ def load_recipe(path: Path, arch: str) -> dict:
                 and item["official_repository"] == repository,
                 "repository/architecture mismatch",
             )
+            _require(
+                item.get("builder_repository", repository)
+                == (
+                    "https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/"
+                    if target == "amd64" else repository
+                ),
+                "builder repository identity mismatch",
+            )
             source_repository = (
                 "https://download.opensuse.org/tumbleweed/repo/src-oss/"
                 if target == "amd64"
@@ -817,7 +825,7 @@ def _install_builder(recipe: dict, work: Path, env: dict[str, str]) -> None:
             "--check",
             "--gpgcheck",
             "--refresh",
-            recipe["official_repository"],
+            recipe.get("builder_repository", recipe["official_repository"]),
             "oss",
         ],
         cwd=work,
@@ -1308,6 +1316,7 @@ def build(
         "codec_inputs": selected["codec_rpms"],
         "codec_source_rpms": selected["source_rpms"],
         "official_source_repository": selected["official_source_repository"],
+        "builder_repository": selected.get("builder_repository", selected["official_repository"]),
         "ffmpeg": ffmpeg,
         "gosu": gosu,
         "builder_rpms": builder_rpms,

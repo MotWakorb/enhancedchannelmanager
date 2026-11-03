@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
-RECIPE_SHA256 = "de91b41ea81123a4af8eb9ca8cd526ed6560f4f53e2e3152de42f2edf0cb7db9"
+RECIPE_SHA256 = "e4d082ee870fa2d9003c91cad1e6ecddd1089f4fb4d122042da9252d474830dc"
 PYTHON_SUMS = {
     "sources": "e21e0520773c78b5f16ee56ddb94073a4def902d8656b435fec9dc26eee8e2ab",
     # Complete sorted 557-entry manifest, including the dnspython 2.9.0 notice.
@@ -266,6 +266,8 @@ def _owned(root, architecture):
     recipe = _json(directory, "recipe/manifest.json")
     _hash(_file(directory, "recipe/build_native_runtime.py"), record["helper_sha256"])
     assert record["base_image"] == recipe["base_image"]
+    selected = recipe["architectures"][arch]
+    assert record["builder_repository"] == selected.get("builder_repository", selected["official_repository"])
     assert record["source_identity"] == {key: recipe[key] for key in ("ffmpeg", "gosu")}
     listing = _file(root, "usr/share/ecm/provenance/native-sources.json")
     _hash(listing, record["source_files_sha256"])
