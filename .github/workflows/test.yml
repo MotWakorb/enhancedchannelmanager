@@ -81,9 +81,9 @@ jobs:
   backend:
     name: Backend Tests
     runs-on: ubuntu-latest
-    # Healthy runs complete in under ten minutes. Bound future deadlocks so a
-    # wedged test cannot occupy a runner for GitHub's six-hour default.
-    timeout-minutes: 30
+    # A full combined run took 28m14s; another was still progressing at 30m.
+    # Include setup/runner variation while retaining a finite deadlock bound.
+    timeout-minutes: 45
     needs: [detect]
     if: ${{ !cancelled() }}
     steps:

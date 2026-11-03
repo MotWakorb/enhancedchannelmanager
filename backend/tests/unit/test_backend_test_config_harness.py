@@ -9,7 +9,6 @@ import yaml
 
 from tests._config_harness import cleanup_test_config, initialize_test_config
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -62,7 +61,9 @@ def test_backend_ci_uses_harness_root_and_bounded_timeout():
         (REPO_ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
     )
     backend = workflow["jobs"]["backend"]
-    assert backend["timeout-minutes"] == 30
+    # A recorded full run took 28m14s; another was still progressing at the
+    # old 30-minute deadline. Allow setup/runner variation, but remain bounded.
+    assert backend["timeout-minutes"] == 45
     pytest_step = next(step for step in backend["steps"] if step.get("id") == "pytest")
     assert pytest_step["env"]["ECM_TEST_CONFIG_ROOT"] == "${{ runner.temp }}"
     assert "CONFIG_DIR" not in pytest_step["env"]
