@@ -14,6 +14,7 @@ from config import DispatcharrSettings, StreamSortPointRule
 from models import StreamStats
 from smart_sort_evaluator import PointRule, StreamFacts, evaluate_points, sort_streams
 from stream_prober import StreamProber
+from tests.conftest import accountless_probe_stream
 
 
 @pytest.fixture
@@ -88,7 +89,7 @@ async def test_resdet_effective_dimensions_reach_classifier(prober):
     prober._run_resdet = AsyncMock(return_value=(640, 480))
     prober._measure_stream_bitrate = AsyncMock(return_value=400000)
     prober._push_stats_to_dispatcharr = AsyncMock()
-    result = await prober.probe_stream(1, "https://provider.example/local.ts", "local")
+    result = await prober.probe_stream(1, "https://provider.example/local.ts", "local", stream=accountless_probe_stream(prober, 1, "https://provider.example/local.ts"))
     assert result["resolution"] == "640x480"
     assert result["is_low_bitrate"] is False
 
@@ -227,7 +228,8 @@ async def test_probe_all_envelope_tracks_low_bitrate(prober, parallel):
     prober.client.get_m3u_accounts.return_value = []
     prober.client.get_channel_stats.return_value = {"channels": []}
     prober._fetch_channel_stream_ids = AsyncMock(return_value=({1}, {}, {}))
-    prober._fetch_all_streams = AsyncMock(return_value=[{"id": 1, "name": "Local", "url": "https://fixture.invalid/local.ts"}])
+    prober._fetch_all_streams = AsyncMock(return_value=[{"id": 1, "name": "Local", "url": "https://fixture.invalid/local.ts", "m3u_account": None}])
+    prober.client.get_stream = AsyncMock(return_value=prober._fetch_all_streams.return_value[0])
     prober._run_ffprobe = AsyncMock(return_value=metadata())
     prober._measure_stream_bitrate = AsyncMock(return_value=100)
     prober._push_stats_to_dispatcharr = AsyncMock()
@@ -239,7 +241,8 @@ async def test_probe_all_envelope_tracks_low_bitrate(prober, parallel):
 
 @pytest.mark.asyncio
 async def test_bulk_probe_persists_flag_and_history_independent_of_toggle(prober):
-    prober._fetch_all_streams = AsyncMock(return_value=[{"id": 1, "name": "Local test", "url": "https://fixture.invalid/local.ts"}])
+    prober._fetch_all_streams = AsyncMock(return_value=[{"id": 1, "name": "Local test", "url": "https://fixture.invalid/local.ts", "m3u_account": None}])
+    prober.client.get_stream = AsyncMock(return_value=prober._fetch_all_streams.return_value[0])
     prober._run_ffprobe = AsyncMock(return_value=metadata())
     prober._measure_stream_bitrate = AsyncMock(return_value=100)
     prober._push_stats_to_dispatcharr = AsyncMock()
