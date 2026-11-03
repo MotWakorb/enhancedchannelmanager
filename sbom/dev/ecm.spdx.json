@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "ecm-0.18.2-0063",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0063/ecm-0d45c0433072f3c0ced37690a5763664bda43ad1369f4ac995b96375b6b9bb9a",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0063/ecm-1c72cc010915a08aa55ea76bddac95f83d8a7ce02d7a845053d49a2987a90b8b",
   "creationInfo": {
-    "created": "2026-11-03T02:09:16Z",
+    "created": "2026-11-03T02:09:37Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],

@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "mcp-0.18.2-0063",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0063/mcp-352b44a1798820afbd962c88dc310575e36d81ae2c185b7b838b643d85e52b32",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0063/mcp-ad9cf08ba6276d7e5ef23bd7c8b4e38b873064a7441ad82508d4737a68d6191d",
   "creationInfo": {
-    "created": "2026-11-03T02:09:16Z",
+    "created": "2026-11-03T02:09:37Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],

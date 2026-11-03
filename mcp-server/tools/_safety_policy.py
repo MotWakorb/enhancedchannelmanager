@@ -519,11 +519,15 @@ def install_safety_policy(mcp) -> None:
                 "run_channel_pipeline", "run_auto_creation",
                 "apply_normalization_to_channels", "clear_emby_logos",
             }
-            resolved = (
-                _stored_resolution(supplied)
-                if supplied and server_planned
-                else await _resolve_targets(_name, arguments, _run)
-            )
+            # Resolution can call the backend before the claimed tool handler
+            # runs. Authenticate that mutation-free preview too; this does not
+            # validate a confirmation or authorize the subsequent mutation.
+            with claim_context(_name, ToolSafety.DESTRUCTIVE.value, confirmed=False):
+                resolved = (
+                    _stored_resolution(supplied)
+                    if supplied and server_planned
+                    else await _resolve_targets(_name, arguments, _run)
+                )
             if resolved is None:
                 return present("Confirmation token was already used or is unknown; request a new preview.")
             resolved_count = _resolved_count(resolved, server_planned=server_planned)
