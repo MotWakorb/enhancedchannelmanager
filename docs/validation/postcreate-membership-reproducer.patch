@@ -1,0 +1,76 @@
+diff --git a/frontend/src/App.bulkCreateStaging.test.tsx b/frontend/src/App.bulkCreateStaging.test.tsx
+index 0dcf7546..5f34e6ad 100644
+--- a/frontend/src/App.bulkCreateStaging.test.tsx
++++ b/frontend/src/App.bulkCreateStaging.test.tsx
+@@ -5,6 +5,8 @@ import type { ChannelManagerTabProps } from './components/tabs/ChannelManagerTab
+ import type { BulkCommitRequest, BulkCommitResponse, ResolvedCreateChannelNames } from './services/api';
+ import type { EditModeSummary, Stream } from './types';
+ import { STAGED_LEDGER_STORAGE_KEY, type PersistedStagedLedger } from './utils/stagedLedgerStorage';
++import * as api from './services/api';
++import recordedProfiles from '../../backend/tests/fixtures/y3m6o1/dispatcharr_channel_profiles_mixed_membership.json';
+ 
+ const testState = vi.hoisted(() => ({
+   channelManagerProps: null as ChannelManagerTabProps | null,
+@@ -78,6 +80,7 @@ vi.mock('./services/api', async (importOriginal) => {
+     getAllLogos: vi.fn().mockResolvedValue([]),
+     getStreamProfiles: vi.fn().mockResolvedValue([]),
+     getChannelProfiles: vi.fn().mockResolvedValue([]),
++    getProfileConflictReviews: vi.fn().mockResolvedValue({ reviews: [], total: 0 }),
+     getEPGSources: vi.fn().mockResolvedValue([]),
+     getEPGData: vi.fn().mockResolvedValue([]),
+     getM3UStreamMetadata: vi.fn().mockResolvedValue({ count: 0, metadata: {} }),
+@@ -276,4 +279,54 @@ describe('App bulk-create staging', () => {
+     await waitFor(() => expect(testState.exitDialogProps?.isOpen).toBe(false));
+     expect(sessionStorage.getItem(STAGED_LEDGER_STORAGE_KEY)).toBeNull();
+   });
++
++  it.each(['accepted-unapplied', 'rejected'] as const)(
++    'keeps post-create profile intent visible when membership is %s (0m06f.3.4)',
++    async (fault) => {
++      let committed = false;
++      const created = {
++        id: 50_000, name: 'New profile-bound channel', channel_number: 100,
++        channel_group_id: null, tvg_id: null, tvc_guide_stationid: null,
++        epg_data_id: null, streams: [], stream_profile_id: null,
++        uuid: 'synthetic-created', logo_id: null, auto_created: false,
++        auto_created_by: null, auto_created_by_name: null,
++      };
++      const commit = testState.bulkCommit.getMockImplementation()!;
++      testState.bulkCommit.mockImplementation(async (...args) => {
++        const result = await commit(...args);
++        committed = true;
++        return result;
++      });
++      vi.mocked(api.getChannels).mockImplementation(async () => ({
++        results: committed ? [created] : [], count: committed ? 1 : 0,
++        next: null, previous: null,
++      }));
++      // Recorded enabled-only shape, with explicitly synthetic target membership.
++      const profile = { ...recordedProfiles.profiles.find((p) => p.id === 6)!, channels: [] };
++      vi.mocked(api.getChannelProfiles).mockResolvedValue([profile]);
++      const write = vi.spyOn(api, 'updateProfileChannel');
++      if (fault === 'rejected') write.mockRejectedValue(new Error('Synthetic destination unavailable'));
++      else write.mockResolvedValue({ success: true }); // Acknowledged, but state did not change.
++
++      render(<App />);
++      const editButton = await screen.findByRole('button', { name: /edit mode/i });
++      await waitFor(() => expect(editButton).toBeEnabled());
++      fireEvent.click(editButton);
++      await waitFor(() => expect(testState.channelManagerProps?.isEditMode).toBe(true));
++      await act(async () => {
++        await testState.channelManagerProps!.onCreateChannel(
++          created.name, 100, undefined, undefined, undefined, undefined, [6],
++        );
++      });
++      expect(write).not.toHaveBeenCalled();
++      fireEvent.click(screen.getByTitle('Apply changes'));
++      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
++      await waitFor(() => expect(write).toHaveBeenCalledWith(6, 50_000, { enabled: true }));
++      await waitFor(() => expect(testState.exitDialogProps?.isOpen).toBe(false));
++      await waitFor(() => expect(api.getChannelProfiles).toHaveBeenCalledTimes(3));
++      expect(profile.channels).not.toContain(50_000);
++      // Required operator outcome, not HTTP fulfillment or swallowed rejection.
++      expect(screen.queryByText(/profile.*(?:unresolved|unverified|failed|pending)/i)).toBeInTheDocument();
++    },
++  );
+ });
