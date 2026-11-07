@@ -124,24 +124,28 @@ SUSE_BASE_IMAGE = (
 )
 SUSE_NATIVE_BUILDER_RUN = (
     'case "$(uname -m)" in '
-    "x86_64) repository=https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/ ;; "
-    "aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/ ;; "
+    "x86_64) repository=https://download.opensuse.org/tumbleweed/repo/oss/; metadata=36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6 ;; "
+    "aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/; metadata=374a893f64518ff85a66f866d88e0aab77d0fbeb78f83eaa5fe140947a0495ce ;; "
     "*) exit 1 ;; esac && rm -f /etc/zypp/repos.d/*.repo && "
     'zypper --non-interactive addrepo --check --gpgcheck --refresh "$repository" oss && '
-    "zypper --non-interactive refresh && zypper --non-interactive install --no-recommends python312-base && "
+    "zypper --non-interactive refresh && "
+    'echo "$metadata /var/cache/zypp/raw/oss/repodata/repomd.xml" | sha256sum --check --strict && '
+    "zypper --non-interactive --no-refresh install --no-recommends python312-base && "
     'case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac && '
     "python3.12 /tmp/build_native_runtime.py --manifest /tmp/native/manifest.json "
     '--work-dir /tmp/native-work --output-dir /tmp/native-output --arch "$arch" --cache-dir /tmp/native-cache'
 )
 SUSE_RUNTIME_RUN = (
     'case "$(uname -m)" in '
-    "x86_64) repository=https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/ ;; "
-    "aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/ ;; "
+    "x86_64) repository=https://download.opensuse.org/tumbleweed/repo/oss/; metadata=36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6 ;; "
+    "aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/; metadata=374a893f64518ff85a66f866d88e0aab77d0fbeb78f83eaa5fe140947a0495ce ;; "
     "*) exit 1 ;; esac && rm -f /etc/zypp/repos.d/*.repo && "
     'zypper --non-interactive addrepo --check --gpgcheck --refresh "$repository" oss && '
-    "zypper --non-interactive refresh && zypper --non-interactive update --no-recommends && "
+    "zypper --non-interactive refresh && "
+    'echo "$metadata /var/cache/zypp/raw/oss/repodata/repomd.xml" | sha256sum --check --strict && '
+    "zypper --non-interactive --no-refresh update --no-recommends && "
     "rpm --import /tmp/packman.asc && rpm --checksig /tmp/runtime-rpms/*.rpm && "
-    "zypper --non-interactive install --no-recommends /tmp/runtime-rpms/*.rpm "
+    "zypper --non-interactive --no-refresh install --no-recommends /tmp/runtime-rpms/*.rpm "
     "$(cat /tmp/runtime-packages.txt) python312 python312-base shadow coreutils bash "
     "timezone ca-certificates && zypper clean --all"
 )
@@ -166,11 +170,16 @@ SUSE_SOURCE_BUILDER_RUN = (
     "rpm -q --qf '%{DESCRIPTION}\\n' gpg-pubkey-29b700a4 > /tmp/suse.asc && "
     "python3.12 /tmp/collect_native_sources.py --inventory /tmp/runtime-inventory.tsv "
     '--arch "$(uname -m)" --out /tmp/rpm-source-output --suse-key /tmp/suse.asc '
-    "--packman-key /tmp/native/packman.asc --cache-dir /tmp/native-source-cache/sources "
-    "--expected-sha256 /tmp/native-source-cache/index.json"
+    "--packman-key /tmp/native/packman.asc "
+    "--native-manifest /tmp/native/manifest.json --native-sources /tmp/native-output/sources"
 )
 SUSE_RESDET_BUILDER_RUN = (
-    "zypper --non-interactive install --no-recommends gcc make pkgconf-pkg-config gawk && "
+    'case "$(uname -m)" in '
+    "x86_64) metadata=36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6 ;; "
+    "aarch64) metadata=374a893f64518ff85a66f866d88e0aab77d0fbeb78f83eaa5fe140947a0495ce ;; "
+    "*) exit 1 ;; esac && zypper --non-interactive refresh && "
+    'echo "$metadata /var/cache/zypp/raw/oss/repodata/repomd.xml" | sha256sum --check --strict && '
+    "zypper --non-interactive --no-refresh install --no-recommends gcc make pkgconf-pkg-config gawk && "
     + RESDET_BUILD_COMMAND.replace("python ", "python3.12 ", 1)
 )
 RESDET_RUNTIME_ASSERTION = (
@@ -198,7 +207,6 @@ SUSE_SOURCE_DELIVERY = [
     ("COPY", "--from=native-builder /tmp/native-output/sources/ /usr/share/ecm/sources/owned/"),
     ("COPY", "--from=native-builder /tmp/native-output/build-output.json /usr/share/ecm/provenance/native-build.json"),
     ("COPY", "--from=native-builder /tmp/native-output/source-files.json /usr/share/ecm/provenance/native-sources.json"),
-    ("COPY", "--from=ecm-native-sources /recovery.json /usr/share/ecm/provenance/native-source-recovery.json"),
     ("COPY", "--from=resdet-builder /tmp/resdet-work/resdet.tar.gz /usr/share/ecm/sources/resdet/resdet.tar.gz"),
     ("COPY", "scripts/build_resdet.py scripts/generate_sbom.py sbom/native-dependencies.json /usr/share/ecm/sources/resdet/"),
     ("COPY", "docker/python-third-party/notices/ /usr/share/doc/ecm/python-third-party/"),
@@ -744,7 +752,6 @@ def _validate_suse_stages(stages: list[dict[str, Any]], source: str) -> None:
     require(5, [
         ("COPY", "--from=runtime-base /tmp/runtime-inventory.tsv /tmp/runtime-inventory.tsv"),
         ("COPY", "scripts/collect_native_sources.py /tmp/collect_native_sources.py"),
-        ("COPY", "--from=ecm-native-sources / /tmp/native-source-cache/"),
         ("RUN", SUSE_SOURCE_BUILDER_RUN),
     ])
     require(6, [

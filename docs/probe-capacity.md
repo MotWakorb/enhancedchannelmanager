@@ -113,6 +113,78 @@ single/probe-all/bulk owners retain permits through delayed wait completion,
 then leave no child process alive. This is OS process-lifecycle evidence, not
 native ffprobe decoding evidence.
 
+### Cancellation and service replacement
+
+Stopping a prober permanently retires that instance before awaiting anything.
+Every direct probe owner is registered before metadata lookup or admission-lock
+waits, and batch owners remain registered through preparation, media cleanup and
+finalization. `stop()` cancels and joins these owners using the same idempotent,
+shielded cleanup path. Settings rebuild cannot publish a replacement with empty
+reservations while old media is still cleaning up. A stale reference receives an
+explicit skipped/cancelled result without control-plane or media work; `start()`,
+force-reset and later batch calls cannot revive a retired instance.
+
+API batch cancellation targets only that batch's children, including sequential
+probe-all children, not unrelated single/pipeline probes. A cancelled probe-all
+joins cleanup before recording cancelled progress/history, skips automatic
+reordering not yet started, and retains the previous successful reprobe scope.
+Cancellation during an already-started reorder cannot undo completed upstream
+writes; its cancelled history retains the returned reorder results rather than
+claiming rollback or publishing a successful scope.
+
+`backend/tests/unit/test_stream_probe_lifecycle.py` invokes production probe,
+pipeline and settings rebuild methods. It covers delayed cleanup, admission
+waiters, all six consumer lanes, repeated rebuild cancellation, batch preparation,
+retired references, and cancellation-tail/scope behavior in both probe-all modes.
+Control APIs, media and background tracker work are substituted; configuration
+and any database state use the private test harness, never provider services.
+These local lifecycle guarantees do not close the external coordination gap below.
+
+### Honest background start acknowledgements
+
+Both `/api/stream-stats/probe/all` and `/probe/bulk` synchronously claim one batch
+owner through `StreamProber.schedule_probe` before returning `status: "started"`.
+That status acknowledges an accepted background job, not a completed measurement.
+The worker adopts only its own claim; same-tick/concurrent API requests and direct
+batch calls cannot steal a queued owner's slot. Both endpoints return the existing
+`already_running` response/message while another run is active or still draining
+after force-reset. A start request never implicitly resets or cancels that run.
+
+Retired references return a cancelled/stopped response, never `started`. Queued
+reset/cancel/stop and task-creation failure cannot leave a permanent busy claim or
+revive cancelled work before its first instruction. An identity-checked completion
+callback releases unstarted workers without clearing a successor's ownership.
+
+Bulk and probe-all both recompute their terminal status after an awaited reorder.
+Accepted cancellation stays cancelled in result, progress and history; returned
+reorder results are retained because already-landed upstream writes are not rolled
+back. Router regressions in `backend/tests/routers/test_probe_start_lifecycle.py`
+exercise real endpoints/probers, including HTTP busy/reset/stopped responses and
+controlled pre-worker scheduling edges. They do not probe production providers.
+
+### Terminal precedence and retained diagnostics
+
+Both batch paths and history use one terminal-precedence rule: **accepted
+cancellation wins over an aborting failure, then normal completion**. A diagnostic
+does not turn cancellation into failure, and an aborting exception with an empty
+message still fails an uncancelled run. Existing error fields and diagnostic logs
+are retained; this does not add a new raw-error payload or logging surface.
+
+An aborting probe-all reorder/late-preparation error therefore remains recorded
+with cancelled result/progress/history if cancellation was accepted during the
+operation. Without cancellation, an aborting error remains failed. Normal success
+and returned completed reorder writes remain unchanged; no rollback is claimed.
+Bulk's optional reorder is still **best-effort**: its swallowed lookup/update
+errors remain logged and do not independently fail an uncancelled probe run.
+Actual batch-aborting preparation errors still fail bulk unless cancelled.
+
+`backend/tests/unit/test_stream_probe_terminal_status.py` covers cancel/no-cancel
+and success/error matrices through the real reorder and preparation methods,
+SQLite-backed smart sort, returned reorder writes, empty exception diagnostics,
+and history's diagnostic/status precedence. Only external service/media boundaries
+are substituted. Start ownership, cancellation joining, subprocess reaping and
+route/SSRF methods are unchanged by this terminal-status repair.
+
 ## What this cannot guarantee
 
 **This is local admission, not an upstream atomic reservation.** After the status

@@ -79,6 +79,17 @@ CODECS = {
     "libx265-devel",
     "libhdr10plus-4_1",
 }
+SECURITY_RPMS = {
+    "librsvg-2-2": ("2.63.4-1.1", "librsvg-2.63.4-1.1.src.rpm"),
+    "libspeex1": ("1.2.1-3.1", "speex-1.2.1-3.1.src.rpm"),
+    "ca-certificates-mozilla": (
+        "2.92-2.1", "ca-certificates-mozilla-2.92-2.1.src.rpm"
+    ),
+    **dict.fromkeys(
+        ("libbrotlicommon1", "libbrotlidec1", "libbrotlienc1"),
+        ("1.2.1-1.1", "brotli-1.2.1-1.1.src.rpm"),
+    ),
+}
 BUILDERS = {
     "gcc",
     "gcc-c++",
@@ -223,11 +234,12 @@ def load_recipe(path: Path, arch: str) -> dict:
                 "repository/architecture mismatch",
             )
             _require(
-                item.get("builder_repository", repository)
-                == (
-                    "https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/"
-                    if target == "amd64" else repository
-                ),
+                item.get("builder_repository") == repository
+                and item.get("cohort") == "20261105"
+                and item.get("repository_metadata_sha256") == {
+                    "amd64": "36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6",
+                    "arm64": "374a893f64518ff85a66f866d88e0aab77d0fbeb78f83eaa5fe140947a0495ce",
+                }[target],
                 "builder repository identity mismatch",
             )
             source_repository = (
@@ -252,9 +264,29 @@ def load_recipe(path: Path, arch: str) -> dict:
             )
             if target == "arm64":
                 validate_arm_go_descriptor(item.get("go_toolchain"))
+            security = item["security_runtime_rpms"]
+            _require(
+                len(security) == len(SECURITY_RPMS)
+                and {p["name"] for p in security} == set(SECURITY_RPMS),
+                "security runtime package set mismatch",
+            )
+            for package in security:
+                _require(
+                    (package["version"], package["sourcerpm"])
+                    == SECURITY_RPMS[package["name"]]
+                    and package["epoch"] == "0"
+                    and package["arch"] == (
+                        "noarch" if package["name"] == "ca-certificates-mozilla"
+                        else rpm_arch
+                    )
+                    and package["metadata_checksum_type"] == "sha512"
+                    and bool(re.fullmatch(r"[0-9a-f]{128}", package["metadata_checksum"])),
+                    "security runtime RPM identity/architecture/source mismatch",
+                )
             for group, prefix in [
                 ("codec_rpms", PACKMAN + rpm_arch + "/"),
                 ("builder_rpms", repository),
+                ("security_runtime_rpms", repository),
             ]:
                 for package in item[group]:
                     _require(
@@ -676,6 +708,21 @@ def _rpm_spec(item: dict) -> str:
     )
 
 
+def security_runtime_packages(recipe: dict, inventory: list[dict]) -> list[dict]:
+    """Bind the reviewed fixed runtime identities to actual installed RPMs."""
+    result = []
+    for expected in recipe["security_runtime_rpms"]:
+        matches = [p for p in inventory if p["name"] == expected["name"]]
+        _require(
+            len(matches) == 1
+            and _rpm_spec(matches[0]) == _rpm_spec(expected)
+            and matches[0]["sourcerpm"] == expected["sourcerpm"],
+            "installed security runtime RPM identity/source mismatch",
+        )
+        result.append(matches[0])
+    return sorted(result, key=_rpm_spec)
+
+
 def parse_ldd(text: str) -> list[str]:
     _require("not found" not in text, "unresolved runtime shared dependency")
     return [
@@ -809,6 +856,16 @@ def publish_record(output: Path, record: dict) -> None:
     temporary.replace(output / "build-output.json")
 
 
+def check_repository_cohort(
+    recipe: dict, path: Path = Path("/var/cache/zypp/raw/oss/repodata/repomd.xml")
+) -> None:
+    """After zypper's GPG refresh, refuse a different signed rolling cohort."""
+    _require(
+        sha256(path) == recipe["repository_metadata_sha256"],
+        "reviewed signed repository cohort has changed",
+    )
+
+
 def _install_builder(recipe: dict, work: Path, env: dict[str, str]) -> None:
     release = Path("/etc/os-release").read_text()
     _require(
@@ -832,8 +889,9 @@ def _install_builder(recipe: dict, work: Path, env: dict[str, str]) -> None:
         env=env,
     )
     run(["/usr/bin/zypper", "--non-interactive", "refresh"], cwd=work, env=env)
+    check_repository_cohort(recipe)
     run(
-        ["/usr/bin/zypper", "--non-interactive", "update", "--no-recommends"],
+        ["/usr/bin/zypper", "--non-interactive", "--no-refresh", "update", "--no-recommends"],
         cwd=work,
         env=env,
     )
@@ -841,9 +899,10 @@ def _install_builder(recipe: dict, work: Path, env: dict[str, str]) -> None:
         [
             "/usr/bin/zypper",
             "--non-interactive",
+            "--no-refresh",
             "install",
             "--no-recommends",
-            *[_rpm_spec(p) for p in recipe["builder_rpms"]],
+            *[_rpm_spec(p) for p in recipe["builder_rpms"] + recipe["security_runtime_rpms"]],
         ],
         cwd=work,
         env=env,
@@ -851,6 +910,7 @@ def _install_builder(recipe: dict, work: Path, env: dict[str, str]) -> None:
     installed = _inventory(
         run(["/usr/bin/rpm", "-qa", "--qf", RPM_FORMAT], cwd=work, env=env)
     )
+    security_runtime_packages(recipe, installed)
     for expected in recipe["builder_rpms"]:
         _require(
             any(
@@ -953,6 +1013,7 @@ def _codec_inputs(
         [
             "/usr/bin/zypper",
             "--non-interactive",
+            "--no-refresh",
             "install",
             "--no-recommends",
             *map(str, binaries),
@@ -1277,8 +1338,10 @@ def build(
     builder_rpms = _inventory(
         run(["/usr/bin/rpm", "-qa", "--qf", RPM_FORMAT], cwd=work, env=env)
     )
+    security_packages = security_runtime_packages(selected, builder_rpms)
+    runtime_specs = sorted({_rpm_spec(p) for p in providers + security_packages})
     (output / "runtime-packages.txt").write_text(
-        "\n".join(_rpm_spec(p) for p in providers) + "\n"
+        "\n".join(runtime_specs) + "\n"
     )
     codecs = output / "runtime-rpms"
     codecs.mkdir()
@@ -1321,6 +1384,7 @@ def build(
         "gosu": gosu,
         "builder_rpms": builder_rpms,
         "runtime_providers": providers,
+        "runtime_security_packages": security_packages,
         "elf_dependency_graph": edges,
         "owned_artifacts": owned_artifacts(root),
         "source_files_sha256": sha256(output / "source-files.json"),

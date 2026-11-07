@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "ecm-0.18.2-0064",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0064/ecm-957d782095ab8607c1c20af6b13ac319641571e6af0cb828760a6c83ebb25533",
+  "name": "ecm-0.18.2-0065",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0065/ecm-9b987fb34f036991c9ab14f7f49b5250acfec28bf2bb7948ba04e70558bef635",
   "creationInfo": {
-    "created": "2026-11-03T04:15:31Z",
+    "created": "2026-11-07T23:40:08Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-ecm",
       "name": "enhanced-channel-manager",
-      "versionInfo": "0.18.2-0064",
+      "versionInfo": "0.18.2-0065",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7110,56 +7110,6 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-oci-ghcr.io.motwakorb.enhancedchannelmanager-13cbcfffff8d",
-      "name": "ghcr.io/motwakorb/enhancedchannelmanager",
-      "versionInfo": "sha256:13cbcfffff8d5091f857583656b91ed8fe40ad3b472b54f7a67ab50e22846c01",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "supplier": "NOASSERTION",
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "NOASSERTION",
-      "copyrightText": "NOASSERTION",
-      "checksums": [
-        {
-          "algorithm": "SHA256",
-          "checksumValue": "13cbcfffff8d5091f857583656b91ed8fe40ad3b472b54f7a67ab50e22846c01"
-        }
-      ],
-      "comment": "Pulled during the build to copy a tool out of; not published. Its own OS package set is NOT enumerated by this document, and the Dockerfile applies OS security upgrades on top of it at build time.",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:oci/enhancedchannelmanager@sha256:13cbcfffff8d5091f857583656b91ed8fe40ad3b472b54f7a67ab50e22846c01?repository_url=ghcr.io%2Fmotwakorb%2Fenhancedchannelmanager"
-        }
-      ]
-    },
-    {
-      "SPDXID": "SPDXRef-Package-oci-ghcr.io.motwakorb.enhancedchannelmanager-98722bea0ddb",
-      "name": "ghcr.io/motwakorb/enhancedchannelmanager",
-      "versionInfo": "sha256:98722bea0ddb8f7c52398151751b89d4173b775f6612afc5bb75aa133d091d48",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "supplier": "NOASSERTION",
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "NOASSERTION",
-      "copyrightText": "NOASSERTION",
-      "checksums": [
-        {
-          "algorithm": "SHA256",
-          "checksumValue": "98722bea0ddb8f7c52398151751b89d4173b775f6612afc5bb75aa133d091d48"
-        }
-      ],
-      "comment": "Pulled during the build to copy a tool out of; not published. Its own OS package set is NOT enumerated by this document, and the Dockerfile applies OS security upgrades on top of it at build time.",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:oci/enhancedchannelmanager@sha256:98722bea0ddb8f7c52398151751b89d4173b775f6612afc5bb75aa133d091d48?repository_url=ghcr.io%2Fmotwakorb%2Fenhancedchannelmanager"
-        }
-      ]
-    },
-    {
       "SPDXID": "SPDXRef-Package-oci-node.20-alpine-fb4cd12c85ee",
       "name": "node:20-alpine",
       "versionInfo": "sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293",
@@ -8815,16 +8765,6 @@
     },
     {
       "spdxElementId": "SPDXRef-Package-oci-ghcr.io.astral-sh.uv.latest-e85be8442038",
-      "relationshipType": "BUILD_DEPENDENCY_OF",
-      "relatedSpdxElement": "SPDXRef-Package-ecm"
-    },
-    {
-      "spdxElementId": "SPDXRef-Package-oci-ghcr.io.motwakorb.enhancedchannelmanager-13cbcfffff8d",
-      "relationshipType": "BUILD_DEPENDENCY_OF",
-      "relatedSpdxElement": "SPDXRef-Package-ecm"
-    },
-    {
-      "spdxElementId": "SPDXRef-Package-oci-ghcr.io.motwakorb.enhancedchannelmanager-98722bea0ddb",
       "relationshipType": "BUILD_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },

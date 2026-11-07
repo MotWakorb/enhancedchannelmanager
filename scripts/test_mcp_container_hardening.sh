@@ -163,7 +163,7 @@ if [ "${COMPOSE_BUILD:-true}" != "false" ] || [ "$build_only" = true ]; then
       *) fail "unsupported native base architecture" ;;
     esac
     native_compose_override="$native_recovery_root/compose.json"
-    python3 "$repository_root/scripts/recover_native_base.py" --arch "$native_arch" --with-sources \
+    python3 "$repository_root/scripts/recover_native_base.py" --arch "$native_arch" \
       --output "$native_recovery_root/base" --compose-output "$native_compose_override"
     native_builder="ecm-$(basename "$native_recovery_root" | tr '[:upper:]' '[:lower:]')"
     docker buildx create --name "$native_builder" --driver docker-container \

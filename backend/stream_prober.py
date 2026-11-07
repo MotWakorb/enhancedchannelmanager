@@ -529,6 +529,11 @@ class StreamProber:
         self._probe_paused = False  # Controls pausing of in-progress probe
         self._probing_in_progress = False
         self._bulk_probe_tasks: set[asyncio.Task] = set()
+        # Lifecycle ownership is independent of the batch progress envelope.
+        # Register before the first await, including control-plane waiters.
+        self._probe_tasks: set[asyncio.Task] = set()
+        self._probe_run_task: asyncio.Task | None = None
+        self._stopped = False  # Retirement is permanent; start/reset cannot revive it.
         # Progress tracking for probe all streams
         self._probe_progress_total = 0
         self._probe_progress_current = 0
@@ -830,9 +835,10 @@ class StreamProber:
 
         try:
             # If cancelled, delete the notification instead of updating it
-            if self._probe_cancelled and self._notification_delete_by_source_callback:
-                await self._notification_delete_by_source_callback("stream_probe")
-                logger.info("[STREAM-PROBE] Deleted probe notification (probe was cancelled)")
+            if self._probe_cancelled:
+                if self._notification_delete_by_source_callback:
+                    await self._notification_delete_by_source_callback("stream_probe")
+                    logger.info("[STREAM-PROBE] Deleted probe notification (probe was cancelled)")
                 return
 
             if not self._notification_update_callback:
@@ -1055,11 +1061,76 @@ class StreamProber:
         )
 
     async def stop(self):
-        """Stop the stream prober and cancel any in-progress probes."""
+        """Retire admission, then join every old owner before replacement is safe."""
         logger.info("[STREAM-PROBE] StreamProber stopping...")
+        self._stopped = True
         self._probe_cancelled = True
-        await self._cancel_and_join_probe_tasks(tuple(self._bulk_probe_tasks))
+        tasks = self._probe_tasks | self._bulk_probe_tasks
+        if self._probe_run_task is not None:
+            tasks.add(self._probe_run_task)
+        await self._cancel_and_join_probe_tasks(tasks)
         logger.info("[STREAM-PROBE] StreamProber stopped")
+
+    def _probe_run_rejection(self, owner: asyncio.Task | None = None) -> str | None:
+        """One admission rule for direct calls and synchronously claimed starts."""
+        if self._stopped:
+            return "cancelled"
+        if self._probe_run_task is not None:
+            if self._probe_run_task is not owner or self._probe_progress_status != "queued":
+                return "already_running"
+        elif self._probing_in_progress:
+            return "already_running"
+        return None
+
+    def schedule_probe(self, *, stream_ids: list[int] | None = None, **kwargs) -> dict:
+        """Claim queued batch ownership before an endpoint acknowledges a start.
+
+        The worker may adopt only its own claim. Resetting progress cannot make
+        another start available, and retirement/cancellation before the worker's
+        first instruction must still release that claim without opening media.
+        """
+        rejection = self._probe_run_rejection()
+        if rejection:
+            message = (
+                "Stream prober has been stopped" if rejection == "cancelled"
+                else "A probe is already in progress; check /probe/progress"
+            )
+            return {"status": rejection, "message": message}
+
+        async def run():
+            # Even an eager task factory must yield until its claim is installed.
+            await asyncio.sleep(0)
+            if self._probe_cancelled:
+                return {"status": "cancelled"}
+            if stream_ids is None:
+                return await self.probe_all_streams(**kwargs)
+            return await self.probe_streams_by_ids(stream_ids, **kwargs)
+
+        operation = run()
+        try:
+            task = asyncio.create_task(operation)
+        except BaseException:
+            operation.close()
+            raise
+        self._probe_run_task = task
+        self._probing_in_progress = True
+        self._probe_cancelled = False
+        self._probe_progress_status = "queued"
+        self._probe_progress_current_stream = ""
+        task.add_done_callback(self._scheduled_probe_done)
+        return {"status": "started"}
+
+    def _scheduled_probe_done(self, task: asyncio.Task) -> None:
+        error = None if task.cancelled() else task.exception()
+        if error is not None:
+            logger.error("[STREAM-PROBE] Background probe failed (%s)", type(error).__name__)
+        # An unstarted/cancelled worker never reaches the batch method's finally.
+        # A completed old callback must not clear a successor's ownership.
+        if self._probe_run_task is task:
+            self._probe_run_task = None
+            self._probing_in_progress = False
+            self._probe_progress_status = "failed" if error is not None else "cancelled"
+            self._probe_progress_current_stream = ""
 
     @staticmethod
     def _cancel_probe_tasks(tasks) -> None:
@@ -1092,7 +1163,9 @@ class StreamProber:
         Returns:
             Dict with status of the cancellation.
         """
-        if not self._probing_in_progress:
+        # History/scope publication is terminal; notification delivery may still
+        # be awaiting I/O, but cancellation can no longer change that outcome.
+        if not self._probing_in_progress or self._probe_progress_status in ("completed", "failed", "cancelled"):
             return {"status": "no_probe_running", "message": "No probe is currently running"}
 
         logger.info("[STREAM-PROBE] Cancelling in-progress probe...")
@@ -1161,6 +1234,11 @@ class StreamProber:
         Reservations coordinate this ECM process, not Dispatcharr viewers. See
         docs/probe-capacity.md for the remaining read/admit race (GH1032).
         """
+        if self._stopped:
+            return {"stream_id": stream_id, "stream_name": name,
+                    "probe_status": "skipped", "error_message": "Probe skipped: prober has been stopped"}
+        owner = asyncio.current_task()
+        self._probe_tasks.add(owner)
         reservation = None
         try:
             if url:
@@ -1198,6 +1276,7 @@ class StreamProber:
                         counts[key] -= 1
                         if counts[key] == 0:
                             del counts[key]
+            self._probe_tasks.discard(owner)
 
     @staticmethod
     def _validated_probe_stream(stream_id: int, fresh: dict, *, cached: dict | None) -> dict:
@@ -3094,10 +3173,14 @@ class StreamProber:
                      self.parallel_probing_enabled, self.max_concurrent_probes,
                      self.profile_distribution_strategy)
 
-        if self._probing_in_progress:
+        rejection = self._probe_run_rejection(asyncio.current_task())
+        if rejection == "cancelled":
+            return {"status": "cancelled", "probed": 0, "reordered_channels": 0}
+        if rejection:
             logger.warning("[STREAM-PROBE] Probe already in progress")
             return {"status": "already_running"}
 
+        self._probe_run_task = asyncio.current_task()
         self._probing_in_progress = True
         self._probe_cancelled = False  # Reset cancellation flag
         self._probe_paused = False  # Reset paused flag
@@ -3128,14 +3211,14 @@ class StreamProber:
                 channel_group_ids_override,
             )
             if resolved_group_ids == frozenset():
-                if stream_ids_filter is None:
+                if stream_ids_filter is None and not self._probe_cancelled:
                     self._last_probe_scope_kind = "scoped"
                     self._last_probe_channel_stream_ids = set()
-                self._probe_progress_status = "completed"
+                self._probe_progress_status = self._probe_terminal_status()
                 self._probe_progress_current_stream = ""
                 self._save_probe_history(start_time, 0, reordered_channels=[])
                 return {
-                    "status": "completed",
+                    "status": self._probe_progress_status,
                     "probed": 0,
                     "reordered_channels": 0,
                 }
@@ -3168,14 +3251,14 @@ class StreamProber:
             logger.info("[STREAM-PROBE] Found %s unique streams across all channels", len(channel_stream_ids))
 
             if not channel_stream_ids:
-                if stream_ids_filter is None:
+                if stream_ids_filter is None and not self._probe_cancelled:
                     self._last_probe_scope_kind = "all" if resolved_group_ids is None else "scoped"
                     self._last_probe_channel_stream_ids = set()
-                self._probe_progress_status = "completed"
+                self._probe_progress_status = self._probe_terminal_status()
                 self._probe_progress_current_stream = ""
                 self._save_probe_history(start_time, 0, reordered_channels=[])
                 return {
-                    "status": "completed",
+                    "status": self._probe_progress_status,
                     "probed": 0,
                     "reordered_channels": 0,
                 }
@@ -3410,6 +3493,8 @@ class StreamProber:
 
                     # Get fresh connection counts from Dispatcharr (profile and account level)
                     dispatcharr_profile_conns = await self._get_profile_active_connections()
+                    if self._probe_cancelled:
+                        break
                     # Derive account-level from profile-level
                     dispatcharr_connections = {}
                     for pid, cnt in dispatcharr_profile_conns.items():
@@ -3421,6 +3506,8 @@ class StreamProber:
                     # Try to start new probes for streams that have available M3U capacity
                     streams_started_this_round = []
                     for stream in pending_streams:
+                        if self._probe_cancelled:
+                            break
                         m3u_account_id = self._extract_m3u_account_id(stream.get("m3u_account"))
                         stream_id = stream["id"]
                         stream_name = stream.get("name", f"Stream {stream_id}")
@@ -3736,7 +3823,26 @@ class StreamProber:
                             logger.debug("[STREAM-PROBE] Account %s: waiting %.1fs", m3u_account_id, hold_remaining)
                             await asyncio.sleep(hold_remaining)
 
-                    result = await self.probe_stream(stream_id, stream_url, stream_name, stream=stream)
+                    if self._probe_cancelled:
+                        break
+                    # A sequential probe has the same cancellable child ownership
+                    # as a parallel one. API cancellation targets this batch only,
+                    # not unrelated single/pipeline probes on the shared prober.
+                    task = asyncio.create_task(self.probe_stream(stream_id, stream_url, stream_name, stream=stream))
+                    active_tasks[task] = (stream, display_string)
+                    self._bulk_probe_tasks.add(task)
+                    try:
+                        result = await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        if not self._probe_cancelled or asyncio.current_task().cancelling():
+                            raise
+                        break
+                    finally:
+                        try:
+                            await self._cancel_and_join_probe_tasks((task,))
+                        finally:
+                            active_tasks.pop(task)
+                            self._bulk_probe_tasks.discard(task)
 
                     # Track success/failure
                     probe_status = result.get("probe_status", "failed")
@@ -3771,6 +3877,16 @@ class StreamProber:
                     await self._update_probe_notification()
                     await asyncio.sleep(0.5)  # Base rate limiting delay
 
+            if self._probe_cancelled:
+                # FIRST_COMPLETED can leave other cancelled children cleaning up.
+                # Do not publish a terminal envelope or release run ownership yet.
+                await self._cancel_and_join_probe_tasks(active_tasks)
+                self._probe_progress_status = self._probe_terminal_status()
+                self._probe_progress_current_stream = ""
+                self._save_probe_history(start_time, probed_count, reordered_channels=[])
+                await self._finalize_probe_notification(send_alerts=completion_send_alerts)
+                return {"status": "cancelled", "probed": probed_count, "reordered_channels": 0}
+
             logger.info("[STREAM-PROBE] Completed probing %s streams", probed_count)
             logger.info("[STREAM-PROBE] Final counts: success=%s, "
                        "failed=%s, skipped=%s",
@@ -3802,21 +3918,25 @@ class StreamProber:
                     raise
 
             # Publish reprobe scope only after the complete scheduled run succeeds.
-            if stream_ids_filter is None:
+            if stream_ids_filter is None and not self._probe_cancelled:
                 self._last_probe_scope_kind = "all" if resolved_group_ids is None else "scoped"
                 self._last_probe_channel_stream_ids = set(channel_stream_ids)
                 logger.info("[STREAM-PROBE] Saved %s channel stream IDs for reprobe scoping", len(self._last_probe_channel_stream_ids))
 
+            # Cancellation during an in-flight reorder cannot undo its writes,
+            # but must not publish a successful scope/history/result afterward.
+            self._probe_progress_status = self._probe_terminal_status()
+            self._probe_progress_current_stream = ""
             # Save to probe history
             self._save_probe_history(start_time, probed_count, reordered_channels=reordered_channels)
 
             # Finalize notification with success/warning status
             await self._finalize_probe_notification(send_alerts=completion_send_alerts)
 
-            return {"status": "completed", "probed": probed_count, "reordered_channels": len(reordered_channels)}
+            return {"status": self._probe_progress_status, "probed": probed_count, "reordered_channels": len(reordered_channels)}
         except Exception as e:
             logger.exception("[STREAM-PROBE] Probe all streams failed: %s", e)
-            self._probe_progress_status = "failed"
+            self._probe_progress_status = self._probe_terminal_status(failed=True)
             self._probe_progress_current_stream = ""
 
             # Save failed run to history
@@ -3825,7 +3945,7 @@ class StreamProber:
             # Finalize notification with error status
             await self._finalize_probe_notification(send_alerts=completion_send_alerts)
 
-            return {"status": "failed", "error": str(e), "probed": probed_count}
+            return {"status": self._probe_progress_status, "error": str(e), "probed": probed_count}
         finally:
             try:
                 if active_tasks:
@@ -3833,6 +3953,7 @@ class StreamProber:
             finally:
                 self._bulk_probe_tasks.difference_update(active_tasks)
                 self._probing_in_progress = False
+                self._probe_run_task = None
 
     async def probe_streams_by_ids(
         self,
@@ -3869,10 +3990,14 @@ class StreamProber:
         """
         logger.info("[STREAM-PROBE] probe_streams_by_ids called with %s stream IDs", len(stream_ids))
 
-        if self._probing_in_progress:
+        rejection = self._probe_run_rejection(asyncio.current_task())
+        if rejection == "cancelled":
+            return {"status": "cancelled", "probed": 0, "total": len(stream_ids), "success": 0, "failed": 0}
+        if rejection:
             logger.warning("[STREAM-PROBE] Probe already in progress — refusing bulk probe")
             return {"status": "already_running"}
 
+        self._probe_run_task = asyncio.current_task()
         # Reset the shared probe envelope (mirrors probe_all_streams setup) so
         # get_probe_progress / get_probe_results report THIS bulk run.
         self._probing_in_progress = True
@@ -3972,7 +4097,7 @@ class StreamProber:
                 try:
                     await asyncio.gather(*tasks)
                 except asyncio.CancelledError:
-                    if not self._probe_cancelled:
+                    if not self._probe_cancelled or asyncio.current_task().cancelling():
                         raise
                 finally:
                     try:
@@ -3980,10 +4105,7 @@ class StreamProber:
                     finally:
                         self._bulk_probe_tasks.difference_update(tasks)
 
-            if self._probe_cancelled:
-                self._probe_progress_status = "cancelled"
-            else:
-                self._probe_progress_status = "completed"
+            self._probe_progress_status = self._probe_terminal_status()
             self._probe_progress_current_stream = ""
 
             logger.info(
@@ -4009,15 +4131,17 @@ class StreamProber:
                     logger.info("[STREAM-PROBE-SORT] Bulk probe auto-reordered %s channels", len(reordered_channels))
                 except Exception as e:
                     logger.error("[STREAM-PROBE] Bulk probe auto-reorder failed: %s", e)
-                self._probe_progress_status = "completed"
-                self._probe_progress_current_stream = ""
+            # Match probe-all: cancellation during reorder remains terminally
+            # cancelled, while history retains any returned, already-landed work.
+            self._probe_progress_status = self._probe_terminal_status()
+            self._probe_progress_current_stream = ""
 
             # Reuse the shared history + notification finalization path.
             self._save_probe_history(start_time, probed_count, reordered_channels=reordered_channels)
             await self._finalize_probe_notification()
 
             return {
-                "status": "cancelled" if self._probe_cancelled else "completed",
+                "status": self._probe_progress_status,
                 "probed": probed_count,
                 "total": len(stream_ids),
                 "success": self._probe_progress_success_count,
@@ -4025,13 +4149,14 @@ class StreamProber:
             }
         except Exception as e:
             logger.exception("[STREAM-PROBE] Bulk probe failed: %s", e)
-            self._probe_progress_status = "failed"
+            self._probe_progress_status = self._probe_terminal_status(failed=True)
             self._probe_progress_current_stream = ""
             self._save_probe_history(start_time, probed_count, error=str(e))
             await self._finalize_probe_notification()
-            return {"status": "failed", "error": str(e), "probed": probed_count}
+            return {"status": self._probe_progress_status, "error": str(e), "probed": probed_count}
         finally:
             self._probing_in_progress = False
+            self._probe_run_task = None
 
     def get_probe_progress(self) -> dict:
         """Get current probe all streams progress."""
@@ -4126,6 +4251,18 @@ class StreamProber:
             "failure_breakdown": self._failure_breakdown(),
         }
 
+    def _probe_terminal_status(self, *, failed: bool = False, status: str = "completed") -> str:
+        """Cancellation wins over an aborting failure, then normal completion.
+
+        Diagnostics are orthogonal: a cancelled run may retain an error, and an
+        exception with an empty message still fails an uncancelled run. Callers
+        decide what aborts: bulk's optional best-effort reorder remains nonfatal.
+        History also preserves an already-recorded cancelled/failed status.
+        """
+        if self._probe_cancelled or status == "cancelled":
+            return "cancelled"
+        return "failed" if failed else status
+
     def _save_probe_history(self, start_time: datetime, total: int, error: str = None, reordered_channels: list = None):
         """Save a probe run to history (keeps last 5 runs)."""
         end_time = datetime.utcnow()
@@ -4139,7 +4276,7 @@ class StreamProber:
             "success_count": self._probe_progress_success_count,
             "failed_count": self._probe_progress_failed_count,
             "skipped_count": self._probe_progress_skipped_count,
-            "status": "failed" if error else ("completed" if self._probe_progress_status == "completed" else self._probe_progress_status),
+            "status": self._probe_terminal_status(failed=bool(error), status=self._probe_progress_status),
             "error": error,
             "success_streams": list(self._probe_success_streams),  # Copy the list
             "failed_streams": list(self._probe_failed_streams),    # Copy the list

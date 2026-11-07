@@ -107,17 +107,17 @@ def test_existing_output_is_never_overwritten(recovery, tmp_path):
     assert marker.read_text() == "keep"
 
 
-def test_both_native_ci_builds_consume_verified_context():
+def test_both_native_ci_builds_recover_base_without_obsolete_source_carriers():
     jobs = yaml.safe_load((ROOT / ".github/workflows/build.yml").read_text())["jobs"]
     for arch in ("amd64", "arm64"):
         steps = jobs["build-" + arch]["steps"]
         preparation = next(s for s in steps if s.get("id") == "version")
         assert "recover_native_base.py" in preparation["run"]
         assert "--arch " + arch in preparation["run"]
-        assert "--with-sources" in preparation["run"]
+        assert "--with-sources" not in preparation["run"]
         build = next(s for s in steps if s.get("uses", "").startswith("docker/build-push-action@"))
         assert build["with"]["build-contexts"].splitlines() == [
-            "${{ steps.version.outputs.context }}", "${{ steps.version.outputs.sources_context }}",
+            "${{ steps.version.outputs.context }}",
         ]
         assert "docker/setup-buildx-action@" in str(steps)
 
@@ -130,6 +130,9 @@ def test_mcp_ci_enables_same_recovery_without_skipping_isolation():
     isolation = next(s for s in steps if s.get("id") == "isolation")
     assert isolation["env"]["COMPOSE_BUILD"] == "false"
     assert "PUID=1571 PGID=1572" in isolation["run"]
+    script = (ROOT / "scripts/test_mcp_container_hardening.sh").read_text()
+    assert 'scripts/recover_native_base.py" --arch "$native_arch"' in script
+    assert "--with-sources" not in script
 
 
 def test_compose_context_only_changes_base_transport(recovery, tmp_path):

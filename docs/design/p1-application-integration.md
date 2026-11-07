@@ -1,6 +1,7 @@
 # Combined P1 application candidate
 
-Tracks `enhancedchannelmanager-tj3d7`, integration build `0.18.2-0063`.
+Tracks `enhancedchannelmanager-tj3d7`. The original integration build below was
+`0.18.2-0063`; successor builds retain that source-combination history.
 
 This isolated branch combines the reviewed application candidates from protected
 `dev` base `0bc126006d96c03637cb9e1b707ec04aca2d5804`:
@@ -17,9 +18,10 @@ limited to changelog/version/generated-SBOM touchpoints. Probe-result reporting
 and responsiveness changes in the pipeline engine occupy separate methods; both
 sets of behavior must remain intact in the combined regression run.
 
-All version touchpoints use build 0063 and the generated dev source SBOM must
-match the combined tree. Original changelog entries retain their candidate build
-numbers as provenance, not four simultaneously deployed versions.
+The original integration used build 0063 at all version touchpoints. Each
+successor's generated dev source SBOM must match its own combined tree. Original
+changelog entries retain their candidate build numbers as provenance, not four
+simultaneously deployed versions.
 
 ## Verification requirements
 
@@ -31,10 +33,20 @@ against the original heads, including the two pipeline methods shared with the
 probe lane. Protected CI and review apply to the integration head itself.
 
 No source-combination result substitutes for actual image/native verification.
-The last fresh read of the pinned base returned `404 MANIFEST_UNKNOWN`; both
-authenticated ARM repositories still contained the old cohort below the vendor
-CA/Brotli fix floors. `8mhga`, `97j9u` and `l5z6r` remain separate delivery holds.
-No base, native package, source-cohort or trust-policy change is bundled here.
+At build 0063, the pinned base returned `404 MANIFEST_UNKNOWN` and no native
+retrieval repair was bundled. That is historical, not the successor's current
+retrieval status: PR #1060 (`55256fe1`) added
+[exact cold native-input recovery](ci-native-input-recovery.md). Its remote Build
+run `41579029152` verified both native architectures, source closure and bootstrap
+identities, and Tests run `41579029184` passed 15,919 backend, 3,812 frontend and
+793 MCP tests including actual isolation. Those receipts name that exact head;
+later edits need their own verification.
+
+The retrieval repair did not fix the affected native packages. Both ECM security
+scans denied the CA advisory; attestation/publication were skipped. `97j9u`,
+`l5z6r` and the subsequent librsvg/Speex P1s remain delivery holds. See
+[reviewed image holds](../security/p1-image-delivery-holds.md). Passing source,
+compatibility or application checks does not override these security results.
 
 ## Probe acceptance remains partial
 

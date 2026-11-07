@@ -460,7 +460,7 @@ jobs:
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
       - id: version
         run: |
-          python3 scripts/recover_native_base.py --arch amd64 --with-sources \
+          python3 scripts/recover_native_base.py --arch amd64 \
             --output "$RUNNER_TEMP/ecm-native-base" --github-output "$GITHUB_OUTPUT"
           echo "version=$(jq -r '.version' frontend/package.json)" >> "$GITHUB_OUTPUT"
           test "${{ github.ref }}" = refs/heads/dev && channel=dev || channel=latest
@@ -472,7 +472,6 @@ jobs:
           platforms: linux/amd64
           build-contexts: |
             ${{ steps.version.outputs.context }}
-            ${{ steps.version.outputs.sources_context }}
           outputs: type=oci,dest=/tmp/ecm-amd64.oci.tar
           build-args: |
             GIT_COMMIT=${{ github.sha }}
@@ -504,7 +503,7 @@ jobs:
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
       - id: version
         run: |
-          python3 scripts/recover_native_base.py --arch arm64 --with-sources \
+          python3 scripts/recover_native_base.py --arch arm64 \
             --output "$RUNNER_TEMP/ecm-native-base" --github-output "$GITHUB_OUTPUT"
           echo "version=$(jq -r '.version' frontend/package.json)" >> "$GITHUB_OUTPUT"
           test "${{ github.ref }}" = refs/heads/dev && channel=dev || channel=latest
@@ -516,7 +515,6 @@ jobs:
           platforms: linux/arm64
           build-contexts: |
             ${{ steps.version.outputs.context }}
-            ${{ steps.version.outputs.sources_context }}
           outputs: type=oci,dest=/tmp/ecm-arm64.oci.tar
           build-args: |
             GIT_COMMIT=${{ github.sha }}

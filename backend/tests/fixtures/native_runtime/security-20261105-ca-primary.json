@@ -1,0 +1,39 @@
+{
+  "scope": "Field projection of actual primary XML records, not synthetic package data or standalone signature proof",
+  "observed_at": "2026-11-07T22:43:55Z",
+  "signer": "AD485664E901B867051AB15F35A2F86E29B700A4",
+  "amd64": {
+    "repomd_url": "https://download.opensuse.org/tumbleweed/repo/oss/repodata/repomd.xml",
+    "repomd_sha256": "36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6",
+    "revision": "1793948236",
+    "package": {
+      "name": "ca-certificates-mozilla",
+      "arch": "noarch",
+      "epoch": "0",
+      "ver": "2.92",
+      "rel": "2.1",
+      "vendor": "openSUSE",
+      "sourcerpm": "ca-certificates-mozilla-2.92-2.1.src.rpm",
+      "location": "noarch/ca-certificates-mozilla-2.92-2.1.noarch.rpm",
+      "checksum": "d385f1f7752ba0582b8b3efd08df47824ad998d76b8941d390dac75a7fccb457ce830c39e8f4e549332505348f316c2d18da2b3f1bd480949d9361d820299b07",
+      "checksum_type": "sha512"
+    }
+  },
+  "arm64": {
+    "repomd_url": "https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/repodata/repomd.xml",
+    "repomd_sha256": "374a893f64518ff85a66f866d88e0aab77d0fbeb78f83eaa5fe140947a0495ce",
+    "revision": "1793957306",
+    "package": {
+      "name": "ca-certificates-mozilla",
+      "arch": "noarch",
+      "epoch": "0",
+      "ver": "2.92",
+      "rel": "2.1",
+      "vendor": "openSUSE",
+      "sourcerpm": "ca-certificates-mozilla-2.92-2.1.src.rpm",
+      "location": "noarch/ca-certificates-mozilla-2.92-2.1.noarch.rpm",
+      "checksum": "f33371f7a95979511b998048e3d1d62151bf12023cc14da02761f1ea6d38d104ad089e8904c7a506806e4c866ab72e3345d241b9e5ee5accec3f5110aaf6180d",
+      "checksum_type": "sha512"
+    }
+  }
+}

@@ -570,8 +570,18 @@ def _trust_policy(context):
     }
     assert _COMPROMISED_G3 not in anchors, "compromised emSign G3 is still trusted"
     assert _UNAFFECTED_G1 in anchors, "unaffected emSign G1 positive control is missing"
+    # Additional negative subject check for the other root named by the vendor
+    # CA advisory. This is not a substitute for G3's exact DER fingerprint or
+    # for the fixed package/source identities checked separately below.
+    assert not any(
+        key == "commonName" and value == "AAA Certificate Services"
+        for cert in context.get_ca_certs(binary_form=False)
+        for rdn in cert["subject"]
+        for key, value in rdn
+    ), "Comodo AAA Certificate Services is still trusted"
     return {
         "compromised_g3_trusted": False,
+        "comodo_aaa_subject_trusted": False,
         "unaffected_g1_trusted": True,
         "anchor_count": len(anchors),
     }
@@ -1028,6 +1038,40 @@ def getent_checks():
     return {"getent": version}
 
 
+def security_runtime_packages():
+    """Check actual native RPM identities, not a scanner label or build receipt."""
+    expected = {
+        "librsvg-2-2": ("2.63.4-1.1", "librsvg-2.63.4-1.1.src.rpm"),
+        "libspeex1": ("1.2.1-3.1", "speex-1.2.1-3.1.src.rpm"),
+        "ca-certificates-mozilla": (
+            "2.92-2.1", "ca-certificates-mozilla-2.92-2.1.src.rpm"
+        ),
+        **dict.fromkeys(
+            ("libbrotlicommon1", "libbrotlidec1", "libbrotlienc1"),
+            ("1.2.1-1.1", "brotli-1.2.1-1.1.src.rpm"),
+        ),
+    }
+    architecture = platform.machine()
+    assert architecture in ("x86_64", "aarch64"), "unsupported security RPM architecture"
+    observed = {}
+    text = command(
+        "/usr/bin/rpm", "-q", "--qf",
+        "%{NAME}\t%{VERSION}-%{RELEASE}\t%{ARCH}\t%{SOURCERPM}\t%{VENDOR}\n",
+        *sorted(expected),
+    )
+    for line in text.splitlines():
+        fields = line.split("\t")
+        assert len(fields) == 5, "malformed security RPM inventory"
+        name, version, arch, source, vendor = fields
+        assert name in expected and name not in observed, "unexpected/duplicate security RPM"
+        assert (version, source) == expected[name], "security RPM version/source mismatch"
+        assert arch == ("noarch" if name == "ca-certificates-mozilla" else architecture), "security RPM architecture mismatch"
+        assert vendor == "openSUSE", "security RPM vendor mismatch"
+        observed[name] = {"version": version, "arch": arch, "sourcerpm": source, "vendor": vendor}
+    assert set(observed) == set(expected), "missing security RPM"
+    return observed
+
+
 def native_metadata():
     version = command("/usr/local/bin/resdet", "-V").splitlines()
     assert version == [
@@ -1057,6 +1101,7 @@ def native_metadata():
         "resdet": version,
         "resdet_license_notice_sha256": notices,
         "resdet_pixel_max": PIXEL_MAX,
+        "security_runtime_packages": security_runtime_packages(),
         "scope": "Behavioral compatibility, not a CVE clearance; only this running architecture tested.",
         "baseline_gap": "Raw DASH only: existing ECM relay does not rewrite MPD resources; not a migration regression.",
     }

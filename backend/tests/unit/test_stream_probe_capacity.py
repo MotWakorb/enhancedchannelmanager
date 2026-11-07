@@ -732,7 +732,9 @@ async def test_two_scheduler_children_single_cancel_keeps_permits_through_delaye
         assert runner.cancelled(), "joining cleanup must preserve parent CancelledError"
 
 
-@pytest.mark.parametrize("entrypoint", ["single", "probe_all", "bulk"])
+@pytest.mark.parametrize(
+    "entrypoint", ["single", "probe_all", "probe_all_sequential", "bulk"]
+)
 async def test_repeated_parent_cancellation_joins_real_process_reap(
     capacity_probe, monkeypatch, entrypoint
 ):
@@ -742,9 +744,9 @@ async def test_repeated_parent_cancellation_joins_real_process_reap(
     scheduler, admission, subprocess communication or OS process reaping.
     """
     prober, account, stream = capacity_probe
-    prepare_probe_all(prober, True)
+    prepare_probe_all(prober, entrypoint != "probe_all_sequential")
     prober._run_ffprobe = StreamProber._run_ffprobe.__get__(prober)
-    count = 1 if entrypoint == "single" else 2
+    count = 1 if entrypoint in ("single", "probe_all_sequential") else 2
     if count == 2:
         other = deepcopy(account)
         other["id"] = 20

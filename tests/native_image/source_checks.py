@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
-RECIPE_SHA256 = "e4d082ee870fa2d9003c91cad1e6ecddd1089f4fb4d122042da9252d474830dc"
+RECIPE_SHA256 = "45a1485802212aaebc6721bb2a1544aefcc79179814bc0c3d15d1bd9b1027b71"
 PYTHON_SUMS = {
     "sources": "e21e0520773c78b5f16ee56ddb94073a4def902d8656b435fec9dc26eee8e2ab",
     # Complete sorted 557-entry manifest, including the dnspython 2.9.0 notice.

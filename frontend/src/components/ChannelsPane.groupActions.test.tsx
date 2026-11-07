@@ -19,6 +19,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ChannelsPane } from './ChannelsPane';
 import { NotificationProvider } from '../contexts/NotificationContext';
+import * as api from '../services/api';
 import type {
   Channel,
   ChannelGroup,
@@ -167,6 +168,52 @@ describe('ChannelsPane group actions menu', () => {
     expect(labels.some((l) => l.includes('Sort & Renumber'))).toBe(true);
     expect(labels.some((l) => l.includes('Rename Group'))).toBe(true);
     expect(labels.some((l) => l.includes('Delete Group'))).toBe(true);
+  });
+
+  it.each([
+    ['already_running', 'A probe is already in progress; wait for it to finish.'],
+    ['cancelled', 'Stream prober has been stopped'],
+  ])('reports %s without claiming this group is being probed', async (status, message) => {
+    const user = userEvent.setup();
+    const start = vi.spyOn(api, 'probeAllStreams').mockResolvedValue({
+      status, message,
+    });
+    const interval = vi.spyOn(globalThis, 'setInterval').mockReturnValue(
+      123 as unknown as ReturnType<typeof setInterval>,
+    );
+    const { container } = renderPane({
+      channels: [makeChannel(1, 'Alpha', MANUAL_GROUP_ID)],
+      channelGroups: [{ id: MANUAL_GROUP_ID, name: 'Drill Locals', channel_count: 1 }],
+    });
+
+    await openGroupMenu(container, 'Drill Locals');
+    await user.click(screen.getByRole('button', { name: /Probe Group/ }));
+    expect(start).toHaveBeenCalledWith(['Drill Locals'], true);
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(interval).not.toHaveBeenCalledWith(expect.any(Function), 2000);
+    await openGroupMenu(container, 'Drill Locals');
+    expect(screen.getByRole('button', { name: /Probe Group/ })).toBeEnabled();
+    expect(screen.queryByText('Probing...')).not.toBeInTheDocument();
+  });
+
+  it('keeps the probing indicator and polling when this group probe starts', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'probeAllStreams').mockResolvedValue({
+      status: 'started', message: 'Background probe started',
+    });
+    const interval = vi.spyOn(globalThis, 'setInterval').mockReturnValue(
+      123 as unknown as ReturnType<typeof setInterval>,
+    );
+    const { container } = renderPane({
+      channels: [makeChannel(1, 'Alpha', MANUAL_GROUP_ID)],
+      channelGroups: [{ id: MANUAL_GROUP_ID, name: 'Drill Locals', channel_count: 1 }],
+    });
+
+    await openGroupMenu(container, 'Drill Locals');
+    await user.click(screen.getByRole('button', { name: /Probe Group/ }));
+    expect(interval).toHaveBeenCalledWith(expect.any(Function), 2000);
+    await openGroupMenu(container, 'Drill Locals');
+    expect(screen.getByRole('button', { name: /Probing\.\.\./ })).toBeDisabled();
   });
 
   it('never offers Delete Group on a provider-backed group, empty or not', async () => {

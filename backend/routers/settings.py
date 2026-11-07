@@ -2337,9 +2337,9 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
         # deliberate manual "restart services" click; it now also fires
         # automatically from update_settings() on any connection-relevant
         # save, so a probe that happens to be running gets hard-cancelled
-        # (StreamProber.stop() sets _probe_cancelled, which the probe loop
-        # treats as an abort — active asyncio tasks cancelled, pending
-        # streams abandoned, not a graceful drain) without the operator
+        # (StreamProber.stop() retires admission and cancels/joins all probe
+        # owners, including single/pipeline work and admission waiters — pending
+        # streams abandoned, not a graceful completion) without the operator
         # having asked for that. Make the interruption loud in the logs
         # since deferring the rebuild until the probe finishes would add
         # real complexity for a rare timing window.
@@ -2371,13 +2371,8 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
 
         # Start new tracker and prober with current settings
         if not settings.is_configured():
-            # bd-snryv: StreamProber.stop() only flips a cancellation flag —
-            # later probe entry points reset it back to False — so the
-            # just-stopped prober object stays truthy and reusable. Without
-            # clearing the singletons here, callers like
-            # channel_pipeline_engine's ``prober = get_prober(); if not prober:
-            # skip`` guard would pass and proceed against a client for
-            # settings that are no longer configured.
+            # Retired probers refuse admission, but callers should see an
+            # unavailable service rather than a truthy retired/stale singleton.
             set_tracker(None)
             set_prober(None)
             return {"success": False, "message": "Settings not configured"}

@@ -2136,6 +2136,15 @@ export function ChannelsPane({
       // Pass skipM3uRefresh=true since this is an on-demand probe from UI
       logger.debug(`[ChannelsPane] Calling probeAllStreams for group '${groupName}' (skipping M3U refresh)`);
       const result = await api.probeAllStreams([groupName], true);
+      if (result.status !== 'started') {
+        notifications.warning(result.message || 'The probe could not be started; try again.', result.status === 'already_running' ? 'Probe In Progress' : 'Probe Not Started');
+        setProbingGroups((prev) => {
+          const next = new Set(prev);
+          next.delete(groupId);
+          return next;
+        });
+        return;
+      }
       logger.debug(`[ChannelsPane] probeAllStreams started for group '${groupName}':`, result);
 
       // Poll for probe completion to keep the spinner active
@@ -2175,7 +2184,7 @@ export function ChannelsPane({
         return next;
       });
     }
-  }, []);
+  }, [notifications]);
 
   // Handle channel row click - in edit mode handles multi-select, outside edit mode expands
   const handleChannelClick = (channel: Channel, e: React.MouseEvent, groupChannelIds: number[]) => {

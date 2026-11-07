@@ -117,6 +117,36 @@ into the new output, hash-checked, signature/key/header-checked, and payload-aud
 again. Filenames alone are never trusted. Expected hashes may also constrain
 fresh downloads. No cache hit bypasses authentication or completeness checks.
 
+### Fresh cohort with retained native Packman inputs
+
+The refreshed Docker recipe uses normal fresh all-origin collection rather than
+the old recovered 156/155-source carrier indexes. The existing native builder
+already retains the two exact Packman source RPMs in its owned source directory;
+some of those exact public URLs now return 404. To reuse these original bytes
+without inventing a complete new cache index, the source-builder supplies both:
+
+```sh
+--native-manifest /tmp/native/manifest.json --native-sources /tmp/native-output/sources
+```
+
+This narrow handoff accepts **only** the selected architecture's two reviewed
+Packman source inputs. The manifest must retain the existing Packman fingerprint,
+the exact canonical vendor URLs, matching codec source set and SHA256s. Only
+actual inventory Packman origins can select these files; no SUSE origin is
+supplied by this handoff. Files must be regular nonsymlinks and hash-match before
+and after copying. Every reused archive still passes the ordinary isolated
+`rpmkeys`, exact vendor/source header and complete Source/Patch payload checks.
+The index truthfully records `reverified-native-input`, canonical origin URL and
+no fabricated download redirect. Other origins use the normal fresh download
+path. Failed public requests log the exact allowed URL and fail without retry.
+
+This is not generic partial-cache permission. Supplying `--expected-sha256`
+still requires coverage of **every** selected origin, and `--cache-dir` still
+requires that complete architecture/URL-bound expected index. Neither native
+source reuse nor fresh mode bypasses these existing contracts. Old same-named
+ARM/AMD archives and indexes remain noninterchangeable. A failed signature or
+missing source still prevents publication of `index.json`.
+
 ## Output and parent integration
 
 `/delivery` contains:

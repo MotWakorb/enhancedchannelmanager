@@ -232,6 +232,72 @@ def test_high_finding_in_an_additional_analyzer_cannot_be_ignored(scan):
     )
 
 
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
+def test_recorded_p1_advisories_deny_promotion_without_a_high_ca_finding(scan, arch):
+    report, identity, scanner = (
+        _evidence() if arch == "amd64" else _recorded_arm_evidence()
+    )
+    projection = json.loads((FIXTURE.parent / "p1-advisories.json").read_text())
+    findings = projection["architectures"][arch]["findings"]
+    assert len(findings) == 3
+    assert {finding["Severity"] for finding in findings} == {"MEDIUM"}
+    report["Results"][0]["Vulnerabilities"] = findings
+    original = copy.deepcopy(report)
+    failures = scan.check_report(report, identity, scanner, arch)
+    for finding in findings:
+        assert (
+            f"reviewed P1 advisory {finding['VulnerabilityID']} in "
+            f"{finding['PkgName']} (reported MEDIUM)"
+        ) in failures
+    assert report == original
+
+
+@pytest.mark.parametrize(
+    "advisory",
+    [
+        "openSUSE-SU-2026:12232-1",
+        "CVE-2026-111497",
+        "openSUSE-SU-2026:12233-1",
+        "CVE-2026-114406",
+        "openSUSE-SU-2026:12364-1",
+        "CVE-2026-96889",
+        "openSUSE-SU-2026:12336-1",
+        "CVE-2026-116741",
+    ],
+)
+@pytest.mark.parametrize("severity", ["UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"])
+@pytest.mark.parametrize(
+    "status", ["fixed", "affected", "will_not_fix", "not_affected"]
+)
+def test_reviewed_p1_hold_is_independent_of_scanner_label_or_fix_availability(
+    scan, advisory, severity, status
+):
+    report, identity, scanner = _evidence()
+    finding = copy.deepcopy(report["Results"][2]["Vulnerabilities"][0])
+    finding.update(
+        VulnerabilityID=advisory, Severity=severity, Status=status, FixedVersion=""
+    )
+    # An additional analyzer must not bypass the hold either.
+    extra = copy.deepcopy(report["Results"][2])
+    extra["Type"] = "additional-analyzer"
+    extra["Vulnerabilities"] = [finding]
+    report["Results"].append(extra)
+    assert (
+        f"reviewed P1 advisory {advisory} in {finding['PkgName']} (reported {severity})"
+        in scan.check_report(report, identity, scanner, "amd64")
+    )
+
+
+@pytest.mark.parametrize("field", ["VulnerabilityID", "PkgName", "InstalledVersion"])
+@pytest.mark.parametrize("value", [["not-a-string"], {"not": "a-string"}, 1, True])
+def test_nonstring_finding_identity_is_denied_instead_of_crashing(scan, field, value):
+    report, identity, scanner = _evidence()
+    report["Results"][1]["Vulnerabilities"][0][field] = value
+    assert "malformed vulnerability finding" in scan.check_report(
+        report, identity, scanner, "amd64"
+    )
+
+
 @pytest.mark.parametrize("result_index", [0, 1, 2], ids=["rpm", "python", "go"])
 @pytest.mark.parametrize("severity", ["HIGH", "CRITICAL"])
 @pytest.mark.parametrize("arch", ["amd64", "arm64"])
@@ -429,6 +495,15 @@ def test_scan_cli_dogfoods_evidence_and_denies_empty_malformed_or_missing_files(
     ]
     result = subprocess.run(command, check=False, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+    projection = json.loads((FIXTURE.parent / "p1-advisories.json").read_text())
+    report["Results"][0]["Vulnerabilities"] = projection["architectures"]["amd64"][
+        "findings"
+    ]
+    paths[0].write_text(json.dumps(report))
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert result.stderr.count("reviewed P1 advisory") == 3
+    assert "Complete unsuppressed" not in result.stdout
     for contents in ("", "{", "null", "{}", "[]"):
         paths[0].write_text(contents)
         result = subprocess.run(command, check=False, capture_output=True, text=True)

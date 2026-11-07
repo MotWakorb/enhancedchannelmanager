@@ -942,7 +942,7 @@ def test_self_consistent_pass_record_still_requires_producer_contract(
     elif mutation == "no_patch":
         record["ffmpeg"]["patches"] = []
     elif mutation == "builder_repository":
-        record["builder_repository"] = "https://download.opensuse.org/tumbleweed/repo/oss/"
+        record["builder_repository"] = "https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/"
     else:
         record["gosu"]["modules"].append(record["gosu"]["modules"][-1])
     document(root, f"{PROOF}/native-build.json", record)

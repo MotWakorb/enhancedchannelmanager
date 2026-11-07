@@ -101,6 +101,7 @@ def test_existing_runtime_gate_requires_exact_negative_and_positive_controls(
     else:
         assert gate._trust_policy(context) == {
             "compromised_g3_trusted": False,
+            "comodo_aaa_subject_trusted": False,
             "unaffected_g1_trusted": True,
             "anchor_count": 1,
         }
