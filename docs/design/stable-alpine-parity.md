@@ -74,9 +74,11 @@ tampering controls on the replacement path.
   pass; native ARM execution and complete application behavior remain unverified.
 - Proposed official Python base preserves Python 3.12 on stable Alpine; using
   distro `apk add python3` would instead select Python 3.14 and is not equivalent.
-- Native media/security/source availability is still being investigated. No full
-  Alpine ECM image, paired parity run, complete source closure, current-head
-  native ARM gate or final security/publication pass is claimed.
+- The [native feasibility result](stable-alpine-feasibility.md) confirms three
+  missing libraries, three security-unclosed providers and additional version/
+  behavior/source/scanner gaps. A stock-package-only substitution does not meet
+  this matrix. No full Alpine ECM image, paired parity run, complete source
+  closure, current-head native ARM gate or final security/publication pass is claimed.
 
 The matrix is a delivery checklist, not proof that literally every possible input
 has been tested. Keep the migration open until every in-scope contract has actual
