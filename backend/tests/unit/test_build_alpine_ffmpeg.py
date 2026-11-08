@@ -59,7 +59,7 @@ def test_gnu_iconv_header_and_link_provider_are_both_explicit(builder, tmp_path)
 
 
 @pytest.mark.parametrize(
-    "mutation", ["none", "arch", "status", "recipe", "binary", "extra-source"]
+    "mutation", ["none", "arch", "status", "recipe", "binary", "extra-source", "header"]
 )
 def test_component_composition_rehashes_receipts_products_and_sources(
     builder, tmp_path, mutation
@@ -67,6 +67,9 @@ def test_component_composition_rehashes_receipts_products_and_sources(
     root, sources = tmp_path / "root", tmp_path / "sources"
     root.mkdir()
     sources.mkdir()
+    sdk = tmp_path / "sdk"
+    sdk.mkdir()
+    (sdk / "owned-header.h").write_text("reviewed interface")
     (root / "owned.so").write_bytes(b"owned-library")
     (sources / "source.tar").write_bytes(b"exact-reviewed-source")
     record = {
@@ -75,6 +78,7 @@ def test_component_composition_rehashes_receipts_products_and_sources(
         "recipe_sha256": builder.CODECS_SHA,
         "owned_artifacts": builder.owned_artifacts(root),
         "source_files": builder.owned_artifacts(sources),
+        "sdk_artifacts": builder.owned_artifacts(sdk),
     }
     if mutation == "arch":
         record["architecture"] = "arm64"
@@ -86,9 +90,27 @@ def test_component_composition_rehashes_receipts_products_and_sources(
         (root / "owned.so").write_bytes(b"changed-library")
     elif mutation == "extra-source":
         (sources / "extra-source").write_text("unbound source")
+    elif mutation == "header":
+        (sdk / "owned-header.h").write_text("unbound inline compiler input")
     (tmp_path / "build-output.json").write_text(json.dumps(record))
     if mutation == "none":
         assert builder.validate_component(tmp_path, "amd64", "codecs") == record
     else:
         with pytest.raises(builder.BuildError, match="component"):
             builder.validate_component(tmp_path, "amd64", "codecs")
+
+
+def test_actual_jxl_linkage_must_be_the_baseline_version_not_a_soname_alias(builder):
+    good = [
+        {
+            "path": "usr/local/lib64/libavcodec.so.62.28.103",
+            "needed": ["libjxl.so.0.12", "libjxl_threads.so.0.12"],
+        }
+    ]
+    builder.validate_jxl_provider(good)
+    for bad in [
+        [],
+        [{**good[0], "needed": ["libjxl.so.0.11", "libjxl_threads.so.0.11"]}],
+    ]:
+        with pytest.raises(builder.BuildError, match="owned JXL"):
+            builder.validate_jxl_provider(bad)

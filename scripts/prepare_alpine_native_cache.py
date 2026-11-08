@@ -9,6 +9,7 @@ from pathlib import Path
 
 from build_alpine_codecs import load_recipe as codecs_recipe
 from build_alpine_ffmpeg import load_recipe as ffmpeg_recipe
+from build_alpine_jxl import load_recipe as jxl_recipe
 from build_alpine_security_libraries import load_recipe as security_recipe
 from build_native_runtime import BuildError, _require, fetch_input
 
@@ -20,8 +21,10 @@ def inputs() -> list[dict]:
     codecs = codecs_recipe(assets / "codecs.json")
     security = security_recipe(assets / "security-libraries.json")
     ffmpeg = ffmpeg_recipe(assets / "ffmpeg.json", ROOT / "docker/native")
+    jxl = jxl_recipe(assets / "libjxl.json")
     return [
         *[p["archive"] for p in codecs["libraries"] + security["libraries"]],
+        jxl["archive"],
         ffmpeg["ffmpeg"],
         ffmpeg["ffmpeg"]["signature"],
     ]

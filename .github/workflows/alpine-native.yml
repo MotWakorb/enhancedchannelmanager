@@ -51,17 +51,33 @@ jobs:
             --build-context owned-cache="$RUNNER_TEMP/alpine-inputs" \
             --file docker/alpine-native/Dockerfile.codecs \
             --output type=local,dest="$RUNNER_TEMP/alpine-evidence/codecs" .
+      - name: Exercise all seven codec modes against the original bounded corpus
+        run: |
+          docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
+            --build-context owned-cache="$RUNNER_TEMP/alpine-inputs" \
+            --file docker/alpine-native/Dockerfile.codecs --target codec-builder \
+            --load --tag ecm-alpine-codec-probe:${{ matrix.arch }} .
+          image=$(docker image inspect --format '{{.Id}}' ecm-alpine-codec-probe:${{ matrix.arch }})
+          python3 scripts/run_alpine_codec_matrix.py --image "$image" --arch ${{ matrix.arch }} \
+            --output-dir "$RUNNER_TEMP/alpine-evidence/codec-matrix"
       - name: Build owned security providers with networkless compilation
         run: |
           docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
             --build-context security-cache="$RUNNER_TEMP/alpine-inputs" \
             --file docker/alpine-native/Dockerfile.security-libraries \
             --output type=local,dest="$RUNNER_TEMP/alpine-evidence/security" .
+      - name: Build baseline-version JPEG XL with authenticated skcms sources
+        run: |
+          docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
+            --build-context jxl-cache="$RUNNER_TEMP/alpine-inputs" \
+            --file docker/alpine-native/Dockerfile.libjxl \
+            --output type=local,dest="$RUNNER_TEMP/alpine-evidence/jxl" .
       - name: Build signed FFmpeg against owned native providers
         run: |
           docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
             --build-context codec-evidence="$RUNNER_TEMP/alpine-evidence/codecs" \
             --build-context security-evidence="$RUNNER_TEMP/alpine-evidence/security" \
+            --build-context jxl-evidence="$RUNNER_TEMP/alpine-evidence/jxl" \
             --build-context ffmpeg-cache="$RUNNER_TEMP/alpine-inputs" \
             --file docker/alpine-native/Dockerfile.ffmpeg \
             --output type=local,dest="$RUNNER_TEMP/alpine-evidence/ffmpeg" .

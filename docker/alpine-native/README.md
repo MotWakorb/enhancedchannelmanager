@@ -1,10 +1,11 @@
 # Incremental owned Alpine library builds
 
 Tracks `enhancedchannelmanager-g3vd3`. The PO approved maintaining pinned,
-reviewed Alpine-native sources/backports for the six minimum library gaps. This
-first interface builds **only Codec2 1.2.0, TwoLAME 0.4.0 and Shine 3.1.1**.
-It is not connected to the production Dockerfile or CI and does not complete
-libxml2, librsvg, Speex, FFmpeg, gosu, resdet or final-image source/security work.
+reviewed Alpine-native sources/backports for seven library providers: Codec2,
+TwoLAME, Shine, libxml2, librsvg, Speex and libjxl. Separate builders also build
+the existing signed FFmpeg and gosu contracts. Native hosted AMD64/ARM64 CI is
+in `.github/workflows/alpine-native.yml`. Production images remain unchanged;
+component builds do not complete final-image packaging/source/security work.
 
 ## Inputs and maintenance
 
@@ -68,7 +69,7 @@ TwoLAME's optional libsndfile frontend is not built. The baseline runtime had
 builder-only. This retains the baseline library integrations; final FFmpeg
 configuration and required media behaviors must still be demonstrated separately.
 
-## Verification and the actual unresolved difference
+## Verification and historical differences
 
 `test_build_alpine_codecs.py` covers recipe/patch/smoke tampering, source-cache
 corruption, repository and platform mismatch, unsafe locations, patch witnesses,
@@ -84,10 +85,24 @@ one unit each**. An independent repeated baseline run is byte-identical to its
 first run. Actual baseline loaded library paths/hashes were checked through
 `/proc/self/maps`, not assumed from filenames.
 
-This discrepancy remains a compatibility blocker (`enhancedchannelmanager-mgt2t`).
-Compiler/libm differences are hypotheses, not an established cause. No rounding,
-sample removal or new tolerance has been approved. These bounded vectors do not
-establish general codec equivalence, full media/runtime behavior or ARM execution.
+That historical discrepancy is now corrected by source-level numeric selection,
+with unchanged goldens: seven modes × five corpora and baseline-stream decoding
+match exactly on native AMD64. `scripts/run_alpine_codec_matrix.py` repeats 70
+fresh native processes against the pinned recorded corpus. ARM equality to that
+AMD64 corpus is not independent old-ARM-baseline proof. No normalization or
+tolerance is permitted. Earlier failed receipts above remain preserved.
+
+Libjxl retains authenticated baseline 0.12.0/skcms sources, its original vendor
+patch, JPEG transcoding and boxes. It checks all 105+9+1 baseline public exports,
+original RGB24 bytes, JPEG reconstruction and native thread creation. FFmpeg
+requires all three evidence contexts (`codec-evidence`, `security-evidence`,
+`jxl-evidence`) and rehashes runtime products, sources **and SDK compiler inputs**.
+Old receipts without SDK inventories cannot satisfy the new composition gate.
+
+Prepare all nine remote inputs with `scripts/prepare_alpine_native_cache.py`.
+Build JXL via `Dockerfile.libjxl` with a `jxl-cache` context before FFmpeg. For
+the complete reproduction sequence, selected security backports, approvals and
+remaining gates see [owned native design](../../docs/design/stable-alpine-owned-native.md).
 
 Detailed raw commands, downloads/signatures, both build records and paired/repeat
 receipts: `/tmp/opencode/ecm-alpine-owned-native-20261108/`. Complete scanner,

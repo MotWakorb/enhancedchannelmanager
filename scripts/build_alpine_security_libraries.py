@@ -539,6 +539,7 @@ def build(
         "smoke": smoke_result,
         "render_sha256": sha256(png),
         "owned_artifacts": owned_artifacts(root),
+        "sdk_artifacts": owned_artifacts(sdk),
         "source_files": owned_artifacts(sources),
         "scope": "Three owned security providers only; final packages/source/inventory/scans and both native whole-image gates remain separate.",
     }

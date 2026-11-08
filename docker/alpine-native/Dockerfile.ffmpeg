@@ -7,23 +7,25 @@ RUN python /proof/scripts/alpine_repository_policy.py \
         openssl-dev zlib-dev bzip2-dev xz-dev gnu-libiconv-dev \
         x264-dev x265-dev libvpx-dev aom-dev dav1d-dev opus-dev libvorbis-dev \
         lame-dev libass-dev freetype-dev fontconfig-dev fribidi-dev harfbuzz-dev \
-        libjxl-dev libgme-dev libopenmpt-dev libwebp-dev zimg-dev gsm-dev \
+        brotli-dev highway-dev libgme-dev libopenmpt-dev libwebp-dev zimg-dev gsm-dev \
         openjpeg-dev libtheora-dev xvidcore-dev rav1e-dev svt-av1-dev snappy-dev \
         cairo-dev gdk-pixbuf-dev glib-dev pango-dev
 COPY --from=codec-evidence / /proof/codecs/
 COPY --from=security-evidence / /proof/security/
+COPY --from=jxl-evidence / /proof/jxl/
 # Headers/pkgconfig/runtime providers are builder-only; final runtime installation
 # and APK attribution are deliberately not claimed by this intermediate stage.
 COPY --from=codec-evidence /sdk/ /
 COPY --from=security-evidence /sdk/ /
-COPY scripts/build_native_runtime.py scripts/build_alpine_codecs.py scripts/build_alpine_security_libraries.py scripts/build_alpine_ffmpeg.py /proof/scripts/
+COPY --from=jxl-evidence /sdk/ /
+COPY scripts/build_native_runtime.py scripts/build_alpine_codecs.py scripts/build_alpine_security_libraries.py scripts/build_alpine_jxl.py scripts/build_alpine_ffmpeg.py /proof/scripts/
 COPY docker/native/ /proof/native/
 COPY docker/alpine-native/ffmpeg.json docker/alpine-native/Dockerfile.ffmpeg /proof/recipe/
 COPY --from=ffmpeg-cache / /proof/cache/
 RUN --network=none case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \
     && python /proof/scripts/build_alpine_ffmpeg.py --manifest /proof/recipe/ffmpeg.json \
         --assets /proof/native --arch "$arch" --work-dir /proof/work --output-dir /proof/output \
-        --codecs-dir /proof/codecs --security-dir /proof/security --cache-dir /proof/cache
+        --codecs-dir /proof/codecs --security-dir /proof/security --jxl-dir /proof/jxl --cache-dir /proof/cache
 
 FROM scratch AS ffmpeg-evidence
 COPY --from=ffmpeg-builder /proof/output/ /

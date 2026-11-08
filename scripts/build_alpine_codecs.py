@@ -388,6 +388,7 @@ def build(
         "compiler": compiler,
         "smoke": result,
         "owned_artifacts": owned_artifacts(root),
+        "sdk_artifacts": owned_artifacts(sdk),
         "source_files": owned_artifacts(sources),
         "smoke_files": owned_artifacts(smoke_dir),
         "scope": "Three library builds and bounded API operations only; no full runtime, security, ARM or paired parity approval.",

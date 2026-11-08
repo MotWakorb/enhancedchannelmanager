@@ -13,6 +13,7 @@ def test_native_evidence_uses_real_hosts_and_no_publication_or_required_check_al
     text = path.read_text()
     workflow = yaml.load(text, Loader=yaml.BaseLoader)
     assert workflow["permissions"] == {"contents": "read"}
+    assert "scripts/run_alpine_codec_matrix.py" in text
     assert 'tar -C "$RUNNER_TEMP/alpine-evidence" -czf' in text
     assert "path: ${{ runner.temp }}/alpine-native-${{ matrix.arch }}.tar.gz" in text
     job = workflow["jobs"]["native-components"]
@@ -43,6 +44,7 @@ def test_native_evidence_uses_real_hosts_and_no_publication_or_required_check_al
         for name in [
             "Dockerfile.codecs",
             "Dockerfile.security-libraries",
+            "Dockerfile.libjxl",
             "Dockerfile.ffmpeg",
             "Dockerfile.gosu",
         ]
@@ -50,6 +52,7 @@ def test_native_evidence_uses_real_hosts_and_no_publication_or_required_check_al
     } == {
         "Dockerfile.codecs",
         "Dockerfile.security-libraries",
+        "Dockerfile.libjxl",
         "Dockerfile.ffmpeg",
         "Dockerfile.gosu",
     }

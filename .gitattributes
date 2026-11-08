@@ -9,3 +9,4 @@ docker/alpine-native/patches/libshine-gcc15-fixes.patch -text -diff
 docker/alpine-native/patches/security/** -text -diff
 docker/alpine-native/patches/codec2-portable-numeric.patch -text -diff
 docker/alpine-native/patches/codec2-initialize-quantizer-error.patch -text -diff
+docker/alpine-native/patches/libjxl-notail.patch -text -diff

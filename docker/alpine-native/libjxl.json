@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "version": "0.12.0",
+  "archive": {
+    "filename": "v0.12.0.tar.gz",
+    "url": "https://codeload.github.com/libjxl/libjxl/tar.gz/refs/tags/v0.12.0",
+    "sha256": "03e9be69a30be4011f559da75328b6d7cea8ad921fabfbd551ce10bf45cdc992",
+    "size": 1698757
+  },
+  "cms": {
+    "commit": "96d9171c94b937a1b5f0293de7309ac16311b722",
+    "file": "retained/d36e9192974fce70bf8b8b446f917469358c2f3889449e45bc84af509b174ad5",
+    "sha256": "d36e9192974fce70bf8b8b446f917469358c2f3889449e45bc84af509b174ad5",
+    "size": 10058488,
+    "upstream_url": "https://skia.googlesource.com/skcms/+archive/96d9171c94b937a1b5f0293de7309ac16311b722.tar.gz",
+    "scope": "Exact authenticated baseline source payload, not a relabeled upstream download"
+  },
+  "source_origin": {
+    "file": "retained/libjxl-source-origin.json",
+    "sha256": "ee1048fdea6d7210e9f10ef015e5fe6cb1b6ab0ad7b289e3fb77c2555bbe76a2"
+  },
+  "baseline_spec": {
+    "file": "retained/libjxl-baseline.spec",
+    "sha256": "b1b079aab45439ec2c9748a35fdb0cdd90221e364bf72caaf6cc04246a9b7040"
+  },
+  "exports": {
+    "file": "libjxl-exports.json",
+    "sha256": "d058e7261e2630ca588273f049b413927a29c425f09a89d8fe590afb151a6f20"
+  },
+  "smoke_assets": [
+    {"file": "jxl-smoke.py", "sha256": "b7fd82ac98bac4a7dbf654819300c2ac91fdbb65ab21cca5ee7afee61d2abf78"},
+    {"file": "jxl-probe.jxl", "sha256": "6fe9765c1f0614056c13dd236536e5958099b7937b9eed4d2309962fc3c502bd"},
+    {"file": "jxl-transcode.jpg", "sha256": "0a5c241a6c03da381d0a8b3397d6166fb43707eda8cda60e98642e6c5901d4d3"}
+  ],
+  "configure": [
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DCMAKE_INSTALL_PREFIX=/usr/local",
+    "-DCMAKE_INSTALL_LIBDIR=lib",
+    "-DBUILD_SHARED_LIBS=ON",
+    "-DBUILD_TESTING=OFF",
+    "-DJPEGXL_ENABLE_TOOLS=OFF",
+    "-DJPEGXL_ENABLE_DEVTOOLS=OFF",
+    "-DJPEGXL_ENABLE_BENCHMARK=OFF",
+    "-DJPEGXL_ENABLE_EXAMPLES=OFF",
+    "-DJPEGXL_ENABLE_DOXYGEN=OFF",
+    "-DJPEGXL_ENABLE_MANPAGES=OFF",
+    "-DJPEGXL_ENABLE_JNI=OFF",
+    "-DJPEGXL_ENABLE_FUZZERS=OFF",
+    "-DJPEGXL_ENABLE_PLUGINS=OFF",
+    "-DJPEGXL_ENABLE_SJPEG=OFF",
+    "-DJPEGXL_ENABLE_TCMALLOC=OFF",
+    "-DJPEGXL_ENABLE_SKCMS=ON",
+    "-DJPEGXL_FORCE_SYSTEM_LCMS2=OFF",
+    "-DJPEGXL_FORCE_SYSTEM_HWY=ON",
+    "-DJPEGXL_FORCE_SYSTEM_BROTLI=ON",
+    "-DJPEGXL_ENABLE_TRANSCODE_JPEG=ON",
+    "-DJPEGXL_ENABLE_BOXES=ON",
+    "-DJPEGXL_ENABLE_JPEGLI=ON",
+    "-DFETCHCONTENT_FULLY_DISCONNECTED=ON"
+  ],
+  "patches": [
+    {
+      "file": "patches/libjxl-notail.patch",
+      "sha256": "61fe9d986286ad1f5e7b9c49fd2de47a3500e3312490dda8460924dd523c65b2",
+      "witnesses": [
+        {
+          "path": "third_party/skcms/src/Transform_inl.h",
+          "before_sha256": "f20790debfdcc51b60fa4e35cd56f92e364d4f5c167d89538f00c57e9ef8f91f",
+          "after_sha256": "72cf1ae1f5a71d8f9c7166b1bc79afafaa277324019836fdc1416c946f98defe"
+        }
+      ]
+    }
+  ],
+  "libraries": [
+    {"name": "libjxl.so", "soname": "libjxl.so.0.12"},
+    {"name": "libjxl_threads.so", "soname": "libjxl_threads.so.0.12"},
+    {"name": "libjxl_cms.so", "soname": "libjxl_cms.so.0.12"}
+  ]
+}

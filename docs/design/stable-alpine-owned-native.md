@@ -44,6 +44,20 @@ directory, so the builder creates and retains a fresh effective
 `CARGO_HOME/config.toml` with an absolute verified vendor directory and offline
 mode. Networkless compilation and upstream `--locked` remain enabled.
 
+The seventh provider now has a clean AMD64 build (`jxl-build-01`), retaining
+baseline SKCMS rather than the investigation's LCMS2 substitution. Its real
+decoder/encoder version is 12000; original RGB24 output, byte-exact JPEG
+reconstruction, native threads and all 105+9+1 public exports pass. Runtime,
+source and SDK inventories were independently rehashed. The bounded independent
+recipe/config/API review found no concrete blocker, not general security or ARM
+approval. New FFmpeg composition requires this evidence and rejects `.0.11`
+linkage; no incompatible SONAME alias is introduced.
+
+Component receipts now bind the complete SDK (headers, pkg-config inputs and
+libraries) as well as runtime products and sources. Earlier receipts without
+`sdk_artifacts` cannot satisfy the composition gate and must be rebuilt, not
+edited to manufacture new evidence.
+
 ### Codec2 numerical correction
 
 The original 2/2,560-sample discrepancy was traced to numerical evaluation, not
@@ -94,7 +108,9 @@ The first hosted ARM64 run proved native codec output, then failed because its
 GCC package lacks those runtimes. The builder now requires native stable
 `clang22`/`compiler-rt` for the identical sanitizer fixture on **both** architectures,
 rather than skipping or weakening it. No sanitizer suppression or runtime
-compiler installation is used; the corrected hosted run must pass separately.
+compiler installation is used. Corrected hosted run `42519704878` passed both
+native architectures, including ARM's real Clang ASan+UBSan fixture. This run
+predates the seventh provider and SDK/matrix additions; it does not verify them.
 
 Libxml2's selected backports also received independent source review. Its
 four-path NONET smoke and supplied 6732 upstream regression do **not** imply that
@@ -115,6 +131,12 @@ Export local evidence directories. Then build `Dockerfile.ffmpeg` with the
 `codec-evidence`, `security-evidence` and `ffmpeg-cache` contexts. The composition
 helper rehashes complete component product/source inventories and requires the
 expected architecture, recipe and status. Build gosu via `Dockerfile.gosu`.
+
+Also build `Dockerfile.libjxl` with `jxl-cache` pointing to the prepared inputs,
+and supply its export as `jxl-evidence` when building FFmpeg. Native CI runs
+`run_alpine_codec_matrix.py` against immutable local builder image IDs: 35 fresh
+encode/decode plus 35 baseline-stream decode-only processes. Its reference is
+the unchanged compressed AMD64 corpus; this is not an old-ARM baseline claim.
 
 `.github/workflows/alpine-native.yml` provides separate native AMD64 and hosted
 ARM64 compilation/execution jobs, with host-machine assertions, immutable action

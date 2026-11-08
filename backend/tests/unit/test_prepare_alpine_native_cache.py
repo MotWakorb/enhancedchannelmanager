@@ -22,11 +22,12 @@ def prepare(monkeypatch):
 
 def test_cache_plan_covers_all_six_libraries_and_signed_ffmpeg(prepare):
     plan = prepare.inputs()
-    assert len(plan) == 8
+    assert len(plan) == 9
     assert {p["sha256"] for p in plan} >= {
         "7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3",
         "5f2880c7fea01f8694d30cb9d06362f77241ee67ce5926b157a226b18f08a538",
         "cbccae52b2c2ecc5d2757e407da567eb681241ff8dadce39d779a7219dbcf449",
+        "03e9be69a30be4011f559da75328b6d7cea8ad921fabfbd551ce10bf45cdc992",
     }
     assert all(p["url"].startswith("https://") for p in plan)
 

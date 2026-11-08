@@ -17,6 +17,7 @@ from pathlib import Path
 from alpine_repository_policy import validate_repositories
 from build_alpine_codecs import RECIPE_SHA256 as CODECS_SHA
 from build_alpine_codecs import create_locations, validate_platform
+from build_alpine_jxl import RECIPE_SHA256 as JXL_SHA
 from build_alpine_security_libraries import RECIPE_SHA256 as SECURITY_SHA
 from build_alpine_security_libraries import dynamic_dependencies
 from build_native_runtime import (
@@ -63,6 +64,7 @@ def validate_component(directory: Path, arch: str, kind: str) -> dict:
     expected_sha, status = {
         "codecs": (CODECS_SHA, "BUILT_API_SMOKE_ONLY"),
         "security": (SECURITY_SHA, "BUILT_SECURITY_API_ONLY"),
+        "jxl": (JXL_SHA, "BUILT_JXL_API_ONLY"),
     }[kind]
     record = json.loads((directory / "build-output.json").read_text())
     _require(
@@ -71,7 +73,11 @@ def validate_component(directory: Path, arch: str, kind: str) -> dict:
         and record["recipe_sha256"] == expected_sha,
         "component recipe/architecture/status mismatch",
     )
-    for key, subdir in [("owned_artifacts", "root"), ("source_files", "sources")]:
+    for key, subdir in [
+        ("owned_artifacts", "root"),
+        ("source_files", "sources"),
+        ("sdk_artifacts", "sdk"),
+    ]:
         _require(
             owned_artifacts(directory / subdir) == record[key],
             "component artifact/source inventory mismatch",
@@ -106,6 +112,20 @@ def validate_gnu_iconv(libraries: list[dict]) -> None:
     )
 
 
+def validate_jxl_provider(libraries: list[dict]) -> None:
+    _require(
+        any(
+            Path(item["path"]).name.startswith("libavcodec.so.")
+            and {"libjxl.so.0.12", "libjxl_threads.so.0.12"} <= set(item["needed"])
+            and not any(
+                "libjxl" in name and ".so.0.11" in name for name in item["needed"]
+            )
+            for item in libraries
+        ),
+        "actual owned JXL linkage mismatch",
+    )
+
+
 def build(
     manifest: Path,
     assets: Path,
@@ -114,6 +134,7 @@ def build(
     output: Path,
     codecs: Path,
     security: Path,
+    jxl: Path,
     cache: Path | None,
 ) -> dict:
     manifest, assets, work, output = [
@@ -125,7 +146,7 @@ def build(
     validate_repositories(release, Path("/etc/apk/repositories").read_text())
     components = {
         kind: validate_component(path, arch, kind)
-        for kind, path in [("codecs", codecs), ("security", security)]
+        for kind, path in [("codecs", codecs), ("security", security), ("jxl", jxl)]
     }
     create_locations(work, output)
     root, sources = output / "root", output / "sources"
@@ -155,6 +176,7 @@ def build(
         item["needed"] = dynamic_dependencies(text, sonames[0], arch)
         item["dynamic"] = text
     validate_gnu_iconv(proof["libraries"])
+    validate_jxl_provider(proof["libraries"])
     shutil.copy2(work / "ffmpeg/ffbuild/config.mak", sources / "ffmpeg-config.mak")
     retained = sources / "recipe"
     retained.mkdir()
@@ -172,6 +194,7 @@ def build(
         "build_native_runtime.py",
         "build_alpine_codecs.py",
         "build_alpine_security_libraries.py",
+        "build_alpine_jxl.py",
         "alpine_repository_policy.py",
     ]:
         shutil.copy2(Path(__file__).with_name(name), retained / name)
@@ -200,6 +223,7 @@ def main() -> int:
         "output-dir",
         "codecs-dir",
         "security-dir",
+        "jxl-dir",
     ]:
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--arch", required=True, choices=sorted(ARCHES))
@@ -214,6 +238,7 @@ def main() -> int:
             args.output_dir,
             args.codecs_dir,
             args.security_dir,
+            args.jxl_dir,
             args.cache_dir,
         )
     except (BuildError, OSError, ValueError) as exc:
