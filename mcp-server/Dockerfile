@@ -6,11 +6,14 @@ WORKDIR /app
 # manifest was published. The digest makes the input reviewable; this upgrade
 # step closes fixed OS advisories until the next intentional digest refresh.
 # Alpine v3.24 secdb requires libuuid 2.42.3-r1 for CVE-2026-78408.
+# Its vendor backport fixes CVE-2026-107891 in both musl packages at 1.2.6-r3.
 RUN apk upgrade --no-cache \
     && apk add --no-cache \
         'libcrypto3>=3.5.8-r0' \
         'libssl3>=3.5.8-r0' \
         'libuuid>=2.42.3-r1' \
+        'musl>=1.2.6-r3' \
+        'musl-utils>=1.2.6-r3' \
     && addgroup -g 1000 appgroup \
     && adduser -D -u 1000 -G appgroup appuser
 

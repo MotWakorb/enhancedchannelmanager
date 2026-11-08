@@ -182,6 +182,41 @@ Declared-input payload completeness is not semantic rebuildability, a proof
 against dynamic fetches in SPEC branches, complete toolchain correspondence,
 reproducibility certification, or legal certification.
 
+### Exact 20261105 release-source route
+
+The frozen AMD64 binary cohort uses
+`openSUSE-release-20261105-4389.1.src.rpm`. The rolling AMD source repository
+advanced to signed cohort 20261106 independently and stopped serving that exact
+source at the canonical route. The reviewed source remains available unchanged
+at the established official GWDG mirror:
+
+<https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261105-4389.1.src.rpm>
+
+Its complete 3,391,198-byte archive SHA256 is
+`93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123`.
+The collector selects this literal route **only** for the exact
+`(openSUSE, x86_64, filename)` tuple. It enforces the archive pin on direct
+downloads and again before ordinary source authentication for fresh/cache
+collection. The final-image source consumer independently requires both the
+actual selected URL and the same archive pin. A self-consistent caller-provided
+index/hash cannot authorize different bytes. No generic mirror prefix, retry,
+fallback, source-version substitution or cache-coverage exception is added.
+
+ARM64 still uses its normal architecture-specific source feed and the distinct
+`openSUSE-release-20261105-3521.1.src.rpm`: 4,377,204 bytes, SHA256
+`7c31d3e46c3b6bf4fc5d5abba14791d4eb4980580b63d4a4721a23a6e185aba2`.
+Both exact SRPMs were freshly downloaded and verified as data with the normal
+isolated SUSE key, RPM signature/payload digest, exact signed source header and
+complete Source/Patch audit. Matching signed binary headers establish the
+architecture/source binding; an SRPM header architecture alone does not.
+These bounded source checks are not ARM native execution or full-image gates.
+
+The source ledger records the GWDG URL as the AMD request, not a fictitious
+canonical request/redirect. Generic `--cache-dir` still needs a complete,
+architecture/URL-bound `--expected-sha256` index. Older canonical-URL indexes do
+not get silently relabeled. If the exact reviewed mirror object expires too,
+collection fails closed pending another reviewed exact recovery.
+
 ## Targeted verification
 
 From `backend/`, using the existing project environment:

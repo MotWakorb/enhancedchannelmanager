@@ -1,0 +1,17 @@
+{
+  "scope": "Actual complete HTTP download identities from 2026-11-07T23:52Z; native signature/header/payload verification is separate evidence",
+  "x86_64": {
+    "filename": "openSUSE-release-20261105-4389.1.src.rpm",
+    "url": "https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261105-4389.1.src.rpm",
+    "sha256": "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123",
+    "sha512": "a765fcb695acd4e97259847699a539fc82a30e264e571772435b4233af22e052f8067789754c86bbd5cd2af47c7a72e5140bbc7a67809f7935c435a6e49a2f20",
+    "size": 3391198
+  },
+  "aarch64": {
+    "filename": "openSUSE-release-20261105-3521.1.src.rpm",
+    "url": "https://download.opensuse.org/ports/aarch64/source/tumbleweed/repo/oss/src/openSUSE-release-20261105-3521.1.src.rpm",
+    "sha256": "7c31d3e46c3b6bf4fc5d5abba14791d4eb4980580b63d4a4721a23a6e185aba2",
+    "sha512": "d5d626f27dc5df2302128d399f36ec847bcd2bb811464e5ae7fedb468d26fa0011b3a4a7f8ef5228ef0be8b24d82bc48ef5644764e3dcd2ef1e567700d22fe27",
+    "size": 4377204
+  }
+}

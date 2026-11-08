@@ -54,7 +54,8 @@ def _has_canonical_mcp_instructions(dockerfile: str) -> bool:
         "WORKDIR /app",
         "RUN apk upgrade --no-cache && apk add --no-cache "
         f"'libcrypto3>={MCP_OPENSSL_MINIMUM}' 'libssl3>={MCP_OPENSSL_MINIMUM}' "
-        "'libuuid>=2.42.3-r1' && addgroup -g 1000 appgroup "
+        "'libuuid>=2.42.3-r1' 'musl>=1.2.6-r3' 'musl-utils>=1.2.6-r3' "
+        "&& addgroup -g 1000 appgroup "
         "&& adduser -D -u 1000 -G appgroup appuser",
         "COPY requirements.txt .",
         "RUN pip install --no-cache-dir -r requirements.txt",
@@ -119,6 +120,11 @@ def check_repository(root: Path) -> list[str]:
             "MCP image must enforce the reviewed libuuid package floor: "
             "'libuuid>=2.42.3-r1' requires the canonical MCP Docker instruction sequence"
         )
+        for package in ("musl", "musl-utils"):
+            failures.append(
+                "MCP image must enforce the reviewed musl package floor: "
+                f"'{package}>=1.2.6-r3' requires the canonical MCP Docker instruction sequence"
+            )
 
     if "pip-audit -r mcp-server/requirements.txt" not in build:
         failures.append("MCP dependency audit is absent from the publication workflow")

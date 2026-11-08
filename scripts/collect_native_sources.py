@@ -42,12 +42,23 @@ REPOSITORIES = {
         "fingerprint": "F8875B880D518B6B8C530D1345A1D0671ABD1AFB",
     },
 }
+# Exact authenticated release source retained by the established official mirror
+# after the rolling x86 source feed advanced. This is routing, never fallback.
+EXACT_SOURCE_ROUTES = {
+    ("openSUSE", "x86_64", "openSUSE-release-20261105-4389.1.src.rpm"): {
+        "url": "https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261105-4389.1.src.rpm",
+        "sha256": "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123",
+    },
+}
 TOKEN = re.compile(r"[A-Za-z0-9_+~.-]+\Z")
 SOURCE_NAME = re.compile(r"[A-Za-z0-9_+~.-]+\.src\.rpm\Z")
 MAX_PAYLOAD = 2 * 1024**3
 
 
 def source_url(vendor: str, architecture: str, filename: str) -> str:
+    route = EXACT_SOURCE_ROUTES.get((vendor, architecture, filename))
+    if route:
+        return route["url"]
     return REPOSITORIES[vendor]["urls"][architecture] + "src/" + filename
 
 
@@ -432,7 +443,15 @@ class HTTPSRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def download(url: str, destination: Path, budget: Budget) -> dict:
-    if not any(
+    pinned_hash = next(
+        (
+            route["sha256"]
+            for route in EXACT_SOURCE_ROUTES.values()
+            if route["url"] == url
+        ),
+        None,
+    )
+    if pinned_hash is None and not any(
         url.startswith(base + "src/")
         and SOURCE_NAME.fullmatch(url[len(base + "src/") :])
         for repo in REPOSITORIES.values()
@@ -454,6 +473,8 @@ def download(url: str, destination: Path, budget: Budget) -> dict:
                 budget.consume(len(block))
                 output.write(block)
         budget.remaining()
+        if pinned_hash is not None and sha256(destination) != pinned_hash:
+            raise ValueError("pinned source checksum mismatch: " + url)
         return {"url": url, "final_url": response.geturl()}
 
 
@@ -645,6 +666,9 @@ def main(argv: list[str] | None = None) -> None:
                 retrieval = download(url, path, budget)
             if filename in expected and sha256(path) != expected[filename]:
                 raise ValueError("expected source checksum mismatch: " + filename)
+            route = EXACT_SOURCE_ROUTES.get((vendor, options.arch, filename))
+            if route and sha256(path) != route["sha256"]:
+                raise ValueError("pinned source checksum mismatch: " + url)
             if retained is not None and sha256(path) != retained[1]:
                 raise ValueError("native source checksum mismatch: " + filename)
             record = verify_source(

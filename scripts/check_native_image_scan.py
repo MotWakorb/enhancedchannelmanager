@@ -39,11 +39,12 @@ REVIEWED_P1_ADVISORIES = frozenset(
         "CVE-2026-116741",
     }
 )
-# Recorded amd64 integration report: 212 RPM entries, including six distinct keys.
-# Native ARM CI has 211: its complete graph lacks only amd64's libnuma1 provider.
-# Keep architecture-specific observed floors, not a globally reduced baseline.
+# AMD64 retains its previous 212-row scan minimum pending a new complete scan.
+# Actual ARM run 42426895390 has 210 rows, matching its live delivered RPM index:
+# only liblcms2-2 disappeared from the old 211-row graph; libnuma1 remains AMD-only.
+# Recorded count/name projection: cohort-20261105-arm64-inventory.json.
 MIN_OS_PACKAGES = 212
-MIN_OS_PACKAGES_BY_ARCH = {"amd64": MIN_OS_PACKAGES, "arm64": 211}
+MIN_OS_PACKAGES_BY_ARCH = {"amd64": MIN_OS_PACKAGES, "arm64": 210}
 # Reviewed upstream-version sanity floors from RPM Version fields, not an RPM
 # EVR/advisory solver. Release fields remain separate; source-built FFmpeg has
 # no RPM floor here and must satisfy the runtime gate's exact source/build pin.

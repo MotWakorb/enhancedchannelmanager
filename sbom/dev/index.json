@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "version": "0.18.2-0065",
-  "created": "2026-11-07T23:40:08Z",
+  "created": "2026-11-08T00:16:42Z",
   "kind": "source-manifest",
   "channel": "dev",
   "permanent": false,
@@ -37,11 +37,11 @@
     "docker/trust/README.md": "sha256:bac4f29677b1a02e25bd767881a4e9047ce0ff1e013aa23600c0766b594d42ad",
     "docker/trust/emsign-ecc-root-ca-g3.pem": "sha256:36e68e205b53c67c7a013894e0d5c8583063468118d1ce78ecbc2200d1dd185c",
     "frontend/package-lock.json": "sha256:ed0636d796d038afefb3e13bd7fa6829c8aa572b4bb83ae6178b6586f3fc3e6c",
-    "mcp-server/Dockerfile": "sha256:58e90f5183dbf0e42069e3b752690a3f049721c1baa18f33f36aa9819433781c",
+    "mcp-server/Dockerfile": "sha256:c5362f558ffbb15522bda00cc3a088b6e3e82429123c06720549c8a93e56b125",
     "mcp-server/requirements.txt": "sha256:de79f8bc7af6839295f4dfcb225e063fec46e841035468d17eaf84f48324833f",
     "sbom/native-dependencies.json": "sha256:530f7498262e5c38541513e01ca12b4f6964b61b80273f75ec8956ff5e17a82a",
     "scripts/build_native_runtime.py": "sha256:97e12cbc87e216efc17e4a60ec53dda6c67d7780a65216beb6ba4e7c08f1b526",
-    "scripts/collect_native_sources.py": "sha256:67dac6efa6b77219c85d10c685f962e08de54ead764e8808f9e3482e56b49f58"
+    "scripts/collect_native_sources.py": "sha256:0ea726019ca672d09cd37acb3b02cc1cdab74eee60d9d05b5ff6fd72abbddb20"
   },
   "documents": [
     {
@@ -84,7 +84,7 @@
           ]
         ]
       },
-      "sha256": "685025375d9f186191015e39b1a903e2f3e14374e509700d1df6a59a97677b99"
+      "sha256": "ac0ceeffc77033f5dda3d7019b4aa6a7ed26a33d5cc15216fccaf032c1e43a1f"
     },
     {
       "path": "mcp.spdx.json",
@@ -95,7 +95,7 @@
         "packages": [],
         "relationships": []
       },
-      "sha256": "ca0445a2167bb441cc9a121f7df0806080644a6bf34e280abc951b84ca455728"
+      "sha256": "a712d622544b7376979314cd96c0160cf7512d0b1b68a79d64c30769a33b4d32"
     }
   ]
 }

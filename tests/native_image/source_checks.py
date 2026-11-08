@@ -34,6 +34,12 @@ VENDORS = {
     "openSUSE": "AD485664E901B867051AB15F35A2F86E29B700A4",
     "http://packman.links2linux.de": "F8875B880D518B6B8C530D1345A1D0671ABD1AFB",
 }
+EXACT_SOURCE_ROUTES = {
+    ("openSUSE", "x86_64", "openSUSE-release-20261105-4389.1.src.rpm"): {
+        "url": "https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261105-4389.1.src.rpm",
+        "sha256": "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123",
+    },
+}
 LIBRARIES = {
     "avcodec",
     "avdevice",
@@ -209,7 +215,10 @@ def _rpm_sources(root, architecture):
             if architecture == "x86_64"
             else "https://download.opensuse.org/ports/aarch64/source/tumbleweed/repo/oss/"
         )
-        assert source["url"] == repository + "src/" + name
+        route = EXACT_SOURCE_ROUTES.get((vendor, architecture, name))
+        assert source["url"] == (route["url"] if route else repository + "src/" + name)
+        if route:
+            assert source["sha256"] == route["sha256"], "pinned source checksum mismatch"
         assert source["path"] == "sources/" + name
         assert source["authentication"] == "pinned-rpm-signature-and-exact-header"
         assert source["license"] and source["license"] != "(none)"
