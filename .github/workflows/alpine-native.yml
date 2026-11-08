@@ -20,8 +20,95 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  original-baseline:
+    name: Historical-package baseline diagnostic (${{ matrix.arch }}, not current-candidate acceptance)
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            machine: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            machine: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Require native host and unchanged original build inputs
+        env:
+          EXPECTED_MACHINE: ${{ matrix.machine }}
+        run: |
+          test "$(uname -m)" = "$EXPECTED_MACHINE"
+          git fetch --no-tags origin 06cc4bf5a1b9eb1f6ef29f617513d237cda2f531 ceb96ba86c714b48bca28d4c945e7b741fa45cb7
+          git diff --exit-code 06cc4bf5a1b9eb1f6ef29f617513d237cda2f531 ceb96ba86c714b48bca28d4c945e7b741fa45cb7 -- Dockerfile backend frontend mcp-server docker sbom scripts tests .dockerignore
+      - name: Fetch pinned original and approved native package artifacts
+        id: verified-inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir "$RUNNER_TEMP/paired-downloads"
+          baseline=$(python3 -c 'import json,os; print(json.load(open("docker/alpine-native/original-baselines.json"))["architectures"][os.environ["ARCH"]]["image_artifact"]["id"])')
+          native=$(python3 -c 'import json,os; print(json.load(open("docker/alpine-native/original-baselines.json"))["architectures"][os.environ["ARCH"]]["native_package_artifact"]["id"])')
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$baseline/zip" > "$RUNNER_TEMP/paired-downloads/original.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$native/zip" > "$RUNNER_TEMP/paired-downloads/native.zip"
+          python3 scripts/prepare_alpine_baseline.py --arch "$ARCH" \
+            --baseline-zip "$RUNNER_TEMP/paired-downloads/original.zip" \
+            --native-zip "$RUNNER_TEMP/paired-downloads/native.zip" \
+            --output-dir "$RUNNER_TEMP/paired-inputs"
+      - name: Load only the verified immutable original image
+        run: |
+          mkdir "$RUNNER_TEMP/paired-evidence"
+          cp "$RUNNER_TEMP/paired-inputs/input-receipt.json" "$RUNNER_TEMP/paired-evidence/input-receipt.json"
+          cp "$RUNNER_TEMP/paired-inputs/original-identity.json" "$RUNNER_TEMP/paired-evidence/original-identity.json"
+          test "$(skopeo --version)" = "skopeo version 1.13.3"
+          skopeo copy "oci-archive:$RUNNER_TEMP/paired-inputs/original.oci.tar" "docker-archive:$RUNNER_TEMP/paired-inputs/original.docker.tar:ecm-original-${{ matrix.arch }}:baseline"
+          docker load --input "$RUNNER_TEMP/paired-inputs/original.docker.tar"
+          image=$(jq -er '.ConfigDigest' "$RUNNER_TEMP/paired-inputs/original-identity.json")
+          docker image inspect "$image" > "$RUNNER_TEMP/paired-evidence/original-loaded.json"
+          python3 scripts/candidate_image.py verify-loaded "$RUNNER_TEMP/paired-inputs/original-identity.json" --inspect "$RUNNER_TEMP/paired-evidence/original-loaded.json"
+      - name: Install the approved signed Alpine package without adding runtime trust
+        run: |
+          docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
+            --build-context paired-packages="$RUNNER_TEMP/paired-inputs/packages" \
+            --file docker/alpine-native/Dockerfile.baseline --load \
+            --tag ecm-alpine-paired:${{ matrix.arch }} .
+          docker image inspect ecm-alpine-paired:${{ matrix.arch }} > "$RUNNER_TEMP/paired-evidence/candidate-loaded.json"
+      - name: Compare both actually executed original and Alpine native subjects
+        run: |
+          original=$(jq -er '.ConfigDigest' "$RUNNER_TEMP/paired-inputs/original-identity.json")
+          candidate=$(docker image inspect --format '{{.Id}}' ecm-alpine-paired:${{ matrix.arch }})
+          python3 scripts/compare_alpine_baseline.py --arch ${{ matrix.arch }} \
+            --baseline-image "$original" --candidate-image "$candidate" \
+            --output-dir "$RUNNER_TEMP/paired-evidence/comparison"
+      - name: Preserve original-baseline comparison receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: alpine-original-baseline-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/paired-evidence/
+          retention-days: 14
+          if-no-files-found: error
+      - name: Preserve verified original image transport before upstream artifact expiry
+        if: always() && steps.verified-inputs.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: retained-original-image-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/paired-downloads/original.zip
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
   native-components:
     name: Alpine native compilation (${{ matrix.arch }}, not final-image acceptance)
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -96,6 +183,51 @@ jobs:
             --build-context gosu-evidence="$RUNNER_TEMP/alpine-evidence/gosu" \
             --file docker/alpine-native/Dockerfile.packages \
             --output type=local,dest="$RUNNER_TEMP/alpine-evidence/packages" .
+      - name: Verify original image for comparison with this current signed APK
+        id: current-original
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          git fetch --no-tags origin 06cc4bf5a1b9eb1f6ef29f617513d237cda2f531 ceb96ba86c714b48bca28d4c945e7b741fa45cb7
+          git diff --exit-code 06cc4bf5a1b9eb1f6ef29f617513d237cda2f531 ceb96ba86c714b48bca28d4c945e7b741fa45cb7 -- Dockerfile backend frontend mcp-server docker sbom scripts tests .dockerignore
+          baseline=$(python3 -c 'import json,os; print(json.load(open("docker/alpine-native/original-baselines.json"))["architectures"][os.environ["ARCH"]]["image_artifact"]["id"])')
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$baseline/zip" > "$RUNNER_TEMP/current-original.zip"
+          python3 scripts/prepare_alpine_baseline.py --arch "$ARCH" \
+            --baseline-zip "$RUNNER_TEMP/current-original.zip" \
+            --output-dir "$RUNNER_TEMP/current-original"
+          mkdir "$RUNNER_TEMP/alpine-evidence/current-paired"
+          cp "$RUNNER_TEMP/current-original/input-receipt.json" "$RUNNER_TEMP/alpine-evidence/current-paired/"
+          cp "$RUNNER_TEMP/current-original/original-identity.json" "$RUNNER_TEMP/alpine-evidence/current-paired/"
+      - name: Load sealed original and install this current signed APK
+        run: |
+          test "$(skopeo --version)" = "skopeo version 1.13.3"
+          skopeo copy "oci-archive:$RUNNER_TEMP/current-original/original.oci.tar" "docker-archive:$RUNNER_TEMP/current-original/original.docker.tar:ecm-current-original-${{ matrix.arch }}:baseline"
+          docker load --input "$RUNNER_TEMP/current-original/original.docker.tar"
+          image=$(jq -er '.ConfigDigest' "$RUNNER_TEMP/current-original/original-identity.json")
+          docker image inspect "$image" > "$RUNNER_TEMP/alpine-evidence/current-paired/original-loaded.json"
+          python3 scripts/candidate_image.py verify-loaded "$RUNNER_TEMP/current-original/original-identity.json" --inspect "$RUNNER_TEMP/alpine-evidence/current-paired/original-loaded.json"
+          docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
+            --build-context paired-packages="$RUNNER_TEMP/alpine-evidence/packages" \
+            --file docker/alpine-native/Dockerfile.baseline --load \
+            --tag ecm-alpine-current-paired:${{ matrix.arch }} .
+          docker image inspect ecm-alpine-current-paired:${{ matrix.arch }} > "$RUNNER_TEMP/alpine-evidence/current-paired/candidate-loaded.json"
+      - name: Compare actual original against the current native signed package
+        run: |
+          original=$(jq -er '.ConfigDigest' "$RUNNER_TEMP/current-original/original-identity.json")
+          candidate=$(docker image inspect --format '{{.Id}}' ecm-alpine-current-paired:${{ matrix.arch }})
+          python3 scripts/compare_alpine_baseline.py --arch ${{ matrix.arch }} \
+            --baseline-image "$original" --candidate-image "$candidate" \
+            --output-dir "$RUNNER_TEMP/alpine-evidence/current-paired/comparison"
+      - name: Preserve verified original even if current-candidate comparison fails
+        if: always() && steps.current-original.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: retained-current-original-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/current-original.zip
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
       - name: Preserve file modes and symlinks in the evidence archive
         if: always()
         run: |

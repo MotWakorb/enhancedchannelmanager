@@ -8,6 +8,26 @@ by this implementation. No image publication or deployment is authorized.
 
 ## Implemented providers
 
+### Independent original-image comparison (execution pending)
+
+`docker/alpine-native/original-baselines.json` seals the retained CI images from
+run `42438805097`, including their OCI manifest, configuration and rootfs
+identities. Build-input paths in source `ceb96ba86c714b48bca28d4c945e7b741fa45cb7`
+are identical to approved application baseline `06cc4bf5a1b9eb1f6ef29f617513d237cda2f531`;
+the workflow repeats that git comparison before consuming them.
+
+`prepare_alpine_baseline.py` verified the actual retained ZIPs and OCI identities
+for both architectures locally without executing ARM code. Original-only mode
+also passed against the retained ARM OCI. The new native workflow pairs each
+**current** signed APK with its actual original image using 35 codec cases,
+four fresh processes per case, five complete framemd5 outputs and six complete
+capability listings. This native execution has not yet passed. The separate
+historical-package diagnostic cannot approve a current candidate. Tests in
+`test_alpine_native_workflow.py`, `test_compare_alpine_baseline.py` and
+`test_prepare_alpine_baseline.py` enforce wiring and rejection paths; they are
+unit/configuration tests, not native compatibility proof. Verified original
+transport ZIPs are retained even when a subsequent comparison fails.
+
 All build stages enforce official stable v3.24 main/community repositories and
 native architecture. The Python builder remains the pinned Python 3.12 Alpine
 base, not Alpine's newer distribution Python. Source/configuration overrides are
