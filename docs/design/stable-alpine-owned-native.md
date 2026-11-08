@@ -89,8 +89,12 @@ The fixture covers partial/full buffers, consumed bytes, negative input, a valid
 lazy read-only `INT_MAX` input mapping, and the near-`INT_MAX` consumed-buffer
 boundary. The builder requires both real native-library execution and an
 ASan+UBSan build of the entire source with forced realloc failure. Sanitizer
-runtimes are provided by the signed Alpine GCC package in the disposable builder;
-no sanitizer suppression or runtime compiler installation is used.
+runtimes in the initial AMD64 receipt came from the signed Alpine GCC package.
+The first hosted ARM64 run proved native codec output, then failed because its
+GCC package lacks those runtimes. The builder now requires native stable
+`clang22`/`compiler-rt` for the identical sanitizer fixture on **both** architectures,
+rather than skipping or weakening it. No sanitizer suppression or runtime
+compiler installation is used; the corrected hosted run must pass separately.
 
 Libxml2's selected backports also received independent source review. Its
 four-path NONET smoke and supplied 6732 upstream regression do **not** imply that
@@ -151,3 +155,20 @@ runtime package/source coverage.
   isolation on both architectures, plus the full application/frontend matrix.
 - Production Docker/CI/source consumers must switch together without weakening
   their existing gates. Independent final review remains required.
+
+## Additional PO decisions after the first native CI run
+
+- **Owned APK signing approved:** use a build-only signing key, retain its public
+  key with package evidence, and remove temporary installation trust. Final
+  runtime trusted keys must be unchanged. No unsigned/`--allow-untrusted`
+  installation, permanent additional key or extra repository is approved.
+- **Seventh owned provider approved: libjxl 0.12.0, including threads/CMS.**
+  Actual process/API/package inspection found baseline 0.12.0 versus Alpine
+  0.11.2-r1, not the initially assumed equal versions. The older ordered dither
+  differs from baseline's channel-offset blue-noise dither. Direct-library
+  experiments explain all 233 differing RGB24 bytes. A scratch 0.12.0 build
+  restores all five complete rare-input framemd5 outputs and all six capability
+  listings. This is approval to implement/verify the provider, not acceptance
+  of the scratch configuration, source/security closure or native ARM behavior.
+  Preserve the authenticated baseline CMS source/configuration during integration;
+  a passing sRGB fixture alone cannot justify changing its color engine.

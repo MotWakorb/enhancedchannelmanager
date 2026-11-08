@@ -264,6 +264,41 @@ def _install_builder_sdk(sdk: Path) -> None:
         shutil.copy2(path, target, follow_symlinks=False)
 
 
+def capacity_command(
+    fixture: Path, sdk: Path, source: Path, executable: Path, *, inject_realloc: bool
+) -> list[str]:
+    # Stable Alpine's ARM64 GCC package does not ship sanitizer runtimes. Use
+    # its native Clang/compiler-rt providers on both architectures; never skip.
+    compiler = "/usr/bin/clang-22" if inject_realloc else "/usr/bin/cc"
+    command = [
+        compiler,
+        "-O1",
+        "-g",
+        str(fixture),
+        "-I" + str(sdk / "usr/include"),
+        "-o",
+        str(executable),
+    ]
+    if inject_realloc:
+        command += [
+            "-fsanitize=address,undefined",
+            "-fno-sanitize-recover=all",
+            "-DHAVE_CONFIG_H",
+            "-DECM_SPEEX_REALLOC_FAILURE",
+            "-I" + str(source),
+            "-I" + str(source / "libspeex"),
+        ]
+    else:
+        command += [
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-L" + str(sdk / "usr/lib"),
+            "-lspeex",
+        ]
+    return command
+
+
 def build(
     manifest: Path, arch: str, work: Path, output: Path, cache: Path | None
 ) -> dict:
@@ -397,32 +432,13 @@ def build(
             capacity_proof = {}
             for kind in ["native-library", "realloc-failure-sanitized-source"]:
                 executable = work / ("speex-capacity-" + kind)
-                command = [
-                    "/usr/bin/cc",
-                    "-O1",
-                    "-g",
-                    str(fixture),
-                    "-I" + str(sdk / "usr/include"),
-                    "-o",
-                    str(executable),
-                ]
-                if kind == "native-library":
-                    command += [
-                        "-Wall",
-                        "-Wextra",
-                        "-Werror",
-                        "-L" + str(sdk / "usr/lib"),
-                        "-lspeex",
-                    ]
-                else:
-                    command += [
-                        "-fsanitize=address,undefined",
-                        "-fno-sanitize-recover=all",
-                        "-DHAVE_CONFIG_H",
-                        "-DECM_SPEEX_REALLOC_FAILURE",
-                        "-I" + str(source),
-                        "-I" + str(source / "libspeex"),
-                    ]
+                command = capacity_command(
+                    fixture,
+                    sdk,
+                    source,
+                    executable,
+                    inject_realloc=kind == "realloc-failure-sanitized-source",
+                )
                 run(command, cwd=work, env=env)
                 result = run(
                     [str(executable)],

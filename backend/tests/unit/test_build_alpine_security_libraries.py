@@ -236,3 +236,27 @@ def test_retained_real_cargo_graph_has_complete_lock_and_file_closure(
     (source / "vendor/itoa-1.0.18").rename(source / "removed-crate")
     with pytest.raises(builder.BuildError, match="dependency closure"):
         builder.verify_vendor(source, vendor["lock_sha256"])
+
+
+def test_failure_injection_uses_native_stable_clang_sanitizers_on_both_architectures(
+    builder, tmp_path
+):
+    command = builder.capacity_command(
+        tmp_path / "fixture.c",
+        tmp_path / "sdk",
+        tmp_path / "source",
+        tmp_path / "out",
+        inject_realloc=True,
+    )
+    assert command[0] == "/usr/bin/clang-22"
+    assert "-fsanitize=address,undefined" in command
+    assert "-fno-sanitize-recover=all" in command
+    assert "-DECM_SPEEX_REALLOC_FAILURE" in command
+    native = builder.capacity_command(
+        tmp_path / "fixture.c",
+        tmp_path / "sdk",
+        tmp_path / "source",
+        tmp_path / "out",
+        inject_realloc=False,
+    )
+    assert native[0] == "/usr/bin/cc" and "-lspeex" in native

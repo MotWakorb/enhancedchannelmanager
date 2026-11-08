@@ -70,11 +70,15 @@ jobs:
           docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
             --file docker/alpine-native/Dockerfile.gosu \
             --output type=local,dest="$RUNNER_TEMP/alpine-evidence/gosu" .
+      - name: Preserve file modes and symlinks in the evidence archive
+        if: always()
+        run: |
+          tar -C "$RUNNER_TEMP/alpine-evidence" -czf "$RUNNER_TEMP/alpine-native-${{ matrix.arch }}.tar.gz" .
       - name: Retain native component receipts, products and matching sources
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: alpine-native-build-only-${{ matrix.arch }}-${{ github.sha }}
-          path: ${{ runner.temp }}/alpine-evidence/
+          path: ${{ runner.temp }}/alpine-native-${{ matrix.arch }}.tar.gz
           retention-days: 7
           if-no-files-found: error
