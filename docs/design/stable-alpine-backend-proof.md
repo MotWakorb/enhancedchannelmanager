@@ -65,3 +65,31 @@ five existing skips and coverage. A passing corrected run supersedes that backen
 result only; it cannot clear Codec2 PCM differences, remaining owned security
 libraries, complete source/advisory coverage, native ARM, shipped-image bootstrap
 or MCP isolation. No production image/CI switch is made by this test recipe.
+
+## Verified result
+
+Source commit `df80c49d96d33f6747d5610e98bea732a8618c30`, image
+`sha256:e72ed3f7cf6bf218503d2905d263efdf2a5f28b8716bd2bf133094ee837ea4b5`:
+
+- Full unmodified backend gate: **16,472 passed, zero failed, 5 skipped,
+  2 deselected**, **84.20% coverage**, in 1,755.08 seconds.
+- All five original failing node IDs pass in a separate explicit subset. The
+  broader affected-module subset passes all 120 tests as well.
+- Requirement hash, canonical pytest selection/coverage arguments and all five
+  skip reasons independently match the earlier failed run. No new exclusions,
+  skips, lowered coverage or production security exceptions were introduced.
+- Image contents were matched to 1,745 tracked source/recipe file SHA256 values
+  before the full run. The one tracked generated frontend test-result artifact
+  already excluded by `.dockerignore` is named separately in that binding record;
+  it is not a skipped backend test or an omitted application source file.
+- In-memory mutation checks on the actual Alpine image make the original `%Q`
+  assertion and real evaluator negative case fail when native musl formatting is
+  restored. Both poisoned-host tests fail if endpoint validation is bypassed.
+
+Raw evidence lives in `/tmp/opencode/ecm-alpine-backend-proof-20261108/`:
+`backend-full-04.log`, `backend-result-04.json`, `backend-source-binding-04.json`,
+`backend-results-04/ecm-gate-9xqbcvf7/receipt.json`,
+`five-failures-final-verification.json`, `five-original-failures-final.log` and
+`failure-regression-mutations.json`. The first `03` attempt stopped in preflight
+on the already Docker-ignored frontend test-result artifact; no gate ran or pass
+was claimed for that attempt.

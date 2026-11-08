@@ -142,20 +142,41 @@ the test-image dependency was corrected without bypassing that check.
 
 - Actual application/platform difference: musl turns unknown strftime `%Q` into
   empty output, failing the retained date-placeholder contract. Track the paired
-  custom-format/flag survey and compatibility fix in `enhancedchannelmanager-63a31`.
+  custom-format/flag survey and compatibility fix in `enhancedchannelmanager-63a31`;
+  this backend defect is corrected in `df80c49d` as verified below.
 - Harness-sensitive failures: one GDrive allowed-endpoint case requires DNS but
   the proof disables external networking; three interpreter tests assume
   `/opt/venv` is absent, unlike this test image. Track test-only environment
   corrections in `enhancedchannelmanager-tikvb`, not weakened entrypoint/SSRF gates.
+  Those four conflicts are also corrected and verified below.
 - The five skips identify a live seeded Dispatcharr fixture, the two previously
   deferred cloud-provider guards, opt-in exact-RPM tooling/source and unavailable
   native Windows. They are not newly added Alpine skips. No new exclusion was used.
 
 Evidence: `/tmp/opencode/ecm-alpine-backend-proof-20261108/backend-full-02.log`,
 `backend-result-02.json` and `backend-results-02/ecm-gate-nelqbb1p/receipt.json`.
-This test image lacks the complete media/gosu/source runtime and must never be
-presented as the production candidate. Neither the full backend gate nor final
-runtime compatibility is cleared.
+### Corrected backend run — verified, not merely ticketed
+
+Application/test commit **`df80c49d96d33f6747d5610e98bea732a8618c30`** passed the
+unchanged canonical backend selection in immutable Alpine x86 test image
+`sha256:e72ed3f7cf6bf218503d2905d263efdf2a5f28b8716bd2bf133094ee837ea4b5`:
+**16,472 passed, zero failures, 5 skipped, 2 deselected; coverage 84.20%**.
+The 74 requirement pins, selection/coverage flags and five existing skip reasons
+are unchanged. All five original failing node IDs also pass in an explicit rerun.
+
+The [backend proof recipe](stable-alpine-backend-proof.md) documents the actual
+date compatibility fix, controlled DNS with real SSRF denial, and test interpreter
+outside `/opt/venv`. Its 4,890 recorded baseline format cases and real condition
+evaluator checks pass on musl; the dangerous old native-formatter and bypassed-SSRF
+mutants are rejected by their specific regressions.
+
+Evidence: `backend-full-04.log`, `backend-result-04.json`,
+`backend-results-04/ecm-gate-9xqbcvf7/receipt.json` and
+`five-failures-final-verification.json` under the same external proof directory.
+
+This clears the **native x86 backend test-only gate**, not the complete media/
+gosu/source runtime. Final runtime compatibility, security and ARM remain open;
+the test image must never be presented as the production candidate.
 
 The target remains Alpine. Stock-package insufficiency is not a distribution
 reversal or a feature-reduction decision. Until the gaps and complete parity
