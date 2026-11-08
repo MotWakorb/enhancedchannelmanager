@@ -23,6 +23,12 @@ This decision changes the platform target. It does **not** authorize silently
 dropping codecs/input formats, ignoring advisories, relaxing source checks,
 lowering coverage, changing application behavior, merging or deploying.
 
+The PO additionally requires **100% compatibility: it must work identically**.
+The [parity acceptance matrix](../design/stable-alpine-parity.md) makes that a
+cutover requirement: compare equivalent scenarios on the same application source,
+retain all existing contracts, and leave every unverified difference blocked.
+Package availability or a green dependency scan alone cannot clear the migration.
+
 ```mermaid
 flowchart LR
     A[Digest-pinned stable Alpine inputs] --> B[Alpine-native Python and media builders]
