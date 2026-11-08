@@ -1,0 +1,113 @@
+# ADR-017: Standardize application images on stable Alpine
+
+- **Status:** Target accepted by the Product Owner; migration implementation and verification pending
+- **Date:** 2026-11-07
+- **Bead:** `enhancedchannelmanager-2ixgf`
+- **Tier:** ECM/MCP home-lab; image publication small-team. Effective scope: small-team.
+- **Supersedes:** The openSUSE Tumbleweed target in [ADR-015](ADR-015-wolfi-native-runtime.md), not its security, source-delivery or media-compatibility requirements.
+
+## Decision
+
+The PO explicitly directed: **"We shouldn't be using rolling repositories. We
+should be making this standard on alpine."** ECM's runtime and native builders
+will migrate to a supported **stable Alpine release**, aligned with the MCP
+sidecar. The first availability survey targets **v3.24**; actual package/security
+and musl compatibility evidence must validate that choice before final image use.
+
+Use digest-pinned, release-qualified image references and explicitly selected
+stable `main`/`community` repositories. Do not use `edge`, `testing`, unqualified
+`latest` inputs, SUSE/Packman RPMs, mixed distribution libraries, or a glibc
+compatibility layer to make a nominally Alpine image work.
+
+This decision changes the platform target. It does **not** authorize silently
+dropping codecs/input formats, ignoring advisories, relaxing source checks,
+lowering coverage, changing application behavior, merging or deploying.
+
+```mermaid
+flowchart LR
+    A[Digest-pinned stable Alpine inputs] --> B[Alpine-native Python and media builders]
+    B --> C[Minimal ECM runtime]
+    A --> D[MCP runtime on the same stable branch]
+    C --> E[Native AMD64 and ARM64 verification]
+    D --> E
+    E --> F[Complete source, security and real isolation gates]
+    F --> G[Protected review and verified publication]
+```
+
+## Why change
+
+The previous security remediation selected Tumbleweed to obtain a sufficiently
+current native-library graph while preserving existing media support. Actual
+cold CI subsequently exposed removed base manifests, exact binary/source RPMs
+and repository metadata. Fixing each expired mirror/object is not an acceptable
+long-term platform strategy for this deployment.
+
+The existing CA repair already installs official fixed certificates on both
+architectures; this is a platform/reproducibility decision, not a reason to
+replace trust verification or suppress the old advisory.
+
+**Stable is not immutable.** A versioned Alpine repository still receives package
+updates and can replace old revisions. A pinned base digest does not freeze a
+later `apk add`/`apk upgrade`. Keep intentional patch updates and retain the exact
+selected APKs, indexes and corresponding source/packaging inputs where necessary
+for repeatable cold builds. Do not recreate the same expired-input problem with
+different package suffixes. No new artifact service is chosen by this ADR.
+
+## Phase 1: Prove and implement the replacement
+
+1. Survey real stable APK indexes and vendor security data separately for
+   x86_64/aarch64. Survey all 74 Python pins against actual CPython 3.12 musllinux
+   distributions; old manylinux wheel receipts do not transfer to musl.
+2. Preserve the signed FFmpeg source and approved RTSP patch. Prefer stable
+   distro library packages; source-build unchanged approved upstream components
+   only where actual evidence requires it, with explicit provenance and review.
+   Do not select a vulnerable stock FFmpeg just to avoid a native build.
+3. Exercise the real backend imports, SQLite, TLS/ACME, FFmpeg probing/relay/
+   previews, rare software inputs, resdet, signals/cancellation and identity
+   remapping. GNU-versus-BusyBox behavior must be tested rather than assumed.
+4. Replace RPM-specific inventory/source/scan bindings with APK-specific checks
+   derived from actual images. Preserve exact config/platform/rootfs binding,
+   inventory completeness, source/notices and unsuppressed advisory detection.
+   An RPM package count is not a portable security floor; an empty APK report
+   must never pass because an old RPM assertion was simply removed.
+5. Run native AMD64 and ARM64 full-image checks, both bootstrap identities,
+   complete scans, full application gates and real Compose MCP isolation on the
+   actual candidate. Require independent review before protected integration.
+
+Phase 1 remains incomplete until these execute. The initial targeted feasibility
+spike is evidence only, not a published runtime or a passing migration.
+
+## Phase 2: Keep stable builds maintainable
+
+Use deliberate stable-release/base-digest and security-package refreshes, bounded
+input retention and ordinary dependency/source tooling. Document rebuild/update
+commands. Re-run both architectures on changes. Avoid introducing a new registry,
+snapshot service or generalized packaging framework unless the actual retained
+input set demonstrates a need.
+
+## Enforcement and current limits
+
+- `scripts/alpine_repository_policy.py` now checks actual Alpine release and
+  repository files, rejecting `edge`, `testing`, cross-release/mixed/tagged feeds,
+  missing/duplicate feeds and alternate endpoints. Its 26 regressions passed
+  after the initial RED run, and it ran successfully read-only/offline against
+  an existing immutable MCP image's actual `3.24.4` files. The fixture records
+  that image identity rather than inventing a repository response.
+- That policy is **not yet wired into production image builds**, and does not
+  authenticate APKs or freeze mutable stable inputs. Release-qualified image
+  reference enforcement, native package/source handling and final Docker/CI
+  integration remain migration work, not implied by these tests.
+- Existing native behavior, scanner identity/advisory, source, bootstrap and
+  isolation gates remain authoritative until their tested Alpine replacements
+  are connected. Earlier SUSE successes are historical, not Alpine passes.
+- Preserve draft #1063, all earlier owning branches and unrelated work. The
+  migration starts in a separate checkout at committed `06cc4bf5`.
+
+## Exit and unresolved decisions
+
+Alpine is the accepted target, not one option awaiting another distribution vote.
+If a stable package or musl/native source gap prevents a safe feature-complete
+image, report the exact gap and the smallest Alpine-compatible correction.
+Do not silently fall back to rolling/edge repositories or narrow supported media.
+Deployment rollback remains an explicit operator action to a previously verified
+immutable image; it is not permission to republish an affected historical image.
