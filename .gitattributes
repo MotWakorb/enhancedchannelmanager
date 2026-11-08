@@ -4,3 +4,8 @@
 
 # Authenticated vendor patch has mixed CRLF; preserve its exact source bytes.
 docker/alpine-native/patches/libshine-gcc15-fixes.patch -text -diff
+# Source patch artifacts retain their exact upstream/context bytes; manifest
+# SHA256 and complete pre/post witnesses are reviewed and verified by the builder.
+docker/alpine-native/patches/security/** -text -diff
+docker/alpine-native/patches/codec2-portable-numeric.patch -text -diff
+docker/alpine-native/patches/codec2-initialize-quantizer-error.patch -text -diff

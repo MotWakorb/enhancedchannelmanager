@@ -1,0 +1,80 @@
+name: Stable Alpine Native Build Evidence
+
+# Incremental migration evidence. Never substitutes for required production
+# compatibility/security contexts, and has no image publication permissions.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/alpine-native.yml'
+      - 'docker/alpine-native/**'
+      - 'docker/native/**'
+      - 'scripts/*alpine*'
+      - 'scripts/build_native_runtime.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alpine-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-components:
+    name: Alpine native compilation (${{ matrix.arch }}, not final-image acceptance)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            machine: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            machine: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Require native host and prepare reviewed source inputs
+        env:
+          EXPECTED_MACHINE: ${{ matrix.machine }}
+        run: |
+          test "$(uname -m)" = "$EXPECTED_MACHINE"
+          mkdir "$RUNNER_TEMP/alpine-evidence"
+          python3 scripts/prepare_alpine_native_cache.py --output-dir "$RUNNER_TEMP/alpine-inputs"
+          git rev-parse HEAD > "$RUNNER_TEMP/alpine-evidence/source-commit.txt"
+      - name: Build owned codecs with networkless compilation
+        run: |
+          docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
+            --build-context owned-cache="$RUNNER_TEMP/alpine-inputs" \
+            --file docker/alpine-native/Dockerfile.codecs \
+            --output type=local,dest="$RUNNER_TEMP/alpine-evidence/codecs" .
+      - name: Build owned security providers with networkless compilation
+        run: |
+          docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
+            --build-context security-cache="$RUNNER_TEMP/alpine-inputs" \
+            --file docker/alpine-native/Dockerfile.security-libraries \
+            --output type=local,dest="$RUNNER_TEMP/alpine-evidence/security" .
+      - name: Build signed FFmpeg against owned native providers
+        run: |
+          docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
+            --build-context codec-evidence="$RUNNER_TEMP/alpine-evidence/codecs" \
+            --build-context security-evidence="$RUNNER_TEMP/alpine-evidence/security" \
+            --build-context ffmpeg-cache="$RUNNER_TEMP/alpine-inputs" \
+            --file docker/alpine-native/Dockerfile.ffmpeg \
+            --output type=local,dest="$RUNNER_TEMP/alpine-evidence/ffmpeg" .
+      - name: Build reviewed static gosu using native Alpine Go
+        run: |
+          docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
+            --file docker/alpine-native/Dockerfile.gosu \
+            --output type=local,dest="$RUNNER_TEMP/alpine-evidence/gosu" .
+      - name: Retain native component receipts, products and matching sources
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: alpine-native-build-only-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/alpine-evidence/
+          retention-days: 7
+          if-no-files-found: error

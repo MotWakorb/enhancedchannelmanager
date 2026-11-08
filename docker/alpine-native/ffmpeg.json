@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "ffmpeg": {
+    "version": "8.1.3",
+    "url": "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz",
+    "sha256": "7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3",
+    "signature": {
+      "url": "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz.asc",
+      "sha256": "5f2880c7fea01f8694d30cb9d06362f77241ee67ce5926b157a226b18f08a538"
+    },
+    "key": {
+      "file": "ffmpeg-release.asc",
+      "sha256": "397b3becedcd5a98769967ff1ff8501ddc89f8368b8f766e4701377d7dbaabe5"
+    },
+    "fingerprint": "FCF986EA15E6E293A5644F10B4322F04D67658D8"
+  },
+  "configure": {
+    "file": "ffmpeg.args",
+    "sha256": "8815506c9fd2a54139123c49a3b4c06facfb06008b125662aff3b7dc323ab8d3"
+  },
+  "ffmpeg_patches": [
+    {
+      "order": 1,
+      "id": "CVE-2026-107696",
+      "upstream_commit": "f5d4fd186c68913240c4f6e9cda98443e1518b34",
+      "upstream_url": "https://github.com/FFmpeg/FFmpeg/commit/f5d4fd186c68913240c4f6e9cda98443e1518b34",
+      "file": "patches/CVE-2026-107696.patch",
+      "sha256": "7518b281a719aa41c5cdd1f259eaf38f6b1e3fb28c09ec254c441abbaad69095",
+      "witnesses": [
+        {
+          "path": "libavformat/rtsp.c",
+          "before_sha256": "7ed3d7cd85feee1a63737054dbf9d2e7294f8a9e7851aaf72c829082987b4495",
+          "after_sha256": "9e181b7cea30a6fbbd9c1bfa4f63ec2c9834001f9804edffb6d2b01984747145"
+        }
+      ]
+    }
+  ]
+}

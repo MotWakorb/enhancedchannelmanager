@@ -27,7 +27,7 @@ from build_native_runtime import (
     verify_elf,
 )
 
-RECIPE_SHA256 = "ea51b0fde8e4cf2553124f35e72c765dc53f93aaa2e4f132716feface8fcd2e5"
+RECIPE_SHA256 = "56865d627f9507a3d81701898453f44c7a279b5ab756b1e4a6354aed7036f8b6"
 SMOKE_SHA256 = "ab0a0b4f68141f69a2ad340683d55e329e2ce0f067cd5e1ace898991917f8186"
 
 
@@ -38,6 +38,24 @@ def load_recipe(path: Path) -> dict:
     )
     recipe = json.loads(path.read_text())
     for item in recipe["libraries"]:
+        if "exports" in item:
+            record = item["exports"]
+            asset = path.parent / record["file"]
+            _require(
+                asset.is_file()
+                and not asset.is_symlink()
+                and sha256(asset) == record["sha256"],
+                "reviewed codec export surface identity mismatch",
+            )
+        if "numeric" in item:
+            for record in [item["numeric"], item["numeric"]["wrapper"]]:
+                asset = path.parent / record["file"]
+                _require(
+                    asset.is_file()
+                    and not asset.is_symlink()
+                    and sha256(asset) == record["sha256"],
+                    "reviewed numeric source identity mismatch",
+                )
         for patch in item["patches"]:
             asset = path.parent / patch["file"]
             _require(
@@ -114,6 +132,42 @@ def validate_dynamic(text: str, soname: str, arch: str) -> list[str]:
         "codec dynamic ABI/dependency/path mismatch",
     )
     return needed
+
+
+def stage_numeric(record: dict, assets: Path, source: Path) -> None:
+    archive, wrapper = assets / record["file"], assets / record["wrapper"]["file"]
+    for path, digest in [
+        (archive, record["sha256"]),
+        (wrapper, record["wrapper"]["sha256"]),
+    ]:
+        _require(
+            path.is_file() and not path.is_symlink() and sha256(path) == digest,
+            "reviewed numeric source identity mismatch",
+        )
+    numeric = source / "src/numeric"
+    safe_extract(archive, numeric)
+    _require(
+        {p.name for p in numeric.iterdir()} == {p["path"] for p in record["sources"]},
+        "numeric source inventory mismatch",
+    )
+    for item in record["sources"]:
+        path = numeric / item["path"]
+        _require(
+            path.is_file() and not path.is_symlink() and sha256(path) == item["sha256"],
+            "numeric source member mismatch",
+        )
+    shutil.copy2(wrapper, numeric / "codec2_numeric.c")
+
+
+def validate_exports(text: str, expected: list[str]) -> list[str]:
+    names = [line.split()[-1] for line in text.splitlines() if line.strip()]
+    _require(
+        len(names) == len(set(names))
+        and set(expected) <= set(names)
+        and set(names) - set(expected) <= {"_init", "_fini"},
+        "codec export surface mismatch",
+    )
+    return sorted(names)
 
 
 def validate_smoke(text: str) -> dict:
@@ -200,6 +254,8 @@ def build(
         patches = [
             apply_patch(p, manifest.parent, source, env) for p in item["patches"]
         ]
+        if "numeric" in item:
+            stage_numeric(item["numeric"], manifest.parent, source)
         patched_source = owned_artifacts(source)
         if item["name"] == "codec2":
             directory = work / "codec2-build"
@@ -258,9 +314,28 @@ def build(
         header = verify_elf(library, arch, env)
         dynamic = run(["/usr/bin/readelf", "-d", str(library)], cwd=work, env=env)
         needed = validate_dynamic(dynamic, item["soname"], arch)
+        exports = None
+        if "exports" in item:
+            symbols = run(
+                ["/usr/bin/nm", "-D", "--defined-only", str(library)], cwd=work, env=env
+            )
+            exports = validate_exports(
+                symbols,
+                (manifest.parent / item["exports"]["file"]).read_text().splitlines(),
+            )
         notices = root / "usr/share/doc/ecm/alpine-native" / item["name"]
         notices.mkdir(parents=True)
         shutil.copy2(source / "COPYING", notices / "COPYING")
+        if "numeric" in item:
+            shutil.copy2(
+                source / "src/numeric/LICENSE",
+                notices / "Arm-optimized-routines-LICENSE",
+            )
+            (notices / "Arm-license-selection.txt").write_text(
+                "ECM selects the MIT option for these pinned Arm scalar sources.\n"
+                "Commit: " + item["numeric"]["commit"] + "\n"
+                "Codec-local hidden symbols only; USE_GLIBC_ABI=0.\n"
+            )
         records.append(
             {
                 **item,
@@ -269,6 +344,7 @@ def build(
                 "readelf": header,
                 "dynamic": dynamic,
                 "needed": needed,
+                "verified_exports": exports,
             }
         )
     executable = work / "codec-smoke"

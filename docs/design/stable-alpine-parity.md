@@ -83,3 +83,7 @@ tampering controls on the replacement path.
 The matrix is a delivery checklist, not proof that literally every possible input
 has been tested. Keep the migration open until every in-scope contract has actual
 evidence and every remaining difference/blocker is explicitly resolved.
+
+The [owned native implementation](stable-alpine-owned-native.md) records the
+component builders, exact bounded Codec2 correction and review-driven security
+work. Its separate native build workflow is deliberately not final acceptance.

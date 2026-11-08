@@ -52,7 +52,13 @@ def test_real_inputs_match_authenticated_baseline_payloads(builder):
         inputs = {f["name"]: f["sha256"] for f in origin["payload"]["files"]}
         assert inputs[item["archive"]["filename"]] == item["archive"]["sha256"]
         for patch in item["patches"]:
-            assert inputs[Path(patch["file"]).name] == patch["sha256"]
+            if patch.get("origin") != "ecm":
+                assert inputs[Path(patch["file"]).name] == patch["sha256"]
+            else:
+                assert Path(patch["file"]).name in {
+                    "codec2-portable-numeric.patch",
+                    "codec2-initialize-quantizer-error.patch",
+                }
 
 
 @pytest.mark.parametrize(
@@ -278,3 +284,69 @@ def test_smoke_files_are_complete_real_frames_not_only_positive_counts(
     (tmp_path / "codec2-decoded.raw").write_bytes(b"x")
     with pytest.raises(builder.BuildError, match="size/type"):
         builder.validate_smoke_files(tmp_path, result)
+
+
+def test_numeric_sources_are_real_pinned_upstream_bytes_not_investigation_stub(
+    builder, tmp_path
+):
+    recipe = builder.load_recipe(ASSETS / "codecs.json")
+    numeric = recipe["libraries"][0]["numeric"]
+    assert numeric["commit"] == "20859d3fd9e797dde592c489c8ef7d383f778620"
+    assert numeric["license_selection"] == "MIT"
+    source = tmp_path / "codec2"
+    (source / "src").mkdir(parents=True)
+    builder.stage_numeric(numeric, ASSETS, source)
+    assert (
+        builder.sha256(source / "src/numeric/test_defs.h")
+        == "006c4acb9cb4dd604cd00c6a94004a52552d056a4bfca7f568566cbb9e83ad4d"
+    )
+    assert (
+        "Investigation build only"
+        not in (source / "src/numeric/test_defs.h").read_text()
+    )
+    assert (
+        "return (float)log10((double)x);"
+        in (source / "src/numeric/codec2_numeric.c").read_text()
+    )
+    patch = (ASSETS / "patches/codec2-portable-numeric.patch").read_text()
+    assert "+#define POW10F(x) ((float)pow(10.0, (double)(float)(x)))" in patch
+    assert "log10f=codec2_log10f" in patch
+    assert {p.name for p in (source / "src/numeric").iterdir()} == {
+        "sincosf.c",
+        "sincosf.h",
+        "sincosf_data.c",
+        "math_config.h",
+        "test_defs.h",
+        "LICENSE",
+        "codec2_numeric.c",
+    }
+
+
+def test_numeric_tampering_is_denied_before_extract(builder, tmp_path, monkeypatch):
+    recipe = builder.load_recipe(ASSETS / "codecs.json")
+    numeric = recipe["libraries"][0]["numeric"]
+    assets = tmp_path / "assets"
+    shutil.copytree(ASSETS, assets)
+    (assets / numeric["file"]).write_bytes(b"unreviewed math source")
+    monkeypatch.setattr(
+        builder, "safe_extract", lambda *a: pytest.fail("unverified math extracted")
+    )
+    with pytest.raises(builder.BuildError, match="numeric source"):
+        builder.stage_numeric(numeric, assets, tmp_path / "source")
+
+
+def test_complete_baseline_export_surface_is_retained_without_math_symbol_leaks(
+    builder,
+):
+    expected = (ASSETS / "codec2-exports.txt").read_text().splitlines()
+    assert len(expected) == 568
+    text = "\n".join("000000000001 T " + name for name in expected + ["_init", "_fini"])
+    assert builder.validate_exports(text, expected) == sorted(
+        expected + ["_init", "_fini"]
+    )
+    for bad in [
+        text.replace(" T codec2_create", " T removed_codec2_create"),
+        text + "\n00001 T codec2_log10f",
+    ]:
+        with pytest.raises(builder.BuildError, match="export"):
+            builder.validate_exports(bad, expected)

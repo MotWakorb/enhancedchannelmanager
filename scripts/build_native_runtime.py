@@ -1037,10 +1037,11 @@ def _gosu(
     cache: Path | None,
     arch: str,
     toolchain: dict | None = None,
+    go_binary: Path | None = None,
 ) -> dict:
-    go = "/usr/lib64/go/1.26/bin/go"
+    go = str(go_binary) if go_binary is not None else "/usr/lib64/go/1.26/bin/go"
     origin = None
-    if arch == "arm64":
+    if arch == "arm64" and go_binary is None:
         go, origin = prepare_arm_go(toolchain, work, sources, cache)
         env = {**env, "GOROOT": str(Path(go).parent.parent)}
     version = run([go, "version"], cwd=work, env=env)
@@ -1118,7 +1119,7 @@ def _gosu(
         run(
             ["/usr/bin/rpm", "-q", "--licensefiles", "go1.26"], cwd=work, env=env
         ).splitlines()
-        if arch == "amd64"
+        if arch == "amd64" and go_binary is None
         else []
     )
     go_notices = {

@@ -1,0 +1,37 @@
+ECM-owned portable numeric selection for Codec2 1.2.0 on stable Alpine.
+Retains the original bounded PCM output, not a new tolerance or libc shim.
+The scalar Arm sources are pinned separately and staged under src/numeric.
+POW10F must not depend on ambient _GNU_SOURCE detection.
+The private target-only renames and hidden wrappers must not leak libc aliases.
+
+--- a/src/defines.h
++++ b/src/defines.h
+@@ -110,10 +110,6 @@
+ extern const struct lsp_codebook newamp2vq_cb[];
+ extern const struct lsp_codebook newamp2_energy_cb[];
+ 
+-#ifdef _GNU_SOURCE
+-#define POW10F(x) exp10f((x))
+-#else
+-#define POW10F(x) expf(2.302585092994046f * (x))
+-#endif
++#define POW10F(x) ((float)pow(10.0, (double)(float)(x)))
+ 
+ #endif
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -425,3 +425,14 @@
+     ldpc_dec
+     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+ )
++
++# ECM-owned portable numerical kernels; no glibc ABI/loader compatibility layer.
++target_sources(codec2 PRIVATE
++    numeric/sincosf.c numeric/sincosf_data.c numeric/codec2_numeric.c)
++target_compile_definitions(codec2 PRIVATE
++    USE_GLIBC_ABI=0 sincosf=codec2_sincosf sinf=codec2_sinf
++    cosf=codec2_cosf atan2f=codec2_atan2f log10f=codec2_log10f)
++target_compile_options(codec2 PRIVATE -ffp-contract=off)
++set_source_files_properties(
++    numeric/sincosf.c numeric/sincosf_data.c numeric/codec2_numeric.c
++    PROPERTIES COMPILE_OPTIONS "-fno-builtin;-fvisibility=hidden")

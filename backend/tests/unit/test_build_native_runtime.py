@@ -49,6 +49,42 @@ def test_cli_has_locations_and_architecture_not_source_overrides(builder):
 
 
 @pytest.mark.parametrize("arch", ["amd64", "arm64"])
+def test_alpine_owned_go_path_is_version_checked_before_source_or_rpm_operations(
+    builder, tmp_path, monkeypatch, arch
+):
+    commands = []
+
+    def wrong_compiler(command, **kwargs):
+        commands.append(command)
+        assert command == ["/usr/local/go/bin/go", "version"]
+        return f"go version go1.26.9 linux/{arch}\n"
+
+    monkeypatch.setattr(builder, "run", wrong_compiler)
+    monkeypatch.setattr(
+        builder,
+        "fetch_input",
+        lambda *a: pytest.fail("source fetched before compiler verification"),
+    )
+    monkeypatch.setattr(
+        builder,
+        "prepare_arm_go",
+        lambda *a: pytest.fail("Alpine builder selected foreign SDK path"),
+    )
+    with pytest.raises(builder.BuildError, match="Go compiler version"):
+        builder._gosu(
+            {},
+            tmp_path,
+            tmp_path,
+            tmp_path,
+            {},
+            None,
+            arch,
+            go_binary=Path("/usr/local/go/bin/go"),
+        )
+    assert len(commands) == 1
+
+
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
 def test_real_two_arch_manifest_has_exact_public_inputs(builder, arch):
     recipe = builder.load_recipe(ASSETS / "manifest.json", arch)
     selected = recipe["architectures"][arch]
@@ -89,18 +125,27 @@ def test_retained_packman_cache_is_exact_complete_original_input_set():
             path = cache / item["sha256"]
             assert path.is_file() and not path.is_symlink()
             assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"]
-    retained_release = "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123"
-    assert {p.name for p in cache.iterdir() if p.name != "README.md"} == expected | {retained_release}
+    retained_release = (
+        "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123"
+    )
+    assert {p.name for p in cache.iterdir() if p.name != "README.md"} == expected | {
+        retained_release
+    }
     assert len(expected) == 14
 
 
-@pytest.mark.parametrize("repository", [
-    "https://download.opensuse.org/tumbleweed/repo/oss/",
-    "https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/",
-    "https://download.opensuse.org/history/20261023/tumbleweed/repo/oss/",
-    "http://download.opensuse.org/history/20261022/tumbleweed/repo/oss/",
-])
-def test_builder_snapshot_cannot_silently_float_or_change(builder, tmp_path, repository):
+@pytest.mark.parametrize(
+    "repository",
+    [
+        "https://download.opensuse.org/tumbleweed/repo/oss/",
+        "https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/",
+        "https://download.opensuse.org/history/20261023/tumbleweed/repo/oss/",
+        "http://download.opensuse.org/history/20261022/tumbleweed/repo/oss/",
+    ],
+)
+def test_builder_snapshot_cannot_silently_float_or_change(
+    builder, tmp_path, repository
+):
     assets = tmp_path / "native"
     shutil.copytree(ASSETS, assets)
     path = assets / "manifest.json"

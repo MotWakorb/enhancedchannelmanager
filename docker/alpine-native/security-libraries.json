@@ -1,0 +1,273 @@
+{
+  "schema_version": 1,
+  "alpine_release": "3.24",
+  "capacity_smoke": {
+    "file": "speex-capacity-smoke.c",
+    "sha256": "674c7db1311b57399e37bb7b5b65214d491c61cf6bc3c4aab3fc1cf430782ab4"
+  },
+  "libraries": [
+    {
+      "name": "libxml2",
+      "version": "2.13.9",
+      "package_version": "2.13.9-r3",
+      "soname": "libxml2.so.2",
+      "license": "MIT",
+      "archive": {
+        "filename": "libxml2-2.13.9.tar.xz",
+        "url": "https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.9.tar.xz",
+        "sha256": "a2c9ae7b770da34860050c309f903221c67830c86e4a7e760692b803df95143a",
+        "size": 2426164
+      },
+      "configure": [
+        "--prefix=/usr",
+        "--libdir=/usr/lib",
+        "--enable-shared",
+        "--disable-static",
+        "--with-python=no",
+        "--with-lzma",
+        "--with-zlib"
+      ],
+      "patches": [
+        {
+          "id": "CVE-2026-6732",
+          "file": "patches/security/libxml2-CVE-2026-6732.patch",
+          "sha256": "8cd12e6532379bb50e7c4ded45e391de399053b7a788598587115ba4bf707664",
+          "origin": "Alpine stable f1bd5b6767a0e7fdda380c95138a1c938eb6e102 fix/test with exact 2.13 SAX branch context",
+          "witnesses": [
+            {
+              "path": "parser.c",
+              "before_sha256": "44ae0f100afb329149dd284976a4e187623ab89b43087c7f43f4d80f3af48191",
+              "after_sha256": "307d9b2c717f9511462ffb34f11c04db4abe81669457eeb8f56a272706d397d0"
+            },
+            {
+              "path": "testparser.c",
+              "before_sha256": "b2651e3069c31cbbb53aad83b792549fdf887d9be69f33c5c90563554b62fdac",
+              "after_sha256": "639377e7ffb7f697f7bc47c810963359f78b600d86a891e97d248ed7270d5406"
+            }
+          ]
+        },
+        {
+          "id": "CVE-2026-86138",
+          "file": "patches/security/libxml2-CVE-2026-86138.patch",
+          "sha256": "aa8e17247c7ac61155af6d8c818fcd89ef545d563e622be37c54a2a82b69e75a",
+          "upstream_commit": "a4cba4b5b5a8c42e155ed42d2d2a44955465a2e4",
+          "upstream_patch_sha256": "f228a9c9b75901b9f4bee563f123ecfe7ba5c4487b76d6de15ecccbcab2f5028",
+          "witnesses": [
+            {
+              "path": "dict.c",
+              "before_sha256": "516f59a03a18bc92234e3e06515d598e59a56450c7c587e64be48c5cd63db8e1",
+              "after_sha256": "7a4497931edf8ea6c69dd492748047a0c88a7a4e37215fa984f21ced4f2d3ce0"
+            }
+          ]
+        },
+        {
+          "id": "CVE-2026-86139",
+          "file": "patches/security/libxml2-CVE-2026-86139.patch",
+          "sha256": "907bb3ee91cb100fd73f51143a1dd4c6c2d7909126b2e60b94873f127b7c67ec",
+          "upstream_commit": "8edbbdb09f24d26a2f900141fddc2b9d014f53b0",
+          "upstream_patch_sha256": "622df43fa14301c266dc05967701a96e13458048affcf96201b8e5f49a15b9bc",
+          "witnesses": [
+            {
+              "path": "uri.c",
+              "before_sha256": "321c404ce5a52d593a1a64e060edaa7222dfec418147cca3146138cdb6909928",
+              "after_sha256": "f9514bce4902824b5f12c756efa3f03d5a4f382f482a16fc82f47c9d6fb510e4"
+            }
+          ]
+        },
+        {
+          "id": "CVE-2026-86140",
+          "file": "patches/security/libxml2-CVE-2026-86140.patch",
+          "sha256": "16230c58f1fcc158509ba7d517425ff10dd23fffd8856ac2b90fe222ad516cd8",
+          "upstream_commit": "d1686f91dbda141a752200419d35639fd6b38340",
+          "upstream_patch_sha256": "6f3e6bd911a1b0d58ebad1ff752e2302f9e8b92ec32c7461774aa998c1a2b3c0",
+          "witnesses": [
+            {
+              "path": "valid.c",
+              "before_sha256": "8161b7d1e1a7db380dc9bec14debbdcb06635e740ad5f08f01b5d3aa4fe49cf5",
+              "after_sha256": "f3e1e845441670751c183cc626ede221cb2011f442d6e3d13c70cc302d109182"
+            }
+          ]
+        },
+        {
+          "id": "CVE-2026-86142",
+          "file": "patches/security/libxml2-CVE-2026-86142.patch",
+          "sha256": "058e1a808ce9c60481ca05b02d28ff91402fac74a93e366e695639cec883fe4c",
+          "upstream_commit": "6b3a736c0edc74ceec3d82f5252499d7911b3a58",
+          "upstream_patch_sha256": "0bfee4c089428b43db8026164045b2b532438b599c90e950ccdd5728d3c65645",
+          "witnesses": [
+            {
+              "path": "xpointer.c",
+              "before_sha256": "0c4f251220c371feefbebd4c0a552c182caf3938b28cd846b926f5fc7b41271f",
+              "after_sha256": "6a30cea61fd0c34fa5eb7e5dc4b3caf625a43a1392b60808ed7c24cb8f57cae5"
+            }
+          ]
+        },
+        {
+          "id": "CVE-2026-86143",
+          "file": "patches/security/libxml2-CVE-2026-86143.patch",
+          "sha256": "de544be89a0cb40655bfa4da01b05a660b3fea666c24cee3c05795b40f1fc07b",
+          "upstream_commit": "90f293ba74d28b1d570920382e707586f68ebf35",
+          "upstream_patch_sha256": "9b6e6e28c7b329ebf7231e70704fe3fbd972d6a38859733ba55b6f266cdff265",
+          "witnesses": [
+            {
+              "path": "xmlIO.c",
+              "before_sha256": "1fb3c693ce3f35325ed009a2906aae6965ea14100b8c06b8bd3a512956ab22f7",
+              "after_sha256": "1d124722583bd2a2808f82d45f8a338e2098e2a1a4309292db5e3133f0ce388e"
+            }
+          ]
+        },
+        {
+          "id": "CVE-2026-86144",
+          "file": "patches/security/libxml2-CVE-2026-86144.patch",
+          "sha256": "845cd245162b5fdf2d6a9dc3aca69f88639accd5603322f4d191305b2607971d",
+          "upstream_commit": "b63cd517afecb76582dd9488c55e54ceaf50de61",
+          "upstream_patch_sha256": "510388cbcf450056f3a8641eaa049d2195fceef4af15bacf6ed6d33a2c7f41fe",
+          "witnesses": [
+            {
+              "path": "xinclude.c",
+              "before_sha256": "4110343ddd883f2c48499803526b723a06ea836146a6e9fa1712a91848110bf1",
+              "after_sha256": "a0e49fb17d3e5b126bcc0cb14ab03198dda23b27add72579553959923cc16965"
+            }
+          ]
+        }
+      ],
+      "retained_upstream_patches": [
+        {
+          "file": "patches/security/upstream/libxml2-CVE-2026-86138.patch",
+          "sha256": "f228a9c9b75901b9f4bee563f123ecfe7ba5c4487b76d6de15ecccbcab2f5028"
+        },
+        {
+          "file": "patches/security/upstream/libxml2-CVE-2026-86139.patch",
+          "sha256": "622df43fa14301c266dc05967701a96e13458048affcf96201b8e5f49a15b9bc"
+        },
+        {
+          "file": "patches/security/upstream/libxml2-CVE-2026-86140.patch",
+          "sha256": "6f3e6bd911a1b0d58ebad1ff752e2302f9e8b92ec32c7461774aa998c1a2b3c0"
+        },
+        {
+          "file": "patches/security/upstream/libxml2-CVE-2026-86142.patch",
+          "sha256": "0bfee4c089428b43db8026164045b2b532438b599c90e950ccdd5728d3c65645"
+        },
+        {
+          "file": "patches/security/upstream/libxml2-CVE-2026-86143.patch",
+          "sha256": "9b6e6e28c7b329ebf7231e70704fe3fbd972d6a38859733ba55b6f266cdff265"
+        },
+        {
+          "file": "patches/security/upstream/libxml2-CVE-2026-86144.patch",
+          "sha256": "510388cbcf450056f3a8641eaa049d2195fceef4af15bacf6ed6d33a2c7f41fe"
+        },
+        {
+          "file": "patches/security/upstream/CVE-2026-6732-test.patch",
+          "sha256": "7c93e102dfdeaaf5d7adeda70c0dec6bfc492dbe9a14a29d42512a6c3f39a6c2"
+        },
+        {
+          "file": "patches/security/upstream/CVE-2026-6732.patch",
+          "sha256": "42d45b35f36bf29229e39a9e5349d7347e51d92099573b5a509f448dbf0e34d7"
+        }
+      ]
+    },
+    {
+      "name": "speex",
+      "version": "1.2.1",
+      "package_version": "1.2.1-r3",
+      "soname": "libspeex.so.1",
+      "license": "BSD-3-Clause",
+      "archive": {
+        "filename": "speex-1.2.1.tar.gz",
+        "url": "https://downloads.xiph.org/releases/speex/speex-1.2.1.tar.gz",
+        "sha256": "4b44d4f2b38a370a2d98a78329fefc56a0cf93d1c1be70029217baae6628feea",
+        "size": 1043278
+      },
+      "configure": [
+        "--prefix=/usr",
+        "--libdir=/usr/lib",
+        "--enable-shared",
+        "--disable-static"
+      ],
+      "patches": [
+        {
+          "id": "reproducible-version",
+          "file": "patches/security/speex-no-build-date.patch",
+          "sha256": "2db61e1f5f4d1c235394dca6d39f6a3cae2fa97ae4b7c5571f9efc287c161f57",
+          "witnesses": [
+            {
+              "path": "src/speexdec.c",
+              "before_sha256": "6633a83d805665fe27b6b2ce067ebbbe7cd873806bf8ed5c50b461d1869e8b5e",
+              "after_sha256": "185c97a2accee1f176572c4a30d793d735b54487f63944b0fce78ccfebd13b7c"
+            },
+            {
+              "path": "src/speexenc.c",
+              "before_sha256": "5f8d9c05d7fbb2ff1839a0e21440da08d60d4875e41536e3390e4ace88b821fa",
+              "after_sha256": "d7c49d68f999dd2d7b17eea84216ad51575604f1c2fa0b7757ccd483ee0479d6"
+            }
+          ]
+        },
+        {
+          "id": "CVE-2026-116741",
+          "file": "patches/security/speex-CVE-2026-116741.patch",
+          "sha256": "3216e4824db62a8d481e3a54e9b51501759881e343aa9747879e4dcb294a0782",
+          "witnesses": [
+            {
+              "path": "libspeex/bits.c",
+              "before_sha256": "bd36b8081282f5a6e9558b2ed8a0acace0a6c3c976587802b466ff8c628a335a",
+              "after_sha256": "c8c8c32c0dc086eab1adb07d5bd61daa6709732fe2b5689664b86ebdabd340c1"
+            }
+          ]
+        },
+        {
+          "id": "ecm-checked-append-capacity",
+          "file": "patches/security/speex-checked-append-capacity.patch",
+          "sha256": "990da1108575a44b590aacb9bae84d8d53526bf0272df76c022fb084f7c09a07",
+          "origin": "ECM-owned follow-up: nonnegative truncation, overflow-free capacity and signed bit-count bounds",
+          "witnesses": [
+            {
+              "path": "libspeex/bits.c",
+              "before_sha256": "c8c8c32c0dc086eab1adb07d5bd61daa6709732fe2b5689664b86ebdabd340c1",
+              "after_sha256": "0f93bf653a32a96a1fc0d92daa596513a0feb8e39fd1a532a04393afca91e5e9"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "librsvg",
+      "version": "2.63.4",
+      "package_version": "2.63.4-r0",
+      "soname": "librsvg-2.so.2",
+      "license": "LGPL-2.1-or-later AND MIT",
+      "archive": {
+        "filename": "librsvg-2.63.4.tar.xz",
+        "url": "https://download.gnome.org/sources/librsvg/2.63/librsvg-2.63.4.tar.xz",
+        "sha256": "31f07d9350dad3f8964fd613c31309ac160fdef13dfac59df6fd082de78d6e8f",
+        "size": 6823168
+      },
+      "vendor": {
+        "file": "retained/d5fd9570af2fa9c586f2f34bd4163ee3a3869a5942be70897bfb4aa8270cfc50",
+        "sha256": "d5fd9570af2fa9c586f2f34bd4163ee3a3869a5942be70897bfb4aa8270cfc50",
+        "size": 21790164,
+        "lock_sha256": "c927ee202cec8128a8b0c0b32f9ddfdf780e78bc9eefa6a9e046957c648bf901",
+        "origin_file": "retained/librsvg-vendor-origin.json",
+        "origin_sha256": "c1e0f018c2c60c39e1fcdf0944ad3df07b072bd96d2c7f8a8c42d8f55b7dbc1a"
+      },
+      "configure": [
+        "--prefix=/usr",
+        "--libdir=lib",
+        "--buildtype=release",
+        "-Dpixbuf=enabled",
+        "-Davif=enabled",
+        "-Dpixbuf-loader=disabled",
+        "-Dintrospection=disabled",
+        "-Dvala=disabled",
+        "-Ddocs=disabled",
+        "-Drsvg-convert=enabled",
+        "-Dtests=true"
+      ],
+      "patches": [],
+      "baseline_archive_sha256": "5e6b8f8c4e488697b1711956fd0f97ca855fb059cdfeed904e9e7eb9961f3639",
+      "source_equivalence": {
+        "file": "retained/librsvg-upstream-equivalence.json",
+        "sha256": "87c19dcf0fc7288a819dbc4d60c9921ec13293a7791ba4fd6ca05b88566aeb54"
+      }
+    }
+  ]
+}
