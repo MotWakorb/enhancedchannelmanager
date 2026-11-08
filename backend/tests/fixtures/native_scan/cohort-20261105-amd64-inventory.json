@@ -1,0 +1,18 @@
+{
+  "projection": "Actual local scan count/name/architecture distributions only; unit tests reshape historical package versions, not final-image clearance.",
+  "head": "70781eacc37a0761cd3016d3bd0aac807e27628b",
+  "report_sha256": "54997bb124de7bfb831d86f8ec253b868d45c8705d567b98ff6d59b70952c275",
+  "config_digest": "sha256:6c7fadb9111c45b794139a8bc958053449a9eb9dd3ae333c795a04b4706e57f8",
+  "Class": "os-pkgs",
+  "Type": "opensuse-tumbleweed",
+  "package_count": 211,
+  "Arch": {"x86_64": 188, "noarch": 17, "None": 6},
+  "AnalyzedBy": {"rpm": 211},
+  "sorted_names_sha256": "76758a60f3a548ac30d96ae4280dbb70077782abe15959f3a5ea07cb11cdd17c",
+  "removed_from_previous_names": ["liblcms2-2"],
+  "added_names": [],
+  "delivered_source_index_packages": 205,
+  "excluded_public_keys": 6,
+  "delivered_source_origins": 155,
+  "native_checks": 28
+}

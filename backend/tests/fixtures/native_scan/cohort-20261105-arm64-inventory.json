@@ -11,7 +11,7 @@
   "Arch": {"aarch64": 187, "noarch": 17, "None": 6},
   "AnalyzedBy": {"rpm": 210},
   "sorted_names_sha256": "24d4e3094f5ab934ac1ca76e2a0a978f3f296d940837df931ad4095337c82dfa",
-  "removed_from_previous_arm_names": ["liblcms2-2"],
+  "removed_from_previous_names": ["liblcms2-2"],
   "added_names": [],
   "delivered_source_index_packages": 204,
   "excluded_public_keys": 6,

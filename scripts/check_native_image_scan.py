@@ -39,11 +39,11 @@ REVIEWED_P1_ADVISORIES = frozenset(
         "CVE-2026-116741",
     }
 )
-# AMD64 retains its previous 212-row scan minimum pending a new complete scan.
-# Actual ARM run 42426895390 has 210 rows, matching its live delivered RPM index:
-# only liblcms2-2 disappeared from the old 211-row graph; libnuma1 remains AMD-only.
-# Recorded count/name projection: cohort-20261105-arm64-inventory.json.
-MIN_OS_PACKAGES = 212
+# Actual 20261105 images: local AMD64 70781eac has 211 rows; ARM run 42426895390
+# has 210. Each complete scan matches its delivered/live RPM source index. Only
+# liblcms2-2 disappeared from the prior graphs; libnuma1 remains AMD-only.
+# Recorded projections: cohort-20261105-{amd64,arm64}-inventory.json.
+MIN_OS_PACKAGES = 211
 MIN_OS_PACKAGES_BY_ARCH = {"amd64": MIN_OS_PACKAGES, "arm64": 210}
 # Reviewed upstream-version sanity floors from RPM Version fields, not an RPM
 # EVR/advisory solver. Release fields remain separate; source-built FFmpeg has

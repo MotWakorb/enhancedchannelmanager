@@ -104,27 +104,31 @@ def test_real_arm_inventory_does_not_require_the_amd64_only_numa_provider(scan):
     report, identity, scanner = _recorded_arm_evidence()
     packages = report["Results"][0]["Packages"]
     assert not any(p["Name"] == "libnuma1" for p in packages)
-    assert scan.MIN_OS_PACKAGES_BY_ARCH == {"amd64": 212, "arm64": 210}
+    assert scan.MIN_OS_PACKAGES_BY_ARCH == {"amd64": 211, "arm64": 210}
     assert scan.check_report(report, identity, scanner, "arm64") == []
 
 
-def _cohort_arm_inventory_shape():
+def _cohort_inventory_shape(arch):
     # Preserve old versions and synthetic identities: this is inventory-shape
     # coverage against recorded count/name distributions, not a fresh image scan.
-    report, identity, scanner = _recorded_arm_evidence()
+    report, identity, scanner = (
+        _evidence() if arch == "amd64" else _recorded_arm_evidence()
+    )
     observed = json.loads(
-        (FIXTURE.parent / "cohort-20261105-arm64-inventory.json").read_text()
+        (FIXTURE.parent / f"cohort-20261105-{arch}-inventory.json").read_text()
     )
     result = report["Results"][0]
     result["Packages"] = [
         p
         for p in result["Packages"]
-        if p["Name"] not in observed["removed_from_previous_arm_names"]
+        if p["Name"] not in observed["removed_from_previous_names"]
     ]
     packages = result["Packages"]
     assert result["Class"] == observed["Class"]
     assert result["Type"] == observed["Type"]
-    assert len(packages) == observed["package_count"] == 210
+    assert (
+        len(packages) == observed["package_count"] == (211 if arch == "amd64" else 210)
+    )
     assert Counter(p["Arch"] for p in packages) == observed["Arch"]
     assert Counter(p["AnalyzedBy"] for p in packages) == observed["AnalyzedBy"]
     encoded = json.dumps(sorted(p["Name"] for p in packages), separators=(",", ":"))
@@ -134,24 +138,18 @@ def _cohort_arm_inventory_shape():
     return report, identity, scanner
 
 
-def test_actual_new_arm_inventory_shape_keeps_its_own_strict_minimum(scan):
-    report, identity, scanner = _cohort_arm_inventory_shape()
-    assert scan.check_report(report, identity, scanner, "arm64") == []
-    report["Results"][0]["Packages"].pop()
-    assert "complete OS inventory requires at least 210 packages" in scan.check_report(
-        report, identity, scanner, "arm64"
-    )
-    assert scan.MIN_OS_PACKAGES_BY_ARCH["amd64"] == 212
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
+def test_actual_new_inventory_shape_is_accepted_without_padding(scan, arch):
+    report, identity, scanner = _cohort_inventory_shape(arch)
+    assert scan.check_report(report, identity, scanner, arch) == []
 
 
 @pytest.mark.parametrize("arch", ["amd64", "arm64"])
 def test_each_architecture_rejects_its_own_truncated_complete_inventory(scan, arch):
-    report, identity, scanner = (
-        _evidence() if arch == "amd64" else _cohort_arm_inventory_shape()
-    )
+    report, identity, scanner = _cohort_inventory_shape(arch)
     report["Results"][0]["Packages"].pop()
     failures = scan.check_report(report, identity, scanner, arch)
-    minimum = 212 if arch == "amd64" else 210
+    minimum = 211 if arch == "amd64" else 210
     assert f"complete OS inventory requires at least {minimum} packages" in failures
 
 
@@ -173,7 +171,7 @@ def test_complete_recorded_inventory_and_unsuppressed_findings_are_accepted(scan
     assert go_result["Vulnerabilities"][0]["Severity"] == "UNKNOWN"
     # Custom FFmpeg is not RPM-owned; this does NOT prove its source/build pin.
     assert not any(p["Name"].startswith("ffmpeg") for p in packages)
-    assert scan.MIN_OS_PACKAGES == 212
+    assert scan.MIN_OS_PACKAGES == 211
     assert scan.check_report(report, identity, scanner, arch) == []
 
 
@@ -434,7 +432,8 @@ def test_scan_fails_closed_on_incomplete_substituted_or_unsafe_evidence(scan, mu
     elif mutation == "rootfs":
         report["Metadata"]["ImageConfig"]["rootfs"]["diff_ids"] = []
     elif mutation == "inventory":
-        packages.pop()
+        # The historical fixture has 212 rows; truncate below the observed 211.
+        del packages[210:]
     elif mutation == "duplicatepkgs":
         packages[-1] = copy.deepcopy(packages[0])
     elif mutation == "duplicategpg":
