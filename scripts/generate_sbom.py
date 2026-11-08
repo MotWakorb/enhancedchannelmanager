@@ -124,7 +124,7 @@ SUSE_BASE_IMAGE = (
 )
 SUSE_NATIVE_BUILDER_RUN = (
     'case "$(uname -m)" in '
-    "x86_64) repository=https://download.opensuse.org/tumbleweed/repo/oss/; metadata=36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6 ;; "
+    "x86_64) repository=https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/; metadata=36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6 ;; "
     "aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/; metadata=374a893f64518ff85a66f866d88e0aab77d0fbeb78f83eaa5fe140947a0495ce ;; "
     "*) exit 1 ;; esac && rm -f /etc/zypp/repos.d/*.repo && "
     'zypper --non-interactive addrepo --check --gpgcheck --refresh "$repository" oss && '
@@ -137,7 +137,7 @@ SUSE_NATIVE_BUILDER_RUN = (
 )
 SUSE_RUNTIME_RUN = (
     'case "$(uname -m)" in '
-    "x86_64) repository=https://download.opensuse.org/tumbleweed/repo/oss/; metadata=36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6 ;; "
+    "x86_64) repository=https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/; metadata=36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6 ;; "
     "aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/; metadata=374a893f64518ff85a66f866d88e0aab77d0fbeb78f83eaa5fe140947a0495ce ;; "
     "*) exit 1 ;; esac && rm -f /etc/zypp/repos.d/*.repo && "
     'zypper --non-interactive addrepo --check --gpgcheck --refresh "$repository" oss && '

@@ -1,0 +1,51 @@
+{
+  "scope": "Projection of actual 2026-11-08 official-history GETs, pinned repomd signature/primary join, and native provider verification; not full image clearance",
+  "repository": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/",
+  "cohort": "20261105",
+  "repomd_sha256": "36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6",
+  "fingerprint": "AD485664E901B867051AB15F35A2F86E29B700A4",
+  "metadata_objects_verified": 20,
+  "builder_providers_verified": 47,
+  "security_providers_verified": 6,
+  "appdata": {
+    "location": "repodata/2cbdb0208de8c9c981b046eeaf77636048b00b7146e60fcd346f3dc1e659dab23fb02179f4f2431bb65d092a3c08ddc049ddb6e2241f3562bda9ad9156798b88-appdata.xml.gz",
+    "bytes": 9351050,
+    "sha256": "37b199756ac434e14faa8784f6a737e3425d87992284dd89982918d51bf49aa4",
+    "sha512": "2cbdb0208de8c9c981b046eeaf77636048b00b7146e60fcd346f3dc1e659dab23fb02179f4f2431bb65d092a3c08ddc049ddb6e2241f3562bda9ad9156798b88"
+  },
+  "providers": [
+    {
+      "name": "gcc",
+      "arch": "x86_64",
+      "epoch": "0",
+      "version": "16-1.1",
+      "sourcerpm": "gcc-16-1.1.src.rpm",
+      "vendor": "openSUSE",
+      "location": "x86_64/gcc-16-1.1.x86_64.rpm",
+      "metadata_checksum_type": "sha512",
+      "metadata_checksum": "f8d62f0567bacf6adc2aaced55cc872a4bcec01a38902faea807e28492c604e107140b1b25379c986f5c388cc9e94dd1e3c1dd9df9435e31e509bd187598b9dd"
+    },
+    {
+      "name": "gawk",
+      "arch": "x86_64",
+      "epoch": "0",
+      "version": "5.4.1-1.2",
+      "sourcerpm": "gawk-5.4.1-1.2.src.rpm",
+      "vendor": "openSUSE",
+      "location": "x86_64/gawk-5.4.1-1.2.x86_64.rpm",
+      "metadata_checksum_type": "sha512",
+      "metadata_checksum": "da92444a99af5a8200bdc3c34d602e4ccaa7556733587f526efde99919d110aac8b4b30f4963caaed0f733b8f78d5762e8e082d1ff1cf880e912535b04ddc717"
+    },
+    {
+      "name": "ca-certificates-mozilla",
+      "arch": "noarch",
+      "epoch": "0",
+      "version": "2.92-2.1",
+      "sourcerpm": "ca-certificates-mozilla-2.92-2.1.src.rpm",
+      "vendor": "openSUSE",
+      "location": "noarch/ca-certificates-mozilla-2.92-2.1.noarch.rpm",
+      "metadata_checksum_type": "sha512",
+      "metadata_checksum": "d385f1f7752ba0582b8b3efd08df47824ad998d76b8941d390dac75a7fccb457ce830c39e8f4e549332505348f316c2d18da2b3f1bd480949d9361d820299b07"
+    }
+  ]
+}

@@ -1177,7 +1177,7 @@ def test_current_native_recovery_contract_validates(sbom):
     ("--out /tmp/rpm-source-output", "--out /tmp/rpm-source-output --cache-dir /tmp/old-carrier"),
     ("--inventory /tmp/runtime-inventory.tsv", "--inventory /tmp/stale-inventory.tsv"),
     ("COPY docker/native-cache/ /tmp/native-cache/\n", ""),
-    ("https://download.opensuse.org/tumbleweed/repo/oss/", "https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/"),
+    ("https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/", "https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/"),
     ("| sha256sum --check --strict", "| cat"),
     ("--no-refresh ", ""),
 ])

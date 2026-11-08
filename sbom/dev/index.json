@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "version": "0.18.2-0065",
-  "created": "2026-11-08T01:03:05Z",
+  "created": "2026-11-08T01:53:48Z",
   "kind": "source-manifest",
   "channel": "dev",
   "permanent": false,
@@ -25,13 +25,13 @@
     ]
   },
   "sources": {
-    "Dockerfile": "sha256:b0ec6ff27c505f63f9ba50b769ee5dd70770088a7c51abfe471ce24584a5e3ac",
+    "Dockerfile": "sha256:b2f9e5079591b633c269a71ed4237bf5d15b324dced98b44993bae18f62fd8ee",
     "backend/requirements.txt": "sha256:c4ff84ae271e902235e2d4024066b0d3e679fce8ccc403ce3b6e9e544518bf0e",
     "docker/native/README.md": "sha256:cea8488880bec7479c8ec448604809b40e534c39b8e16c34c46838cbe5446b07",
     "docker/native/base-recovery.json": "sha256:d9e516d050b43f102ebb87183472d253710ca1e087e1f2117aea7e9d0de766c9",
     "docker/native/ffmpeg-release.asc": "sha256:397b3becedcd5a98769967ff1ff8501ddc89f8368b8f766e4701377d7dbaabe5",
     "docker/native/ffmpeg.args": "sha256:8815506c9fd2a54139123c49a3b4c06facfb06008b125662aff3b7dc323ab8d3",
-    "docker/native/manifest.json": "sha256:45a1485802212aaebc6721bb2a1544aefcc79179814bc0c3d15d1bd9b1027b71",
+    "docker/native/manifest.json": "sha256:947de1caccc41af19eff4ed898e7df9df992bb7c0907b8ac30e6f735a34f425d",
     "docker/native/packman.asc": "sha256:9ad00d51db9644a12945ce780f5e013eaa1d72d5d212b040d296925b9aec50c7",
     "docker/native/patches/CVE-2026-107696.patch": "sha256:7518b281a719aa41c5cdd1f259eaf38f6b1e3fb28c09ec254c441abbaad69095",
     "docker/trust/README.md": "sha256:bac4f29677b1a02e25bd767881a4e9047ce0ff1e013aa23600c0766b594d42ad",
@@ -40,7 +40,7 @@
     "mcp-server/Dockerfile": "sha256:c5362f558ffbb15522bda00cc3a088b6e3e82429123c06720549c8a93e56b125",
     "mcp-server/requirements.txt": "sha256:de79f8bc7af6839295f4dfcb225e063fec46e841035468d17eaf84f48324833f",
     "sbom/native-dependencies.json": "sha256:530f7498262e5c38541513e01ca12b4f6964b61b80273f75ec8956ff5e17a82a",
-    "scripts/build_native_runtime.py": "sha256:97e12cbc87e216efc17e4a60ec53dda6c67d7780a65216beb6ba4e7c08f1b526",
+    "scripts/build_native_runtime.py": "sha256:eb49c39de097131076d543c9801c063c2f4b948843909cea4539ccb51a1ce8ac",
     "scripts/collect_native_sources.py": "sha256:882d2ae3980e7a77ea4c902300843a97fd85828de950368e18415751322902ac"
   },
   "documents": [
@@ -84,7 +84,7 @@
           ]
         ]
       },
-      "sha256": "57dae05712588a7347d85f8ba1fdf4a9ed75fba63cefe063bcdc895394660d69"
+      "sha256": "8029b7fdf5a8f8229bcfb20ce615cedbc2a065f1f3d0de445f92c3445d2c374f"
     },
     {
       "path": "mcp.spdx.json",
@@ -95,7 +95,7 @@
         "packages": [],
         "relationships": []
       },
-      "sha256": "62659d5d0f9e37a4ac3bc010578bf99430edeb20868d2e14fc39c111e7cf6c2f"
+      "sha256": "e8b77132a410f1144e5bada7e3c99a24fc7fa1da4cb2e55c0cbc5faa318a94b5"
     }
   ]
 }

@@ -233,8 +233,12 @@ def load_recipe(path: Path, arch: str) -> dict:
                 and item["official_repository"] == repository,
                 "repository/architecture mismatch",
             )
+            builder_repository = (
+                "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/"
+                if target == "amd64" else repository
+            )
             _require(
-                item.get("builder_repository") == repository
+                item.get("builder_repository") == builder_repository
                 and item.get("cohort") == "20261105"
                 and item.get("repository_metadata_sha256") == {
                     "amd64": "36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6",
@@ -285,8 +289,8 @@ def load_recipe(path: Path, arch: str) -> dict:
                 )
             for group, prefix in [
                 ("codec_rpms", PACKMAN + rpm_arch + "/"),
-                ("builder_rpms", repository),
-                ("security_runtime_rpms", repository),
+                ("builder_rpms", builder_repository),
+                ("security_runtime_rpms", builder_repository),
             ]:
                 for package in item[group]:
                     _require(

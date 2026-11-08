@@ -48,7 +48,10 @@ def test_fixed_runtime_descriptors_bind_each_native_architecture(
     selected = builder.load_recipe(ASSETS / "manifest.json", arch)["architectures"][
         arch
     ]
-    assert selected["builder_repository"] == selected["official_repository"]
+    assert selected["builder_repository"] == (
+        "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/"
+        if arch == "amd64" else selected["official_repository"]
+    )
     assert selected["cohort"] == "20261105"
     rows = selected["security_runtime_rpms"]
     assert len(rows) == 6 and {p["name"] for p in rows} == set(VERSIONS)
@@ -69,7 +72,7 @@ def test_fixed_runtime_descriptors_bind_each_native_architecture(
     assert selected["repository_metadata_sha256"] == recorded["repomd_sha256"]
     assert ca["metadata_checksum"] == recorded["package"]["checksum"]
     assert (
-        ca["url"] == selected["official_repository"] + recorded["package"]["location"]
+        ca["url"] == selected["builder_repository"] + recorded["package"]["location"]
     )
 
 

@@ -56,7 +56,7 @@
     "amd64": {
       "rpm_arch": "x86_64",
       "official_repository": "https://download.opensuse.org/tumbleweed/repo/oss/",
-      "builder_repository": "https://download.opensuse.org/tumbleweed/repo/oss/",
+      "builder_repository": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/",
       "official_source_repository": "https://download.opensuse.org/tumbleweed/repo/src-oss/",
       "builder_status": "ready",
       "builder_rpms": [
@@ -66,7 +66,7 @@
           "epoch": "0",
           "version": "4.3.0-1.1",
           "sourcerpm": "SVT-AV1-4.3.0-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/SVT-AV1-devel-4.3.0-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/SVT-AV1-devel-4.3.0-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "ec4364c3013fa2adbf529dd7e0edf5afd3301cc30b28333a4de75b452647eac463fb6b15563b1e13c4d5ad442727b4bf6f4a129f5bf870be52de1d40244f2528"
         },
@@ -76,7 +76,7 @@
           "epoch": "0",
           "version": "2.47-2.1",
           "sourcerpm": "binutils-2.47-2.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/binutils-2.47-2.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/binutils-2.47-2.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "3e7a88c0f10ec538916b3b225849cdac6ab50a89b92786c49e2efb95e9709bd4370bf95b77ede951a05a008604d9df04586a56289b74f39f5e04336ac4d597e6"
         },
@@ -86,7 +86,7 @@
           "epoch": "0",
           "version": "1.2.0-2.7",
           "sourcerpm": "codec2-1.2.0-2.7.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/codec2-devel-1.2.0-2.7.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/codec2-devel-1.2.0-2.7.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "a8532c62a001abb02c8f3da3b46283af9b3be1e71d768b5ae58832b342662ff34d75665bc0de7431381ff13d704db9e94984e4ddc3ca1fb063b639db4b4e1e5b"
         },
@@ -96,7 +96,7 @@
           "epoch": "0",
           "version": "1.5.4-1.2",
           "sourcerpm": "dav1d-1.5.4-1.2.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/dav1d-devel-1.5.4-1.2.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/dav1d-devel-1.5.4-1.2.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "a5b0dadbd117c920b719549906284e0fc5e778b1a4df9bb9c527e6f6cda055b1b0085ac9c12d5d4b087380d6d03d2f8fffc1a70102464d441aadf53b866584e7"
         },
@@ -106,7 +106,7 @@
           "epoch": "0",
           "version": "2.18.3-1.1",
           "sourcerpm": "fontconfig-2.18.3-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/fontconfig-devel-2.18.3-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/fontconfig-devel-2.18.3-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "5626dce83cff64ca237988a238e5f9ba0a51cd9d5f2c6c022b00588cd7cda7ce673cc0c852df90badcd9bb2d35802aa5614176475ba38c6ec449cb46cc5cfa3e"
         },
@@ -116,7 +116,7 @@
           "epoch": "0",
           "version": "2.15.0-2.1",
           "sourcerpm": "freetype2-2.15.0-2.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/freetype2-devel-2.15.0-2.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/freetype2-devel-2.15.0-2.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "f10b2eadc4b8451be2fc8863310481d888052ebe862c7beb0139c2246db02edcf27eaccc488016f38e3ddc45d725e3d74e9dd4a2628ff758ebdd8c46429ab033"
         },
@@ -126,7 +126,7 @@
           "epoch": "0",
           "version": "1.0.17-1.1",
           "sourcerpm": "fribidi-1.0.17-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/fribidi-devel-1.0.17-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/fribidi-devel-1.0.17-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "202cf8522411a800fcb1f4aec7e6adf9359c434b5727666ec94ce66825dad7c3c996e562401f174cf1dec05db0d2fcbe5ca2bf5e523203ab9f45a704c95b5381"
         },
@@ -136,7 +136,7 @@
           "epoch": "0",
           "version": "5.4.1-1.2",
           "sourcerpm": "gawk-5.4.1-1.2.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/gawk-5.4.1-1.2.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/gawk-5.4.1-1.2.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "da92444a99af5a8200bdc3c34d602e4ccaa7556733587f526efde99919d110aac8b4b30f4963caaed0f733b8f78d5762e8e082d1ff1cf880e912535b04ddc717"
         },
@@ -146,7 +146,7 @@
           "epoch": "0",
           "version": "16-1.1",
           "sourcerpm": "gcc-16-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/gcc-16-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/gcc-16-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "f8d62f0567bacf6adc2aaced55cc872a4bcec01a38902faea807e28492c604e107140b1b25379c986f5c388cc9e94dd1e3c1dd9df9435e31e509bd187598b9dd"
         },
@@ -156,7 +156,7 @@
           "epoch": "0",
           "version": "16-1.1",
           "sourcerpm": "gcc-16-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/gcc-c++-16-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/gcc-c++-16-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "8ba5fccd577b49b89072c1585790f874e9b4874b88e6c2ec6357dc757066930848f8f4dfdacda92248da4f358a6090493069915deb0d8d3cc2b31acdb87e85b3"
         },
@@ -166,7 +166,7 @@
           "epoch": "0",
           "version": "1.26.10-1.1",
           "sourcerpm": "go1.26-1.26.10-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/go1.26-1.26.10-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/go1.26-1.26.10-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "41de310ad552383bb2d02ec08d2dcd92c5a23314d5d8402cca229dfc7409ae0b4958c2e0da973d13bb26268dc43969695b7140f10c296431fc81a1dfb4dd7c14"
         },
@@ -176,7 +176,7 @@
           "epoch": "0",
           "version": "2.5.24-1.1",
           "sourcerpm": "gpg2-2.5.24-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/gpg2-2.5.24-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/gpg2-2.5.24-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "d65a5871468635c0c3ea0ef2464f780bcb47d2185279f03cadbc199ff6574f90bddacc14921b5cce2d188adc4240fed4351ca3c44d3a2f05be40f143f2a564b3"
         },
@@ -186,7 +186,7 @@
           "epoch": "0",
           "version": "1.15-1.1",
           "sourcerpm": "gzip-1.15-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/gzip-1.15-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/gzip-1.15-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "2a6b3da27aded08aab4220c971ecc2b59c177bba4798350f0086e5a4bd65463b888640f3ecf2394d40e048ce56c420d24cb2409220fcfc683135d83fdcc0f285"
         },
@@ -196,7 +196,7 @@
           "epoch": "0",
           "version": "15.0.0-1.1",
           "sourcerpm": "harfbuzz-15.0.0-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/harfbuzz-devel-15.0.0-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/harfbuzz-devel-15.0.0-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "a2961fb22d94a8dd08f7a397153caa0c1927d65466589266a16bc1bd7ef7e6389d107dc75bf0e6f8411624b4138f083c6c6d29ecdf9ab07dc2c2d0d41e2c52d7"
         },
@@ -206,7 +206,7 @@
           "epoch": "0",
           "version": "3.15.2-1.1",
           "sourcerpm": "libaom-3.15.2-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libaom-devel-3.15.2-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libaom-devel-3.15.2-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "a97df99becfea60f8c7b55d9206dbd78cacca29bd25253de6687f50f5a8896ce0a077288cc770a66021ba7c0dd76c70257f082db718a11be751fe43580fec441"
         },
@@ -216,7 +216,7 @@
           "epoch": "0",
           "version": "0.17.5-1.3",
           "sourcerpm": "libass-0.17.5-1.3.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libass-devel-0.17.5-1.3.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libass-devel-0.17.5-1.3.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "84819f71e53216505b5631db6e6bc150cc0e5baa57a42828851db8156680b682492d38d48983ea92aeb184a4ec7998d78c602f3e70c57d6659c2b7a335756da2"
         },
@@ -226,7 +226,7 @@
           "epoch": "0",
           "version": "1.0.8-7.1",
           "sourcerpm": "bzip2-1.0.8-7.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libbz2-devel-1.0.8-7.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libbz2-devel-1.0.8-7.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "87cc4bc6abe54d49a4d8165c3dab21b7ffc33b65d9d7bf86c05f9e77742e2c36505432eb9daa3e8bd2348cedec5e2603b87646eb8d930887b1792669c558fbc4"
         },
@@ -236,7 +236,7 @@
           "epoch": "0",
           "version": "0.6.5-1.4",
           "sourcerpm": "libgme-0.6.5-1.4.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libgme-devel-0.6.5-1.4.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libgme-devel-0.6.5-1.4.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "9b338682f35279e55e0301fc2f8b66c60cd73ec19ca158f0733c8a18185e1e95813173675749399bf6999ba15cfdd235dfd0aa38e5a95e2d8129ce340ea2b9fb"
         },
@@ -246,7 +246,7 @@
           "epoch": "0",
           "version": "1.0.24-1.4",
           "sourcerpm": "libgsm-1.0.24-1.4.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libgsm-devel-1.0.24-1.4.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libgsm-devel-1.0.24-1.4.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "c06ba9288f71f20397acb58ba30ea070bf4f171b1cd3a87fec0c0390750633dd9774b02663126fa9af4b26e4040fd899341b74efcb9639d7b7b574d7d9494245"
         },
@@ -256,7 +256,7 @@
           "epoch": "0",
           "version": "0.12.0-1.2",
           "sourcerpm": "libjxl-0.12.0-1.2.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libjxl-devel-0.12.0-1.2.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libjxl-devel-0.12.0-1.2.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "09e3e153db454a72fd89a922e127035a3148217177fe3da591d14509d112c0ea03b0cd46e3e71e5580564b699a06b1c0fbe52f3c3907749f040b3afcc69b89bf"
         },
@@ -266,7 +266,7 @@
           "epoch": "0",
           "version": "4.0-1.1",
           "sourcerpm": "lame-4.0-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libmp3lame-devel-4.0-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libmp3lame-devel-4.0-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "107b511aad595300c40235c7b3ca93b7f72e57a48b703d22f062dbfce78516a7aada707de14b3b925fae0511416b7363ebfbadd145ee511c98066ed3a4a2283c"
         },
@@ -276,7 +276,7 @@
           "epoch": "0",
           "version": "0.8.10-1.1",
           "sourcerpm": "libopenmpt-0.8.10-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libopenmpt-devel-0.8.10-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libopenmpt-devel-0.8.10-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "5268099028bb8f3b7e02cd9676e88c65b75b53a72d2355851aa1342e26504ac043d9c63b70da4a1a3c65778ad6a8e07b9e3e106e0ce50c8b86bd8b5ff42c3784"
         },
@@ -286,7 +286,7 @@
           "epoch": "0",
           "version": "3.5.3-9.1",
           "sourcerpm": "openssl-3-3.5.3-9.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libopenssl-3-devel-3.5.3-9.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libopenssl-3-devel-3.5.3-9.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "c5282f8ab45b0aa050abf3fe43a85a30c7bee8d0f4b6975f83721ccd6243d1d67534e0f507062867bac41bd74dc6e66f695da38cd88b1357a316334585804a05"
         },
@@ -296,7 +296,7 @@
           "epoch": "0",
           "version": "1.6.1-1.5",
           "sourcerpm": "opus-1.6.1-1.5.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libopus-devel-1.6.1-1.5.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libopus-devel-1.6.1-1.5.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "6720423ddb5943f245f77481f9f75ef30db68d8070ef3e6a4f5f784ae6ced98835c8a4db42095600bc0774e36be6ed2d23a8f8190ac3c5e22f5478dfd3638a1a"
         },
@@ -306,7 +306,7 @@
           "epoch": "0",
           "version": "2.63.4-1.1",
           "sourcerpm": "librsvg-2.63.4-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/librsvg-devel-2.63.4-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/librsvg-devel-2.63.4-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "305de569523be7e9648b5525f9aacce69fa05c2b123d4cee61c093dc807ad6cf66d69e525bf45f6df4a6d48bbb0216a998d9fc47fec315c6c8199ea9d02e6015"
         },
@@ -316,7 +316,7 @@
           "epoch": "0",
           "version": "3.1.1-2.5",
           "sourcerpm": "libshine-3.1.1-2.5.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libshine-devel-3.1.1-2.5.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libshine-devel-3.1.1-2.5.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "59d69f2f1fd444a02f8f02e7ed7893ac5a0374b869daf087dd2970b9d83380522e7fc9ae2d9650ccf7e59855f8331345f4f4af022f0387a001820e0a1c334873"
         },
@@ -326,7 +326,7 @@
           "epoch": "0",
           "version": "1.2.0-3.1",
           "sourcerpm": "libtheora-1.2.0-3.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libtheora-devel-1.2.0-3.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libtheora-devel-1.2.0-3.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "cf35c604633f140985edd06ed20ad372a8adcd481f7bab1652d3d3d65853f9691aa617632fb47ffc0139ccb0330a4a6642326d05541d4f0611560e4bba76dda0"
         },
@@ -336,7 +336,7 @@
           "epoch": "0",
           "version": "0.4.0-1.25",
           "sourcerpm": "twolame-0.4.0-1.25.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libtwolame-devel-0.4.0-1.25.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libtwolame-devel-0.4.0-1.25.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "c64f1e12d630f695588c12d9bb58aaabe593ec98f3e45b64d166ab2fc323f07b4e6a2dd6f05eb548b093830c1a570cf7e39f952fdd35daa66fb6ed144a81124d"
         },
@@ -346,7 +346,7 @@
           "epoch": "0",
           "version": "1.3.7-5.7",
           "sourcerpm": "libvorbis-1.3.7-5.7.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libvorbis-devel-1.3.7-5.7.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libvorbis-devel-1.3.7-5.7.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "b523f13e4a30ea95e593d2beb591ef30895e6679dd5b173071915a86f549da1e1e5579235ecd2479ad08a5a57547dcded2a6df6f9ded4ae17443d23a835dc44a"
         },
@@ -356,7 +356,7 @@
           "epoch": "0",
           "version": "1.17.0-1.1",
           "sourcerpm": "libvpx-1.17.0-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libvpx-devel-1.17.0-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libvpx-devel-1.17.0-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "d68dd43219755c00cbacc7f3d8855e066193643375fafa0740436401fc659375feb4d837c60d4ef90ce0d6549aede90dfdbc4951dfcb1bba5fbf060cc0909769"
         },
@@ -366,7 +366,7 @@
           "epoch": "0",
           "version": "1.6.0-2.3",
           "sourcerpm": "libwebp-1.6.0-2.3.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libwebp-devel-1.6.0-2.3.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libwebp-devel-1.6.0-2.3.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "ff324b74109ec1b165d045009f9fb446a4ea723c7cadfe3af6eaed1cc4535cb785cbbcaa3bf5d68f3f609d0c1ee3777c32b2a078923c6fd2490384ad8e1364d1"
         },
@@ -376,7 +376,7 @@
           "epoch": "0",
           "version": "2.15.4-1.1",
           "sourcerpm": "libxml2-2.15.4-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libxml2-devel-2.15.4-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libxml2-devel-2.15.4-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "e7f923de168b75088effb13c26e9bad1277d38c48d5feb2c3763502f4d465acee73860f3c8fcbbcd0c93fb3409798e754b6d6bad400a9dd788cfcd476ff5f28e"
         },
@@ -386,7 +386,7 @@
           "epoch": "0",
           "version": "4.4.1-3.7",
           "sourcerpm": "make-4.4.1-3.7.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/make-4.4.1-3.7.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/make-4.4.1-3.7.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "032942227f33510ecad96438e0b73b39d9cda1c2595ffa0ebc6aa11ebb809c821a76ace255404bfb40d81a06101faf884783f4a971acfa8ff8267a0da5608b17"
         },
@@ -396,7 +396,7 @@
           "epoch": "0",
           "version": "3.02-1.2",
           "sourcerpm": "nasm-3.02-1.2.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/nasm-3.02-1.2.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/nasm-3.02-1.2.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "64248c968c79eadaf0170574286ee4535dc930c5bd8943188c28c7a869d55d78d9f916f8e1bb0c9e5e105a2eee83ba7cce58ce41283fb3fa918624481348e615"
         },
@@ -406,7 +406,7 @@
           "epoch": "0",
           "version": "2.5.4-2.6",
           "sourcerpm": "openjpeg2-2.5.4-2.6.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/openjpeg2-devel-2.5.4-2.6.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/openjpeg2-devel-2.5.4-2.6.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "219ffa67ee027f0d757f90abc46d2b07d6939abfbbcfd65526283071f179c4e0e68724284d0015eb3e05939f12d99aec5cc60c83ab4b22c681ab50b179d4356c"
         },
@@ -416,7 +416,7 @@
           "epoch": "0",
           "version": "2.8.1-2.1",
           "sourcerpm": "patch-2.8.1-2.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/patch-2.8.1-2.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/patch-2.8.1-2.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "378d84e7efe917c9243699c7b60a416894e8edfcf3296a3c21f937461f00ac8a0b5f567ef8e22a03c4351ef7f37f8db51bee7ad4eb3d8f4846bbb2ec9a746a1d"
         },
@@ -426,7 +426,7 @@
           "epoch": "0",
           "version": "2.5.1-1.5",
           "sourcerpm": "pkgconf-2.5.1-1.5.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/pkgconf-pkg-config-2.5.1-1.5.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/pkgconf-pkg-config-2.5.1-1.5.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "c33164cc7364437e499d24e5f81ad46e20095094c62b8fd7dcd197617dfa37dfe21588e4c7207bf20d4f2e45b1cca9a1d2235f153a4fd36fdd202df2925a431f"
         },
@@ -436,7 +436,7 @@
           "epoch": "0",
           "version": "3.12.15-2.1",
           "sourcerpm": "python312-core-3.12.15-2.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/python312-base-3.12.15-2.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/python312-base-3.12.15-2.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "cf45faf0172c7576462de488de299dd64e10d9cda2e16b6926a872e9e73a904a4f3e00490cfc1741896bd2b01dec4b368ac960820a7914c32ff59adf36e6fab2"
         },
@@ -446,7 +446,7 @@
           "epoch": "0",
           "version": "0.8.1-3.1",
           "sourcerpm": "rav1e-0.8.1-3.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/rav1e-devel-0.8.1-3.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/rav1e-devel-0.8.1-3.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "659eb6f68a42f14be52981cc8e09740aa9213c5a16996ecb5852a0897c3cc9ae74d86ad544145c93fe9e7d6d3f51421b7dce4135076824157b3b10dd416e81cc"
         },
@@ -456,7 +456,7 @@
           "epoch": "0",
           "version": "1.3.0-1.1",
           "sourcerpm": "snappy-1.3.0-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/snappy-devel-1.3.0-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/snappy-devel-1.3.0-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "a3a3425b3f29208e6fa64e7942c9e25a3b7834878eff44588bd70e42b5c33ae3e63604e6024b53e0f7a939fef966f876e60e5c09fbcca30203aae30e5d7defbf"
         },
@@ -466,7 +466,7 @@
           "epoch": "0",
           "version": "1.2.1-3.1",
           "sourcerpm": "speex-1.2.1-3.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/speex-devel-1.2.1-3.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/speex-devel-1.2.1-3.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "107f0c74bcba00734b3c17a747642389cd4bd743bfc144b9616aa3d466405881490b532d1899346d3141a67e18ee7cf00bb8c864383a23e65c7573d92b704d55"
         },
@@ -476,7 +476,7 @@
           "epoch": "0",
           "version": "1.35-10.1",
           "sourcerpm": "tar-1.35-10.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/tar-1.35-10.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/tar-1.35-10.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "05fcb67e71663e22b861cfd053cf0baa4cec0ff5517b681d6134798589873ee918b658bb02317b96ed3e363ec857ffc6f69f4d35ad62eb83348085e23a3ea778"
         },
@@ -486,7 +486,7 @@
           "epoch": "0",
           "version": "1.3.7-4.5",
           "sourcerpm": "xvidcore-1.3.7-4.5.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/xvidcore-devel-1.3.7-4.5.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/xvidcore-devel-1.3.7-4.5.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "09cf9826868f90e9a41f7d74517f37c5593085c54931df524fb1a5622f4525d9dede1d7e3bbfc8b46a8c8fde43c6d648090040897669d0f72cefeb1267a2275e"
         },
@@ -496,7 +496,7 @@
           "epoch": "0",
           "version": "5.8.4-1.1",
           "sourcerpm": "xz-5.8.4-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/xz-5.8.4-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/xz-5.8.4-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "8f6b8be519e987ece968e0ca778d2e147fe52e895693489d6d7f84d925675611f0767fbd36b9738145fdfc0936509df865a9faf0d045587f7244e3f25b70a611"
         },
@@ -506,7 +506,7 @@
           "epoch": "0",
           "version": "5.8.4-1.1",
           "sourcerpm": "xz-5.8.4-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/xz-devel-5.8.4-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/xz-devel-5.8.4-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "1a24d501bbe0bf881bd44eb9c8298f2d9f0436756a0fcdfcc91d43ecbbbafaa5399607738e1a3470b0bd600eab23f95cc083c72773046b939129879a0c023147"
         },
@@ -516,7 +516,7 @@
           "epoch": "0",
           "version": "3.0.6+20260720.g1ad1895-1.1",
           "sourcerpm": "zimg-3.0.6+20260720.g1ad1895-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/zimg-devel-3.0.6+20260720.g1ad1895-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/zimg-devel-3.0.6+20260720.g1ad1895-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "2827804f4f0d7044b72b551fba4423a64d4e15fe5f0cb8d25b46760fe59587c3b2fb6adee43ac985758a56f0baa2ef527a3efa2fdc1dbbbc4a2d017ee1788bc2"
         },
@@ -526,7 +526,7 @@
           "epoch": "0",
           "version": "1.3.1-3.3",
           "sourcerpm": "zlib-1.3.1-3.3.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/zlib-devel-1.3.1-3.3.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/zlib-devel-1.3.1-3.3.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "744542e3390b44fe381189fc75b531177653ce49463f09b97ad56f9b5210c865314e23001860627741b973785177ce31399ed8e59fb63d98a9f60c392b359164"
         }
@@ -599,7 +599,7 @@
           "epoch": "0",
           "version": "2.92-2.1",
           "sourcerpm": "ca-certificates-mozilla-2.92-2.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/noarch/ca-certificates-mozilla-2.92-2.1.noarch.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/noarch/ca-certificates-mozilla-2.92-2.1.noarch.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "d385f1f7752ba0582b8b3efd08df47824ad998d76b8941d390dac75a7fccb457ce830c39e8f4e549332505348f316c2d18da2b3f1bd480949d9361d820299b07"
         },
@@ -609,7 +609,7 @@
           "epoch": "0",
           "version": "1.2.1-1.1",
           "sourcerpm": "brotli-1.2.1-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libbrotlicommon1-1.2.1-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libbrotlicommon1-1.2.1-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "6de5360a637d8f0606c82d170af1bbaf91ff42846095b6aea0b4dc3ce59e95d7a38ae0626eded7681331a1b6ed7583509f0eb24d23cb30603a1116b84afde698"
         },
@@ -619,7 +619,7 @@
           "epoch": "0",
           "version": "1.2.1-1.1",
           "sourcerpm": "brotli-1.2.1-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libbrotlidec1-1.2.1-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libbrotlidec1-1.2.1-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "1bb8ecbb848daa2f7d82bc6670b78841b256a1265ba6013a6d187a40da9fa0d3fdf8bdbcb3552a7cfa1a7a4f3a5eec68a9a94feb9a9e503c89557f35f53860ec"
         },
@@ -629,7 +629,7 @@
           "epoch": "0",
           "version": "1.2.1-1.1",
           "sourcerpm": "brotli-1.2.1-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libbrotlienc1-1.2.1-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libbrotlienc1-1.2.1-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "d17f8522c41e815b78eef8f0e824bbd20f7f7a23c5e95e7b72961d59ab83f53b58275abf611ce4eff9ac5a6d876d347ec3b92e4bc542b3b881ced4c9a13af255"
         },
@@ -639,7 +639,7 @@
           "epoch": "0",
           "version": "2.63.4-1.1",
           "sourcerpm": "librsvg-2.63.4-1.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/librsvg-2-2-2.63.4-1.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/librsvg-2-2-2.63.4-1.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "4b2398a78647c489d640fb2378e1ff4ccfa8163d54a14e15b015a8dbb6ac6f65e5638db4c5a78353742589a06ee62812929b14e34ad6b22b151180e37f03b138"
         },
@@ -649,7 +649,7 @@
           "epoch": "0",
           "version": "1.2.1-3.1",
           "sourcerpm": "speex-1.2.1-3.1.src.rpm",
-          "url": "https://download.opensuse.org/tumbleweed/repo/oss/x86_64/libspeex1-1.2.1-3.1.x86_64.rpm",
+          "url": "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/x86_64/libspeex1-1.2.1-3.1.x86_64.rpm",
           "metadata_checksum_type": "sha512",
           "metadata_checksum": "79fa96816228923026f04dd4a1f99614a19bbdbd1b5b744be917230e9793b184a9b1300879df1eb1db991d7e5a671a9cb43e43d56595e62557561d6d37db2d9d"
         }

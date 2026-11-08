@@ -75,7 +75,7 @@ def test_real_two_arch_manifest_has_exact_public_inputs(builder, arch):
 def test_amd_builder_selects_the_recorded_complete_pin_cohort(builder):
     recipe = builder.load_recipe(ASSETS / "manifest.json", "amd64")
     assert recipe["architectures"]["amd64"]["builder_repository"] == (
-        "https://download.opensuse.org/tumbleweed/repo/oss/"
+        "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/"
     )
 
 
@@ -95,6 +95,7 @@ def test_retained_packman_cache_is_exact_complete_original_input_set():
 
 
 @pytest.mark.parametrize("repository", [
+    "https://download.opensuse.org/tumbleweed/repo/oss/",
     "https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/",
     "https://download.opensuse.org/history/20261023/tumbleweed/repo/oss/",
     "http://download.opensuse.org/history/20261022/tumbleweed/repo/oss/",
