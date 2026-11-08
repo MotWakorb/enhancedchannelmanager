@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "alpine_release": "3.24",
+  "prefix": "/usr/local",
+  "libraries": [
+    {
+      "name": "codec2",
+      "version": "1.2.0",
+      "license": "LGPL-2.1-only",
+      "soname": "libcodec2.so.1.2",
+      "archive": {
+        "filename": "codec2-1.2.0.tar.gz",
+        "url": "https://codeload.github.com/drowe67/codec2/tar.gz/refs/tags/1.2.0",
+        "sha256": "cbccae52b2c2ecc5d2757e407da567eb681241ff8dadce39d779a7219dbcf449",
+        "size": 7688549
+      },
+      "configure": ["-DCMAKE_BUILD_TYPE=RelWithDebInfo", "-DBUILD_SHARED_LIBS=ON", "-DUNITTEST=FALSE", "-DLPCNET=OFF"],
+      "patches": [
+        {
+          "file": "patches/codec2-1.2.0-install-binaries.patch",
+          "sha256": "8280d1777a3313c8775019fa0e00c21c37a8e5654e09e1a682509374b35c5766",
+          "witnesses": [
+            {
+              "path": "src/CMakeLists.txt",
+              "before_sha256": "874d1678fd7640ef42cd81a94603889159e749621abb1aa3f2188becbfd7a887",
+              "after_sha256": "7c8df0f43105b0bca6f0f119057a12f7a5f0f748a7e37a1b18878a0eba8f5e86"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "twolame",
+      "version": "0.4.0",
+      "license": "LGPL-2.1-only",
+      "soname": "libtwolame.so.0",
+      "archive": {
+        "filename": "twolame-0.4.0.tar.gz",
+        "url": "https://downloads.sourceforge.net/project/twolame/twolame/0.4.0/twolame-0.4.0.tar.gz",
+        "sha256": "cc35424f6019a88c6f52570b63e1baf50f62963a3eac52a03a800bb070d7c87d",
+        "size": 890908
+      },
+      "configure": ["--enable-shared", "--disable-static", "--disable-sndfile"],
+      "patches": []
+    },
+    {
+      "name": "shine",
+      "version": "3.1.1",
+      "license": "LGPL-2.0-only",
+      "soname": "libshine.so.3",
+      "archive": {
+        "filename": "shine-3.1.1.tar.gz",
+        "url": "https://github.com/toots/shine/releases/download/3.1.1/shine-3.1.1.tar.gz",
+        "sha256": "58e61e70128cf73f88635db495bfc17f0dde3ce9c9ac070d505a0cd75b93d384",
+        "size": 2144728
+      },
+      "configure": ["--enable-shared", "--disable-static"],
+      "patches": [
+        {
+          "file": "patches/libshine-gcc15-fixes.patch",
+          "sha256": "915554e32c2c6586cb2b1318e959e9d223384e967537ff45e1af712733a79cc1",
+          "witnesses": [
+            {
+              "path": "src/lib/l3mdct.h",
+              "before_sha256": "d85e4df2a765a419a6ceddbca6a830505fb36f32f6c801567b339f1494a9fa20",
+              "after_sha256": "3dee042691b56ecbc804ff25e87c6c8bae1c3d686e0b9e329cf02d5608086470"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

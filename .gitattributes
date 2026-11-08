@@ -1,3 +1,6 @@
 
 # Use bd merge for beads JSONL files
 .beads/issues.jsonl merge=beads
+
+# Authenticated vendor patch has mixed CRLF; preserve its exact source bytes.
+docker/alpine-native/patches/libshine-gcc15-fixes.patch -text -diff

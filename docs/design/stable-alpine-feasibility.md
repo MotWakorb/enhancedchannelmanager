@@ -106,7 +106,22 @@ support period. Exact old APK retention varies by architecture; preserve selecte
 authenticated artifacts/source inputs where rebuilds require them. No new hosted
 artifact service or move to edge is authorized by this observation.
 
-## Next implementation boundary
+## Owned-build decision and first implementation slice
+
+The PO subsequently approved **Own builds** for the six minimum library gaps.
+The [incremental owned-codec interface](../../docker/alpine-native/README.md) now
+builds Codec2, TwoLAME and Shine from pinned upstream archives with the exact
+baseline patches on stable Alpine. Two actual x86 builds passed bounded public
+API checks; **libxml2/librsvg/Speex and complete native-runtime integration are
+not yet implemented**.
+
+The same C vectors against the actual baseline produce identical encoded Codec2,
+TwoLAME MP2 and Shine MP3 bytes, but Codec2 decoded PCM differs at two of 2,560
+samples by one unit. That actual discrepancy remains blocked in
+`enhancedchannelmanager-mgt2t`, not normalized into a passing comparison. It does
+not alter the PO's compatibility requirement.
+
+## Remaining implementation boundary
 
 1. Build the unchanged signed FFmpeg **8.1.3 + one RTSP patch**, with all **49**
    reviewed arguments and all required integrations, using only stable Alpine
@@ -118,11 +133,29 @@ artifact service or move to edge is authorized by this observation.
 4. Execute the [paired parity matrix](stable-alpine-parity.md), full application
    gates, real bootstrap/isolation and complete scans on **both native platforms**.
 
-The unchanged backend selection is being exercised separately in a disposable
-Alpine test-only image. Its first collection attempt failed because the harness
-required `jq`; that dependency was added to the **test image**, not bypassed or
-skipped. The corrected run remains pending. This test image lacks the complete
-media/gosu/source runtime and must never be presented as the production candidate.
+The unchanged canonical backend selection from **`ad79fd06`**, not a later branch
+head, completed in immutable test-only image
+`sha256:1b5014ca0a0ca5dd17a208fc32091e269e008b194ba8315a820bccae83dcd0f5`:
+**16,425 passed, 5 failed, 5 skipped, 2 deselected; coverage 84.18%**. Its persisted
+canonical receipt is **failed**. The earlier collection attempt lacked `jq`;
+the test-image dependency was corrected without bypassing that check.
+
+- Actual application/platform difference: musl turns unknown strftime `%Q` into
+  empty output, failing the retained date-placeholder contract. Track the paired
+  custom-format/flag survey and compatibility fix in `enhancedchannelmanager-63a31`.
+- Harness-sensitive failures: one GDrive allowed-endpoint case requires DNS but
+  the proof disables external networking; three interpreter tests assume
+  `/opt/venv` is absent, unlike this test image. Track test-only environment
+  corrections in `enhancedchannelmanager-tikvb`, not weakened entrypoint/SSRF gates.
+- The five skips identify a live seeded Dispatcharr fixture, the two previously
+  deferred cloud-provider guards, opt-in exact-RPM tooling/source and unavailable
+  native Windows. They are not newly added Alpine skips. No new exclusion was used.
+
+Evidence: `/tmp/opencode/ecm-alpine-backend-proof-20261108/backend-full-02.log`,
+`backend-result-02.json` and `backend-results-02/ecm-gate-nelqbb1p/receipt.json`.
+This test image lacks the complete media/gosu/source runtime and must never be
+presented as the production candidate. Neither the full backend gate nor final
+runtime compatibility is cleared.
 
 The target remains Alpine. Stock-package insufficiency is not a distribution
 reversal or a feature-reduction decision. Until the gaps and complete parity

@@ -29,6 +29,22 @@ cutover requirement: compare equivalent scenarios on the same application source
 retain all existing contracts, and leave every unverified difference blocked.
 Package availability or a green dependency scan alone cannot clear the migration.
 
+### Owned-library maintenance decision
+
+After the authenticated stable-package survey, the PO explicitly selected
+**"Own builds"** for Codec2, TwoLAME, Shine, libxml2, librsvg and Speex. Maintain
+pinned, reviewed Alpine-native source builds/backports where stable packages
+cannot retain the existing media/security contracts. This accepts the additional
+patch, advisory, source and notice maintenance; it does not approve a particular
+unverified build, library downgrade or cutover. Track implementation in
+`enhancedchannelmanager-g3vd3` and the source/scanner follow-ups linked from
+`enhancedchannelmanager-2ixgf`.
+
+Authenticated historical vendor source payloads may establish the exact baseline
+upstream/patch identities. They do not authorize installing foreign RPM binaries
+or enabling a rolling repository in an Alpine build. The first codec build uses
+upstream archives whose hashes independently match those signed source payloads.
+
 ```mermaid
 flowchart LR
     A[Digest-pinned stable Alpine inputs] --> B[Alpine-native Python and media builders]
