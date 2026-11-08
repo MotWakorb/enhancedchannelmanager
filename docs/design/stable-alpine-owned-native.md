@@ -11,7 +11,7 @@ by this implementation. No image publication or deployment is authorized.
 All build stages enforce official stable v3.24 main/community repositories and
 native architecture. The Python builder remains the pinned Python 3.12 Alpine
 base, not Alpine's newer distribution Python. Source/configuration overrides are
-not exposed. Compilation of the six libraries and FFmpeg is networkless after
+not exposed. Compilation of the seven libraries and FFmpeg is networkless after
 hash-verified input preparation.
 
 | Provider | Retained contract and implementation |
@@ -21,6 +21,7 @@ hash-verified input preparation.
 | libxml2 2.13.9 | ABI-preserving `libxml2.so.2`, seven selected security backports with complete pre/post file witnesses and original patches retained |
 | Speex 1.2.1 | Original reproducibility/vendor security patches, plus separately owned checked-capacity follow-up described below |
 | librsvg 2.63.4 | Baseline version and retained Cargo graph: 352 registry crates and nine workspace packages, offline/locked builds, complete crate/file/lock checksum joins |
+| libjxl 0.12.0 | Authenticated baseline SKCMS and original vendor patch; threads/CMS, JPEG transcoding, boxes and original public exports |
 | gosu 1.19 | Existing commit/modules and Go 1.26.10, pinned official native Alpine Go builder, static binary and retained Go/module source |
 | FFmpeg 8.1.3 | Existing signed source, signer, RTSP patch and all 49 configure arguments; composed owned headers/libraries and explicit GNU iconv header/link selection |
 
@@ -157,6 +158,17 @@ and compiler/privilege-drop results. Security build `security-build-06` passed
 the final native-library and forced-realloc-failure sanitizer fixtures, including
 the consumed-boundary correction. The receipt does not invent an ARM result.
 
+The later [native CI receipt](evidence/stable-alpine-native-ci-20261108.json.gz)
+retains verified artifacts from run `42522607374`, PR merge source
+`3c21293a507ec68799815b0590ddba64de46fb9d` (head `fd087770`). Its ARM64 job
+completed all seven providers, SDK-bound signed FFmpeg and gosu. Both
+architectures passed all 70 codec processes and the faithful JXL API smoke.
+Complete delivered runtime/source/SDK maps, hashes, modes and symlinks were
+independently checked. The AMD64 job was cancelled during FFmpeg compilation by
+the next push: no completed AMD64 FFmpeg/gosu receipt is invented. This receipt
+predates signed APK installation and installed-media checks, and is not an
+independent old-ARM-baseline or final security approval.
+
 Local targeted native/policy/source/SBOM/publication regressions: **808 passed**.
 The existing source-manifest SBOM index was regenerated to bind the changed
 shared helper; it still describes the unchanged production path, not Alpine
@@ -218,14 +230,52 @@ configuration is itself package-owned, preserving real `/usr/local/lib64`
 FFmpeg paths without `LD_LIBRARY_PATH` or SONAME aliases.
 
 The actual stable APK3 signing/verification probe passed; its recorded fixture
-also includes untrusted-key and damaged-package denials. This is not yet proof
-that the complete composite APK installs: `Dockerfile.packages` and native CI
-must establish that with real complete exports on both architectures. External
-APK/source attribution and advisory denial remain separate unfinished gates.
+also includes untrusted-key and damaged-package denials. The subsequent
+[signed AMD64 receipt](evidence/stable-alpine-signed-amd64-20261108.json.gz)
+now proves a complete composite APK install in a clean pinned Alpine Python
+image: all 564 files retain exact content and APK ownership, runtime key and
+repository inventories remain unchanged, and both signature-denial controls
+pass. Its FFmpeg source was freshly compiled against independently rehashed CI
+SDK exports in a disposable older builder, **not an exact current Dockerfile
+build**. Current native CI must still prove the full Dockerfile path on both
+architectures. External APK/source attribution and advisory denial remain
+separate unfinished gates.
 
 `verify_alpine_ffmpeg.py` supplements the existing rare-input gate with hashes
 of all five complete decoded framemd5 outputs and six complete capability
 listings from the original actual AMD64 image. The reference passes against
-that immutable baseline; the known stock-JXL hash is explicitly rejected. It
-runs after actual signed installation, not just against a builder SDK. Matching
+that immutable baseline; the known stock-JXL hash is explicitly rejected. The
+actual signed AMD64 installation matches all five complete decoded outputs and
+all six complete listings. It runs after installation, not just against a
+builder SDK. Matching
 these recorded outputs on ARM is still not independent old-ARM-baseline proof.
+
+The same receipt records a separate real native AMD64 build of the unchanged
+resdet script/source/configuration. The original version/Y4M-only reader contract,
+existing over-pixel-ceiling rejection and four deterministic CLI outputs match
+the actual baseline exactly. This is not ARM proof or final package/application
+integration of resdet, which remains required.
+
+### Current native CI: package and installed-media gates passed
+
+Run **`42524783410`** passed both native jobs for head `29f4075f`, checked out as
+PR merge source `47093e5751efffc3233ccde030d5ad144d096ea3`. The
+[durable package CI receipt](evidence/stable-alpine-native-packages-ci-20261108.json.gz)
+records all five complete component builds, SDK-bound FFmpeg, 70 fresh codec
+processes, actual signed installation, both signature-denial controls, unchanged
+runtime trust/repositories, and all five complete framemd5 / six capability
+listing comparisons on **both** architectures. Both downloaded artifact ZIP
+digests and complete component runtime/source/SDK maps, modes and symlinks were
+independently checked, along with the component-to-package receipt joins.
+
+Each current CI package owns **566** files. The older local proof owns 564:
+the new `Dockerfile.packages` and `ffmpeg-baseline.json` were subsequently added
+to Codec2's complete delivered recipe directory. The receipt preserves that
+source-only difference; no file was omitted to force an old count, and no media
+golden or tolerance changed.
+
+This completes the bounded native owned-package gate, **not the migration**.
+Production Docker/MCP/source/SBOM integration, complete external APK and wheel
+source/advisory attribution, native application and old-ARM-baseline comparisons,
+identities/recreation/persistence/trust/isolation and final unsuppressed image
+scans remain required. No protected merge, publication or deployment occurred.

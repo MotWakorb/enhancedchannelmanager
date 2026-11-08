@@ -113,6 +113,12 @@ six capability listings without replacing the existing production tests.
 This package proof does not cover external APK source/advisory closure or the
 complete application, persistence, trust-consumer and MCP-isolation matrix.
 
+Native CI run `42524783410` passed this complete component/package/media path on
+both hosted architectures. Its [durable receipt](../../docs/design/evidence/stable-alpine-native-packages-ci-20261108.json.gz)
+records verified artifact identities and all installation/behavior gates. This
+does not mark the production migration or independent old-ARM-baseline matrix
+complete; those remaining gates are listed in the design document.
+
 Detailed raw commands, downloads/signatures, both build records and paired/repeat
 receipts: `/tmp/opencode/ecm-alpine-owned-native-20261108/`. Complete scanner,
 final corresponding-source closure and independent review remain outstanding.
