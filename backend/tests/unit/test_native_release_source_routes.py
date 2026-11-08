@@ -212,8 +212,11 @@ def test_actual_collection_replays_authentication_and_rejects_self_consistent_wr
 
 
 @pytest.mark.parametrize("tampered", [False, True])
+@pytest.mark.parametrize(
+    "retention", ["fresh", "retained", "wrong-pin", "download-claim", "missing-label"]
+)
 def test_final_source_consumer_enforces_exact_route_and_archive_pin(
-    monkeypatch, tmp_path, tampered
+    monkeypatch, tmp_path, tampered, retention
 ):
     consumer = load("release_source_consumer", "tests/native_image/source_checks.py")
     directory = tmp_path / "usr/share/ecm/sources/rpm"
@@ -262,6 +265,18 @@ def test_final_source_consumer_enforces_exact_route_and_archive_pin(
             ],
         },
     }
+    if retention != "fresh":
+        source.update(
+            retrieval="reverified-retained-source",
+            retained_sha256=AMD["sha256"],
+            final_url=None,
+        )
+        if retention == "wrong-pin":
+            source["retained_sha256"] = "0" * 64
+        elif retention == "download-claim":
+            source["final_url"] = AMD["url"]
+        elif retention == "missing-label":
+            source["retrieval"] = "reverified-cache"
     index = {
         "schema": 1,
         "architecture": "x86_64",
@@ -285,6 +300,9 @@ def test_final_source_consumer_enforces_exact_route_and_archive_pin(
     )
     if tampered:
         with pytest.raises(AssertionError, match="pinned source"):
+            consumer._rpm_sources(tmp_path, "x86_64")
+    elif retention in ("wrong-pin", "download-claim", "missing-label"):
+        with pytest.raises(AssertionError, match="retained source"):
             consumer._rpm_sources(tmp_path, "x86_64")
     else:
         assert consumer._rpm_sources(tmp_path, "x86_64") == (1, 1)

@@ -42,8 +42,8 @@ REPOSITORIES = {
         "fingerprint": "F8875B880D518B6B8C530D1345A1D0671ABD1AFB",
     },
 }
-# Exact authenticated release source retained by the established official mirror
-# after the rolling x86 source feed advanced. This is routing, never fallback.
+# Exact authenticated release-source identity and original public origin. Its
+# retained input is location-only; this pin, never a caller index, authorizes it.
 EXACT_SOURCE_ROUTES = {
     ("openSUSE", "x86_64", "openSUSE-release-20261105-4389.1.src.rpm"): {
         "url": "https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261105-4389.1.src.rpm",
@@ -574,6 +574,31 @@ def native_source_inputs(
     return result
 
 
+def retained_release_source(
+    path: Path | None, architecture: str, origins: list[tuple]
+) -> dict:
+    """One explicit hash-addressed source, not an arbitrary partial cache."""
+    if path is None:
+        return {}
+    matches = [
+        (name, route)
+        for (vendor, arch, name), route in EXACT_SOURCE_ROUTES.items()
+        if arch == architecture and (name, vendor) in origins
+    ]
+    if len(matches) != 1:
+        raise ValueError("retained release source requires its exact vendor/architecture/origin")
+    name, route = matches[0]
+    if (
+        path.name != route["sha256"]
+        or path.is_symlink()
+        or not path.is_file()
+        or path.stat().st_size > MAX_PAYLOAD
+        or sha256(path) != route["sha256"]
+    ):
+        raise ValueError("retained release source filename/bytes mismatch")
+    return {name: (path, route["sha256"])}
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     inventory_input = parser.add_mutually_exclusive_group()
@@ -597,6 +622,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--cache-dir", type=Path)
     parser.add_argument("--native-manifest", type=Path)
     parser.add_argument("--native-sources", type=Path)
+    parser.add_argument(
+        "--retained-release-source", type=Path,
+        help="one hash-addressed reviewed AMD release SRPM, never an arbitrary source cache",
+    )
     parser.add_argument(
         "--expected-sha256",
         type=Path,
@@ -627,6 +656,9 @@ def main(argv: list[str] | None = None) -> None:
     native = native_source_inputs(
         options.native_manifest, options.native_sources, options.arch, origins
     )
+    release_inputs = retained_release_source(
+        options.retained_release_source, options.arch, origins
+    )
     keys = {
         "openSUSE": options.suse_key,
         "http://packman.links2linux.de": options.packman_key,
@@ -638,6 +670,21 @@ def main(argv: list[str] | None = None) -> None:
     options.out.mkdir(parents=True, exist_ok=False)
     directory = options.out / "sources"
     directory.mkdir()
+    release_retrieval = {}
+    for filename, (source, digest) in release_inputs.items():
+        budget.consume(source.stat().st_size)
+        path = directory / (filename + ".partial")
+        shutil.copyfile(source, path)
+        if sha256(path) != digest:
+            raise ValueError("retained release source copied checksum mismatch")
+        budget.remaining()
+        release_retrieval[filename] = {
+            "url": source_url("openSUSE", options.arch, filename),
+            "final_url": None,
+            "retrieval": "reverified-retained-source",
+            "retained_sha256": digest,
+        }
+        print("Reverifying retained source: " + filename, flush=True)
     sources = []
     with tempfile.TemporaryDirectory(prefix="ecm-source-trust-") as temporary:
         databases = {
@@ -652,7 +699,9 @@ def main(argv: list[str] | None = None) -> None:
             retained = native.get(filename)
             if retained is not None:
                 cached = retained[0]
-            if cached is not None and cached.exists():
+            if filename in release_retrieval:
+                retrieval = release_retrieval[filename]
+            elif cached is not None and cached.exists():
                 if not cached.is_file() or cached.is_symlink():
                     raise ValueError("cache source must be a regular nonsymlink file")
                 budget.consume(cached.stat().st_size)

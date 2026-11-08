@@ -89,7 +89,8 @@ def test_retained_packman_cache_is_exact_complete_original_input_set():
             path = cache / item["sha256"]
             assert path.is_file() and not path.is_symlink()
             assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"]
-    assert {p.name for p in cache.iterdir() if p.name != "README.md"} == expected
+    retained_release = "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123"
+    assert {p.name for p in cache.iterdir() if p.name != "README.md"} == expected | {retained_release}
     assert len(expected) == 14
 
 

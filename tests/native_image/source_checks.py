@@ -219,6 +219,13 @@ def _rpm_sources(root, architecture):
         assert source["url"] == (route["url"] if route else repository + "src/" + name)
         if route:
             assert source["sha256"] == route["sha256"], "pinned source checksum mismatch"
+        if source.get("retrieval") == "reverified-retained-source" or "retained_sha256" in source:
+            assert (
+                route is not None
+                and source.get("retrieval") == "reverified-retained-source"
+                and source.get("retained_sha256") == route["sha256"]
+                and source.get("final_url") is None
+            ), "retained source provenance mismatch"
         assert source["path"] == "sources/" + name
         assert source["authentication"] == "pinned-rpm-signature-and-exact-header"
         assert source["license"] and source["license"] != "(none)"

@@ -167,11 +167,14 @@ SUSE_CA_BLACKLIST_RUN = (
     "&& update-ca-certificates"
 )
 SUSE_SOURCE_BUILDER_RUN = (
+    'case "$(uname -m)" in '
+    "x86_64) set -- --retained-release-source /tmp/native-cache/93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123 ;; "
+    "aarch64) set -- ;; *) exit 1 ;; esac && "
     "rpm -q --qf '%{DESCRIPTION}\\n' gpg-pubkey-29b700a4 > /tmp/suse.asc && "
     "python3.12 /tmp/collect_native_sources.py --inventory /tmp/runtime-inventory.tsv "
     '--arch "$(uname -m)" --out /tmp/rpm-source-output --suse-key /tmp/suse.asc '
     "--packman-key /tmp/native/packman.asc "
-    "--native-manifest /tmp/native/manifest.json --native-sources /tmp/native-output/sources"
+    '--native-manifest /tmp/native/manifest.json --native-sources /tmp/native-output/sources "$@"'
 )
 SUSE_RESDET_BUILDER_RUN = (
     'case "$(uname -m)" in '
