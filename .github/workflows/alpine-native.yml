@@ -86,6 +86,16 @@ jobs:
           docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
             --file docker/alpine-native/Dockerfile.gosu \
             --output type=local,dest="$RUNNER_TEMP/alpine-evidence/gosu" .
+      - name: Sign and install the exact native APK without changing runtime trust
+        run: |
+          docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
+            --build-context codec-evidence="$RUNNER_TEMP/alpine-evidence/codecs" \
+            --build-context security-evidence="$RUNNER_TEMP/alpine-evidence/security" \
+            --build-context jxl-evidence="$RUNNER_TEMP/alpine-evidence/jxl" \
+            --build-context ffmpeg-evidence="$RUNNER_TEMP/alpine-evidence/ffmpeg" \
+            --build-context gosu-evidence="$RUNNER_TEMP/alpine-evidence/gosu" \
+            --file docker/alpine-native/Dockerfile.packages \
+            --output type=local,dest="$RUNNER_TEMP/alpine-evidence/packages" .
       - name: Preserve file modes and symlinks in the evidence archive
         if: always()
         run: |

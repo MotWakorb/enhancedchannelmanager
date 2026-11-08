@@ -194,3 +194,38 @@ runtime package/source coverage.
   of the scratch configuration, source/security closure or native ARM behavior.
   Preserve the authenticated baseline CMS source/configuration during integration;
   a passing sRGB fixture alone cannot justify changing its color engine.
+
+## Signed package implementation (verification in progress)
+
+`package_alpine_native.py` requires all five component exports, checks the exact
+reviewed recipes/status/architecture and complete product/source inventories,
+and requires that FFmpeg consumed the same codec/security/JXL receipts being
+packaged. It inspects actual ELF SONAME/NEEDED entries to declare APK providers
+and external dependencies, without fabricating `.0.11` aliases. Matching source,
+notices and component receipts accompany the products in one owned APK. The
+package name/version is content-bound to those component receipts; it is not
+presented as a vendor APK or an upstream vulnerability-free version.
+
+The APK is signed by a temporary RSA-3072 key in an automatically removed private
+directory. Only the public key, package and evidence are exported. No runtime
+key/repository is added and no unsigned, overwrite or solver-force option is
+used. `install_alpine_native.py` verifies default-trust denial, then verifies and
+installs offline with an external temporary `--keys-dir` containing vendor keys
+and that public key. Temporary trust is removed even on failure. It checks the
+unchanged runtime trust/repository inventories, exact installed bytes/modes/links,
+complete APK contents and ownership of every delivered file. The musl loader
+configuration is itself package-owned, preserving real `/usr/local/lib64`
+FFmpeg paths without `LD_LIBRARY_PATH` or SONAME aliases.
+
+The actual stable APK3 signing/verification probe passed; its recorded fixture
+also includes untrusted-key and damaged-package denials. This is not yet proof
+that the complete composite APK installs: `Dockerfile.packages` and native CI
+must establish that with real complete exports on both architectures. External
+APK/source attribution and advisory denial remain separate unfinished gates.
+
+`verify_alpine_ffmpeg.py` supplements the existing rare-input gate with hashes
+of all five complete decoded framemd5 outputs and six complete capability
+listings from the original actual AMD64 image. The reference passes against
+that immutable baseline; the known stock-JXL hash is explicitly rejected. It
+runs after actual signed installation, not just against a builder SDK. Matching
+these recorded outputs on ARM is still not independent old-ARM-baseline proof.

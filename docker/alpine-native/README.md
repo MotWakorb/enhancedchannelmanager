@@ -104,6 +104,15 @@ Build JXL via `Dockerfile.libjxl` with a `jxl-cache` context before FFmpeg. For
 the complete reproduction sequence, selected security backports, approvals and
 remaining gates see [owned native design](../../docs/design/stable-alpine-owned-native.md).
 
+`Dockerfile.packages` adds a separate build-only signed APK and offline
+installation proof using all five component contexts. It exports only the APK,
+public key and receipts, never its private key. Runtime trusted keys/repositories
+must remain unchanged; delivered files must retain exact bytes and APK ownership.
+Its installed FFmpeg check compares all five complete rare-input outputs and
+six capability listings without replacing the existing production tests.
+This package proof does not cover external APK source/advisory closure or the
+complete application, persistence, trust-consumer and MCP-isolation matrix.
+
 Detailed raw commands, downloads/signatures, both build records and paired/repeat
 receipts: `/tmp/opencode/ecm-alpine-owned-native-20261108/`. Complete scanner,
 final corresponding-source closure and independent review remain outstanding.
