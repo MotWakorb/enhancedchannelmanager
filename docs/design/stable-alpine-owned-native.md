@@ -279,3 +279,68 @@ Production Docker/MCP/source/SBOM integration, complete external APK and wheel
 source/advisory attribution, native application and old-ARM-baseline comparisons,
 identities/recreation/persistence/trust/isolation and final unsuppressed image
 scans remain required. No protected merge, publication or deployment occurred.
+
+### Musllinux GNU runtime correspondence
+
+The complete wheel archive survey is **14 GNU-bearing wheels, 18 member copies,
+12 distinct repaired ELF objects** (not the earlier Beads note's 16 wheels).
+All twelve now have whole-byte transformation matches, with no target bytes
+edited or normalized. Eight GCC 14.2 objects / twelve copies join to signed
+Alpine v3.22 `libgcc`/`libstdc++` 14.2.0-r6 originals; four GCC 12.4 objects / six
+copies join to original ELF files in digest-verified official
+`ghcr.io/rust-cross/rust-musl-cross` layers. The initial PyPA musllinux 1.1 image
+investigation did **not** contain those GCC 12.4 originals and is retained as a
+negative control, not misattributed as their provider.
+
+The replay uses hash-pinned comparison-only patchelf 0.17.2 or 0.19.3 as required
+by the observed full-byte outputs. RapidFuzz's auditwheel 6.6 profile performs
+SONAME then NEEDED without RPATH; greenlet's 6.7 profile adds `$ORIGIN` between
+those operations. Cryptography and hypothesis match with patchelf 0.19.3.
+These controls prove correspondence, not the exact producer command history.
+Original mismatches, failed controls and incomplete experiments remain retained.
+The [GNU correspondence receipt](evidence/stable-alpine-musllinux-gnu-20261108.json.gz)
+retains all ten controls, raw immutable OCI metadata and layer joins, original
+APK authentication/public verification keys, candidate-source hashes, and the
+actual repository verifier's passing binary / failing source receipts.
+
+The curated map is `docker/python-third-party/artifact-index/musllinux-gnu.json`.
+Its loader and both comparison tool binaries are hash-pinned by
+`scripts/verify_musllinux_gnu.py`; tests are in
+`backend/tests/unit/test_verify_musllinux_gnu.py`. In an isolated native AMD64
+comparison run it rehashes all **96** selected wheel archives and rejects added
+or missing wheels, including changes that leave the 18 known GNU members
+untouched. This is still only GNU correspondence, not other bundled-component
+source clearance. The [complete-selection receipt](evidence/stable-alpine-musllinux-gnu-selection-20261108.json.gz)
+binds the current helpers/map and retains the earlier narrower receipt unchanged.
+In an isolated native AMD64
+comparison container, prepare a hash-named cache of the four original APKs, two
+rust-cross toolchain layers and two tool wheels named in that map (never install
+them in a runtime). Then run:
+
+```sh
+python scripts/prepare_musllinux_gnu_inputs.py \
+  --manifest docker/python-third-party/artifact-index/musllinux-gnu.json \
+  --cache-dir /inputs/cache --output-dir /proof/prepared
+python scripts/verify_musllinux_gnu.py \
+  --manifest docker/python-third-party/artifact-index/musllinux-gnu.json \
+  --wheel-dir /inputs/wheels --original-dir /proof/prepared/originals \
+  --tool-dir /proof/prepared/tools --work-dir /proof/binary-work \
+  --output-file /proof/binary-receipt.json --binary-only
+```
+
+Preparation rechecks compressed APK control/index and payload-datahash joins,
+OCI compressed/diff-id hashes, exact regular archive members and tool bytes.
+The default verifier, **without** `--binary-only`, intentionally fails source
+closure after preserving the twelve successful replays. It cannot accept source
+status labels without independently hashing a complete delivered source tree.
+This is not wired as final production source clearance.
+
+GCC 14.2 source archive and all 40 local source inputs match the Git-object-
+verified APKBUILD at `fbf60319be3bbaf6dd32ef55cc6fb7189e05c266`. GCC 12.4's
+official OCI layers retain exact `config.mak` and the unpinned clone command, but
+delete the checkout and log. Source candidate `227df8b99103f9c59f6570babf892978e293082f`
+and its hash-matching upstream archive were retrieved; **the original build
+recipe revision is not yet authenticated**. Cryptography ARM's raw
+`NotpineForGHA` producer PURL is preserved separately from the independent
+original-byte proof. None of these results clears source delivery, other wheel
+components/crates, external APK advisories, image SBOMs or final security scans.

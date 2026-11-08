@@ -19,3 +19,29 @@ architecture evidence or final-image verification is silently refreshed.
 The proposed accompanying-image source path is `/usr/share/ecm/sources/python/`; integration and recipient access remain **not implemented or verified here**. Keep the source/notice files for components actually shipped and preserve ECM's separate CC0 root license.
 
 Details: `../../arm64-current/REPORT.md`; new tree integrity: `SHA256SUMS`.
+
+## Stable-Alpine GNU correspondence (not source clearance)
+
+`artifact-index/musllinux-gnu.json` is a separate, hash-pinned map for the
+unchanged musllinux selection. It does not replace or relabel the historical
+manylinux indexes above. It accounts for **14 wheels, 18 GNU member copies and
+12 distinct repaired ELF objects** on AMD64 and ARM64, covering GCC 14.2.0 and
+12.4.0. `scripts/verify_musllinux_gnu.py` checks all **96** selected whole-wheel
+hashes (including non-GNU wheels), complete GNU
+member coverage and full-byte replay of bounded SONAME/NEEDED/RPATH operations.
+`scripts/prepare_musllinux_gnu_inputs.py` extracts original bytes from hash-pinned
+APK/OCI cache blobs without installing packages, extracting filesystem paths or
+executing target ELFs. Comparison tools are pinned AMD64 binaries; this verifies
+ARM **artifact bytes**, not ARM execution.
+
+The explicit `--binary-only` result is `BINARY_ONLY_NO_SOURCE_CLEARANCE`, never
+source/advisory/final-image approval. The default source gate fails: matching
+source delivery is not integrated, and the GCC 12.4 OCI build recipe cloned an
+unpinned `musl-cross-make` revision then removed its checkout/log. A retrieved
+candidate revision and matching upstream archive do not establish that original
+revision. Producer metadata remains raw, including cryptography ARM's
+`pkg:apk/NotpineForGHA/libgcc@14.2.0-r6`; it is not normalized into Alpine or
+used as corresponding-source authority.
+
+See [owned native design](../../docs/design/stable-alpine-owned-native.md) for
+verified receipts, offline reproduction and the remaining production gates.
