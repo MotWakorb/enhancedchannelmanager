@@ -76,6 +76,9 @@ class ProbeCapacityError(RuntimeError):
     """Admission refused; messages are fixed text, not upstream diagnostics."""
 
 
+PROBE_DEFERRED_REASON = "Probe deferred: provider capacity is limited or unverified; shared viewer coordination is unavailable"
+
+
 # Provider portals can redirect onto HTTP media edges. Four probe paths use this
 # explicit waiver; direct previews have their own policy (GH995). Other SSRF
 # checks remain enforced by tests/security/test_probe_scheme_downgrade.py.
@@ -844,6 +847,17 @@ class StreamProber:
             if not self._notification_update_callback:
                 return
 
+            if self._probe_progress_status == "deferred":
+                await self._notification_update_callback(
+                    notification_id=self._probe_notification_id,
+                    notification_type="warning",
+                    message=PROBE_DEFERRED_REASON,
+                    metadata={"deferred_reason": PROBE_DEFERRED_REASON,
+                              "progress": {"status": "deferred", "current": self._probe_progress_current,
+                                           "total": self._probe_progress_total, "skipped": self._probe_progress_skipped_count}},
+                )
+                return
+
             # Determine notification type based on results
             if self._probe_progress_failed_count > 0:
                 notification_type = "warning"
@@ -1165,7 +1179,7 @@ class StreamProber:
         """
         # History/scope publication is terminal; notification delivery may still
         # be awaiting I/O, but cancellation can no longer change that outcome.
-        if not self._probing_in_progress or self._probe_progress_status in ("completed", "failed", "cancelled"):
+        if not self._probing_in_progress or self._probe_progress_status in ("completed", "failed", "cancelled", "deferred"):
             return {"status": "no_probe_running", "message": "No probe is currently running"}
 
         logger.info("[STREAM-PROBE] Cancelling in-progress probe...")
@@ -1227,7 +1241,7 @@ class StreamProber:
 
     async def probe_stream(
         self, stream_id: int, url: Optional[str], name: Optional[str] = None,
-        *, stream: Optional[dict] = None,
+        *, stream: dict | None = None, black_screen_only: bool = False,
     ) -> dict:
         """Admit every probe entrypoint before opening direct provider media.
 
@@ -1255,11 +1269,12 @@ class StreamProber:
                     # Capacity is not a measurement of stream health. Preserve
                     # previous successful stats and let batch callers count skips.
                     return {"stream_id": stream_id, "stream_name": name,
-                            "probe_status": "skipped", "error_message": reason}
+                            "probe_status": "skipped", "error_message": reason,
+                            "deferred_reason": PROBE_DEFERRED_REASON}
             # The owner may receive multiple cancellation requests (API,
             # scheduler, shutdown). Isolate media cleanup from those requests
             # and join it before the reservation's finally block can run.
-            media = asyncio.create_task(self._probe_stream_admitted(stream_id, url, name, stream=stream))
+            media = asyncio.create_task(self._probe_stream_admitted(stream_id, url, name, stream=stream, black_screen_only=black_screen_only))
             try:
                 return await asyncio.shield(media)
             except asyncio.CancelledError:
@@ -1357,6 +1372,23 @@ class StreamProber:
             route_profiles.append(default)
         return route_profiles
 
+    @staticmethod
+    def _require_unlimited_direct_route(account: dict | None) -> None:
+        """PO-selected restriction, not a lease: only explicit ungrouped zero caps.
+
+        Inspect the entire account, not just a selected spare profile. Recorded
+        server_group is null or an integer FK; no recorded group response proves
+        shared-credential headroom. Accountless/missing/grouped capacity is not
+        an unlimited declaration. There is deliberately no runtime override.
+        """
+        if (account is None or "server_group" not in account
+                or account["server_group"] is not None
+                or type(account.get("max_streams")) is not int
+                or account["max_streams"] != 0
+                or any(type(p.get("max_streams")) is not int or p["max_streams"] != 0
+                       for p in account["profiles"])):
+            raise ProbeCapacityError(PROBE_DEFERRED_REASON)
+
     async def _reserve_probe_capacity(
         self, stream: dict, *, url: str,
     ) -> tuple[int, tuple[int, ...]] | None:
@@ -1371,6 +1403,7 @@ class StreamProber:
         account_id = stream["m3u_account"]
         if account_id is None:
             self._probe_route_profiles(stream, url, None)
+            self._require_unlimited_direct_route(None)
             return None  # URL identity is still required without an account cap.
         if type(account_id) is not int or account_id <= 0:
             raise ProbeCapacityError(unavailable)
@@ -1398,6 +1431,7 @@ class StreamProber:
             if account is None:
                 raise ProbeCapacityError(unavailable)
             route_profiles = self._probe_route_profiles(stream, url, account)
+            self._require_unlimited_direct_route(account)
             account_max = account.get("max_streams")
 
             # Do not use the scheduler's five-second cache/fail-open helper.
@@ -1434,7 +1468,7 @@ class StreamProber:
 
     async def _probe_stream_admitted(
         self, stream_id: int, url: str | None, name: str | None = None,
-        *, stream: dict | None = None,
+        *, stream: dict | None = None, black_screen_only: bool = False,
     ) -> dict:
         """
         Probe a single stream using ffprobe.
@@ -1447,6 +1481,12 @@ class StreamProber:
             return self._save_probe_result(
                 stream_id, name, None, "failed", "No URL available"
             )
+
+        if black_screen_only:
+            # Standalone scan: same admission/ownership, no full probe or health
+            # save. The task retains its existing indeterminate/error contract.
+            return {"stream_id": stream_id, "probe_status": "success",
+                    "is_black_screen": await self._detect_black_screen(url, stream_id=stream_id)}
 
         try:
             user_agent = await StreamUserAgentResolver(self.client).resolve(stream, stream_id=stream_id)
@@ -3903,7 +3943,7 @@ class StreamProber:
                 self.auto_reorder_after_probe,
                 allow_reorder_after_probe,
             )
-            if self.auto_reorder_after_probe and allow_reorder_after_probe:
+            if self.auto_reorder_after_probe and allow_reorder_after_probe and not self._probe_progress_skipped_count:
                 logger.info("[STREAM-PROBE] Auto-reorder is enabled, reordering streams in probed channels...")
                 self._probe_progress_status = "reordering"
                 self._probe_progress_current_stream = "Reordering streams..."
@@ -3918,7 +3958,7 @@ class StreamProber:
                     raise
 
             # Publish reprobe scope only after the complete scheduled run succeeds.
-            if stream_ids_filter is None and not self._probe_cancelled:
+            if stream_ids_filter is None and not self._probe_cancelled and not self._probe_progress_skipped_count:
                 self._last_probe_scope_kind = "all" if resolved_group_ids is None else "scoped"
                 self._last_probe_channel_stream_ids = set(channel_stream_ids)
                 logger.info("[STREAM-PROBE] Saved %s channel stream IDs for reprobe scoping", len(self._last_probe_channel_stream_ids))
@@ -3933,7 +3973,7 @@ class StreamProber:
             # Finalize notification with success/warning status
             await self._finalize_probe_notification(send_alerts=completion_send_alerts)
 
-            return {"status": self._probe_progress_status, "probed": probed_count, "reordered_channels": len(reordered_channels)}
+            return {"status": self._probe_progress_status, "probed": probed_count, "reordered_channels": len(reordered_channels), **self._probe_deferred_fields()}
         except Exception as e:
             logger.exception("[STREAM-PROBE] Probe all streams failed: %s", e)
             self._probe_progress_status = self._probe_terminal_status(failed=True)
@@ -4123,6 +4163,7 @@ class StreamProber:
                 self.auto_reorder_after_probe
                 and allow_reorder_after_probe
                 and not self._probe_cancelled
+                and not self._probe_progress_skipped_count
             ):
                 self._probe_progress_status = "reordering"
                 self._probe_progress_current_stream = "Reordering streams..."
@@ -4146,6 +4187,7 @@ class StreamProber:
                 "total": len(stream_ids),
                 "success": self._probe_progress_success_count,
                 "failed": self._probe_progress_failed_count,
+                **self._probe_deferred_fields(),
             }
         except Exception as e:
             logger.exception("[STREAM-PROBE] Bulk probe failed: %s", e)
@@ -4168,6 +4210,7 @@ class StreamProber:
             "total": self._probe_progress_total,
             "current": self._probe_progress_current,
             "status": self._probe_progress_status,
+            "deferred_reason": self._probe_deferred_fields().get("deferred_reason"),
             "current_stream": self._probe_progress_current_stream,
             "success_count": self._probe_progress_success_count,
             "failed_count": self._probe_progress_failed_count,
@@ -4261,7 +4304,12 @@ class StreamProber:
         """
         if self._probe_cancelled or status == "cancelled":
             return "cancelled"
+        if not failed and status == "completed" and self._probe_progress_skipped_count:
+            return "deferred"
         return "failed" if failed else status
+
+    def _probe_deferred_fields(self) -> dict:
+        return {"deferred_reason": PROBE_DEFERRED_REASON} if self._probe_progress_status == "deferred" else {}
 
     def _save_probe_history(self, start_time: datetime, total: int, error: str = None, reordered_channels: list = None):
         """Save a probe run to history (keeps last 5 runs)."""
@@ -4278,6 +4326,7 @@ class StreamProber:
             "skipped_count": self._probe_progress_skipped_count,
             "status": self._probe_terminal_status(failed=bool(error), status=self._probe_progress_status),
             "error": error,
+            "deferred_reason": self._probe_deferred_fields().get("deferred_reason"),
             "success_streams": list(self._probe_success_streams),  # Copy the list
             "failed_streams": list(self._probe_failed_streams),    # Copy the list
             # Why the failures happened, not just how many (bead

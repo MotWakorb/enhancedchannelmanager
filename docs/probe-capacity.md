@@ -1,5 +1,53 @@
 # Direct probe capacity (GH1032)
 
+## PO decision: temporary fail-closed restriction (2026-11-08)
+
+The PO explicitly selected **fail closed**, superseding the earlier partial-only
+disposition. Direct probes are deferred on capacity-limited or unverified routes,
+even when a status snapshot shows free slots. They never open a provider media
+connection, mutate measured health, auto-reorder, or widen successful probe scope.
+Audit/history/notification records describing deferral are intentional. Other
+explicit channel-pipeline actions and their ordering remain authorized/unchanged.
+
+Admission requires a fresh, route-validated account with integer `max_streams: 0`
+on the account **and every profile**, plus explicit `server_group: null`. Zero is
+unlimited, not unknown. Any finite sibling/default/selected profile blocks the
+account; choosing an unlimited alternate does not bypass a declared restriction.
+Missing/null/bool/string limits, failed/degraded reads, accountless capacity and
+grouped credentials without a verified unlimited contract fail closed. No runtime
+override, proxy route, preemption policy or upstream fork is introduced.
+
+Recorded survey: all 32 fixture JSON files contain only two capacity-bearing
+accounts/two profiles, with four integer-zero limits. The 0.27.2 account 11/profile
+12 has `server_group: null`; 0.28.2 account/profile 4 has integer FK `server_group:
+20`. No recorded group response proves shared-credential capacity. Finite and bad
+metadata cases are explicitly synthetic variations, never claimed live captures.
+
+Allowed explicit-unlimited probes retain direct ffprobe/resdet/bitrate/black-screen
+measurements, SSRF controls, fresh status validation and owned cleanup. Standalone
+black-screen scans use the same gate/ownership in black-screen-only mode, not the
+old direct-decoder bypass. Scheduled and pipeline probes share this admission.
+
+### Deferral wire contract
+
+Per-stream admission refusal has `probe_status: "skipped"`, an operator-safe
+`error_message`, and fixed `deferred_reason`:
+
+> Probe deferred: provider capacity is limited or unverified; shared viewer coordination is unavailable
+
+A batch with deferred/skipped admissions terminates `status: "deferred"`, not
+completed. Its result/progress/history expose `deferred_reason`; progress/history
+use null outside deferral. Existing success/failed/skipped counters retain their
+meaning. Accepted cancellation still wins, then aborting failure, then deferral,
+then completion. Deferred runs do not auto-reorder or publish successful scope.
+Scheduled/standalone-scan task reports use `PROBE_DEFERRED` and the same reason;
+pipeline probe-action logs show the reason without suppressing other rule actions.
+
+This resolves the limited-provider viewer-arrival safety case **by restriction**:
+there is no admitted probe connection for a later viewer to collide with. It does
+not implement leases or restore limited-provider probing. Future functionality is
+tracked separately by the parent as `enhancedchannelmanager-88yso`.
+
 ## Shared route invariant
 
 Before **any media**, the supplied URL must identify the same validated stream,
@@ -30,7 +78,7 @@ integration counterpart checks zero provider reads and retained persisted health
 `test_missing_url_preserves_failed_result_without_route_reads` pins the no-URL
 exception to admission. These augment the rewrite and cancellation regressions.
 
-## Bounded policy
+## Retained route and inner local-accounting defenses
 
 ECM keeps its existing **direct-to-provider measurement route**. This change
 does not enable the playback probe proposed in PR #1035, route probes through
@@ -38,16 +86,17 @@ Dispatcharr's proxy, add a reserved-slot setting, or silently reserve an extra
 viewer slot.
 
 `StreamProber.probe_stream` performs shared admission for single, bulk, pipeline
-and probe-all calls. On the singleton prober, a lock serializes fresh account
-and live-status reads with check/reserve. A probe is admitted only when both:
+and probe-all calls. The new restriction is checked on the same fresh account
+snapshot inside the admission lock, before live-status/check/reserve or media.
+The retained inner accounting implementation also requires both:
 
 ```
 account live channels + local account probes < account max_streams
 profile live channels + local profile probes < profile max_streams
 ```
 
-A configured zero means unlimited for that limit, independently of the other
-limit. Account counts aggregate the current profiles of live channels, including
+A configured zero means unlimited for that individual limit; the new outer policy
+requires every account/profile limit to be zero. Inner account counts aggregate the current profiles of live channels, including
 inactive profiles still referenced by status. One channel counts once even when
 several clients share it; `client_count` and stored `current_viewers` are not the
 provider connection count. Known connections on another account do not consume
@@ -82,11 +131,9 @@ Missing/malformed stream/account/profile metadata, unknown channel attribution,
 and account/status fetch errors or ten-second read timeouts fail closed. Even
 an unlimited account must have verifiable metadata/status; a missing limit is
 not interpreted as unlimited. The scheduler's five-second status cache and its
-fail-open error fallback are not used for admission. A null `m3u_account` is an
-explicit accountless stream and needs no account reservation; an absent field is
-not the same thing. Accountless streams still require verified stream ID and
-exact original URL identity; accountless reassignment cannot authorize an older
-provider URL.
+fail-open error fallback are not used for admission. Null `m3u_account` remains
+distinct from an absent field for route validation, but neither proves unlimited
+capacity under the selected policy, so neither admits media.
 
 The caller receives `probe_status: "skipped"` and a fixed, credential-free
 capacity reason. Batch results/history count it as skipped, not failed; pipeline
@@ -185,18 +232,15 @@ and history's diagnostic/status precedence. Only external service/media boundari
 are substituted. Start ownership, cancellation joining, subprocess reaping and
 route/SSRF methods are unchanged by this terminal-status repair.
 
-## What this cannot guarantee
+## Restriction boundary and future functionality
 
-**This is local admission, not an upstream atomic reservation.** After the status
-read (or during an already admitted probe), Dispatcharr can start another channel.
-It does not know that a direct ECM probe occupies the provider slot. Therefore
-the viewer-arrival reproduction in GH1032 can still exceed the provider limit
-even though the initial snapshot had headroom. The integration test
-`test_real_http_one_free_slot_and_later_viewer_arrival` deliberately demonstrates
-this boundary: a viewer arrives while direct media is in progress; only the next
-probe is refused. Media substeps/retries reuse the permit, not new upstream
-reservations. Polling faster or clamping subsequent admissions cannot make the
-in-flight direct connection viewer-safe.
+No upstream atomic reservation is claimed. The former late-viewer race is avoided
+for limited/unverified providers because no probe is admitted, not because local
+reservations became shared with Dispatcharr. The disposable integration test
+`test_real_http_free_slot_then_viewer_arrival_never_opens_limited_media` observes
+headroom, queues concurrent probe work, admits a later viewer, and verifies zero
+provider media reads and retained SQLite health. Its explicit-unlimited positive
+control still performs direct, SSRF-checked HTTP measurement.
 
 Reservations coordinate one singleton prober in one ECM process, not multiple
 ECM processes/replicas, other external clients, or different accounts sharing
@@ -205,13 +249,12 @@ but incomplete upstream snapshot cannot be detected locally. In the inspected
 upstream implementation, some internal Redis failures can even be represented
 as an empty channel list.
 
-Stronger guarantees need an approved product/routing decision and verified
-upstream enforcement: e.g. a genuinely shared atomic reservation, or a proxy
-probe route whose connection-limit behavior is proven for raw-stream probes.
-Leaving one slot free is only headroom, not a guarantee against arbitrary viewer
-arrivals. Neither that policy change nor new routing/auth settings is introduced
-here. Do not describe this bounded fix as complete protection of new viewers or
-as a full solution to both GH1032 reproductions.
+Restoring probing on finite/shared providers requires a verified coordination
+contract (future 88yso), not a headroom heuristic or hidden unsafe override. The
+current P1 safety restriction does not depend on an upstream merge. As with any
+configured limit, admission relies on truthful upstream declarations; it cannot
+infer hidden provider caps, undeclared credential aliases or changes made after
+an unlimited route was admitted.
 
 The bounded [upstream coordination review](design/direct-probe-coordination-limits.md)
 explains why the existing proxy route is not a demonstrated drop-in viewer-priority
@@ -256,7 +299,14 @@ Verification is split rather than presented as a production guarantee:
 
 - `backend/tests/unit/test_stream_probe_capacity.py`: entrypoint wiring,
   snapshot/account/profile logic, local concurrency, pause and cancellation
-  lifecycle, and permit cleanup with substituted media work.
+  lifecycle, and permit cleanup with substituted media work. The finite
+  `capacity_probe` fixture explicitly mocks only the outer restriction for inner
+  accounting/route regressions; it is not policy acceptance evidence or a product
+  bypass. Separate `unlimited_probe` controls run the actual policy for lifecycle,
+  cancellation and real disposable-process reaping. No prior cases were dropped.
+- `backend/tests/unit/test_probe_failclosed_policy.py`: real-policy free-slot,
+  unknown/grouping and all-consumer negative/positive controls with zero media
+  and no health/reorder/scope mutation when deferred.
 - `backend/tests/integration/test_probe_capacity.py`: disposable loopback HTTP
   control API/provider, actual Dispatcharr client, real SQLite, ASGI single
   probe/stat serialization, bulk and both pipeline consumers, and actual
@@ -264,8 +314,8 @@ Verification is split rather than presented as a production guarantee:
   the existing generated-local-media JSON fixture; no ffprobe executable was
   available on this test host. This is not a live Dispatcharr/provider E2E test.
 - Existing SSRF, downgrade, relay cleanup/retry, resdet, User-Agent, media and
-  probe envelope suites remain regression checks; their synthetic accountless
-  media cases now identify `m3u_account: null` explicitly instead of bypassing
-  admission with incomplete metadata.
+  probe envelope suites remain regression checks. Their media fixtures now use
+  the recorded explicit-unlimited account rather than accountless metadata; the
+  real restriction is not mocked in these suites.
 
 The parent lane owns the full backend gate and final integration/merge decision.

@@ -8,6 +8,7 @@ import stream_prober
 from models import StreamStats
 from stream_prober import StreamProber
 from tasks.stream_probe import StreamProbeTask
+from tests.conftest import unlimited_probe_stream
 
 
 def _task_prober() -> SimpleNamespace:
@@ -118,7 +119,6 @@ async def test_probe_all_reorder_gate_preserves_metadata_and_channel_order(
 
     client = AsyncMock()
     client.get_channel_groups.return_value = [{"id": 7, "name": "Sports"}]
-    client.get_m3u_accounts.return_value = []
     channel_order = [10, 20]
     prober = StreamProber(
         client=client,
@@ -126,6 +126,8 @@ async def test_probe_all_reorder_gate_preserves_metadata_and_channel_order(
         parallel_probing_enabled=False,
     )
     prober._persist_probe_history = lambda: None
+    stream = unlimited_probe_stream(prober, 20, "http://example.test/20")
+    stream["name"] = "1080p"
 
     async def reorder(*, stream_to_channels, channel_group_ids_override):
         assert stream_to_channels == {20: ["Channel"]}
@@ -162,7 +164,7 @@ async def test_probe_all_reorder_gate_preserves_metadata_and_channel_order(
         "_fetch_all_streams",
         AsyncMock(
             return_value=[
-                {"id": 20, "name": "1080p", "url": "http://example.test/20", "m3u_account": None}
+                stream
             ]
         ),
     ), patch.object(

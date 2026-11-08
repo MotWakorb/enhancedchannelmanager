@@ -13,10 +13,10 @@ import stream_prober
 from models import StreamStats
 from sqlalchemy.orm import sessionmaker
 
-from tests.unit.test_stream_probe_capacity import (
-    capacity_probe as capacity_probe,  # noqa: PLC0414 - pytest fixture re-export
-)
-from tests.unit.test_stream_probe_capacity import prepare_probe_all
+from tests.unit.test_stream_probe_capacity import prepare_probe_all, unlimited_probe
+
+# Preserve the existing fixture name while exercising real unlimited admission.
+capacity_probe = unlimited_probe
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("vlc_stream_user_agent")]
 

@@ -11,7 +11,7 @@ from stream_prober import (
     ProbeNetworkRouteError,
     StreamProber,
 )
-from tests.conftest import accountless_probe_stream
+from tests.conftest import unlimited_probe_stream as accountless_probe_stream  # legacy call-site alias; real unlimited admission
 
 
 SYNTHETIC_URL = "http://provider.invalid/account/token/stream.ts"

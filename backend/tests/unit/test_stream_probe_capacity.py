@@ -24,12 +24,10 @@ FIXTURES = Path(__file__).parents[1] / "fixtures"
 
 
 @pytest.fixture
-def capacity_probe():
+def unlimited_probe():
     account = json.loads(
         (FIXTURES / "bd_igqcy/dispatcharr_v0272_m3u_account.json").read_text()
     )
-    account["max_streams"] = 2
-    account["profiles"][0]["max_streams"] = 2
     stream = {"id": 7, "name": "Test", "url": URL, "m3u_account": account["id"]}
     client = AsyncMock()
     client.get_stream.return_value = stream
@@ -58,6 +56,22 @@ def capacity_probe():
         return fresh
 
     client.get_stream.side_effect = current_stream
+    return prober, account, stream
+
+
+@pytest.fixture
+def capacity_probe(unlimited_probe, monkeypatch):
+    """Isolate inner finite accounting below the new restrictive policy.
+
+    This unit-only mock keeps the original admission/route/concurrency matrix
+    meaningful. Policy/integration/lifecycle tests use unlimited_probe and the
+    real restriction instead. There is no production opt-out or test flag.
+    """
+    prober, account, stream = unlimited_probe
+    account["max_streams"] = account["profiles"][0]["max_streams"] = 2
+    monkeypatch.setattr(
+        prober, "_require_unlimited_direct_route", lambda _account: None
+    )
     return prober, account, stream
 
 
@@ -121,7 +135,7 @@ async def test_saturated_probe_all_finishes_with_skip(capacity_probe, parallel):
         ),
         1,
     )
-    assert result["status"] == "completed"
+    assert result["status"] == "deferred"
     assert prober.get_probe_progress()["skipped_count"] == 1
     prober._run_ffprobe.assert_not_awaited()
 
@@ -140,7 +154,7 @@ async def test_probe_all_stale_scheduler_snapshot_cannot_bypass_admission(
         ),
         2,
     )
-    assert result["status"] == "completed"
+    assert result["status"] == "deferred"
     assert prober.get_probe_progress()["skipped_count"] == 1
     assert prober.get_probe_progress()["failed_count"] == 0
     prober._run_ffprobe.assert_not_awaited()
@@ -605,7 +619,7 @@ async def test_scheduler_rewrite_fallback_cannot_charge_spare_profile(
             ),
             3,
         )
-    assert result["status"] == "completed"
+    assert result["status"] == "deferred"
     assert stream["_selected_profile"]["id"] == 13, (
         "the real scheduler must select the spare profile"
     )
@@ -736,14 +750,14 @@ async def test_two_scheduler_children_single_cancel_keeps_permits_through_delaye
     "entrypoint", ["single", "probe_all", "probe_all_sequential", "bulk"]
 )
 async def test_repeated_parent_cancellation_joins_real_process_reap(
-    capacity_probe, monkeypatch, entrypoint
+    unlimited_probe, monkeypatch, entrypoint
 ):
     """Real _run_ffprobe/kill/wait; a disposable Python child replaces ffprobe.
 
     Only the input relay and executable are substituted, not cancellation,
     scheduler, admission, subprocess communication or OS process reaping.
     """
-    prober, account, stream = capacity_probe
+    prober, account, stream = unlimited_probe
     prepare_probe_all(prober, entrypoint != "probe_all_sequential")
     prober._run_ffprobe = StreamProber._run_ffprobe.__get__(prober)
     count = 1 if entrypoint in ("single", "probe_all_sequential") else 2

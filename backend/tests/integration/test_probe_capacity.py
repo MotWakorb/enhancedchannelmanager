@@ -210,45 +210,98 @@ async def test_http_pipeline_reassignment_rejects_stale_route_before_media(
     assert not prober._probe_profile_connections
 
 
-async def test_real_http_one_free_slot_and_later_viewer_arrival(
+async def test_real_http_free_slot_then_viewer_arrival_never_opens_limited_media(
     upstream, integrated_probe, async_client, monkeypatch
 ):
     prober = integrated_probe
     upstream.active = 1
-    started, release = asyncio.Event(), asyncio.Event()
+    # The actual control API reports a free slot. It is not a reservation.
+    assert len((await prober.client.get_channel_stats())["channels"]) == 1
+    prober._resolve_channel_group_ids = AsyncMock(return_value=None)
+    prober._fetch_channel_stream_ids = AsyncMock(return_value=({7}, {}, {}))
+    await prober._probe_capacity_lock.acquire()
+    assert (
+        prober.schedule_probe(skip_m3u_refresh=True, allow_reorder_after_probe=False)[
+            "status"
+        ]
+        == "started"
+    )
+    owner = prober._probe_run_task
+    first = asyncio.create_task(prober.probe_stream(7, upstream.stream["url"]))
+    try:
+        assert (await prober.probe_streams_by_ids([7]))["status"] == "already_running"
+        assert upstream.media_requests == 0
+        # Viewer arrives after that free-slot observation, while work is queued.
+        upstream.active = 2
+    finally:
+        prober._probe_capacity_lock.release()
+        result = await asyncio.wait_for(first, 3)
+    assert result["probe_status"] == "skipped"
+    assert (await asyncio.wait_for(owner, 3))["status"] == "deferred"
+    assert upstream.media_requests == 0
+    response = await async_client.post("/api/stream-stats/probe/7")
+    assert response.json()["probe_status"] == "skipped"
+    assert response.json()["deferred_reason"]
+    assert upstream.media_requests == 0
+    saved = (await async_client.get("/api/stream-stats/7")).json()
+    assert saved["video_bitrate"] == 1234
+    assert saved["stream_name"] == "Prior healthy measurement"
+    assert saved["probe_status"] == "success"
+    assert not prober._probe_account_connections
+    assert not prober._probe_profile_connections
+
+
+async def test_real_http_explicit_unlimited_still_measures_and_serializes_health(
+    upstream, integrated_probe, async_client, monkeypatch
+):
+    prober = integrated_probe
+    upstream.account["max_streams"] = upstream.account["profiles"][0]["max_streams"] = 0
     metadata = json.loads((FIXTURES / "gh980_generated_local_ffprobe.json").read_text())
 
     async def decode_substitute(url, **_kwargs):
         async with stream_request(url) as response:
             response.raise_for_status()
             await response.aread()
-            started.set()
-            await release.wait()
         return metadata
 
     monkeypatch.setattr(prober, "_run_ffprobe", decode_substitute)
-    first = asyncio.create_task(prober.probe_stream(7, upstream.stream["url"]))
-    try:
-        await asyncio.wait_for(started.wait(), 3)
-        response = await async_client.post("/api/stream-stats/probe/7")
-        assert response.json()["probe_status"] == "skipped"
-        assert upstream.media_requests == 1
-        # An upstream viewer can arrive after our read: no upstream reservation
-        # exists. The in-flight direct probe is NOT claimed as viewer-safe.
-        upstream.active = 2
-    finally:
-        release.set()
-        result = await asyncio.wait_for(first, 3)
-    assert result["probe_status"] == "success"
-    assert upstream.media_requests == 2  # Decode substitute + real bitrate read.
     response = await async_client.post("/api/stream-stats/probe/7")
-    assert response.json()["probe_status"] == "skipped"
-    assert upstream.media_requests == 2
+    assert response.json()["probe_status"] == "success"
+    assert upstream.media_requests == 2  # Substitute metadata + real bitrate HTTP.
     saved = (await async_client.get("/api/stream-stats/7")).json()
     assert saved["resolution"] == "640x480"
     assert saved["probe_status"] == "success"
-    assert not prober._probe_account_connections
-    assert not prober._probe_profile_connections
+
+
+async def test_actual_http_deferred_progress_and_per_stream_reason_are_operator_visible(
+    upstream, integrated_probe, async_client
+):
+    from stream_prober import PROBE_DEFERRED_REASON
+
+    response = await async_client.post("/api/stream-stats/probe/7")
+    single = response.json()
+    assert single["probe_status"] == "skipped"
+    assert single["error_message"] == single["deferred_reason"] == PROBE_DEFERRED_REASON
+    response = await async_client.post(
+        "/api/stream-stats/probe/bulk", json={"stream_ids": [7]}
+    )
+    assert response.json()["status"] == "started"
+    task = integrated_probe._probe_run_task
+    if task is not None:
+        await asyncio.wait_for(task, 3)
+    progress = (await async_client.get("/api/stream-stats/probe/progress")).json()
+    assert progress["status"] == "deferred"
+    assert progress["deferred_reason"] == PROBE_DEFERRED_REASON
+    assert progress["skipped_count"] == 1
+    assert not progress["in_progress"]
+    history = (await async_client.get("/api/stream-stats/probe/history")).json()
+    assert upstream.media_requests == 0
+    print(
+        "DEFERRED_HTTP_WIRE "
+        + json.dumps(
+            {"single": single, "progress": progress, "history": history}, sort_keys=True
+        )
+    )
 
 
 async def test_real_http_status_failure_skips(upstream, integrated_probe, async_client):
@@ -281,7 +334,7 @@ async def test_real_http_scheduler_rewrite_fallback_never_opens_default_media(
     result = await prober.probe_all_streams(
         skip_m3u_refresh=True, allow_reorder_after_probe=False
     )
-    assert result["status"] == "completed"
+    assert result["status"] == "deferred"
     assert prober.get_probe_progress()["skipped_count"] == 1
     assert prober.get_probe_progress()["failed_count"] == 0
     assert upstream.media_requests == 0

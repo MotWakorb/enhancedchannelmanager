@@ -2154,14 +2154,17 @@ export function ChannelsPane({
           logger.debug(`[ChannelsPane] Probe progress for '${groupName}':`, progress);
 
           if (!progress.in_progress) {
-            // Probe completed - clear the spinner
+            // Terminal includes deferred runs that deliberately started no media.
             clearInterval(pollInterval);
             setProbingGroups((prev) => {
               const next = new Set(prev);
               next.delete(groupId);
               return next;
             });
-            logger.info(`[ChannelsPane] Probe completed for group '${groupName}'`);
+            if (progress.status === 'deferred') {
+              notifications.warning(progress.deferred_reason || 'Probe deferred to protect viewers; provider capacity is limited or unverified.', 'Stream Probe Deferred');
+            }
+            logger.info(`[ChannelsPane] Probe stopped for group '${groupName}': ${progress.status}`);
           }
         } catch (err) {
           // If we can't get progress, stop polling and clear spinner

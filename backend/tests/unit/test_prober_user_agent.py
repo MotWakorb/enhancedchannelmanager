@@ -19,7 +19,7 @@ async def test_full_probe_and_retry_send_account_ua_at_provider_boundary(tmp_pat
     client = AsyncMock()
     client.get_stream.return_value = {"id": 42, "url": "https://provider.example/live.ts", "m3u_account": 8, "stream_profile_id": 999}
     client.get_m3u_accounts.return_value = [{
-        "id": 8, "max_streams": 0,
+        "id": 8, "max_streams": 0, "server_group": None,
         "profiles": [{"id": 12, "is_default": True, "is_active": True, "max_streams": 0}],
     }]
     client.get_channel_stats.return_value = {"channels": []}

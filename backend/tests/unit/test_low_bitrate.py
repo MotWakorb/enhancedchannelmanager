@@ -14,7 +14,7 @@ from config import DispatcharrSettings, StreamSortPointRule
 from models import StreamStats
 from smart_sort_evaluator import PointRule, StreamFacts, evaluate_points, sort_streams
 from stream_prober import StreamProber
-from tests.conftest import accountless_probe_stream
+from tests.conftest import unlimited_probe_stream as accountless_probe_stream  # legacy call-site alias; real unlimited admission
 
 
 @pytest.fixture
@@ -225,10 +225,10 @@ def test_self_healing_prober_uses_configured_threshold_and_toggle(monkeypatch):
 async def test_probe_all_envelope_tracks_low_bitrate(prober, parallel):
     prober.parallel_probing_enabled = parallel
     prober.client = AsyncMock()
-    prober.client.get_m3u_accounts.return_value = []
-    prober.client.get_channel_stats.return_value = {"channels": []}
     prober._fetch_channel_stream_ids = AsyncMock(return_value=({1}, {}, {}))
-    prober._fetch_all_streams = AsyncMock(return_value=[{"id": 1, "name": "Local", "url": "https://fixture.invalid/local.ts", "m3u_account": None}])
+    stream = accountless_probe_stream(prober, 1, "https://fixture.invalid/local.ts")
+    stream["name"] = "Local"
+    prober._fetch_all_streams = AsyncMock(return_value=[stream])
     prober.client.get_stream = AsyncMock(return_value=prober._fetch_all_streams.return_value[0])
     prober._run_ffprobe = AsyncMock(return_value=metadata())
     prober._measure_stream_bitrate = AsyncMock(return_value=100)
@@ -241,7 +241,9 @@ async def test_probe_all_envelope_tracks_low_bitrate(prober, parallel):
 
 @pytest.mark.asyncio
 async def test_bulk_probe_persists_flag_and_history_independent_of_toggle(prober):
-    prober._fetch_all_streams = AsyncMock(return_value=[{"id": 1, "name": "Local test", "url": "https://fixture.invalid/local.ts", "m3u_account": None}])
+    stream = accountless_probe_stream(prober, 1, "https://fixture.invalid/local.ts")
+    stream["name"] = "Local test"
+    prober._fetch_all_streams = AsyncMock(return_value=[stream])
     prober.client.get_stream = AsyncMock(return_value=prober._fetch_all_streams.return_value[0])
     prober._run_ffprobe = AsyncMock(return_value=metadata())
     prober._measure_stream_bitrate = AsyncMock(return_value=100)

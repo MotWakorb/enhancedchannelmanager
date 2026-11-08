@@ -2148,7 +2148,7 @@ class ChannelPipelineEngine:
         This runs after Pass 1 (match collection) and before sorting,
         so that quality data is available for the sort.
         """
-        from stream_prober import get_prober
+        from stream_prober import PROBE_DEFERRED_REASON, get_prober
 
         # Collect streams that need probing
         rule_map = {r.id: r for r in rules}
@@ -2236,7 +2236,7 @@ class ChannelPipelineEngine:
             "rules_evaluated": [],
             "actions_executed": [{
                 "type": "probe_streams",
-                "description": f"Probed {probed}/{count} unprobed stream(s) for quality sorting; {skipped} skipped",
+                "description": f"Probed {probed}/{count} unprobed stream(s) for quality sorting; {skipped} skipped" + (f"; {PROBE_DEFERRED_REASON}" if skipped else ""),
                 "success": True,
                 "entity_id": None,
                 "error": None
@@ -5618,7 +5618,7 @@ class ChannelPipelineEngine:
         dry_run: bool
     ):
         """Probe streams that were queued by probe_streams actions."""
-        from stream_prober import get_prober
+        from stream_prober import PROBE_DEFERRED_REASON, get_prober
 
         # Build lookup from stream contexts
         stream_lookup = {}
@@ -5683,7 +5683,7 @@ class ChannelPipelineEngine:
             "stream_name": "[Pass 6] Probe Streams",
             "actions_executed": [{
                 "type": "probe_streams",
-                "description": f"Probed {probed}/{count} stream(s); {skipped} skipped"
+                "description": f"Probed {probed}/{count} stream(s); {skipped} skipped" + (f"; {PROBE_DEFERRED_REASON}" if skipped else "")
             }]
         })
 

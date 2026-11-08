@@ -2670,6 +2670,7 @@ export async function getProbeProgress(): Promise<{
   total: number;
   current: number;
   status: string;
+  deferred_reason?: string | null;
   current_stream: string;
   success_count: number;
   failed_count: number;
@@ -2689,6 +2690,7 @@ export async function getProbeProgress(): Promise<{
     total: number;
     current: number;
     status: string;
+    deferred_reason?: string | null;
     current_stream: string;
     success_count: number;
     failed_count: number;
@@ -2798,6 +2800,7 @@ export interface ProbeHistoryEntry {
   failed_count: number;
   skipped_count: number;
   status: string;
+  deferred_reason?: string | null;
   error?: string;
   success_streams: Array<{ id: number; name: string; url?: string }>;
   failed_streams: Array<{ id: number; name: string; url?: string; error?: string }>;

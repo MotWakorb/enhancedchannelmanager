@@ -190,14 +190,18 @@ def vlc_stream_user_agent(monkeypatch):
     monkeypatch.setattr(get_settings(), "stream_user_agent", "vlc")
 
 
-def accountless_probe_stream(prober, stream_id: int, url: str) -> dict:
-    """Complete synthetic metadata, returned by the real admission read as well.
+def unlimited_probe_stream(prober, stream_id: int, url: str) -> dict:
+    """Recorded explicit-zero account + synthetic URL/ID for media/security tests.
 
-    Media/security tests still exercise stream identity checks; this configures
-    their control-plane mock rather than bypassing admission.
+    The real policy, route and SSRF checks all run; no admission helper is mocked.
     """
-    stream = {"id": stream_id, "url": url, "m3u_account": None}
+    import json
+
+    account = json.loads((Path(__file__).parent / "fixtures/bd_igqcy/dispatcharr_v0272_m3u_account.json").read_text())
+    stream = {"id": stream_id, "url": url, "m3u_account": account["id"]}
     prober.client.get_stream = AsyncMock(return_value=dict(stream))
+    prober.client.get_m3u_accounts = AsyncMock(return_value=[account])
+    prober.client.get_channel_stats = AsyncMock(return_value={"channels": []})
     return stream
 
 

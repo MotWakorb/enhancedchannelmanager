@@ -15,7 +15,7 @@
  * minimal prop set. ChannelsPane has no general-purpose test suite.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ChannelsPane } from './ChannelsPane';
 import { NotificationProvider } from '../contexts/NotificationContext';
@@ -214,6 +214,29 @@ describe('ChannelsPane group actions menu', () => {
     expect(interval).toHaveBeenCalledWith(expect.any(Function), 2000);
     await openGroupMenu(container, 'Drill Locals');
     expect(screen.getByRole('button', { name: /Probing\.\.\./ })).toBeDisabled();
+  });
+
+  it('surfaces a terminal deferred reason and clears the group spinner', async () => {
+    const user = userEvent.setup();
+    const reason = 'Probe deferred: provider capacity is limited or unverified; shared viewer coordination is unavailable';
+    vi.spyOn(api, 'probeAllStreams').mockResolvedValue({ status: 'started', message: 'Background probe started' });
+    vi.spyOn(api, 'getProbeProgress').mockResolvedValue({
+      in_progress: false, status: 'deferred', deferred_reason: reason, total: 1, current: 1,
+      current_stream: '', success_count: 0, failed_count: 0, skipped_count: 1,
+      black_screen_count: 0, low_fps_count: 0, percentage: 100,
+    });
+    const interval = vi.spyOn(globalThis, 'setInterval').mockReturnValue(123 as unknown as ReturnType<typeof setInterval>);
+    const { container } = renderPane({
+      channels: [makeChannel(1, 'Alpha', MANUAL_GROUP_ID)],
+      channelGroups: [{ id: MANUAL_GROUP_ID, name: 'Drill Locals', channel_count: 1 }],
+    });
+    await openGroupMenu(container, 'Drill Locals');
+    await user.click(screen.getByRole('button', { name: /Probe Group/ }));
+    const poll = interval.mock.calls.find(([, delay]) => delay === 2000)![0] as () => Promise<void>;
+    await act(async () => { await poll(); });
+    expect(await screen.findByText(reason)).toBeVisible();
+    await openGroupMenu(container, 'Drill Locals');
+    expect(screen.getByRole('button', { name: /Probe Group/ })).toBeEnabled();
   });
 
   it('never offers Delete Group on a provider-backed group, empty or not', async () => {

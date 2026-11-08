@@ -56,6 +56,8 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import './SettingsTab.css';
 
+const PROBE_DEFERRED_MESSAGE = 'Probe deferred: provider capacity is limited or unverified; shared viewer coordination is unavailable';
+
 // Sort priority item configuration
 const SORT_CRITERION_CONFIG: Record<SortCriterion, { icon: string; label: string; description: string }> = {
   resolution: { icon: 'aspect_ratio', label: 'Resolution', description: '4K > 1080p > 720p' },
@@ -828,6 +830,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     total: number;
     current: number;
     status: string;
+    deferred_reason?: string | null;
     current_stream: string;
     success_count: number;
     failed_count: number;
@@ -1149,6 +1152,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             notifications.error('Probe failed', 'Stream Probe');
           } else if (progress.status === 'cancelled') {
             notifications.warning('Probe was cancelled', 'Stream Probe');
+          } else if (progress.status === 'deferred') {
+            notifications.warning(progress.deferred_reason || PROBE_DEFERRED_MESSAGE, 'Stream Probe Deferred');
           }
         }
       } catch (err) {
@@ -2291,13 +2296,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       // background. The declared type is stale; see enhancedchannelmanager-n4g7g follow-up
       // bead for fixing it (and its two other ChannelsPane.tsx callers) at the source.
       const startResult = await api.probeBulkStreams(streamIds) as unknown as {
-        status: 'started' | 'already_running';
+        status: string;
         message?: string;
         total?: number;
       };
 
       if (startResult.status === 'already_running') {
         notifications.warning('A probe is already in progress; try again once it finishes.');
+        return;
+      }
+      if (startResult.status !== 'started') {
+        notifications.warning(startResult.message || 'The probe could not be started; try again.');
         return;
       }
 
@@ -2308,7 +2317,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       while (true) {
         await new Promise((resolve) => setTimeout(resolve, 1500));
         const progress = await api.getProbeProgress();
-        if (!progress.in_progress) break;
+        if (!progress.in_progress) {
+          if (progress.status === 'deferred') {
+            notifications.warning(progress.deferred_reason || PROBE_DEFERRED_MESSAGE, 'Stream Probe Deferred');
+            return;
+          }
+          if (progress.status !== 'completed') {
+            notifications.warning(`Probe stopped (${progress.status}).`, 'Stream Probe');
+            return;
+          }
+          break;
+        }
       }
 
       notifications.success(`Finished probing ${streamIds.length} stream(s).`);
@@ -5717,6 +5736,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       )}
 
+      {!probingAll && probeProgress?.status === 'deferred' && (
+        <p role="status" aria-label="Stream probe deferred" className="form-hint">
+          {probeProgress.deferred_reason || PROBE_DEFERRED_MESSAGE}
+        </p>
+      )}
+
       {/* Reset Probe State — rendered UNCONDITIONALLY, and that is the whole
           point (bead enhancedchannelmanager-xg9gp).
 
@@ -5827,6 +5852,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       {entry.total} streams in {formatDuration(entry.duration_seconds)}
                       {entry.error && <span style={{ color: '#e74c3c' }}> - {entry.error}</span>}
                     </div>
+                    {entry.status === 'deferred' && (
+                      <div className="form-hint">{entry.deferred_reason || PROBE_DEFERRED_MESSAGE}</div>
+                    )}
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -5886,7 +5914,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                         alignItems: 'center',
                         gap: '0.3rem'
                       }}
-                      title="View skipped streams (M3U at max connections)"
+                      title="View skipped streams"
                     >
                       <span className="material-icons" style={{ fontSize: '16px' }}>block</span>
                       {entry.skipped_count}

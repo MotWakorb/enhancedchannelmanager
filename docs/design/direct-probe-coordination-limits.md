@@ -1,12 +1,16 @@
 # Direct probes and later Dispatcharr viewers
 
-Remaining acceptance boundary for #1032 / `enhancedchannelmanager-0m06f.6.2`.
+Coordination boundary and selected restriction for #1032 / `enhancedchannelmanager-0m06f.6.2`.
 
 ECM can serialize its own direct-probe reservations against freshly observed
 Dispatcharr occupancy. It cannot atomically reserve a provider connection on
 behalf of a direct probe against a viewer admitted later by another process.
-The local admission repair is therefore partial, not a claim that the late-viewer
-scenario is solved. No routing or reserved-slot setting is introduced implicitly.
+The PO has now explicitly selected a temporary **fail-closed restriction**:
+limited/unverified providers receive no direct probe connection even with free
+slots. This resolves the late-viewer safety reproduction by restriction, not by
+implementing leases. Explicit-unlimited, ungrouped routes retain direct
+measurement and all existing SSRF/ownership controls. No unsafe override, proxy,
+preemption or reserved-slot setting is introduced.
 
 ## Inspected upstream contracts
 
@@ -38,16 +42,16 @@ provider connection has closed before capacity becomes reusable.
 
 ## Product boundary
 
-Two possible directions require an explicit disposition:
+The selected current policy is documented in [the operator contract](../probe-capacity.md).
+All account/profile limits must be explicit integer zero, with explicit absence
+of shared grouping. Grouped or missing capacity declarations cannot be blessed
+from an unrecorded/guessed grouping schema. A finite sibling profile cannot be
+evaded by selecting an unlimited alternate. Null-account routes are unverified.
 
-1. Keep direct measurements with shared local admission, while retaining the
-   late-viewer case as an unresolved upstream coordination requirement. Do not
-   close #1032 or describe the entire P1 as fixed on this evidence.
-2. Review a proxy/routing policy against a pinned supported Dispatcharr version,
-   explicitly deciding whether a probe may deny a later viewer and whether
-   measuring Dispatcharr output instead of the raw provider route is acceptable.
-   Verify preview/channel isolation and provider-close-before-slot-reuse ordering
-   against an actual disposable upstream before claiming the stronger behavior.
+Future `enhancedchannelmanager-88yso` tracks restoring limited-provider probing
+with a supported shared lease/revocation/provider-close-ack contract and an
+explicit expiry/partition policy. That future functionality is not a dependency
+of the PO-selected current P1 safety restriction.
 
 Proxying changes the measured network leg, buffering/output processing, profile
 selection and potentially source IP/VPN/reachability. It also needs a reviewed
@@ -55,9 +59,9 @@ trusted origin, safe stream-hash construction, auth/network permissions and
 redirect/SSRF controls; broad private-network exemptions are not a safe shortcut.
 Following a provider redirect can recreate the unaccounted direct connection.
 
-Neither direction is implicitly authorized by the bounded local admission fix.
-Preserving both raw direct measurement and guaranteed protection for later viewers
-requires coordination beyond the demonstrated local contracts.
+Proxy/preemption/upstream-fork alternatives remain unauthorized. Preserving raw
+direct measurement on limited accounts while guaranteeing protection for later
+viewers still requires coordination beyond the demonstrated local contracts.
 
 [allocator]: https://github.com/Dispatcharr/Dispatcharr/blob/cd3f6c509d74ad7618d870e5673476928d528de9/apps/m3u/connection_pool.py#L261-L313
 [stream]: https://github.com/Dispatcharr/Dispatcharr/blob/cd3f6c509d74ad7618d870e5673476928d528de9/apps/channels/models.py#L219-L286

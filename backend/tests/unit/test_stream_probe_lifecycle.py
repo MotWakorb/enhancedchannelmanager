@@ -15,10 +15,11 @@ from config import DispatcharrSettings
 from tests.unit.test_stream_probe_capacity import (
     URL,
     prepare_probe_all,
+    unlimited_probe,
 )
-from tests.unit.test_stream_probe_capacity import (
-    capacity_probe as capacity_probe,  # noqa: PLC0414 - pytest fixture re-export
-)
+
+# Preserve the existing fixture name while exercising real unlimited admission.
+capacity_probe = unlimited_probe
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("vlc_stream_user_agent")]
 
@@ -171,8 +172,8 @@ def rebuild_services(capacity_probe, monkeypatch):
 async def test_settings_rebuild_drains_active_probe_and_waiter_before_replacement(
     capacity_probe, rebuild_services, lane, interrupt_rebuild
 ):
-    prober, account, stream = capacity_probe
-    account["max_streams"] = account["profiles"][0]["max_streams"] = 1
+    prober, _, stream = capacity_probe
+    # Declared-unlimited control exercises cleanup/ownership, not a policy bypass.
     started, cleaning, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
     waiter_fetching = asyncio.Event()
     original_get_stream = prober.client.get_stream.side_effect
