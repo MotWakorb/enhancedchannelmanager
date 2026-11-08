@@ -20,7 +20,7 @@ The proposed accompanying-image source path is `/usr/share/ecm/sources/python/`;
 
 Details: `../../arm64-current/REPORT.md`; new tree integrity: `SHA256SUMS`.
 
-## Stable-Alpine GNU correspondence (not source clearance)
+## Stable-Alpine GNU correspondence (bounded source proof)
 
 `artifact-index/musllinux-gnu.json` is a separate, hash-pinned map for the
 unchanged musllinux selection. It does not replace or relabel the historical
@@ -35,11 +35,23 @@ executing target ELFs. Comparison tools are pinned AMD64 binaries; this verifies
 ARM **artifact bytes**, not ARM execution.
 
 The explicit `--binary-only` result is `BINARY_ONLY_NO_SOURCE_CLEARANCE`, never
-source/advisory/final-image approval. The default source gate fails: matching
-source delivery is not integrated, and the GCC 12.4 OCI build recipe cloned an
-unpinned `musl-cross-make` revision then removed its checkout/log. A retrieved
-candidate revision and matching upstream archive do not establish that original
-revision. Producer metadata remains raw, including cryptography ARM's
+source/advisory/final-image approval. Earlier default-source denials are retained.
+The GCC 12.4 publisher removed its unpinned source checkout/log; the exact
+original revision is still unknown. Corresponding source is now established
+independently: a pinned source/recipe build reproduces the complete AMD64 ELF;
+the ARM-target build also matches after upstream version-map generation uses
+mawk, not BusyBox awk or gawk. This is ARM artifact proof, not ARM execution.
+
+`scripts/collect_musllinux_gnu_sources.py` copies the 27 reviewed source archives,
+recipes, notices and proof files from an offline hash-named cache. The default
+GNU verifier rehashes the entire delivered source tree as well as all wheel and
+GNU ELF bindings. It passed on the actual complete delivery; changing only a
+runtime-exception notice in a separate negative copy is rejected. No status
+label substitutes for actual source bytes, and copying a candidate never upgrades
+its authentication status. This closes only the GNU subset, not other wheel
+components or production source/SBOM/advisory integration.
+
+Producer metadata remains raw, including cryptography ARM's
 `pkg:apk/NotpineForGHA/libgcc@14.2.0-r6`; it is not normalized into Alpine or
 used as corresponding-source authority.
 

@@ -295,23 +295,27 @@ def test_source_status_labels_cannot_substitute_for_delivered_source_bytes(verif
         verifier.require_source_closure(manifest)
 
 
+@pytest.mark.parametrize(
+    "status", ["AUTHENTICATED_PROVIDER_SOURCE", "REPRODUCED_CORRESPONDING_SOURCE"]
+)
 def test_source_closure_rehashes_every_delivered_file_and_rejects_extras(
-    verifier, tmp_path
+    verifier, tmp_path, status
 ):
     directory = tmp_path / "gcc-source"
     directory.mkdir()
     archive = directory / "gcc.tar.xz"
     archive.write_bytes(b"synthetic source-binding negative-control fixture")
     manifest = {
+        "objects": [{"source_closure": "gcc-source"}],
         "source_closures": {
             "gcc-source": {
-                "status": "AUTHENTICATED_PROVIDER_SOURCE",
-                "delivery_status": "VERIFIED_DELIVERED",
+                "status": status,
+                "delivery_status": "REQUIRES_VERIFIED_DELIVERY",
                 "source_files": [
                     {"path": archive.name, "sha256": verifier.sha256(archive)}
                 ],
             }
-        }
+        },
     }
     verifier.require_source_closure(manifest, tmp_path)
     archive.write_bytes(b"changed source")
@@ -335,3 +339,53 @@ def test_unchanged_gnu_members_do_not_allow_mutated_other_wheels(verifier, tmp_p
         wheel.writestr("example/hidden.so", b"new unindexed ELF, unchanged GNU names")
     with pytest.raises(verifier.AttributionError, match="whole-wheel identity"):
         verifier.inspect_wheels(manifest, tmp_path)
+
+
+def test_verification_cannot_create_work_inside_delivered_source_inputs(
+    verifier, tmp_path
+):
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    (sources / "operator-file").write_bytes(b"preserve")
+    for name in ["wheels", "originals", "tools"]:
+        (tmp_path / name).mkdir()
+    with pytest.raises(verifier.AttributionError, match="disjoint"):
+        verifier.verify(
+            verifier.load_manifest(MANIFEST),
+            tmp_path / "wheels",
+            tmp_path / "originals",
+            tmp_path / "tools",
+            sources / "new-work",
+            tmp_path / "receipt.json",
+            source_root=sources,
+        )
+    assert sorted(p.name for p in sources.iterdir()) == ["operator-file"]
+
+
+def test_empty_source_binding_table_cannot_clear_real_gnu_objects(verifier, tmp_path):
+    manifest = copy.deepcopy(verifier.load_manifest(MANIFEST))
+    manifest["source_closures"] = {}
+    with pytest.raises(verifier.AttributionError, match="source family coverage"):
+        verifier.require_source_closure(manifest, tmp_path)
+
+
+def test_complete_source_root_rejects_unindexed_families_or_root_files(
+    verifier, tmp_path
+):
+    directory = tmp_path / "gcc-source"
+    directory.mkdir()
+    item = directory / "source"
+    item.write_bytes(b"synthetic source root negative control")
+    manifest = {
+        "objects": [{"source_closure": "gcc-source"}],
+        "source_closures": {
+            "gcc-source": {
+                "status": "REPRODUCED_CORRESPONDING_SOURCE",
+                "source_files": [{"path": "source", "sha256": verifier.sha256(item)}],
+            }
+        },
+    }
+    verifier.require_source_closure(manifest, tmp_path)
+    (tmp_path / "unindexed").write_bytes(b"undeclared")
+    with pytest.raises(verifier.AttributionError, match="source family coverage"):
+        verifier.require_source_closure(manifest, tmp_path)

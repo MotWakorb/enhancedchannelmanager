@@ -22,7 +22,7 @@ import zipfile
 import zlib
 from pathlib import Path
 
-MANIFEST_SHA256 = "6a42d893510f2d3fae6f4ca9e4e462020cd2e50a018aca42ae3bf423de384af2"
+MANIFEST_SHA256 = "609dac61e58e81d074d7996bcc13dff6620cfa2592f35cd97c6e659fbebdf615"
 GNU_MEMBER = re.compile(
     r"lib(?:gcc_s|stdc\+\+|gomp|gfortran|quadmath|atomic|itm)(?:-[A-Za-z0-9_+-]+)?\.so(?:\.[0-9]+)*\Z"
 )
@@ -230,11 +230,16 @@ def compare_members(actual: dict, expected: dict) -> None:
 
 
 def require_source_closure(manifest: dict, source_root: Path | None = None) -> None:
+    families = {row["source_closure"] for row in manifest["objects"]}
+    require(
+        families and families == set(manifest["source_closures"]),
+        "complete GNU source family coverage required",
+    )
     unresolved = [
         name
         for name, item in manifest["source_closures"].items()
-        if item["status"] != "AUTHENTICATED_PROVIDER_SOURCE"
-        or item["delivery_status"] != "VERIFIED_DELIVERED"
+        if item["status"]
+        not in {"AUTHENTICATED_PROVIDER_SOURCE", "REPRODUCED_CORRESPONDING_SOURCE"}
     ]
     require(
         not unresolved,
@@ -246,6 +251,10 @@ def require_source_closure(manifest: dict, source_root: Path | None = None) -> N
         and source_root.is_dir()
         and not source_root.is_symlink(),
         "GNU source closure requires actual delivered source bytes",
+    )
+    require(
+        {path.name for path in source_root.iterdir()} == families,
+        "complete GNU source family coverage mismatch",
     )
     for name, record in manifest["source_closures"].items():
         expected = record.get("source_files", [])
@@ -423,7 +432,10 @@ def verify(
         and not output.is_symlink(),
         "GNU attribution work/output locations must be fresh",
     )
-    for source in [wheels, originals, tools]:
+    inputs = [wheels, originals, tools]
+    if source_root is not None:
+        inputs.append(source_root)
+    for source in inputs:
         for target in [work, output]:
             require(
                 not target.resolve().is_relative_to(source.resolve())
@@ -434,7 +446,12 @@ def verify(
         "schema_version": 1,
         "manifest_sha256": MANIFEST_SHA256,
         "status": "FAILED",
-        "scope": "GNU binary correspondence only. No ELF execution, wheel modification, source/advisory/final-image clearance.",
+        "scope": (
+            "GNU binary correspondence only; no source clearance."
+            if binary_only
+            else "GNU binary/corresponding-source and delivered-byte binding only."
+        )
+        + " No target ELF execution, wheel modification, other wheel/APK source attribution, advisory or final-image clearance.",
         "source_closures": manifest["source_closures"],
         "replays": [],
         "failures": [],

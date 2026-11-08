@@ -330,17 +330,75 @@ python scripts/verify_musllinux_gnu.py \
 
 Preparation rechecks compressed APK control/index and payload-datahash joins,
 OCI compressed/diff-id hashes, exact regular archive members and tool bytes.
-The default verifier, **without** `--binary-only`, intentionally fails source
-closure after preserving the twelve successful replays. It cannot accept source
-status labels without independently hashing a complete delivered source tree.
-This is not wired as final production source clearance.
+The earlier default verifier, **without** `--binary-only`, correctly failed
+source closure after preserving the twelve successful replays. Those denials
+remain immutable historical receipts. It cannot accept source status labels
+without independently hashing a complete delivered source tree. The subsequent
+bounded GNU source closure below is not final production source clearance.
 
 GCC 14.2 source archive and all 40 local source inputs match the Git-object-
 verified APKBUILD at `fbf60319be3bbaf6dd32ef55cc6fb7189e05c266`. GCC 12.4's
 official OCI layers retain exact `config.mak` and the unpinned clone command, but
 delete the checkout and log. Source candidate `227df8b99103f9c59f6570babf892978e293082f`
 and its hash-matching upstream archive were retrieved; **the original build
-recipe revision is not yet authenticated**. Cryptography ARM's raw
+recipe revision is not yet authenticated**. Corresponding source is now proven
+independently below, without pretending to recover that removed revision.
+Cryptography ARM's raw
 `NotpineForGHA` producer PURL is preserved separately from the independent
 original-byte proof. None of these results clears source delivery, other wheel
 components/crates, external APK advisories, image SBOMs or final security scans.
+
+### GNU source reproduction and actual delivery
+
+The [source-reproduction receipt](evidence/stable-alpine-gnu12-source-reproduction-20261108.json.gz)
+retains both complete source-build transcripts, all eight hash-checked upstream
+inputs, pinned musl-cross-make recipe/configuration and the failed controls.
+On native AMD64 the complete source-built `libgcc_s.so.1` equals official
+rust-cross original `f685abf10f5e598c5fe7869915bfe476984bb73bee0fbf11a9c2bbb4ebd8a32e`.
+The ARM-target build initially differs in 129 bytes, confined to version tables;
+that candidate is **not accepted by section equality**. GCC's upstream
+`mkmap-symver.awk` iterates version roots in an awk-dependent order. With mawk,
+the source-generated map and unchanged source-built objects/compiler/linker
+produce the complete original ARM ELF
+`0bf60adc8e990861bcc846bdb16ce7e31ba0d82c01be2d6338e41ff14a6b6b52`.
+BusyBox awk and gawk controls differ and remain retained. No version-label edit,
+ELF normalization, target binary substitution or new tolerance is used.
+
+This is a native AMD64 compiler host and an ARM **cross-target artifact** proof,
+not ARM application execution. The original publisher checkout identity stays
+unknown; independently reproduced corresponding source is labeled
+`REPRODUCED_CORRESPONDING_SOURCE`, distinct from signed-provider source identity.
+The exact generated ARM linker-map input and reproduction instructions are
+retained in `docker/python-third-party/gnu-source-assets/` along with both pinned
+recipe archives, original configurations and verbatim GCC license/exception texts.
+
+`collect_musllinux_gnu_sources.py` delivers the reviewed **27** source archives,
+recipes, notices and proof files for the two GNU families, without installing
+anything, unpacking archives or upgrading a candidate's source status. After the
+input-preparation command above, run:
+
+```sh
+python scripts/collect_musllinux_gnu_sources.py \
+  --manifest docker/python-third-party/artifact-index/musllinux-gnu.json \
+  --cache-dir /inputs/gnu-source-cache --output-dir /proof/sources \
+  --receipt-file /proof/source-copy.json
+python scripts/verify_musllinux_gnu.py \
+  --manifest docker/python-third-party/artifact-index/musllinux-gnu.json \
+  --wheel-dir /inputs/wheels --original-dir /proof/prepared/originals \
+  --tool-dir /proof/prepared/tools --work-dir /proof/source-work \
+  --output-file /proof/source-receipt.json --sources-dir /proof/sources
+```
+
+The cache must contain every reviewed `source_files[].sha256` input named in the
+curated map; neither collector nor verifier downloads or trusts missing inputs.
+The actual offline, read-only/nonroot stable-Alpine run passed the default
+`GNU_SOURCE_ATTRIBUTED` gate: all 96 whole wheels, 18 GNU members, 12 complete ELF
+replays and 27 delivered source/recipe/notice/proof files. A separate delivery
+copy with only `COPYING.RUNTIME` changed fails after the same twelve replays.
+The [delivery receipt](evidence/stable-alpine-gnu-source-delivery-20261108.json.gz)
+binds the current curated map/helpers, complete delivered inventory, successful
+default gate and real corrupted-notice denial. Original earlier source denials
+and the 129-byte ARM candidate remain preserved in their separate receipts.
+This is only GNU subset closure. Production-image delivery/source consumers,
+other wheel components/crates, external APK attribution/advisories, SBOMs and
+the complete application/native-ARM/security matrices remain unfinished.
