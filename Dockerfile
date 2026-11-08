@@ -15,9 +15,19 @@ RUN npm run build
 FROM registry.opensuse.org/opensuse/tumbleweed@sha256:c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55 AS native-builder
 COPY scripts/build_native_runtime.py /tmp/build_native_runtime.py
 COPY docker/native/ /tmp/native/
-RUN zypper --non-interactive install --no-recommends python312-base \
+COPY docker/native-cache/ /tmp/native-cache/
+RUN case "$(uname -m)" in \
+        x86_64) repository=https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/; metadata=36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6 ;; \
+        aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/; metadata=374a893f64518ff85a66f866d88e0aab77d0fbeb78f83eaa5fe140947a0495ce ;; \
+        *) exit 1 ;; \
+    esac \
+    && rm -f /etc/zypp/repos.d/*.repo \
+    && zypper --non-interactive addrepo --check --gpgcheck --refresh "$repository" oss \
+    && zypper --non-interactive refresh \
+    && echo "$metadata  /var/cache/zypp/raw/oss/repodata/repomd.xml" | sha256sum --check --strict \
+    && zypper --non-interactive --no-refresh install --no-recommends python312-base \
     && case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \
-    && python3.12 /tmp/build_native_runtime.py --manifest /tmp/native/manifest.json --work-dir /tmp/native-work --output-dir /tmp/native-output --arch "$arch"
+    && python3.12 /tmp/build_native_runtime.py --manifest /tmp/native/manifest.json --work-dir /tmp/native-work --output-dir /tmp/native-output --arch "$arch" --cache-dir /tmp/native-cache
 
 # Resolve one runtime graph, without retaining compilers or development headers.
 FROM registry.opensuse.org/opensuse/tumbleweed@sha256:c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55 AS runtime-base
@@ -25,17 +35,18 @@ COPY --from=native-builder /tmp/native-output/runtime-rpms/ /tmp/runtime-rpms/
 COPY --from=native-builder /tmp/native-output/runtime-packages.txt /tmp/runtime-packages.txt
 COPY --from=native-builder /tmp/native/packman.asc /tmp/packman.asc
 RUN case "$(uname -m)" in \
-        x86_64) repository=https://download.opensuse.org/tumbleweed/repo/oss/ ;; \
-        aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/ ;; \
+        x86_64) repository=https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/; metadata=36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6 ;; \
+        aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/; metadata=374a893f64518ff85a66f866d88e0aab77d0fbeb78f83eaa5fe140947a0495ce ;; \
         *) exit 1 ;; \
     esac \
     && rm -f /etc/zypp/repos.d/*.repo \
     && zypper --non-interactive addrepo --check --gpgcheck --refresh "$repository" oss \
     && zypper --non-interactive refresh \
-    && zypper --non-interactive update --no-recommends \
+    && echo "$metadata  /var/cache/zypp/raw/oss/repodata/repomd.xml" | sha256sum --check --strict \
+    && zypper --non-interactive --no-refresh update --no-recommends \
     && rpm --import /tmp/packman.asc \
     && rpm --checksig /tmp/runtime-rpms/*.rpm \
-    && zypper --non-interactive install --no-recommends /tmp/runtime-rpms/*.rpm \
+    && zypper --non-interactive --no-refresh install --no-recommends /tmp/runtime-rpms/*.rpm \
         $(cat /tmp/runtime-packages.txt) python312 python312-base shadow coreutils bash timezone ca-certificates \
     && zypper clean --all
 # Selectively distrust compromised G3 even while an architecture's Mozilla RPM lags.
@@ -63,15 +74,29 @@ RUN uv venv --python /usr/bin/python3.12 /opt/venv \
 # Build resdet from a pinned source commit for both supported image architectures.
 FROM runtime-base AS resdet-builder
 COPY scripts/generate_sbom.py scripts/build_resdet.py sbom/native-dependencies.json /tmp/
-RUN zypper --non-interactive install --no-recommends gcc make pkgconf-pkg-config gawk \
+RUN case "$(uname -m)" in \
+        x86_64) metadata=36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6 ;; \
+        aarch64) metadata=374a893f64518ff85a66f866d88e0aab77d0fbeb78f83eaa5fe140947a0495ce ;; \
+        *) exit 1 ;; \
+    esac \
+    && zypper --non-interactive refresh \
+    && echo "$metadata  /var/cache/zypp/raw/oss/repodata/repomd.xml" | sha256sum --check --strict \
+    && zypper --non-interactive --no-refresh install --no-recommends gcc make pkgconf-pkg-config gawk \
     && python3.12 /tmp/build_resdet.py --manifest /tmp/native-dependencies.json --work-dir /tmp/resdet-work --output-dir /tmp/resdet-output
 
 # Retain exact sources for the runtime inventory, not the expanded builder graph.
 FROM native-builder AS source-builder
 COPY --from=runtime-base /tmp/runtime-inventory.tsv /tmp/runtime-inventory.tsv
 COPY scripts/collect_native_sources.py /tmp/collect_native_sources.py
-RUN rpm -q --qf '%{DESCRIPTION}\n' gpg-pubkey-29b700a4 > /tmp/suse.asc \
-    && python3.12 /tmp/collect_native_sources.py --inventory /tmp/runtime-inventory.tsv --arch "$(uname -m)" --out /tmp/rpm-source-output --suse-key /tmp/suse.asc --packman-key /tmp/native/packman.asc
+# All-origin collection: retain the exact expired AMD release source; other
+# SUSE origins remain fresh. Old whole-source carrier indexes are not reused.
+RUN case "$(uname -m)" in \
+        x86_64) set -- --retained-release-source /tmp/native-cache/93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123 ;; \
+        aarch64) set -- ;; \
+        *) exit 1 ;; \
+    esac \
+    && rpm -q --qf '%{DESCRIPTION}\n' gpg-pubkey-29b700a4 > /tmp/suse.asc \
+    && python3.12 /tmp/collect_native_sources.py --inventory /tmp/runtime-inventory.tsv --arch "$(uname -m)" --out /tmp/rpm-source-output --suse-key /tmp/suse.asc --packman-key /tmp/native/packman.asc --native-manifest /tmp/native/manifest.json --native-sources /tmp/native-output/sources "$@"
 
 # Production image
 FROM runtime-base

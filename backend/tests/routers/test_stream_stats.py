@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from models import StreamStats
+from stream_prober import StreamProber
 from tests.conftest import closing_create_task_mock
 
 
@@ -525,7 +526,8 @@ class TestProbeBulkStreams:
         it only schedules a background task. We assert the response comes back
         before any probing happens (asyncio.create_task is patched out).
         """
-        mock_prober = MagicMock()
+        mock_prober = StreamProber(client=AsyncMock())
+        mock_prober.probe_streams_by_ids = AsyncMock()
         mock_prober._probing_in_progress = False
 
         with patch("routers.stream_stats.ensure_prober", return_value=mock_prober), \
@@ -547,7 +549,7 @@ class TestProbeBulkStreams:
     @pytest.mark.asyncio
     async def test_rejects_concurrent_start_when_probe_running(self, async_client):
         """Honors single-probe-at-a-time: refuses to start over a running probe."""
-        mock_prober = MagicMock()
+        mock_prober = StreamProber(client=AsyncMock())
         mock_prober._probing_in_progress = True
 
         with patch("routers.stream_stats.ensure_prober", return_value=mock_prober), \
@@ -569,7 +571,7 @@ class TestProbeBulkStreams:
         We capture the coroutine handed to create_task and await it to confirm it
         delegates to the shared prober method (which owns the results envelope).
         """
-        mock_prober = MagicMock()
+        mock_prober = StreamProber(client=AsyncMock())
         mock_prober._probing_in_progress = False
         mock_prober.probe_streams_by_ids = AsyncMock(
             return_value={"status": "completed", "probed": 2, "total": 2, "success": 2, "failed": 0}
@@ -615,7 +617,7 @@ class TestProbeAllStreams:
     @pytest.mark.asyncio
     async def test_starts_background_probe(self, async_client):
         """Starts a background probe task."""
-        mock_prober = MagicMock()
+        mock_prober = StreamProber(client=AsyncMock())
         mock_prober._probing_in_progress = False
 
         with patch("routers.stream_stats.ensure_prober", return_value=mock_prober), \
@@ -626,9 +628,10 @@ class TestProbeAllStreams:
         assert response.json()["status"] == "started"
 
     @pytest.mark.asyncio
-    async def test_resets_stuck_probe(self, async_client):
-        """Resets stuck probe state before starting new one."""
-        mock_prober = MagicMock()
+    async def test_rejects_existing_probe_without_reset(self, async_client):
+        """A start request never force-resets or cancels the existing probe."""
+        mock_prober = StreamProber(client=AsyncMock())
+        mock_prober.force_reset_probe_state = MagicMock(wraps=mock_prober.force_reset_probe_state)
         mock_prober._probing_in_progress = True
 
         with patch("routers.stream_stats.ensure_prober", return_value=mock_prober), \
@@ -636,7 +639,8 @@ class TestProbeAllStreams:
             response = await async_client.post("/api/stream-stats/probe/all")
 
         assert response.status_code == 200
-        mock_prober.force_reset_probe_state.assert_called_once()
+        assert response.json()["status"] == "already_running"
+        mock_prober.force_reset_probe_state.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_returns_503_when_prober_unavailable(self, async_client):
@@ -912,7 +916,10 @@ class TestProbeSingleStream:
             response = await async_client.post("/api/stream-stats/probe/42")
 
         assert response.status_code == 200
-        mock_prober.probe_stream.assert_called_once_with(42, "http://example.com/42", "ESPN")
+        mock_prober.probe_stream.assert_called_once_with(
+            42, "http://example.com/42", "ESPN",
+            stream=mock_prober._fetch_all_streams.return_value[0],
+        )
 
     @pytest.mark.asyncio
     async def test_returns_404_when_stream_not_found(self, async_client):

@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import shutil
 import ssl
 import sys
 import tarfile
@@ -69,6 +70,45 @@ def test_real_two_arch_manifest_has_exact_public_inputs(builder, arch):
         assert selected["go_toolchain"] == _arm_go_descriptor()
     assert recipe["gosu"]["go_version"] == "1.26.10"
     assert recipe["gosu"]["modules"]["golang.org/x/sys"] == "v0.44.0"
+
+
+def test_amd_builder_selects_the_recorded_complete_pin_cohort(builder):
+    recipe = builder.load_recipe(ASSETS / "manifest.json", "amd64")
+    assert recipe["architectures"]["amd64"]["builder_repository"] == (
+        "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/"
+    )
+
+
+def test_retained_packman_cache_is_exact_complete_original_input_set():
+    recipe = json.loads((ASSETS / "manifest.json").read_text())
+    cache = ROOT / "docker/native-cache"
+    expected = set()
+    for selected in recipe["architectures"].values():
+        for item in [*selected["codec_rpms"], *selected["source_rpms"]]:
+            expected.add(item["sha256"])
+            path = cache / item["sha256"]
+            assert path.is_file() and not path.is_symlink()
+            assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"]
+    retained_release = "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123"
+    assert {p.name for p in cache.iterdir() if p.name != "README.md"} == expected | {retained_release}
+    assert len(expected) == 14
+
+
+@pytest.mark.parametrize("repository", [
+    "https://download.opensuse.org/tumbleweed/repo/oss/",
+    "https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/",
+    "https://download.opensuse.org/history/20261023/tumbleweed/repo/oss/",
+    "http://download.opensuse.org/history/20261022/tumbleweed/repo/oss/",
+])
+def test_builder_snapshot_cannot_silently_float_or_change(builder, tmp_path, repository):
+    assets = tmp_path / "native"
+    shutil.copytree(ASSETS, assets)
+    path = assets / "manifest.json"
+    data = json.loads(path.read_text())
+    data["architectures"]["amd64"]["builder_repository"] = repository
+    path.write_text(json.dumps(data))
+    with pytest.raises(builder.BuildError, match="builder repository"):
+        builder.load_recipe(path, "amd64")
 
 
 def test_recorded_rpm_headers_really_match_both_arch_manifests(builder):

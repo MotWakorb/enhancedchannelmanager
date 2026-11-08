@@ -211,17 +211,18 @@
     },
     {
       "name": "dnspython",
-      "version": "2.8.0",
+      "version": "2.9.0",
       "coverage": "byte-agnostic shared license/notice text, not an ARM-specific binary artifact assertion",
       "original_wheel_purelib": true,
-      "current_x86_metadata_sha256": "74f759539b89e299151b2d697c612307345b766dbb7e9435cf863a06981fd385",
+      "current_x86_metadata_sha256": "d25dbd09b39758cd5cebe518701012a6278731986cd384fc4a7f25e78f7de929",
       "shared_notices": [
         {
-          "shared_candidate_path": "notices/wheels/dnspython-2.8.0.dist-info/licenses/LICENSE",
+          "shared_candidate_path": "notices/upstream/dnspython-2.9.0/LICENSE",
           "sha256": "c3ea3ff5654b329c19d3bc5f7481af623c3dded4a6145585499f843ad3d741cd"
         }
       ],
-      "new_pure_python_wheel_downloaded": false
+      "new_pure_python_wheel_downloaded": true,
+      "targeted_update_evidence": "artifact-index/dnspython-2.9.0.json"
     },
     {
       "name": "email-validator",

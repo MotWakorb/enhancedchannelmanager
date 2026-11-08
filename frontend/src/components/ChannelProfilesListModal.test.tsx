@@ -56,8 +56,9 @@ const channelGroups: ChannelGroup[] = [];
 
 describe('ChannelProfilesListModal — bulk apply-to-selected (bead hq3de.i)', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.mocked(api.getChannelProfiles).mockResolvedValue([profile]);
+    vi.mocked(api.getChannelProfile).mockResolvedValue(profile);
   });
 
   async function openChannelsView() {
@@ -92,7 +93,8 @@ describe('ChannelProfilesListModal — bulk apply-to-selected (bead hq3de.i)', (
 
   it('applies enable to selected channels via the bulk endpoint and refreshes the profile', async () => {
     vi.mocked(api.bulkUpdateProfileChannels).mockResolvedValue({});
-    vi.mocked(api.getChannelProfile).mockResolvedValue({ id: 1, name: 'Kids Profile', channels: [10, 11] });
+    vi.mocked(api.getChannelProfile).mockResolvedValueOnce(profile)
+      .mockResolvedValue({ id: 1, name: 'Kids Profile', channels: [10, 11] });
 
     await openChannelsView();
 
@@ -101,10 +103,10 @@ describe('ChannelProfilesListModal — bulk apply-to-selected (bead hq3de.i)', (
     fireEvent.click(screen.getByText('Apply to Selected: Enable'));
 
     await waitFor(() => {
-      expect(api.bulkUpdateProfileChannels).toHaveBeenCalledWith(1, expect.arrayContaining([10, 11]), true);
+      expect(api.bulkUpdateProfileChannels).toHaveBeenCalledWith(1, [11], true);
     });
     await waitFor(() => {
-      expect(api.getChannelProfile).toHaveBeenCalledWith(1);
+      expect(api.getChannelProfile).toHaveBeenCalledWith(1, { fresh: true });
     });
     // Selection clears after a successful apply.
     await waitFor(() => {
@@ -114,7 +116,8 @@ describe('ChannelProfilesListModal — bulk apply-to-selected (bead hq3de.i)', (
 
   it('applies disable to selected channels via the bulk endpoint', async () => {
     vi.mocked(api.bulkUpdateProfileChannels).mockResolvedValue({});
-    vi.mocked(api.getChannelProfile).mockResolvedValue({ id: 1, name: 'Kids Profile', channels: [] });
+    vi.mocked(api.getChannelProfile).mockResolvedValueOnce(profile)
+      .mockResolvedValue({ id: 1, name: 'Kids Profile', channels: [] });
 
     await openChannelsView();
 
@@ -157,11 +160,11 @@ describe('ChannelProfilesListModal — bulk apply-to-selected (bead hq3de.i)', (
 
     await openChannelsView();
 
-    fireEvent.click(screen.getByLabelText('Select Cartoon Network for bulk apply'));
+    fireEvent.click(screen.getByLabelText('Select Nick Jr for bulk apply'));
     fireEvent.click(screen.getByText('Apply to Selected: Enable'));
 
     await waitFor(() => {
-      expect(mockError).toHaveBeenCalledWith('upstream rejected', 'Profiles');
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining('1 change(s) still pending after readback'), 'Profiles');
     });
   });
 });

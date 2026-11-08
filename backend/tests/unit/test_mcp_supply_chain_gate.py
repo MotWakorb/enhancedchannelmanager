@@ -34,6 +34,38 @@ def test_repository_satisfies_mcp_publication_policy():
     assert gate.check_repository(REPO_ROOT) == []
 
 
+@pytest.mark.parametrize("package", ["musl", "musl-utils"])
+@pytest.mark.parametrize("replacement", ["", "{package}", "'{package}>=1.2.6-r2'"])
+def test_policy_enforces_both_vendor_fixed_musl_packages(tmp_path, package, replacement):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    dockerfile = tmp_path / "mcp-server/Dockerfile"
+    contents = dockerfile.read_text()
+    required = f"'{package}>=1.2.6-r3'"
+    assert required in contents
+    dockerfile.write_text(
+        contents.replace(required, replacement.format(package=package), 1)
+    )
+    assert any(
+        "musl package floor" in failure for failure in gate.check_repository(tmp_path)
+    )
+
+
+def test_commented_musl_floors_do_not_satisfy_the_policy(tmp_path):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    dockerfile = tmp_path / "mcp-server/Dockerfile"
+    contents = dockerfile.read_text()
+    for package in ("musl", "musl-utils"):
+        required = f"'{package}>=1.2.6-r3'"
+        assert required in contents
+        contents = contents.replace(required, package, 1) + f"\n# {required}\n"
+    dockerfile.write_text(contents)
+    assert sum(
+        "musl package floor" in failure for failure in gate.check_repository(tmp_path)
+    ) == 2
+
+
 def _use_common_base(root: Path) -> Path:
     dockerfile = root / "Dockerfile"
     dockerfile.write_text(

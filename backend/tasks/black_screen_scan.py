@@ -2,12 +2,12 @@
 Black Screen Scan Task.
 
 Standalone task that runs black screen detection on already-probed streams
-without repeating the full probe (ffprobe/bitrate). Calls StreamProber._detect_black_screen()
-directly on each stream URL.
+without repeating the full probe (ffprobe/bitrate). Uses the prober's shared
+admission and owned cleanup with a black-screen-only measurement.
 """
 import asyncio
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Optional
 
 from database import get_session
@@ -189,17 +189,22 @@ class BlackScreenScanTask(TaskScheduler):
         black_count = 0
         clear_count = 0
         error_count = 0
+        deferred_count = 0
         completed = 0
         black_streams = []
         error_streams = []
 
         async def scan_one(stream_id: int, name: str, url: str):
-            nonlocal black_count, clear_count, error_count, completed
+            nonlocal black_count, clear_count, error_count, completed, deferred_count
             async with semaphore:
                 if self._cancel_requested:
                     return
                 try:
-                    is_black = await self._prober._detect_black_screen(url, stream_id=stream_id)
+                    result = await self._prober.probe_stream(stream_id, url, name, black_screen_only=True)
+                    if result.get("probe_status") == "skipped":
+                        deferred_count += 1
+                        return
+                    is_black = result["is_black_screen"]
 
                     # None = indeterminate (ffmpeg timed out or returned no
                     # YAVG samples). Count as an error and leave the existing
@@ -243,7 +248,7 @@ class BlackScreenScanTask(TaskScheduler):
                         current_item=name,
                         success_count=clear_count,
                         failed_count=black_count,
-                        skipped_count=error_count,
+                        skipped_count=error_count + deferred_count,
                     )
 
         # Save group names before finally block clears them (needed for post-scan reorder)
@@ -283,19 +288,19 @@ class BlackScreenScanTask(TaskScheduler):
             self._channel_groups = None
             self._auto_sync_groups = False
 
-        status = "cancelled" if self._cancel_requested else "completed"
+        status = "cancelled" if self._cancel_requested else "deferred" if deferred_count else "completed"
         self._set_progress(
             status=status,
             current=completed,
             total=total,
             success_count=clear_count,
             failed_count=black_count,
-            skipped_count=error_count,
+            skipped_count=error_count + deferred_count,
         )
 
         # Re-sort channels if black screens were found and auto-reorder is enabled
         reorder_count = 0
-        if black_count > 0 and not self._cancel_requested and self._prober.auto_reorder_after_probe:
+        if black_count > 0 and not self._cancel_requested and not deferred_count and self._prober.auto_reorder_after_probe:
             logger.info("[%s] %d black screen streams found, triggering smart sort reorder", self.task_id, black_count)
             self._set_progress(status="reordering", current_item="Reordering streams after black screen scan...")
             try:
@@ -322,8 +327,19 @@ class BlackScreenScanTask(TaskScheduler):
                 total_items=total,
                 success_count=clear_count,
                 failed_count=black_count,
-                skipped_count=error_count,
+                skipped_count=error_count + deferred_count,
                 details=details,
+            )
+
+        if deferred_count:
+            from stream_prober import PROBE_DEFERRED_REASON
+
+            details["deferred_reason"] = PROBE_DEFERRED_REASON
+            return TaskResult(
+                success=False, message=PROBE_DEFERRED_REASON, error="PROBE_DEFERRED",
+                started_at=started_at, completed_at=datetime.now(UTC).replace(tzinfo=None), total_items=total,
+                success_count=clear_count, failed_count=black_count,
+                skipped_count=error_count + deferred_count, details=details,
             )
 
         reorder_msg = f", reordered {reorder_count} channels" if reorder_count else ""

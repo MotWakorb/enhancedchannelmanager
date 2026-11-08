@@ -19,12 +19,20 @@ import stream_prober as stream_prober_module
 from stream_prober import StreamProber
 from smart_sort_evaluator import PointRule
 from security.stream_outbound import ValidatedSubprocessInput
+from tests.conftest import unlimited_probe_stream
 
 
 def _make_prober(client, **kwargs):
     # Patch history persistence to disk so unit tests don't touch /config.
     prober = StreamProber(client=client, **kwargs)
     prober._persist_probe_history = lambda: None
+
+    async def stream_metadata(stream_id):
+        return next(dict(row) for row in prober._fetch_all_streams.return_value if row["id"] == stream_id)
+
+    client.get_stream = AsyncMock(side_effect=stream_metadata)
+    unlimited_probe_stream(prober, 10, "https://provider.example/10")
+    client.get_stream = AsyncMock(side_effect=stream_metadata)
     return prober
 
 
@@ -45,6 +53,8 @@ def _blocking_process(started: asyncio.Event):
 
 
 def _prepare_bulk_probe(prober, streams):
+    for stream in streams:
+        stream["m3u_account"] = 11  # Recorded unlimited account; real policy runs.
     prober._fetch_all_streams = AsyncMock(return_value=streams)
     prober._create_probe_notification = AsyncMock()
     prober._update_probe_notification = AsyncMock()
@@ -143,7 +153,7 @@ async def test_bulk_cancellation_reaps_active_resdet_and_cancels_lock_waiters(tm
         _resdet_lock_path=lock_path,
     )
     streams = [
-        {"id": sid, "url": f"https://provider.example/{sid}", "name": f"Stream {sid}"}
+        {"id": sid, "url": f"https://provider.example/{sid}", "name": f"Stream {sid}", "m3u_account": 11}
         for sid in (10, 11, 12)
     ]
     ffmpeg = MagicMock(returncode=0, pid=4320)

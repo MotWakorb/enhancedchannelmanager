@@ -42,12 +42,23 @@ REPOSITORIES = {
         "fingerprint": "F8875B880D518B6B8C530D1345A1D0671ABD1AFB",
     },
 }
+# Exact authenticated release-source identity and original public origin. Its
+# retained input is location-only; this pin, never a caller index, authorizes it.
+EXACT_SOURCE_ROUTES = {
+    ("openSUSE", "x86_64", "openSUSE-release-20261105-4389.1.src.rpm"): {
+        "url": "https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261105-4389.1.src.rpm",
+        "sha256": "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123",
+    },
+}
 TOKEN = re.compile(r"[A-Za-z0-9_+~.-]+\Z")
 SOURCE_NAME = re.compile(r"[A-Za-z0-9_+~.-]+\.src\.rpm\Z")
 MAX_PAYLOAD = 2 * 1024**3
 
 
 def source_url(vendor: str, architecture: str, filename: str) -> str:
+    route = EXACT_SOURCE_ROUTES.get((vendor, architecture, filename))
+    if route:
+        return route["url"]
     return REPOSITORIES[vendor]["urls"][architecture] + "src/" + filename
 
 
@@ -432,7 +443,15 @@ class HTTPSRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def download(url: str, destination: Path, budget: Budget) -> dict:
-    if not any(
+    pinned_hash = next(
+        (
+            route["sha256"]
+            for route in EXACT_SOURCE_ROUTES.values()
+            if route["url"] == url
+        ),
+        None,
+    )
+    if pinned_hash is None and not any(
         url.startswith(base + "src/")
         and SOURCE_NAME.fullmatch(url[len(base + "src/") :])
         for repo in REPOSITORIES.values()
@@ -443,6 +462,7 @@ def download(url: str, destination: Path, budget: Budget) -> dict:
     if budget.count < 0:
         raise ValueError("download count limit exceeded")
     # No retry/fallback: failed exact-source availability is a build failure.
+    print("Collecting exact native source: " + url, flush=True)
     opener = urllib.request.build_opener(HTTPSRedirect())
     with opener.open(url, timeout=min(30, budget.remaining())) as response:
         if urllib.parse.urlsplit(response.geturl()).scheme != "https":
@@ -453,6 +473,8 @@ def download(url: str, destination: Path, budget: Budget) -> dict:
                 budget.consume(len(block))
                 output.write(block)
         budget.remaining()
+        if pinned_hash is not None and sha256(destination) != pinned_hash:
+            raise ValueError("pinned source checksum mismatch: " + url)
         return {"url": url, "final_url": response.geturl()}
 
 
@@ -499,6 +521,84 @@ def expected_hashes(path: Path | None, architecture: str, origins: list[tuple]) 
     return hashes
 
 
+def native_source_inputs(
+    manifest: Path | None,
+    directory: Path | None,
+    architecture: str,
+    origins: list[tuple],
+) -> dict:
+    """Reuse only the native recipe's existing exact Packman SRPM inputs.
+
+    Not a partial generic cache: SUSE origins remain fresh, and --cache-dir /
+    --expected-sha256 retain their complete all-origin coverage contract.
+    """
+    if manifest is None and directory is None:
+        return {}
+    if manifest is None or directory is None:
+        raise ValueError("native source handoff requires both manifest and directory")
+    if manifest.stat().st_size > 1024**2 or directory.is_symlink() or not directory.is_dir():
+        raise ValueError("invalid native source handoff locations")
+    target = {"x86_64": "amd64", "aarch64": "arm64"}[architecture]
+    recipe = json.loads(manifest.read_text())
+    vendor = "http://packman.links2linux.de"
+    if recipe.get("packman_key", {}).get("fingerprint") != REPOSITORIES[vendor]["fingerprint"]:
+        raise ValueError("native source vendor key mismatch")
+    selected = recipe["architectures"][target]
+    if selected["rpm_arch"] != architecture:
+        raise ValueError("native source architecture mismatch")
+    entries = selected["source_rpms"]
+    approved = {}
+    for item in entries:
+        name, digest = item["filename"], item["sha256"]
+        if (
+            not SOURCE_NAME.fullmatch(name)
+            or name in approved
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or item["url"] != source_url(vendor, architecture, name)
+        ):
+            raise ValueError("native source filename/URL/hash mismatch")
+        approved[name] = digest
+    if len(approved) != 2 or set(approved) != {p["sourcerpm"] for p in selected["codec_rpms"]}:
+        raise ValueError("native source codec origin set mismatch")
+    result = {}
+    for name, origin_vendor in origins:
+        if origin_vendor != vendor:
+            continue
+        path = directory / name
+        if (
+            name not in approved or path.is_symlink() or not path.is_file()
+            or sha256(path) != approved[name]
+        ):
+            raise ValueError("native source bytes/origin do not match reviewed recipe")
+        result[name] = (path, approved[name])
+    return result
+
+
+def retained_release_source(
+    path: Path | None, architecture: str, origins: list[tuple]
+) -> dict:
+    """One explicit hash-addressed source, not an arbitrary partial cache."""
+    if path is None:
+        return {}
+    matches = [
+        (name, route)
+        for (vendor, arch, name), route in EXACT_SOURCE_ROUTES.items()
+        if arch == architecture and (name, vendor) in origins
+    ]
+    if len(matches) != 1:
+        raise ValueError("retained release source requires its exact vendor/architecture/origin")
+    name, route = matches[0]
+    if (
+        path.name != route["sha256"]
+        or path.is_symlink()
+        or not path.is_file()
+        or path.stat().st_size > MAX_PAYLOAD
+        or sha256(path) != route["sha256"]
+    ):
+        raise ValueError("retained release source filename/bytes mismatch")
+    return {name: (path, route["sha256"])}
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     inventory_input = parser.add_mutually_exclusive_group()
@@ -520,6 +620,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--suse-key", type=Path)
     parser.add_argument("--packman-key", type=Path)
     parser.add_argument("--cache-dir", type=Path)
+    parser.add_argument("--native-manifest", type=Path)
+    parser.add_argument("--native-sources", type=Path)
+    parser.add_argument(
+        "--retained-release-source", type=Path,
+        help="one hash-addressed reviewed AMD release SRPM, never an arbitrary source cache",
+    )
     parser.add_argument(
         "--expected-sha256",
         type=Path,
@@ -547,6 +653,12 @@ def main(argv: list[str] | None = None) -> None:
     expected = expected_hashes(options.expected_sha256, options.arch, origins)
     if options.cache_dir and any(name not in expected for name, _ in origins):
         raise ValueError("cache requires expected SHA256 for every selected source")
+    native = native_source_inputs(
+        options.native_manifest, options.native_sources, options.arch, origins
+    )
+    release_inputs = retained_release_source(
+        options.retained_release_source, options.arch, origins
+    )
     keys = {
         "openSUSE": options.suse_key,
         "http://packman.links2linux.de": options.packman_key,
@@ -558,6 +670,21 @@ def main(argv: list[str] | None = None) -> None:
     options.out.mkdir(parents=True, exist_ok=False)
     directory = options.out / "sources"
     directory.mkdir()
+    release_retrieval = {}
+    for filename, (source, digest) in release_inputs.items():
+        budget.consume(source.stat().st_size)
+        path = directory / (filename + ".partial")
+        shutil.copyfile(source, path)
+        if sha256(path) != digest:
+            raise ValueError("retained release source copied checksum mismatch")
+        budget.remaining()
+        release_retrieval[filename] = {
+            "url": source_url("openSUSE", options.arch, filename),
+            "final_url": None,
+            "retrieval": "reverified-retained-source",
+            "retained_sha256": digest,
+        }
+        print("Reverifying retained source: " + filename, flush=True)
     sources = []
     with tempfile.TemporaryDirectory(prefix="ecm-source-trust-") as temporary:
         databases = {
@@ -569,7 +696,12 @@ def main(argv: list[str] | None = None) -> None:
             path = directory / (filename + ".partial")
             url = source_url(vendor, options.arch, filename)
             cached = options.cache_dir / filename if options.cache_dir else None
-            if cached is not None and cached.exists():
+            retained = native.get(filename)
+            if retained is not None:
+                cached = retained[0]
+            if filename in release_retrieval:
+                retrieval = release_retrieval[filename]
+            elif cached is not None and cached.exists():
                 if not cached.is_file() or cached.is_symlink():
                     raise ValueError("cache source must be a regular nonsymlink file")
                 budget.consume(cached.stat().st_size)
@@ -577,12 +709,17 @@ def main(argv: list[str] | None = None) -> None:
                 retrieval = {
                     "url": url,
                     "final_url": None,
-                    "retrieval": "reverified-cache",
+                    "retrieval": "reverified-native-input" if retained else "reverified-cache",
                 }
             else:
                 retrieval = download(url, path, budget)
             if filename in expected and sha256(path) != expected[filename]:
                 raise ValueError("expected source checksum mismatch: " + filename)
+            route = EXACT_SOURCE_ROUTES.get((vendor, options.arch, filename))
+            if route and sha256(path) != route["sha256"]:
+                raise ValueError("pinned source checksum mismatch: " + url)
+            if retained is not None and sha256(path) != retained[1]:
+                raise ValueError("native source checksum mismatch: " + filename)
             record = verify_source(
                 path, filename, vendor, databases[vendor], min(120, budget.remaining())
             )

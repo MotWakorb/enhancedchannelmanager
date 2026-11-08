@@ -117,6 +117,37 @@ into the new output, hash-checked, signature/key/header-checked, and payload-aud
 again. Filenames alone are never trusted. Expected hashes may also constrain
 fresh downloads. No cache hit bypasses authentication or completeness checks.
 
+### Fresh cohort with retained native Packman inputs
+
+The refreshed Docker recipe uses all-origin collection rather than
+the old recovered 156/155-source carrier indexes. The existing native builder
+already retains the two exact Packman source RPMs in its owned source directory;
+some of those exact public URLs now return 404. To reuse these original bytes
+without inventing a complete new cache index, the source-builder supplies both:
+
+```sh
+--native-manifest /tmp/native/manifest.json --native-sources /tmp/native-output/sources
+```
+
+This narrow handoff accepts **only** the selected architecture's two reviewed
+Packman source inputs. The manifest must retain the existing Packman fingerprint,
+the exact canonical vendor URLs, matching codec source set and SHA256s. Only
+actual inventory Packman origins can select these files; no SUSE origin is
+supplied by this handoff. Files must be regular nonsymlinks and hash-match before
+and after copying. Every reused archive still passes the ordinary isolated
+`rpmkeys`, exact vendor/source header and complete Source/Patch payload checks.
+The index truthfully records `reverified-native-input`, canonical origin URL and
+no fabricated download redirect. Apart from the single retained AMD release
+source below, other origins use the normal fresh download path. Failed public
+requests log the exact allowed URL and fail without retry.
+
+This is not generic partial-cache permission. Supplying `--expected-sha256`
+still requires coverage of **every** selected origin, and `--cache-dir` still
+requires that complete architecture/URL-bound expected index. Neither native
+source reuse nor fresh mode bypasses these existing contracts. Old same-named
+ARM/AMD archives and indexes remain noninterchangeable. A failed signature or
+missing source still prevents publication of `index.json`.
+
 ## Output and parent integration
 
 `/delivery` contains:
@@ -151,6 +182,69 @@ instructions, Docker wiring, canonical validation, and advisory manifests.
 Declared-input payload completeness is not semantic rebuildability, a proof
 against dynamic fetches in SPEC branches, complete toolchain correspondence,
 reproducibility certification, or legal certification.
+
+### Retained exact AMD 20261105 release source
+
+The frozen AMD64 binary cohort uses
+`openSUSE-release-20261105-4389.1.src.rpm`. The rolling AMD source repository
+advanced to signed cohort 20261106 independently and stopped serving that exact
+source at the canonical route. The established official GWDG mirror initially
+served the same authenticated archive at:
+
+<https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261105-4389.1.src.rpm>
+
+That exact mirror URL also returned **404 in final CI**, after successful local
+builds. The product no longer depends on another mirror for this source. Its
+unchanged, previously authenticated bytes are retained in `docker/native-cache/`
+under their complete 3,391,198-byte archive SHA256:
+`93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123`.
+
+The source-builder supplies this location-only option **on x86_64 only**:
+
+```sh
+--retained-release-source /tmp/native-cache/93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123
+```
+
+It accepts one regular nonsymlink file, never a directory or extra source list,
+and binds it to the existing `EXACT_SOURCE_ROUTES` policy for the exact
+`(openSUSE, x86_64, openSUSE-release-20261105-4389.1.src.rpm)` tuple and pin.
+Missing, corrupt, differently named or noncorresponding inputs fail without
+network fallback. The collector copies the archive into its actual output and
+rehashes the copied bytes **before `prepare_key`**. It then repeats the unchanged
+isolated-key RPM signature/payload-digest, exact source-header and complete
+Source/Patch checks. Retention never substitutes for authentication.
+
+The source ledger records `retrieval="reverified-retained-source"`,
+`retained_sha256` equal to that pin, and `final_url=null`. Its existing GWDG URL
+is the **historical origin**, not a new GET or redirect claim. The final-image
+consumer independently checks the tuple, archive pin and retained provenance.
+The existing optional fresh/full-cache interfaces remain available without this
+flag; the exact product Dockerfile contract requires the AMD handoff and rejects
+an ARM handoff. No generic mirror prefix, retry, fallback, source substitution or
+second caller-defined trust schema is added.
+
+ARM64 still uses its normal architecture-specific source feed and the distinct
+`openSUSE-release-20261105-3521.1.src.rpm`: 4,377,204 bytes, SHA256
+`7c31d3e46c3b6bf4fc5d5abba14791d4eb4980580b63d4a4721a23a6e185aba2`.
+Both exact SRPMs were previously downloaded and verified as data with the normal
+isolated SUSE key, RPM signature/payload digest, exact signed source header and
+complete Source/Patch audit. Matching signed binary headers establish the
+architecture/source binding; an SRPM header architecture alone does not.
+These bounded source checks are not ARM native execution or full-image gates.
+
+Generic `--cache-dir` still needs a complete,
+architecture/URL-bound `--expected-sha256` index. Older canonical-URL indexes do
+not get silently relabeled, and supplied expected hashes must still cover every
+selected origin, including the retained one. The original 14 Packman cache
+objects, two-source handoff and all seven no-refresh transactions are unchanged;
+only this one SUSE source object is added (15 objects / 12,911,729 bytes total).
+
+A bounded actual-collector proof under BuildKit `RUN --network=none` reverified
+this retained source with native RPM tools and complete payload checks. Adding
+an ordinary fresh zlib origin failed offline without publishing an index, proving
+retention does not skip other origins. This is not a cold full-image build, full
+runtime source closure, ARM execution or CI-green claim; parent delivery gates
+remain required.
 
 ## Targeted verification
 

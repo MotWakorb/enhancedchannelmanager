@@ -104,18 +104,52 @@ def test_real_arm_inventory_does_not_require_the_amd64_only_numa_provider(scan):
     report, identity, scanner = _recorded_arm_evidence()
     packages = report["Results"][0]["Packages"]
     assert not any(p["Name"] == "libnuma1" for p in packages)
-    assert scan.MIN_OS_PACKAGES_BY_ARCH == {"amd64": 212, "arm64": 211}
+    assert scan.MIN_OS_PACKAGES_BY_ARCH == {"amd64": 211, "arm64": 210}
     assert scan.check_report(report, identity, scanner, "arm64") == []
+
+
+def _cohort_inventory_shape(arch):
+    # Preserve old versions and synthetic identities: this is inventory-shape
+    # coverage against recorded count/name distributions, not a fresh image scan.
+    report, identity, scanner = (
+        _evidence() if arch == "amd64" else _recorded_arm_evidence()
+    )
+    observed = json.loads(
+        (FIXTURE.parent / f"cohort-20261105-{arch}-inventory.json").read_text()
+    )
+    result = report["Results"][0]
+    result["Packages"] = [
+        p
+        for p in result["Packages"]
+        if p["Name"] not in observed["removed_from_previous_names"]
+    ]
+    packages = result["Packages"]
+    assert result["Class"] == observed["Class"]
+    assert result["Type"] == observed["Type"]
+    assert (
+        len(packages) == observed["package_count"] == (211 if arch == "amd64" else 210)
+    )
+    assert Counter(p["Arch"] for p in packages) == observed["Arch"]
+    assert Counter(p["AnalyzedBy"] for p in packages) == observed["AnalyzedBy"]
+    encoded = json.dumps(sorted(p["Name"] for p in packages), separators=(",", ":"))
+    assert (
+        hashlib.sha256(encoded.encode()).hexdigest() == observed["sorted_names_sha256"]
+    )
+    return report, identity, scanner
+
+
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
+def test_actual_new_inventory_shape_is_accepted_without_padding(scan, arch):
+    report, identity, scanner = _cohort_inventory_shape(arch)
+    assert scan.check_report(report, identity, scanner, arch) == []
 
 
 @pytest.mark.parametrize("arch", ["amd64", "arm64"])
 def test_each_architecture_rejects_its_own_truncated_complete_inventory(scan, arch):
-    report, identity, scanner = (
-        _evidence() if arch == "amd64" else _recorded_arm_evidence()
-    )
+    report, identity, scanner = _cohort_inventory_shape(arch)
     report["Results"][0]["Packages"].pop()
     failures = scan.check_report(report, identity, scanner, arch)
-    minimum = 212 if arch == "amd64" else 211
+    minimum = 211 if arch == "amd64" else 210
     assert f"complete OS inventory requires at least {minimum} packages" in failures
 
 
@@ -137,7 +171,7 @@ def test_complete_recorded_inventory_and_unsuppressed_findings_are_accepted(scan
     assert go_result["Vulnerabilities"][0]["Severity"] == "UNKNOWN"
     # Custom FFmpeg is not RPM-owned; this does NOT prove its source/build pin.
     assert not any(p["Name"].startswith("ffmpeg") for p in packages)
-    assert scan.MIN_OS_PACKAGES == 212
+    assert scan.MIN_OS_PACKAGES == 211
     assert scan.check_report(report, identity, scanner, arch) == []
 
 
@@ -229,6 +263,72 @@ def test_high_finding_in_an_additional_analyzer_cannot_be_ignored(scan):
     assert (
         f"HIGH {finding['VulnerabilityID']} in {finding['PkgName']}"
         in scan.check_report(report, identity, scanner, "amd64")
+    )
+
+
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
+def test_recorded_p1_advisories_deny_promotion_without_a_high_ca_finding(scan, arch):
+    report, identity, scanner = (
+        _evidence() if arch == "amd64" else _recorded_arm_evidence()
+    )
+    projection = json.loads((FIXTURE.parent / "p1-advisories.json").read_text())
+    findings = projection["architectures"][arch]["findings"]
+    assert len(findings) == 3
+    assert {finding["Severity"] for finding in findings} == {"MEDIUM"}
+    report["Results"][0]["Vulnerabilities"] = findings
+    original = copy.deepcopy(report)
+    failures = scan.check_report(report, identity, scanner, arch)
+    for finding in findings:
+        assert (
+            f"reviewed P1 advisory {finding['VulnerabilityID']} in "
+            f"{finding['PkgName']} (reported MEDIUM)"
+        ) in failures
+    assert report == original
+
+
+@pytest.mark.parametrize(
+    "advisory",
+    [
+        "openSUSE-SU-2026:12232-1",
+        "CVE-2026-111497",
+        "openSUSE-SU-2026:12233-1",
+        "CVE-2026-114406",
+        "openSUSE-SU-2026:12364-1",
+        "CVE-2026-96889",
+        "openSUSE-SU-2026:12336-1",
+        "CVE-2026-116741",
+    ],
+)
+@pytest.mark.parametrize("severity", ["UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"])
+@pytest.mark.parametrize(
+    "status", ["fixed", "affected", "will_not_fix", "not_affected"]
+)
+def test_reviewed_p1_hold_is_independent_of_scanner_label_or_fix_availability(
+    scan, advisory, severity, status
+):
+    report, identity, scanner = _evidence()
+    finding = copy.deepcopy(report["Results"][2]["Vulnerabilities"][0])
+    finding.update(
+        VulnerabilityID=advisory, Severity=severity, Status=status, FixedVersion=""
+    )
+    # An additional analyzer must not bypass the hold either.
+    extra = copy.deepcopy(report["Results"][2])
+    extra["Type"] = "additional-analyzer"
+    extra["Vulnerabilities"] = [finding]
+    report["Results"].append(extra)
+    assert (
+        f"reviewed P1 advisory {advisory} in {finding['PkgName']} (reported {severity})"
+        in scan.check_report(report, identity, scanner, "amd64")
+    )
+
+
+@pytest.mark.parametrize("field", ["VulnerabilityID", "PkgName", "InstalledVersion"])
+@pytest.mark.parametrize("value", [["not-a-string"], {"not": "a-string"}, 1, True])
+def test_nonstring_finding_identity_is_denied_instead_of_crashing(scan, field, value):
+    report, identity, scanner = _evidence()
+    report["Results"][1]["Vulnerabilities"][0][field] = value
+    assert "malformed vulnerability finding" in scan.check_report(
+        report, identity, scanner, "amd64"
     )
 
 
@@ -332,7 +432,8 @@ def test_scan_fails_closed_on_incomplete_substituted_or_unsafe_evidence(scan, mu
     elif mutation == "rootfs":
         report["Metadata"]["ImageConfig"]["rootfs"]["diff_ids"] = []
     elif mutation == "inventory":
-        packages.pop()
+        # The historical fixture has 212 rows; truncate below the observed 211.
+        del packages[210:]
     elif mutation == "duplicatepkgs":
         packages[-1] = copy.deepcopy(packages[0])
     elif mutation == "duplicategpg":
@@ -429,6 +530,15 @@ def test_scan_cli_dogfoods_evidence_and_denies_empty_malformed_or_missing_files(
     ]
     result = subprocess.run(command, check=False, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+    projection = json.loads((FIXTURE.parent / "p1-advisories.json").read_text())
+    report["Results"][0]["Vulnerabilities"] = projection["architectures"]["amd64"][
+        "findings"
+    ]
+    paths[0].write_text(json.dumps(report))
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert result.stderr.count("reviewed P1 advisory") == 3
+    assert "Complete unsuppressed" not in result.stdout
     for contents in ("", "{", "null", "{}", "[]"):
         paths[0].write_text(contents)
         result = subprocess.run(command, check=False, capture_output=True, text=True)

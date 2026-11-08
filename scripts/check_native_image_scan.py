@@ -2,8 +2,10 @@
 """Fail closed on incomplete, substituted or suppressed native image scan evidence.
 
 This validates Trivy's complete JSON output, not a severity-filtered table. The
-separate HIGH/CRITICAL exit-1 scan remains a publication gate. Package floors and
-inventory are detection sanity checks, never substitutes for advisory review.
+separate HIGH/CRITICAL exit-1 scan remains a publication gate. Reviewed P1
+advisories also deny promotion regardless of the scanner's severity label.
+Package floors and inventory are detection sanity checks, never substitutes
+for advisory review.
 
 The supported OS report is openSUSE Tumbleweed/RPM. Custom FFmpeg 8 is not
 RPM-owned and is NOT covered by this OS scan. Its exact source/build pin and
@@ -22,11 +24,27 @@ from pathlib import Path
 
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SEVERITIES = {"UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"}
-# Recorded amd64 integration report: 212 RPM entries, including six distinct keys.
-# Native ARM CI has 211: its complete graph lacks only amd64's libnuma1 provider.
-# Keep architecture-specific observed floors, not a globally reduced baseline.
-MIN_OS_PACKAGES = 212
-MIN_OS_PACKAGES_BY_ARCH = {"amd64": MIN_OS_PACKAGES, "arm64": 211}
+# Primary-advisory assessments and owners: docs/security/p1-image-delivery-holds.md.
+# Enforced by test_recorded_p1_advisories_deny_promotion_without_a_high_ca_finding
+# and test_reviewed_p1_hold_is_independent_of_scanner_label_or_fix_availability.
+REVIEWED_P1_ADVISORIES = frozenset(
+    {
+        "openSUSE-SU-2026:12232-1",  # Brotli
+        "CVE-2026-111497",
+        "openSUSE-SU-2026:12233-1",  # Mozilla CA
+        "CVE-2026-114406",
+        "openSUSE-SU-2026:12364-1",  # librsvg
+        "CVE-2026-96889",
+        "openSUSE-SU-2026:12336-1",  # Speex
+        "CVE-2026-116741",
+    }
+)
+# Actual 20261105 images: local AMD64 70781eac has 211 rows; ARM run 42426895390
+# has 210. Each complete scan matches its delivered/live RPM source index. Only
+# liblcms2-2 disappeared from the prior graphs; libnuma1 remains AMD-only.
+# Recorded projections: cohort-20261105-{amd64,arm64}-inventory.json.
+MIN_OS_PACKAGES = 211
+MIN_OS_PACKAGES_BY_ARCH = {"amd64": MIN_OS_PACKAGES, "arm64": 210}
 # Reviewed upstream-version sanity floors from RPM Version fields, not an RPM
 # EVR/advisory solver. Release fields remain separate; source-built FFmpeg has
 # no RPM floor here and must satisfy the runtime gate's exact source/build pin.
@@ -272,17 +290,24 @@ def check_report(
         for finding in findings:
             if (
                 not isinstance(finding, dict)
-                or not finding.get("VulnerabilityID")
-                or not finding.get("PkgName")
-                or not finding.get("InstalledVersion")
+                or any(
+                    not isinstance(finding.get(field), str) or not finding[field]
+                    for field in ("VulnerabilityID", "PkgName", "InstalledVersion")
+                )
                 or not isinstance(finding.get("Severity"), str)
                 or finding.get("Severity") not in SEVERITIES
             ):
                 failures.append("malformed vulnerability finding")
-            elif finding["Severity"] in {"HIGH", "CRITICAL"}:
-                failures.append(
-                    f"{finding['Severity']} {finding['VulnerabilityID']} in {finding['PkgName']}"
-                )
+            else:
+                if finding["Severity"] in {"HIGH", "CRITICAL"}:
+                    failures.append(
+                        f"{finding['Severity']} {finding['VulnerabilityID']} in {finding['PkgName']}"
+                    )
+                if finding["VulnerabilityID"] in REVIEWED_P1_ADVISORIES:
+                    failures.append(
+                        f"reviewed P1 advisory {finding['VulnerabilityID']} in "
+                        f"{finding['PkgName']} (reported {finding['Severity']})"
+                    )
     return failures
 
 
@@ -308,7 +333,7 @@ def main() -> int:
         return 1
     print(
         "Complete unsuppressed RPM/Python/Go scan evidence verified; "
-        "no HIGH/CRITICAL findings. Custom native source/build binding "
+        "no HIGH/CRITICAL or reviewed P1 findings. Custom native source/build binding "
         "requires the separate runtime gate."
     )
     return 0

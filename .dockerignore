@@ -26,3 +26,4 @@ frontend/playwright-report
 frontend/test-results
 .beads
 .vite-temp
+.native-ci-inputs.*

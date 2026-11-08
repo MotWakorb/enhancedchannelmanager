@@ -1,7 +1,7 @@
 """Probe channel streams when a matching EPG event becomes active."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from typing import Callable, Optional
 
 import safe_regex
@@ -319,6 +319,20 @@ class EPGEventProbeTask(TaskScheduler):
                 error="ALREADY_RUNNING",
                 started_at=started_at,
                 completed_at=datetime.utcnow(),
+            )
+
+        if probe_result.get("status") == "deferred":
+            from stream_prober import PROBE_DEFERRED_REASON
+
+            return TaskResult(
+                success=False, message=PROBE_DEFERRED_REASON, error="PROBE_DEFERRED",
+                started_at=started_at, completed_at=datetime.now(UTC).replace(tzinfo=None),
+                total_items=int(probe_result.get("total", len(stream_ids))),
+                success_count=int(probe_result.get("success", 0)),
+                failed_count=int(probe_result.get("failed", 0)),
+                skipped_count=self._prober._probe_progress_skipped_count,
+                details={"deferred_reason": PROBE_DEFERRED_REASON,
+                         "trigger_keys": trigger_keys, "matched_channels": matched_channel_ids},
             )
 
         failed_count = int(probe_result.get("failed", 0))

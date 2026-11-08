@@ -39,6 +39,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from tests.conftest import (
+    unlimited_probe_stream as accountless_probe_stream,  # legacy call-site alias; real unlimited admission
+)
 
 pytestmark = pytest.mark.usefixtures("vlc_stream_user_agent")
 
@@ -160,7 +163,7 @@ class TestProbeFailureLogging:
         reason = "Refusing redirect that downgrades https → http"
         with patch.object(prober, "_run_ffprobe", side_effect=SSRFError(reason)):
             with caplog.at_level(logging.ERROR, logger="stream_prober"):
-                result = await prober.probe_stream(228547, CRED_URL, "BBC One")
+                result = await prober.probe_stream(228547, CRED_URL, "BBC One", stream=accountless_probe_stream(prober, 228547, CRED_URL))
 
         assert reason in caplog.text
         assert "SSRFError" in caplog.text
@@ -175,7 +178,7 @@ class TestProbeFailureLogging:
             side_effect=RuntimeError(f"ffprobe failed on {CRED_URL}"),
         ):
             with caplog.at_level(logging.ERROR, logger="stream_prober"):
-                result = await prober.probe_stream(228547, CRED_URL, "BBC One")
+                result = await prober.probe_stream(228547, CRED_URL, "BBC One", stream=accountless_probe_stream(prober, 228547, CRED_URL))
 
         assert "RuntimeError" in caplog.text
         assert USER not in caplog.text
@@ -191,7 +194,7 @@ class TestProbeFailureLogging:
             side_effect=ProbeNetworkRouteError("Provider connection failed"),
         ):
             with caplog.at_level(logging.ERROR, logger="stream_prober"):
-                result = await prober.probe_stream(228547, CRED_URL, "BBC One")
+                result = await prober.probe_stream(228547, CRED_URL, "BBC One", stream=accountless_probe_stream(prober, 228547, CRED_URL))
 
         assert result["error_message"] == PROBE_NETWORK_ROUTE_GUIDANCE
         assert "Provider connection failed" in caplog.text
@@ -209,7 +212,7 @@ class TestProbeFailureLogging:
         with caplog.at_level(logging.ERROR, logger="stream_prober"):
             for failure in failures:
                 with patch.object(prober, "_run_ffprobe", side_effect=failure):
-                    await prober.probe_stream(228547, CRED_URL, "BBC One")
+                    await prober.probe_stream(228547, CRED_URL, "BBC One", stream=accountless_probe_stream(prober, 228547, CRED_URL))
 
         assert USER not in caplog.text
         assert PASSWORD not in caplog.text

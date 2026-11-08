@@ -15,24 +15,30 @@ import subprocess
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
-RECIPE_SHA256 = "de91b41ea81123a4af8eb9ca8cd526ed6560f4f53e2e3152de42f2edf0cb7db9"
+RECIPE_SHA256 = "947de1caccc41af19eff4ed898e7df9df992bb7c0907b8ac30e6f735a34f425d"
 PYTHON_SUMS = {
     "sources": "e21e0520773c78b5f16ee56ddb94073a4def902d8656b435fec9dc26eee8e2ab",
-    # Complete sorted 556-entry manifest, including six newly audited ARM JSONs.
-    "notices": "68555090f8b5f1a58b00512048f1a9f468f2ed0fa8b06a10a8fcc3833ed07975",
+    # Complete sorted 557-entry manifest, including the dnspython 2.9.0 notice.
+    "notices": "cc1790cbfca9d206333084155cbf8f1a0c66fb6512615dea692a9c0a5daa903d",
 }
 RESDET_SCRIPTS = {
     "build_resdet.py": "1f071637352c3e21abc94388dd4101c7d819998cc31b94cd5a34af939febf611",
 }
 PYTHON_INDEXES = {
-    "x86_64": "2c2345a3fbb95f6e2ea41fb9b9a04acdc118d5715a4dbd8c218358e4a27df3b0",
-    "aarch64": "0f6734132bdf44f6841a93ece87251d825935c9f01ec8f3df5b9b2aa079883de",
+    "x86_64": "08ed75d9a94dae5cb10fa8353dfc01ea27a9a531d199c786b29eaecacc4ca1f0",
+    "aarch64": "2d24f53e8aeec9f3e96aeb188c26941a2270206995a365788fd50ef6fe42f094",
 }
 FIELDS = ("name", "version", "release", "arch", "vendor", "sourcerpm", "license")
 QUERY = "\\t".join("%{" + field.upper() + "}" for field in FIELDS) + "\\n"
 VENDORS = {
     "openSUSE": "AD485664E901B867051AB15F35A2F86E29B700A4",
     "http://packman.links2linux.de": "F8875B880D518B6B8C530D1345A1D0671ABD1AFB",
+}
+EXACT_SOURCE_ROUTES = {
+    ("openSUSE", "x86_64", "openSUSE-release-20261105-4389.1.src.rpm"): {
+        "url": "https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261105-4389.1.src.rpm",
+        "sha256": "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123",
+    },
 }
 LIBRARIES = {
     "avcodec",
@@ -209,7 +215,17 @@ def _rpm_sources(root, architecture):
             if architecture == "x86_64"
             else "https://download.opensuse.org/ports/aarch64/source/tumbleweed/repo/oss/"
         )
-        assert source["url"] == repository + "src/" + name
+        route = EXACT_SOURCE_ROUTES.get((vendor, architecture, name))
+        assert source["url"] == (route["url"] if route else repository + "src/" + name)
+        if route:
+            assert source["sha256"] == route["sha256"], "pinned source checksum mismatch"
+        if source.get("retrieval") == "reverified-retained-source" or "retained_sha256" in source:
+            assert (
+                route is not None
+                and source.get("retrieval") == "reverified-retained-source"
+                and source.get("retained_sha256") == route["sha256"]
+                and source.get("final_url") is None
+            ), "retained source provenance mismatch"
         assert source["path"] == "sources/" + name
         assert source["authentication"] == "pinned-rpm-signature-and-exact-header"
         assert source["license"] and source["license"] != "(none)"
@@ -266,6 +282,8 @@ def _owned(root, architecture):
     recipe = _json(directory, "recipe/manifest.json")
     _hash(_file(directory, "recipe/build_native_runtime.py"), record["helper_sha256"])
     assert record["base_image"] == recipe["base_image"]
+    selected = recipe["architectures"][arch]
+    assert record["builder_repository"] == selected.get("builder_repository", selected["official_repository"])
     assert record["source_identity"] == {key: recipe[key] for key in ("ffmpeg", "gosu")}
     listing = _file(root, "usr/share/ecm/provenance/native-sources.json")
     _hash(listing, record["source_files_sha256"])
