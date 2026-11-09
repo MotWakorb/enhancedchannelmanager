@@ -433,6 +433,25 @@ joins, and aggregate/security/MCP acceptance remain unfinished. The four owned
 packages remain explicit obligations in the external consumer; this helper does
 not remove or blanket-skip them and always reports false aggregate acceptance.
 
+`alpine_owned_busybox.py` now provides the corresponding **three owned APKv2**
+control/payload/full installed-record joins. Actual nonroot/read-only/offline
+native-tool checks pass for both original architecture datasets on AMD64: BusyBox
+has seven file entries and 17 directory entries, binsh one/one, and ssl_client
+one/two. The original three BusyBox control scripts and their installed-name
+subjects are bound, not executed. These packages use compressed-control SHA1,
+signed payload SHA256 and installed file/link SHA1 tokens; they are deliberately
+not conflated with the APKv3 `f:S` encoding. ADB input is rejected.
+
+The common installed-record structure/default-attribute decoder is now shared,
+without changing `source_plan` outputs or interpreting checksum algorithms. The
+complete APKv3 native-tool regression receipt remains identical. An actual wrong
+BusyBox installed-control token is rejected after original native signature
+verification; bypassing that guard makes all six architecture/package regressions
+red. Evidence is `stable-alpine-owned-busybox-database-paired-20261109.json`.
+Live installed files/control-script archives, source/compiler/attribution joins,
+original signed evidence delivery and aggregate acceptance remain separate work;
+the four pending owned obligations have not been removed or skipped.
+
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
 (84.19% coverage). Five failures correctly rejected the stale resdet helper hash;

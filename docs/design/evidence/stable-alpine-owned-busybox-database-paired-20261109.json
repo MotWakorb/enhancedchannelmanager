@@ -1,0 +1,36 @@
+{
+  "status": "PAIRED_THREE_OWNED_BUSYBOX_NATIVE_SIGNATURE_CONTROL_PAYLOAD_AND_FULL_INSTALLED_RECORD_JOINS_ONLY",
+  "source_native_run": 42681901847,
+  "helpers": {
+    "owned_busybox_sha256": "fdbaae7ba6c8cbca9bd93a796d82e8e941c5c27c5f52a569a3413178b9cbe413",
+    "shared_raw_installed_inventory_sha256": "5c729b1bd4bfde9bb00b0cac607cc7cebb534aa8291144723bba7da58e8ba86d",
+    "owned_apk3_after_shared_decoder_sha256": "a4c2fe9343999436fee8b79ac4f7750518c5f764935eb3b34e689704052659f2"
+  },
+  "architecture_datasets": ["amd64", "arm64"],
+  "execution_architecture": "amd64",
+  "verified_packages_per_dataset": {
+    "busybox": {"file_entries": 7, "directory_entries": 17, "original_control_scripts": 3},
+    "busybox-binsh": {"file_entries": 1, "directory_entries": 1, "original_control_scripts": 0},
+    "ssl_client": {"file_entries": 1, "directory_entries": 2, "original_control_scripts": 0}
+  },
+  "verification": "Independently bind original whole APK/public-key hashes, run native apk verify with one scoped first-party public key, bind complete original compressed control SHA1 and control metadata to each actual installed record, verify signed control's whole-payload SHA256 and every payload/control-script inventory entry, then every installed file/directory/path/UID/GID/mode/checksum. Original control-script installed-name subjects are derived; checking actual live installed script archives remains separate.",
+  "format_distinction": "These reviewed owned APKv2 file/link Q1 tokens contain SHA1 of original regular bytes or link text; they have no f:S flag. They are not interpreted as the owned native APKv3 SHA256-160 tokens. ADB input is rejected. The shared raw decoder validates structure/default attributes but does not interpret checksum algorithms, change source_plan's output/digests or grant acceptance.",
+  "paired_native_tool_consumer_receipt_sha256": "3c41e6dff8bb7f0f867ea4a787478f71fb215c23c9f3e6b26e4b4feda10eaf3f",
+  "owned_apk3_shared_decoder_regression_receipt_sha256": "211615b70d44eea6360541a17629f3ceb39d4f55a3f974e8d3cef80bc18ae31b",
+  "negative_controls": {
+    "actual_installed_control_corruption": "Original native owned BusyBox package signature verifies, but changed installed control token is rejected: owned BusyBox installed control checksum differs",
+    "actual_denial_log_sha256": "983e3ed68424ef0e2fedc418e05faae4be357faa8930ebb0e267ecb40a469f98",
+    "dangerous_mutant": "Bypassing control-token comparison makes all six recorded architecture/package regressions fail with DID NOT RAISE InputError",
+    "mutant_log_sha256": "82fac1faec16c21e90c27d91d459a2e2e7614b6fef42d2d461c780fcbbe557f6"
+  },
+  "regression_tests": {
+    "layer": "Native AMD64 Alpine component/source/workflow subset plus complete maintained native-builder controls, including the narrow typed TLS EOF repair; not the full backend/final-image gate",
+    "modules": 47,
+    "passed": 1042,
+    "log_sha256": "b145059c628ec22466d5dbaf82f2172d66bb41a086c6bd1858bb751888f0f176"
+  },
+  "conditions": "Native Alpine tools, nonroot UID/GID 3000:3000, read-only root/input mounts, network disabled. Both actual architecture datasets verified on AMD64 without ARM target execution. Complete original APKv2/public key/build/installed-record fixtures committed.",
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/{owned-busybox-full-database-replay-paired-02.json,owned-apk3-full-database-replay-paired-03.json,owned-busybox-actual-control-database-survey-paired-01.json,owned-busybox-complete-checksum-survey-paired-01.json}",
+  "scope": "Four owned package metadata/payload/installed-record joins are now available, with distinct APKv2 and APKv3 enforcement. Final live file/control-script checks, original BusyBox/static and other owned component source/compiler/attribution joins, delivery of original signed package evidence, complete aggregate/security and MCP acceptance remain unfinished. The four external-consumer pending obligations and unchanged RPM aggregate dispatch remain enforced. No runtime trust-store/repository change, installation, source/target program execution, waiver, merge, publication or deployment.",
+  "full_runtime_source_acceptance": false
+}

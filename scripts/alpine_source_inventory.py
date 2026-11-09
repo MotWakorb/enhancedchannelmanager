@@ -177,6 +177,49 @@ def parse_database(text: str, architecture: str) -> list[dict]:
     return sorted(packages, key=lambda row: row["name"])
 
 
+def payload_record(text: str, architecture: str) -> dict:
+    """Decode one validated record without interpreting its checksum algorithm.
+
+    The selected formats' omitted attributes use the surveyed APK DB defaults.
+    A consumer must bind the appropriate signed package format and every raw
+    attribute/token; legacy Q1 may not mean the same file hash for APKv2 and v3.
+    No existing source_plan representation/digest or acceptance scope changes.
+    """
+    records = parse_database(text, architecture)
+    require(len(records) == 1, "one complete installed payload record required")
+    directories = {}
+    files = {}
+    directory = None
+    filename = None
+    directory_attributes = set()
+    for line in text.strip("\n").splitlines():
+        key, value = line[0], line[2:]
+        if key == "F":
+            directory = value
+            filename = None
+            directories[directory] = "0:0:755"
+        elif directory is not None:
+            if key == "R":
+                filename = str(PurePosixPath(directory) / value)
+                files[filename] = {"a": "0:0:644"}
+            elif key == "M":
+                require(
+                    directory not in directory_attributes,
+                    "duplicate installed directory attributes",
+                )
+                directory_attributes.add(directory)
+                directories[directory] = value
+            else:
+                files[filename][key] = value
+    return {
+        "status": "UNAUTHENTICATED_INSTALLED_PAYLOAD_RECORD_ONLY",
+        "record": records[0],
+        "files": files,
+        "directories": directories,
+        "full_runtime_source_acceptance": False,
+    }
+
+
 def source_plan(capture: dict, architecture: str) -> dict:
     packages = parse_database(capture["installed_database"], architecture)
     query = capture["packages"]

@@ -1,5 +1,6 @@
 """Actual APK inventory bytes, not package-name heuristics, define source scope."""
 
+import gzip
 import importlib.util
 import json
 from pathlib import Path
@@ -158,3 +159,33 @@ def test_query_size_boolean_cannot_equal_an_integer_package_size(inventory, capt
     capture["packages"][1]["file-size"] = True
     with pytest.raises(inventory.InventoryError, match="query"):
         inventory.source_plan(capture, "x86_64")
+
+
+@pytest.mark.parametrize("arch,machine", [("amd64", "x86_64"), ("arm64", "aarch64")])
+def test_full_actual_installed_record_decoder_preserves_uninterpreted_tokens_and_attributes(
+    inventory, arch, machine
+):
+    recorded = json.loads(
+        gzip.decompress((FIXTURES / f"owned-adb-{arch}.json.gz").read_bytes())
+    )
+    result = inventory.payload_record(recorded["installed_record"], machine)
+    assert result["record"]["fields"] == recorded["installed_fields"]
+    assert len(result["files"]) == 591 and len(result["directories"]) == 72
+    file = result["files"][f"etc/ld-musl-{machine}.path"]
+    assert file["a"] == "0:0:644" and file["Z"].startswith("Q1")
+    assert result["files"]["usr/lib/librsvg-2.so"]["a"] == "0:0:777"
+    assert result["directories"]["etc"] == "0:0:755"
+    assert result["full_runtime_source_acceptance"] is False
+
+
+def test_record_payload_decoder_denies_duplicate_directory_attributes_not_last_value_wins(
+    inventory,
+):
+    recorded = json.loads(
+        gzip.decompress((FIXTURES / "owned-adb-amd64.json.gz").read_bytes())
+    )
+    changed = recorded["installed_record"].replace(
+        "F:etc\n", "F:etc\nM:0:0:755\nM:0:0:700\n", 1
+    )
+    with pytest.raises(inventory.InventoryError, match="duplicate"):
+        inventory.payload_record(changed, "x86_64")

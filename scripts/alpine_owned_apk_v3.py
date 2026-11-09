@@ -19,7 +19,7 @@ import subprocess
 from pathlib import Path, PurePosixPath
 
 from alpine_source_inputs import InputError, require
-from alpine_source_inventory import InventoryError, parse_database
+from alpine_source_inventory import InventoryError, payload_record
 from verify_alpine_external_sources import sha256, unique
 
 __all__ = ["InputError", "bind_installed_record", "bind_metadata", "verify_owned_apk"]
@@ -403,16 +403,16 @@ def bind_installed_record(
     )
     machine = {"amd64": "x86_64", "arm64": "aarch64"}[architecture]
     try:
-        parsed = parse_database(text, machine)
+        parsed = payload_record(text, machine)
     except InventoryError as exc:
         raise InputError(
             "invalid owned installed database record: " + str(exc)
         ) from exc
     require(
-        len(parsed) == 1 and parsed[0]["name"] == "ecm-owned-native",
+        parsed["record"]["name"] == "ecm-owned-native",
         "unique complete owned native installed record required",
     )
-    fields = parsed[0]["fields"]
+    fields = parsed["record"]["fields"]
     bound = bind_metadata(document, fields, receipt, architecture)
     signed_directories = {
         entry["name"]: entry for entry in document["paths"] if entry.get("name")
@@ -422,30 +422,8 @@ def bind_installed_record(
         for entry in document["paths"]
         for child in entry.get("files", [])
     }
-    directories = {}
-    files = {}
-    directory = None
-    filename = None
-    directory_attributes = set()
-    for line in text.splitlines():
-        key, value = line[0], line[2:]
-        if key == "F":
-            directory = value
-            filename = None
-            directories[directory] = "0:0:755"
-        elif directory is not None:
-            if key == "R":
-                filename = str(PurePosixPath(directory) / value)
-                files[filename] = {"a": "0:0:644"}
-            elif key == "M":
-                require(
-                    directory not in directory_attributes,
-                    "duplicate owned installed directory attributes",
-                )
-                directory_attributes.add(directory)
-                directories[directory] = value
-            else:
-                files[filename][key] = value
+    directories = parsed["directories"]
+    files = parsed["files"]
     require(
         set(files) == set(signed_files) and set(directories) == set(signed_directories),
         "complete owned installed payload path/directory set differs from signed ADB",
