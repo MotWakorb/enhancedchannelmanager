@@ -59,7 +59,7 @@
         "jobs",
         "native-components",
         "steps",
-        17,
+        20,
         "if"
       ],
       "value": "always() && steps.application-candidate.outcome == 'success'"
@@ -70,7 +70,7 @@
         "jobs",
         "native-components",
         "steps",
-        18,
+        21,
         "if"
       ],
       "value": "always() && steps.current-original.outcome == 'success'"
@@ -81,7 +81,7 @@
         "jobs",
         "native-components",
         "steps",
-        19,
+        22,
         "if"
       ],
       "value": "always()"
@@ -92,7 +92,7 @@
         "jobs",
         "native-components",
         "steps",
-        20,
+        23,
         "if"
       ],
       "value": "always()"
