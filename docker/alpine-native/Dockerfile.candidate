@@ -51,6 +51,18 @@ RUN --network=none --mount=type=bind,source=scripts,target=/build-scripts \
     && apk query --from installed --format json --all-matches '*' > /usr/share/ecm/provenance/installed-apks.json \
     && cp /lib/apk/db/installed /usr/share/ecm/provenance/installed-apk-database.txt
 
+FROM runtime-base AS apk-source-builder
+# Select the saved runtime subject before adding builder-only Git. Never query
+# this stage's expanded installed set as the runtime source-delivery subject.
+RUN --mount=type=bind,source=scripts,target=/build-scripts \
+    mkdir /proof \
+    && python -c 'import json; from pathlib import Path; Path("/proof/runtime-inventory.json").write_text(json.dumps({"packages":json.loads(Path("/usr/share/ecm/provenance/installed-apks.json").read_text()),"installed_database":Path("/usr/share/ecm/provenance/installed-apk-database.txt").read_text()},sort_keys=True,indent=2)+"\n")' \
+    && apk add --no-cache git \
+    && python /build-scripts/prepare_alpine_external_sources.py \
+        --runtime-inventory /proof/runtime-inventory.json --architecture "$(uname -m)" \
+        --output-dir /proof/external-sources --work-dir /proof/source-work \
+        --receipt-file /proof/external-source-receipt.json
+
 FROM runtime-base AS application-candidate
 LABEL io.ecm.alpine.source-and-advisory-closure=pending
 ARG GIT_COMMIT=unknown
@@ -62,6 +74,9 @@ RUN groupadd --gid 1000 appuser \
     && useradd --uid 1000 --gid appuser --create-home --shell /bin/bash appuser
 COPY --from=python-builder /opt/venv /opt/venv
 COPY --from=python-builder /proof/installed-wheel-bindings.json /usr/share/ecm/provenance/installed-wheel-bindings.json
+COPY --from=apk-source-builder /proof/external-sources/ /usr/share/ecm/sources/apk/
+COPY --from=apk-source-builder /proof/external-source-receipt.json /usr/share/ecm/provenance/external-sources.json
+COPY scripts/verify_alpine_external_sources.py scripts/alpine_source_inventory.py scripts/alpine_source_inputs.py scripts/alpine_apk_v2.py scripts/verify_musllinux_gnu.py /usr/share/ecm/sources/verification/
 ENV PATH="/opt/venv/bin:$PATH"
 COPY backend/ /app/
 COPY --from=frontend-builder /app/frontend/dist /app/static

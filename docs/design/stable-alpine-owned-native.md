@@ -184,9 +184,12 @@ fixtures now explicitly select their original platform; every original banner
 acceptance/rejection and RPM downgrade assertion is retained. Separate explicit
 Alpine dispatch tests also require adapter failures to propagate. The local
 native subset passes 18 cases, and the host regression subset passes 165. The
-previous full Python CI remains failed until fresh complete native runs pass;
-the runtime checks, application source and source-integrity gate were not changed
-by this fixture repair (`enhancedchannelmanager-xql87`).
+original failed Python CI is retained. Fresh full native run `42665448299` at
+`d2290f79` subsequently passed **16,717 tests per architecture**, with the five
+unchanged skips and two deselections. Paired job results are sealed in
+`stable-alpine-python-native-fixture-repair-paired-20261109.json`; fixture bead
+`enhancedchannelmanager-xql87` is closed. The runtime checks, application source
+and source-integrity gate were not changed by this fixture repair.
 
 ### External APK source delivery: strict standalone consumer, not the full gate
 
@@ -221,8 +224,22 @@ The initial stable distfiles request for the original libopenmpt source returned
 URL in the exact original APKBUILD matched the same SHA512. There is no fallback
 on authentication or byte mismatch.
 
-The consumer always returns `full_runtime_source_acceptance: false`. This bundle
-is not yet integrated into either final native application image; four owned
+`prepare_alpine_external_sources.py` now automates exact acquisition and requires
+the standalone offline consumer to pass before reporting success. Actual AMD64
+and ARM64 captured subjects passed acquisition and independent nonroot/read-only
+rechecks (626 and 625 files respectively); both were verified on AMD64, not
+presented as native ARM execution. Paired receipts are sealed in
+`stable-alpine-external-source-producer-paired-20261109.json`.
+
+The candidate now derives an `apk-source-builder` from `runtime-base`, consumes
+the saved query/database captured **before** builder-only Git installation,
+and copies the verified bundle and acquisition receipt into the final image.
+The workflow adds an offline, unprivileged immutable-image check using its
+**live** APK query/database; the complete runtime gate retains `always()` and
+failure propagation. Wiring regressions were red before implementation and
+pass locally; fresh paired final-image builds/execution are still required.
+
+The consumer always returns `full_runtime_source_acceptance: false`; four owned
 providers, Python base, compiler/language support, complete license/advisory
 reconciliation and an aggregate source consumer remain required. The unchanged
 shared source gate still fails until those equivalent checks are complete.

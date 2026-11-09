@@ -152,3 +152,25 @@ def test_full_application_candidate_uses_current_components_and_retains_real_gat
     )
     assert "application/runtime-inventory.json" in commands
     assert "--pull never --network none --read-only --cap-drop ALL" in commands
+
+
+def test_external_source_gate_rechecks_actual_immutable_image_without_replacing_the_full_gate():
+    workflow = yaml.load(
+        (ROOT / ".github/workflows/alpine-native.yml").read_text(),
+        Loader=yaml.BaseLoader,
+    )
+    steps = workflow["jobs"]["native-components"]["steps"]
+    source = next(
+        step
+        for step in steps
+        if "verify_alpine_external_sources" in step.get("run", "")
+    )
+    command = source["run"]
+    assert "application/external-sources.json" in command
+    assert "--pull never --network none --read-only --cap-drop ALL" in command
+    assert 'Path("/lib/apk/db/installed").read_text()' in command
+    assert '"/sbin/apk","query","--from","installed"' in command
+    assert "/usr/share/ecm/sources/apk" in command
+    assert "continue-on-error" not in source and "|| true" not in command
+    runtime = next(step for step in steps if "--phase runtime" in step.get("run", ""))
+    assert "always()" in runtime["if"] and "continue-on-error" not in runtime

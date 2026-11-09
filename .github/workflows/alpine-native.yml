@@ -262,7 +262,14 @@ jobs:
           docker run --rm --pull never --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
             --entrypoint /usr/local/bin/python "$image" -I -c \
             'import json,subprocess; from pathlib import Path; p=subprocess.run(["/sbin/apk","query","--from","installed","--format","json","--all-matches","*"],check=True,capture_output=True,text=True); print(json.dumps({"packages":json.loads(p.stdout),"installed_database":Path("/lib/apk/db/installed").read_text()},sort_keys=True,indent=2))' \
-            > "$RUNNER_TEMP/alpine-evidence/application/runtime-inventory.json"
+             > "$RUNNER_TEMP/alpine-evidence/application/runtime-inventory.json"
+      - name: Verify delivered external APK sources against the immutable image live inventory
+        run: |
+          image=$(docker image inspect --format '{{.Id}}' ecm-alpine-application-candidate:${{ matrix.arch }})
+          docker run --rm --pull never --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user 1000:1000 --entrypoint /usr/local/bin/python "$image" -I -c \
+            'import json,subprocess,sys; from pathlib import Path; sys.path.insert(0,"/usr/share/ecm/sources/verification"); from verify_alpine_external_sources import verify; p=subprocess.run(["/sbin/apk","query","--from","installed","--format","json","--all-matches","*"],check=True,capture_output=True,text=True); capture={"packages":json.loads(p.stdout),"installed_database":Path("/lib/apk/db/installed").read_text()}; print(json.dumps(verify(Path("/usr/share/ecm/sources/apk"),capture),sort_keys=True,indent=2))' \
+            > "$RUNNER_TEMP/alpine-evidence/application/external-sources.json"
       - name: Exercise real application identities and persistence on the immutable candidate
         run: |
           image=$(docker image inspect --format '{{.Id}}' ecm-alpine-application-candidate:${{ matrix.arch }})
