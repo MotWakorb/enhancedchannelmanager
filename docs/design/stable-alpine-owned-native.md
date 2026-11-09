@@ -102,6 +102,26 @@ Backend tests and Docker-excluded generated/cache files are outside that source
 map. Local source verification passed. The same guard runs before native builds
 so a PR merge checkout cannot silently substitute different application code.
 
+The first full ARM64 candidate in `42649078033` built successfully and passed
+both 1000:1000 and 1571:1572 bootstrap/restart/recreation scenarios. It passed 25
+runtime checks, including real prober cancellation, encrypted HLS relay/previews,
+resdet, timezone, SQLite and verified/refused TLS cases. The full runtime gate
+still **failed** on three distribution-specific checks: glibc's getent version
+banner, RPM security-package metadata and the RPM source index. The immutable
+image/rootfs and original failures are retained in
+`stable-alpine-application-arm64-first-runtime-20261109.json`.
+
+The getent check now retains named lookups and adds actual numeric lookup,
+missing-user exit/output and official APK ownership checks on Alpine. The
+security metadata adapter verifies the exact current owned recipe, installed
+file/link bytes and APK ownership instead of asking for nonexistent RPMs.
+Local actual musl getent integration passed; fresh full native adapter execution
+is still pending. A Python-3.12 AST manifest proves that all 34 original shared
+functions retain their original bodies, except the two explicit metadata
+dispatch branches. In particular, the original source-integrity gate and every
+functional check remain unchanged. The incomplete source index therefore still
+fails: no compatibility or source gate has been waived.
+
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
 (84.19% coverage). Five failures correctly rejected the stale resdet helper hash;

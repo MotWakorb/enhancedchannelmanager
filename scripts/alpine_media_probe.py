@@ -21,7 +21,7 @@ FIXTURES = (
     "synthetic.vgm",
 )
 FIXTURE_HASHES = {
-    "runtime_checks.py": "2c98dee4394f58934960723ce19811a9c398122cb308f0e883e82dde8bd20915",
+    "runtime_checks.py": "3f21e1ccb0f93ce0ff09573f2e87332e58c1a4d3dadbfa98e5ca5bfe1570b4ea",
     "rare_inputs.json": "7be7374b29e2c4ac43871b2fb1dff27eaa599a8ef434c2c914c53ca9981c0071",
 }
 
