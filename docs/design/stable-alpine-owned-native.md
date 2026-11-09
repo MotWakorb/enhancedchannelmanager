@@ -8,6 +8,28 @@ by this implementation. No image publication or deployment is authorized.
 
 ## Implemented providers
 
+### Additional BusyBox provider approved (implementation pending)
+
+On 2026-11-09 the PO explicitly approved an additional source-pinned, patched
+BusyBox provider, preserving applets, signed package ownership and matching
+source delivery. The official stable `busybox-1.37.0-r31` reproduces
+CVE-2025-60876: a container-local HTTP server observes an injected header when
+the wget request target contains raw CR/LF. An ordinary URL succeeds as a control.
+The official tracker reports this exact stable source version as `fixed: false`;
+its missing CVSS vector/zero score is **unknown severity**, not a safety claim.
+Signed stable `dash` and `dash-binsh` explicitly depend on BusyBox, so the tested
+transaction cannot simply remove the affected provider. No vulnerability
+suppression, removed applet, mixed feed or compatibility shim is approved.
+
+Full AMD64 Python execution against the pre-repair test-image snapshot completed
+with 16,608 passes, six failures, five unchanged skips and two deselections
+(84.19% coverage). Five failures correctly rejected the stale resdet helper hash;
+the sixth rejected the newly added workflow controls absent from the closed
+manifest. The consumer hash is rebound to the actual unchanged-recipe helper;
+all nine added workflow `if` controls were reviewed and recorded, with no removed
+controls or new `continue-on-error` entries. The targeted repair suite passes;
+the full native rerun remains required. This failure is retained, not waived.
+
 ### Independent original-image comparison and native ARM numerical correction
 
 `docker/alpine-native/original-baselines.json` seals the retained CI images from
@@ -39,8 +61,14 @@ matched **all 70** original-ARM checks; the unchanged `off-selected-pow` retaine
 54 differences. This isolates contraction semantics, rather than a new tolerance
 or replacement libc. The recipe now selects `-ffp-contract=fast` on AArch64 and
 retains `off` on AMD64. Patch and complete post-patch source witnesses were
-recomputed from the unchanged original archive. Final signed-package/live-media
-verification of that correction is still pending.
+recomputed from the unchanged original archive. Fresh native run `42539263198`
+subsequently passed signed-package installation, all 70 recorded-native codec
+processes and all 142 live original/candidate processes on **both** architectures,
+including complete media outputs. Each APK owns 568 exact files. Independently
+downloaded artifact hashes and actual subjects are retained in
+`stable-alpine-native-original-paired-20261109.json`. This closes the bounded
+codec/media gap, not whole-application/source/security acceptance. Resdet and
+later BusyBox work are not included in that run.
 
 `stable-alpine-native-original-arm64-20261109.json.gz` records the actual old-ARM
 execution and media results bound to its original OCI identity. It supplements,

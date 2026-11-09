@@ -1,6 +1,92 @@
 {
   "if": [
     {
+      "file": "alpine-native.yml",
+      "path": [
+        "jobs",
+        "original-baseline",
+        "if"
+      ],
+      "value": "github.event_name == 'workflow_dispatch' && inputs.historical_package_diagnostic"
+    },
+    {
+      "file": "alpine-native.yml",
+      "path": [
+        "jobs",
+        "original-baseline",
+        "steps",
+        7,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
+      "file": "alpine-native.yml",
+      "path": [
+        "jobs",
+        "original-baseline",
+        "steps",
+        8,
+        "if"
+      ],
+      "value": "always() && steps.verified-inputs.outcome == 'success'"
+    },
+    {
+      "file": "alpine-native.yml",
+      "path": [
+        "jobs",
+        "native-components",
+        "steps",
+        14,
+        "if"
+      ],
+      "value": "always() && steps.current-original.outcome == 'success'"
+    },
+    {
+      "file": "alpine-native.yml",
+      "path": [
+        "jobs",
+        "native-components",
+        "steps",
+        15,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
+      "file": "alpine-native.yml",
+      "path": [
+        "jobs",
+        "native-components",
+        "steps",
+        16,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
+      "file": "alpine-python.yml",
+      "path": [
+        "jobs",
+        "application",
+        "steps",
+        5,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
+      "file": "alpine-python.yml",
+      "path": [
+        "jobs",
+        "application",
+        "steps",
+        6,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
       "file": "build.yml",
       "path": [
         "jobs",
@@ -223,6 +309,17 @@
         "if"
       ],
       "value": "always() && github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success' && needs.trivy-scan.result == 'success' && needs.trivy-scan-arm64.result == 'success' && needs.trivy-scan-mcp-amd64.result == 'success' && needs.trivy-scan-mcp-arm64.result == 'success' && needs.native-runtime-amd64.result == 'success' && needs.native-runtime-arm64.result == 'success' && needs.security-scan-mcp.result == 'success'"
+    },
+    {
+      "file": "codec2-numeric-diagnostic.yml",
+      "path": [
+        "jobs",
+        "investigate",
+        "steps",
+        5,
+        "if"
+      ],
+      "value": "always()"
     },
     {
       "file": "docs-pages.yml",

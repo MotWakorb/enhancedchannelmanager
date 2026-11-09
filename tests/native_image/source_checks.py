@@ -22,7 +22,7 @@ PYTHON_SUMS = {
     "notices": "cc1790cbfca9d206333084155cbf8f1a0c66fb6512615dea692a9c0a5daa903d",
 }
 RESDET_SCRIPTS = {
-    "build_resdet.py": "1f071637352c3e21abc94388dd4101c7d819998cc31b94cd5a34af939febf611",
+    "build_resdet.py": "1c73568784cd1821d513cbb155437d9699dbedb9c4a78d02e62dfa76a0628355",
 }
 PYTHON_INDEXES = {
     "x86_64": "08ed75d9a94dae5cb10fa8353dfc01ea27a9a531d199c786b29eaecacc4ca1f0",
