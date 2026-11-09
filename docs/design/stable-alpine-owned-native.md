@@ -8,7 +8,7 @@ by this implementation. No image publication or deployment is authorized.
 
 ## Implemented providers
 
-### Additional libxml2 advisory reconciliation (source checks only so far)
+### Additional libxml2 advisory reconciliation (bounded native proof only)
 
 The official unfixed-aware tracker identified two additional regexp advisories
 for review. The primary upstream corrections `76fe08d97de88bfaef2f7d5cd27f11954cc5bee2`
@@ -170,9 +170,11 @@ identity/persistence scenarios, all 27 functional/metadata runtime checks and
 the 1,080-file application source guard. Its **only** remaining shared runtime
 failure is `native_source_and_artifact_integrity` (missing the RPM source index).
 The failed full report and actual getent/APK metadata are retained in
-`stable-alpine-application-arm64-metadata-20261109.json`. Fresh AMD64 adapter
-execution, the complete Alpine source consumer and final security/MCP gates
-are still required.
+`stable-alpine-application-arm64-metadata-20261109.json`. The paired AMD64 result
+subsequently passed the same 27 checks and both identity/persistence scenarios;
+both complete gates still fail only source integrity. The exact paired receipts
+are retained in `stable-alpine-application-metadata-paired-20261109.json`. The
+complete Alpine source consumer and final security/MCP gates are still required.
 
 Full Python run `42657433240` then exposed eight **unit-fixture** failures per
 architecture: six GNU getent cases and two RPM metadata cases selected Alpine
@@ -185,6 +187,55 @@ native subset passes 18 cases, and the host regression subset passes 165. The
 previous full Python CI remains failed until fresh complete native runs pass;
 the runtime checks, application source and source-integrity gate were not changed
 by this fixture repair (`enhancedchannelmanager-xql87`).
+
+### External APK source delivery: strict standalone consumer, not the full gate
+
+The actual ARM64 candidate from `42659218638` contains 122 installed packages:
+117 external APK subjects across 99 original source groups, one zero-payload
+Python virtual package and four owned packages awaiting their separate source
+proof joins. The original captured package set is sealed by
+`f42595d7b8b226aba45810a584e333cdefad69ab9edd9b78e26418b7ac5e889e`.
+It is not the earlier local 94-package test-image selection.
+
+`verify_alpine_external_sources.py` now verifies an actual delivered external
+source bundle against that capture. It requires the exact architecture-scoped
+official public-key bytes, actual APK/index signatures, the entire installed
+external package set, original raw commit/root/path Git objects, complete
+recipe-tree reconstruction and every checksummed source input. Missing, added,
+rehashed or relabeled artifacts are rejected. Signature checks use only a scoped
+evidence key directory; no runtime trust store is modified. The bundle includes
+only the 117 selected external APKs, not vulnerable original BusyBox witnesses
+or unselected subpackages.
+
+Actual nonroot/read-only/networkless AMD64 verification of the ARM64 candidate's
+captured subjects passes: 625 delivered files, 99 recipe groups and all 314
+checksummed inputs (197 local recipe files and 117 external inputs). This is
+cryptographic/source verification of ARM data, **not ARM target execution**.
+A same-size source mutation with its outer manifest SHA256 also updated is
+still denied by the original signed-commit APKBUILD SHA512. A regression test is
+proven red when the source-input validator itself is removed. All originals are
+retained. Evidence is `stable-alpine-external-source-delivery-arm64-20261109.json`.
+
+The initial stable distfiles request for the original libopenmpt source returned
+404. The failed receipt is retained; an explicit request to the official upstream
+URL in the exact original APKBUILD matched the same SHA512. There is no fallback
+on authentication or byte mismatch.
+
+The consumer always returns `full_runtime_source_acceptance: false`. This bundle
+is not yet integrated into either final native application image; four owned
+providers, Python base, compiler/language support, complete license/advisory
+reconciliation and an aggregate source consumer remain required. The unchanged
+shared source gate still fails until those equivalent checks are complete.
+
+Separate source preparation retained all 546 distinct registry crate archives
+selected by the exact glycin/libglycin and rav1e locks, matching each Cargo
+checksum. The two original glycin patches were applied in order with fuzz zero;
+the changed lock is hash-bound, not guessed or copied from another build.
+Official build resolution/target linkage, vendor/delivery consumers and licensing
+are not cleared by those downloads. CPython 3.12.16's official source archive also
+matches the actual base environment SHA256, including its bundled pip 25.0.1
+wheel; original OCI/Docker-recipe and installed-byte source binding remain
+separate unfinished work.
 
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
