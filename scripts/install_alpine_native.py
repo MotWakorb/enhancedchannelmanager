@@ -57,7 +57,15 @@ def load_package(directory: Path, arch: str) -> dict:
 
 
 @contextmanager
-def temporary_trust(system: list[Path], public: Path, parent: Path):
+def temporary_trust(
+    system: list[Path], public: Path, parent: Path, key_name: str = "ecm-build.pub"
+):
+    _require(
+        Path(key_name).name == key_name
+        and key_name.endswith(".pub")
+        and key_name not in {".", ".."},
+        "safe APK public-key filename required",
+    )
     with tempfile.TemporaryDirectory(
         prefix="ecm-install-trust-", dir=parent
     ) as temporary:
@@ -80,7 +88,7 @@ def temporary_trust(system: list[Path], public: Path, parent: Path):
                     "conflicting vendor APK key",
                 )
                 shutil.copy2(key, target)
-        target = directory / "ecm-build.pub"
+        target = directory / key_name
         _require(not target.exists(), "owned APK key collides with vendor trust")
         shutil.copy2(public, target)
         yield directory

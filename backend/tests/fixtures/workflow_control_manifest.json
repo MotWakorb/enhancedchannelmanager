@@ -1,6 +1,17 @@
 {
   "if": [
     {
+      "file": "alpine-busybox.yml",
+      "path": [
+        "jobs",
+        "provider",
+        "steps",
+        6,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
       "file": "alpine-native.yml",
       "path": [
         "jobs",

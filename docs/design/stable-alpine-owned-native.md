@@ -8,7 +8,7 @@ by this implementation. No image publication or deployment is authorized.
 
 ## Implemented providers
 
-### Additional BusyBox provider approved (implementation pending)
+### Additional BusyBox provider: signed native proof in progress
 
 On 2026-11-09 the PO explicitly approved an additional source-pinned, patched
 BusyBox provider, preserving applets, signed package ownership and matching
@@ -21,6 +21,28 @@ Signed stable `dash` and `dash-binsh` explicitly depend on BusyBox, so the teste
 transaction cannot simply remove the affected provider. No vulnerability
 suppression, removed applet, mixed feed or compatibility shim is approved.
 
+The canonical AMD64 provider build now passes all 913 upstream checks without
+additional exclusions. It retains all 304 applet paths, 1,084 settings, the 44
+original vendor patches and exact witnesses for 50 touched sources. Only the
+three selected runtime packages are installed. The disposable AMD64 runtime
+proof passed actual signatures, default-trust denial, an authenticated-control
+tampering rejection, exact installed payloads and APK ownership, with temporary
+trust removed and runtime trust/repositories unchanged. The bounded runtime
+probe rejects all 32 representable C0/space URL bytes, passes five actual local
+HTTP transfers and the timezone case. The original official-base failure remains
+separate evidence. See `docker/alpine-busybox/README.md` and the builder/parser/
+installer/workflow unit tests for executable contracts.
+
+An actual APKv2 negative control reports `BAD signature` under the trusted key;
+an unknown key reports `UNTRUSTED signature`. The regression fixture preserves
+the real outputs. A parser error or unknown-key error cannot satisfy the patched
+package's authenticated-byte negative control. No signature gate is bypassed.
+
+Real native AMD64/ARM64 BusyBox CI is the next gate; static utmps/skalibs
+corresponding-source closure, complete rebuild-helper delivery and independent
+unfixed-aware advisory enforcement remain unfinished. Production Dockerfiles
+are unchanged.
+
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
 (84.19% coverage). Five failures correctly rejected the stale resdet helper hash;
@@ -29,6 +51,14 @@ manifest. The consumer hash is rebound to the actual unchanged-recipe helper;
 all nine added workflow `if` controls were reviewed and recorded, with no removed
 controls or new `continue-on-error` entries. The targeted repair suite passes;
 the full native rerun remains required. This failure is retained, not waived.
+
+Native run `42543103180` subsequently passed **16,614 tests on each architecture**,
+with five unchanged skips and two deselections. Both full gates used all 74
+unchanged pins, hash-enforced installation and installed-byte verification;
+no test exclusions were added. Later Python run `42547435116` and resdet-inclusive
+native composition run `42547435177` also completed successfully on both native
+hosts at `7545f73d`. These results do not include the later BusyBox replacement
+or establish full ECM/MCP runtime/security approval.
 
 ### Independent original-image comparison and native ARM numerical correction
 

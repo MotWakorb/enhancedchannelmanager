@@ -10,6 +10,22 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def test_apkv2_signer_filename_is_explicit_and_scoped(installer, tmp_path):
+    public = tmp_path / "source.pub"
+    public.write_bytes(b"public key evidence")
+    with installer.temporary_trust(
+        [], public, tmp_path, key_name="ecm-busybox.rsa.pub"
+    ) as trust:
+        assert (trust / "ecm-busybox.rsa.pub").read_bytes() == public.read_bytes()
+        assert not (trust / "ecm-build.pub").exists()
+    assert not trust.exists()
+    with (
+        pytest.raises(installer.BuildError, match="filename"),
+        installer.temporary_trust([], public, tmp_path, key_name="../escape.pub"),
+    ):
+        pytest.fail("unsafe key name accepted")
+
+
 def test_negative_control_changes_authenticated_metadata_not_deflate_padding(
     installer, tmp_path
 ):
