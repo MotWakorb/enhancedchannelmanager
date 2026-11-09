@@ -1,0 +1,86 @@
+# Full application integration candidate only. Never substitutes for completed
+# source/advisory gates, and does not switch either production Dockerfile.
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS frontend-builder
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=$GIT_COMMIT
+COPY frontend/ ./
+RUN npm run build
+
+FROM python:3.12-alpine3.24@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7 AS python-builder
+COPY scripts/alpine_repository_policy.py /proof/source/scripts/alpine_repository_policy.py
+RUN python /proof/source/scripts/alpine_repository_policy.py \
+    && apk upgrade --no-cache && apk add --no-cache binutils
+COPY --from=proof-wheels / /proof/wheels/
+COPY backend/requirements.txt /proof/source/backend/requirements.txt
+COPY scripts/inventory_musllinux_wheels.py scripts/verify_musllinux_gnu.py /proof/source/scripts/
+COPY docker/python-third-party/ /proof/source/docker/python-third-party/
+RUN --network=none python -m venv /opt/venv \
+    && /opt/venv/bin/python -m pip install --no-index --only-binary=:all: --require-hashes \
+        --find-links=/proof/wheels -r /proof/wheels/requirements.txt \
+    && /opt/venv/bin/python -m pip check \
+    && case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \
+    && /opt/venv/bin/python /proof/source/scripts/inventory_musllinux_wheels.py --verify --arch "$arch" \
+        --wheels-dir /proof/wheels --site-packages /opt/venv/lib/python3.12/site-packages \
+        --installed-python /opt/venv/bin/python > /proof/installed-wheel-bindings.json
+
+FROM python:3.12-alpine3.24@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7 AS runtime-base
+RUN --mount=type=bind,source=scripts,target=/build-scripts \
+    --mount=type=bind,from=native-packages,target=/native-packages \
+    python /build-scripts/alpine_repository_policy.py \
+    && apk upgrade --no-cache \
+    && apk add --no-cache bash coreutils shadow findutils grep sed tar gzip tzdata ca-certificates \
+    && python -c 'import json,subprocess; from pathlib import Path; p=json.loads(Path("/native-packages/package-output.json").read_text()); subprocess.run(["/sbin/apk","add","--no-cache",*p["external_dependencies"]],check=True)'
+RUN --network=none --mount=type=bind,source=scripts,target=/build-scripts \
+    --mount=type=bind,source=docker/alpine-busybox/manifest.json,target=/build-policy/manifest.json \
+    --mount=type=bind,from=native-packages,target=/native-packages \
+    --mount=type=bind,from=busybox-packages,target=/busybox-packages \
+    case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \
+    && mkdir -p /usr/share/ecm/provenance /usr/share/ecm/sources \
+    && python /build-scripts/install_alpine_native.py --arch "$arch" --packages-dir /native-packages \
+        --evidence-file /usr/share/ecm/provenance/native-installed.json \
+    && python /build-scripts/install_busybox_provider.py --arch "$arch" --packages-dir /busybox-packages \
+        --manifest /build-policy/manifest.json --evidence-file /usr/share/ecm/provenance/busybox-installed.json \
+    && python /build-scripts/probe_busybox_runtime.py --output-file /usr/share/ecm/provenance/busybox-runtime.json \
+    && cp /native-packages/package-output.json /usr/share/ecm/provenance/native-package.json \
+    && cp /busybox-packages/build-output.json /usr/share/ecm/provenance/busybox-package.json \
+    && cp -a /busybox-packages/sources /usr/share/ecm/sources/busybox \
+    && python -c 'import json,shutil; from pathlib import Path; out=Path("/usr/share/ecm/provenance"); [shutil.copy2(root/json.loads((root/receipt).read_text())["public_key"]["file"],out/name) for root,receipt,name in [(Path("/native-packages"),"package-output.json","native-signing-public-key.pub"),(Path("/busybox-packages"),"build-output.json","busybox-signing-public-key.pub")]]' \
+    && apk query --from installed --format json --all-matches '*' > /usr/share/ecm/provenance/installed-apks.json \
+    && cp /lib/apk/db/installed /usr/share/ecm/provenance/installed-apk-database.txt
+
+FROM runtime-base AS application-candidate
+LABEL io.ecm.alpine.source-and-advisory-closure=pending
+ARG GIT_COMMIT=unknown
+ARG ECM_VERSION=unknown
+ARG RELEASE_CHANNEL=latest
+ENV GIT_COMMIT=$GIT_COMMIT ECM_VERSION=$ECM_VERSION RELEASE_CHANNEL=$RELEASE_CHANNEL
+WORKDIR /app
+RUN groupadd --gid 1000 appuser \
+    && useradd --uid 1000 --gid appuser --create-home --shell /bin/bash appuser
+COPY --from=python-builder /opt/venv /opt/venv
+COPY --from=python-builder /proof/installed-wheel-bindings.json /usr/share/ecm/provenance/installed-wheel-bindings.json
+ENV PATH="/opt/venv/bin:$PATH"
+COPY backend/ /app/
+COPY --from=frontend-builder /app/frontend/dist /app/static
+COPY docker/python-third-party/notices/ /usr/share/doc/ecm/python-third-party/
+COPY docker/python-third-party/sources/ /usr/share/ecm/sources/python/
+COPY docker/python-third-party/component-manifest.json docker/python-third-party/SOURCE-AVAILABILITY.txt /usr/share/doc/ecm/python-third-party/
+COPY docker/python-third-party/artifact-index/ /usr/share/doc/ecm/python-third-party/artifact-index/
+COPY docker/trust/ /usr/share/ecm/sources/trust/
+COPY docker/alpine-native/Dockerfile.candidate /usr/share/ecm/sources/trust/Dockerfile.candidate
+RUN --network=none mkdir -p /config /config/tls /config/uploads/logos /run/ecm \
+    && chown -R appuser:appuser /config /app \
+    && chown appuser:appuser /run/ecm \
+    && chmod 700 /config/tls /run/ecm \
+    && sed -i 's/\r$//' /app/entrypoint.sh \
+    && chmod +x /app/entrypoint.sh \
+    && /opt/venv/bin/python -m pip check \
+    && resdet -V && ffmpeg -version && ffprobe -version
+ENV PUID=1000 PGID=1000 CONFIG_DIR=/config ECM_PORT=6100 ECM_HTTPS_PORT=6143
+EXPOSE 6100 6143
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+  CMD /opt/venv/bin/python -c "import urllib.request, os; port = os.environ.get('ECM_PORT', '6100'); urllib.request.urlopen(f'http://localhost:{port}/api/health')" || exit 1
+ENTRYPOINT ["/app/entrypoint.sh"]

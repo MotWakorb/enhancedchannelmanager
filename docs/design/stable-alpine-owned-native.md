@@ -52,6 +52,26 @@ Fresh native CI for that source-bound revision is still required. Complete
 compiler-support/rebuild delivery and independent unfixed-aware advisory
 enforcement remain unfinished. Production Dockerfiles are unchanged.
 
+### Full application integration candidate (native execution pending)
+
+`docker/alpine-native/Dockerfile.candidate` composes the freshly built signed
+native and BusyBox products with the 74 hash-enforced Python wheels and the
+unchanged frontend/backend application. It retains the production identity,
+entrypoint, environment, healthcheck and persistence-directory contracts, while
+labeling incomplete source/advisory closure explicitly. The normal native
+workflow now builds this candidate on both architectures, records its immutable
+image identity, and runs the existing bootstrap and runtime gates without
+waivers. Runtime evidence is retained even if bootstrap fails, but either
+failure still fails the job. RPM/glibc-specific assertions are not silently
+removed: their Alpine replacements must be established from actual failures and
+equivalent source/behavior checks. No whole-application pass is claimed yet.
+
+This new gate is additive to the signed-component and live original-image
+pairing gates. Source closure for the external APK/Python base, independent
+unfixed-aware advisory enforcement, final immutable-image scans and MCP
+composition/isolation remain required. The production Dockerfiles and protected
+publication/deployment workflow are not switched by this candidate.
+
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
 (84.19% coverage). Five failures correctly rejected the stale resdet helper hash;

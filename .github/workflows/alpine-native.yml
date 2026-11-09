@@ -8,6 +8,9 @@ on:
       - '.github/workflows/alpine-native.yml'
       - 'docker/alpine-native/**'
       - 'docker/native/**'
+      - 'docker/alpine-busybox/**'
+      - 'scripts/*busybox*'
+      - 'scripts/alpine_apk_v2.py'
       - 'scripts/*alpine*'
       - 'scripts/build_native_runtime.py'
   workflow_dispatch:
@@ -127,7 +130,7 @@ jobs:
             machine: aarch64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
@@ -233,6 +236,38 @@ jobs:
           python3 scripts/compare_alpine_baseline.py --arch ${{ matrix.arch }} \
             --baseline-image "$original" --candidate-image "$candidate" \
             --output-dir "$RUNNER_TEMP/alpine-evidence/current-paired/comparison"
+      - name: Prepare exact Python wheels and build the current signed BusyBox provider
+        run: |
+          python3 scripts/prepare_musllinux_wheels.py --arch '${{ matrix.arch }}' --output-dir "$RUNNER_TEMP/application-wheels"
+          python3 scripts/prepare_busybox_cache.py --output-dir "$RUNNER_TEMP/busybox-inputs"
+          docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
+            --build-context busybox-cache="$RUNNER_TEMP/busybox-inputs" \
+            --file docker/alpine-busybox/Dockerfile \
+            --output type=local,dest="$RUNNER_TEMP/alpine-evidence/busybox" .
+      - name: Build the full application integration candidate without publication
+        id: application-candidate
+        run: |
+          mkdir "$RUNNER_TEMP/alpine-evidence/application"
+          docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
+            --build-context native-packages="$RUNNER_TEMP/alpine-evidence/packages" \
+            --build-context busybox-packages="$RUNNER_TEMP/alpine-evidence/busybox" \
+            --build-context proof-wheels="$RUNNER_TEMP/application-wheels" \
+            --build-arg GIT_COMMIT="$(git rev-parse HEAD)" \
+            --metadata-file "$RUNNER_TEMP/alpine-evidence/application/build-metadata.json" \
+            --file docker/alpine-native/Dockerfile.candidate --load \
+            --tag ecm-alpine-application-candidate:${{ matrix.arch }} .
+          docker image inspect ecm-alpine-application-candidate:${{ matrix.arch }} > "$RUNNER_TEMP/alpine-evidence/application/image-inspect.json"
+      - name: Exercise real application identities and persistence on the immutable candidate
+        run: |
+          image=$(docker image inspect --format '{{.Id}}' ecm-alpine-application-candidate:${{ matrix.arch }})
+          python3 scripts/native_image_gate.py --image "$image" --phase bootstrap \
+            --report "$RUNNER_TEMP/alpine-evidence/application/bootstrap.json"
+      - name: Exercise the complete existing runtime gate and retain incompatibilities
+        if: always() && steps.application-candidate.outcome == 'success'
+        run: |
+          image=$(docker image inspect --format '{{.Id}}' ecm-alpine-application-candidate:${{ matrix.arch }})
+          python3 scripts/native_image_gate.py --image "$image" --phase runtime \
+            --report "$RUNNER_TEMP/alpine-evidence/application/runtime.json"
       - name: Preserve verified original even if current-candidate comparison fails
         if: always() && steps.current-original.outcome == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

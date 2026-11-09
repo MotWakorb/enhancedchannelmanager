@@ -59,7 +59,18 @@
         "jobs",
         "native-components",
         "steps",
-        14,
+        17,
+        "if"
+      ],
+      "value": "always() && steps.application-candidate.outcome == 'success'"
+    },
+    {
+      "file": "alpine-native.yml",
+      "path": [
+        "jobs",
+        "native-components",
+        "steps",
+        18,
         "if"
       ],
       "value": "always() && steps.current-original.outcome == 'success'"
@@ -70,7 +81,7 @@
         "jobs",
         "native-components",
         "steps",
-        15,
+        19,
         "if"
       ],
       "value": "always()"
@@ -81,7 +92,7 @@
         "jobs",
         "native-components",
         "steps",
-        16,
+        20,
         "if"
       ],
       "value": "always()"
