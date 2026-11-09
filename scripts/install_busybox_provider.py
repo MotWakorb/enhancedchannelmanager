@@ -130,7 +130,25 @@ def verify_control_scripts(path: Path, expected: dict[str, dict]) -> list[dict]:
     return observed
 
 
-def load_packages(directory: Path, arch: str, manifest: Path) -> dict:
+def source_directory(directory: Path, alternative: Path | None = None) -> Path:
+    """Select already-delivered sources, without copying or relaxing identity.
+
+    The complete source/static/check inventories below remain mandatory. This
+    location parameter is not a source provider, archive substitute or waiver.
+    """
+    source = directory / "sources" if alternative is None else alternative
+    _require(
+        source.is_dir()
+        and not source.is_symlink()
+        and source.absolute() == source.resolve(),
+        "regular canonical BusyBox source directory required",
+    )
+    return source
+
+
+def load_packages(
+    directory: Path, arch: str, manifest: Path, *, source_root: Path | None = None
+) -> dict:
     recipe = read_policy(manifest)
     receipt = directory / "build-output.json"
     _require(
@@ -195,8 +213,9 @@ def load_packages(directory: Path, arch: str, manifest: Path) -> dict:
             "BusyBox payload/control identity mismatch",
         )
         validate_payload(group, row["name"], actual["payload"])
+    sources = source_directory(directory, source_root)
     _require(
-        record["source_files"] == owned_artifacts(directory / "sources"),
+        record["source_files"] == owned_artifacts(sources),
         "BusyBox delivered source inventory mismatch",
     )
     _require(
@@ -205,14 +224,14 @@ def load_packages(directory: Path, arch: str, manifest: Path) -> dict:
         == "TWO_OFFICIAL_STATIC_PROVIDERS_SOURCE_BOUND",
         "BusyBox static source receipt mismatch",
     )
-    verify_delivery(directory / "sources/static-components")
-    static = json.loads((directory / "sources/static-source-output.json").read_text())
+    verify_delivery(sources / "static-components")
+    static = json.loads((sources / "static-source-output.json").read_text())
     _require(
         static["status"] == "TWO_OFFICIAL_STATIC_PROVIDERS_SOURCE_BOUND"
         and static["machine"] == ARCHES[arch][0]
         and static["static_sources_sha256"] == STATIC_SOURCES_SHA256
         and static["source_files"]
-        == owned_artifacts(directory / "sources/static-components"),
+        == owned_artifacts(sources / "static-components"),
         "BusyBox static provider delivery mismatch",
     )
     check = json.loads((directory / "check-output.json").read_text())
@@ -227,7 +246,7 @@ def load_packages(directory: Path, arch: str, manifest: Path) -> dict:
         and check["log_sha256"] == sha256(directory / "check.log")
         and check["binary_sha256"] == binary["sha256"]
         and check["helper_sha256"]
-        == sha256(directory / "sources/build_busybox_provider.py")
+        == sha256(sources / "build_busybox_provider.py")
         and not any(line.startswith(b"FAIL:") for line in lines)
         and sum(line.startswith(b"PASS:") for line in lines)
         == record["upstream_pass_lines"]

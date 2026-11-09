@@ -165,3 +165,32 @@ def test_installed_database_scripts_must_match_authenticated_control_bytes(
     archive(b"changed script content")
     with pytest.raises(installer.BuildError, match="control script"):
         installer.verify_control_scripts(path, expected)
+
+
+def test_separate_source_location_avoids_copying_delivered_sources(installer, tmp_path):
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    original = tmp_path / "delivered-sources"
+    original.mkdir()
+    assert installer.source_directory(evidence, original) == original
+    assert not (evidence / "sources").exists()
+    default = evidence / "sources"
+    default.mkdir()
+    assert installer.source_directory(evidence) == default
+
+
+@pytest.mark.parametrize("mutation", ["missing", "file", "link", "parent-link"])
+def test_source_location_requires_a_real_canonical_directory(installer, tmp_path, mutation):
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    original = tmp_path / "delivered-sources"
+    if mutation == "file": original.write_bytes(b"not a source directory")
+    elif mutation in {"link", "parent-link"}:
+        real = tmp_path / "real"
+        real.mkdir()
+        original.symlink_to(real, target_is_directory=True)
+        if mutation == "parent-link":
+            (real / "nested").mkdir()
+            original = original / "nested"
+    with pytest.raises(installer.BuildError, match="source directory"):
+        installer.source_directory(evidence, original)
