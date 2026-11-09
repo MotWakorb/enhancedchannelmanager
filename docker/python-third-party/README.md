@@ -22,6 +22,22 @@ Details: `../../arm64-current/REPORT.md`; new tree integrity: `SHA256SUMS`.
 
 ## Stable-Alpine GNU correspondence (bounded source proof)
 
+The separate `artifact-index/musllinux/` inventories now bind the unchanged
+74-package selection on each architecture: 96 distinct whole wheels, 48 AMD64
+and 45 ARM64 ELF members, every wheel RECORD member, notices and 16 raw embedded
+SBOM payloads. The 100 unique retained notice/SBOM files are content-addressed
+under `payloads/`. Raw producer PURLs are preserved, not normalized.
+`scripts/inventory_musllinux_wheels.py --verify --arch ... --wheels-dir ...`
+rehashes actual wheel archives, every RECORD entry, delivered payloads and
+reused shared notices. With `--site-packages` and `--installed-python`, it also
+checks installed bytes, the exact native ELF set and the two PEP427 header/script
+relocations. This installed consumer passed against the actual AMD64 Alpine
+74-package environment; ARM verification here is archive-only, not execution.
+Unit tests include payload/RECORD/notice/script-tampering denials.
+
+These indexes do **not** establish corresponding sources or advisory clearance
+from SBOM names/versions. The historical manylinux indexes remain unchanged.
+
 `artifact-index/musllinux-gnu.json` is a separate, hash-pinned map for the
 unchanged musllinux selection. It does not replace or relabel the historical
 manylinux indexes above. It accounts for **14 wheels, 18 GNU member copies and
