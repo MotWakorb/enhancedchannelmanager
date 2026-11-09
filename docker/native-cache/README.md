@@ -30,7 +30,7 @@ One additional object is the exact **AMD64-only SUSE source RPM**
 These bytes match the earlier authenticated complete source-builder output.
 They are retained unchanged because the
 canonical source and later exact mirror route expired independently. The complete
-directory is now **15 objects / 12,911,729 bytes**, plus this README.
+directory previously held **15 objects / 12,911,729 bytes**, plus this README.
 
 Only the exact `(openSUSE, x86_64, filename, SHA256)` policy in the existing
 collector selects this source. Its explicit location-only
@@ -44,13 +44,41 @@ that handoff or reuse these bytes/hash; its own source/feed remains unchanged.
 Keeping this small, already-reviewed bootstrap set in Git avoids new registry
 write credentials, retention services or untrusted mirror fallback for CI.
 This is not implementation of a full native binary/source archive. Other SUSE
-origins still use ordinary exact fresh source retrieval, and the existing two
+origins except the exact companion below still use ordinary fresh retrieval, and the existing two
 per-architecture Packman source inputs retain their separate reviewed handoff.
 Their availability/authentication and complete runtime source closure remain
 independent requirements. There is no generic partial-cache permission or
 automatic mirror fallback.
 
 `test_retained_packman_cache_is_exact_complete_original_input_set` enforces all
-14 original hashes plus the one approved retained source and absence of unindexed
+14 original hashes plus the two exact retained sources and absence of unindexed
 files. Native signature/header and final
 source/media/image gates still have to execute; Git retention is not their pass.
+
+## Exact e2fsprogs source companion
+
+The same explicit AMD handoff now also selects **only when present in the actual
+inventory** the exact `(openSUSE, x86_64, e2fsprogs-1.47.4-1.1.src.rpm)` companion:
+
+* SHA256 / filename: `4b90c6c666634fe3f97b2045a6556c4ae34709a9f48b53c3c930d32c665b8833`
+* Size: **7,757,243 bytes**; source license: **GPL-2.0-only**.
+* Unchanged canonical origin:
+  <https://download.opensuse.org/tumbleweed/repo/src-oss/src/e2fsprogs-1.47.4-1.1.src.rpm>
+* Same pinned SUSE fingerprint as above; all 13 payload members retained.
+
+These identical bytes were recovered as data from the previously sealed original
+AMD64 OCI source layer and freshly verified by the collector's ordinary native
+RPM signature, exact header and complete payload checks. Neither source nor SPEC
+was executed. This is not an upgraded package, replacement binary, new mirror,
+runtime library or partial generic cache. The directory now contains **16 objects
+/ 20,668,972 bytes**, plus this README.
+
+`--retained-release-source` still accepts only the original anchor file, not a
+directory or caller-defined list. Its adjacent companion filename/hash/size and
+exact inventory tuple are fixed in collector code; there is no directory scan.
+If selected, missing/corrupt/aliased companion bytes fail before key import with
+no network fallback. Without the explicit anchor handoff or selected exact
+origin, this companion is not used. ARM gets no handoff. Both copied SRPMs still
+undergo native signature/header/full payload authentication. The independent
+runtime consumer pins the same canonical e2fsprogs URL/hash and retained
+provenance. Generic cache indexes must still cover every selected origin.

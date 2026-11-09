@@ -50,6 +50,16 @@ EXACT_SOURCE_ROUTES = {
         "sha256": "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123",
     },
 }
+# One exact previously delivered AMD source companion to the explicit branding
+# handoff. Not a URL override, runtime provider, directory scan or generic cache.
+# The recovered vendor-signed bytes retain the canonical source_url and must go
+# through the ordinary signature, exact header and complete payload checks.
+RETAINED_RELEASE_COMPANIONS = {
+    ("openSUSE", "x86_64", "e2fsprogs-1.47.4-1.1.src.rpm"): {
+        "sha256": "4b90c6c666634fe3f97b2045a6556c4ae34709a9f48b53c3c930d32c665b8833",
+        "size": 7757243,
+    },
+}
 TOKEN = re.compile(r"[A-Za-z0-9_+~.-]+\Z")
 SOURCE_NAME = re.compile(r"[A-Za-z0-9_+~.-]+\.src\.rpm\Z")
 MAX_PAYLOAD = 2 * 1024**3
@@ -577,7 +587,7 @@ def native_source_inputs(
 def retained_release_source(
     path: Path | None, architecture: str, origins: list[tuple]
 ) -> dict:
-    """One explicit hash-addressed source, not an arbitrary partial cache."""
+    """Explicit branding anchor and exact selected companion, never a partial cache."""
     if path is None:
         return {}
     matches = [
@@ -586,17 +596,36 @@ def retained_release_source(
         if arch == architecture and (name, vendor) in origins
     ]
     if len(matches) != 1:
-        raise ValueError("retained release source requires its exact vendor/architecture/origin")
+        raise ValueError(
+            "retained release source requires its exact vendor/architecture/origin"
+        )
     name, route = matches[0]
     if (
         path.name != route["sha256"]
         or path.is_symlink()
+        or path.absolute() != path.resolve()
         or not path.is_file()
         or path.stat().st_size > MAX_PAYLOAD
         or sha256(path) != route["sha256"]
     ):
         raise ValueError("retained release source filename/bytes mismatch")
-    return {name: (path, route["sha256"])}
+    retained = {name: (path, route["sha256"])}
+    for (vendor, arch, filename), companion in RETAINED_RELEASE_COMPANIONS.items():
+        if arch != architecture or (filename, vendor) not in origins:
+            continue
+        source = path.parent / companion["sha256"]
+        if (
+            source.is_symlink()
+            or not source.is_file()
+            or source.absolute() != source.resolve()
+            or source.stat().st_size != companion["size"]
+            or sha256(source) != companion["sha256"]
+        ):
+            raise ValueError(
+                "retained release source companion filename/bytes mismatch"
+            )
+        retained[filename] = (source, companion["sha256"])
+    return retained
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -623,8 +652,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--native-manifest", type=Path)
     parser.add_argument("--native-sources", type=Path)
     parser.add_argument(
-        "--retained-release-source", type=Path,
-        help="one hash-addressed reviewed AMD release SRPM, never an arbitrary source cache",
+        "--retained-release-source",
+        type=Path,
+        help="hash-addressed AMD release SRPM plus its one exact selected source companion, never an arbitrary source cache",
     )
     parser.add_argument(
         "--expected-sha256",

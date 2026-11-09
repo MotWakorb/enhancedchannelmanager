@@ -1,0 +1,61 @@
+{
+  "status": "EXACT_LEGACY_AMD_SOURCE_RECOVERED_AND_NATIVE_REAUTHENTICATED_BOUNDED_COLLECTOR_INTEGRATION_PASS",
+  "bead": "enhancedchannelmanager-d9xhw",
+  "source": {
+    "filename": "e2fsprogs-1.47.4-1.1.src.rpm",
+    "sha256": "4b90c6c666634fe3f97b2045a6556c4ae34709a9f48b53c3c930d32c665b8833",
+    "size": 7757243,
+    "vendor": "openSUSE",
+    "architecture_selection": "x86_64 only",
+    "canonical_url_unchanged": "https://download.opensuse.org/tumbleweed/repo/src-oss/src/e2fsprogs-1.47.4-1.1.src.rpm",
+    "fingerprint": "AD485664E901B867051AB15F35A2F86E29B700A4",
+    "license": "GPL-2.0-only",
+    "complete_payload_regular_files": 13,
+    "spec_files": 1,
+    "source_inputs": 5,
+    "patch_inputs": 7,
+    "nosource_or_nopatch": false
+  },
+  "recovery_provenance": {
+    "original_baseline_zip_sha256": "5d66c32ed4ea3eb1c034e9ad7bd48369d285a7ed6076dfd573cd223a5c113d07",
+    "original_oci_manifest": "sha256:57d1c4a05b9c5604cd02264ce40891438438da3d81a2a62cd214310f73e71d59",
+    "source_layer_index": 14,
+    "source_layer_compressed_digest": "sha256:30e8bf6aaa1cef4a3733abd9b777f72ae83ef06723f4dd82e505a6deb383ee47",
+    "source_layer_compressed_size": 952861584,
+    "recovery_receipt_sha256": "6c33f11966e99ae51c57dbd252df11ba065b2c8db66d2a59522734fcae551d57",
+    "verification": "Existing baseline tooling reverified the original artifact and every OCI manifest/config/compressed layer/diff-ID before data-only source-layer inspection. The exact recovered SRPM matches the original source index. Original OCI never loaded or executed."
+  },
+  "fresh_native_authentication": {
+    "diagnostic_tools_image": "sha256:c80c6c337aef65b102231fd64d0a04da495245effb95a14c1d556b7a8d076698",
+    "base": "python:3.12-alpine3.24@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7",
+    "native_architecture": "amd64",
+    "receipt_sha256": "89c95bc88bb61b7286f0c39e162b5dc9e10c0b295dd1d43c87ad61c9f3539a44",
+    "scope": "Trusted collector prepare_key and verify_source, full pinned SUSE fingerprint, native RPM signature/digests, exact source header and complete payload. Nonroot, read-only immutable source/key mounts, network disabled, capabilities dropped, isolated task-owned trust DB/output; no package install or SPEC/source/target execution. Diagnostic tools are not runtime packages."
+  },
+  "implementation": {
+    "explicit_selector_unchanged": "--retained-release-source /tmp/native-cache/93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123",
+    "companion_selection": "One code-pinned vendor/architecture/origin/hash/size tuple, adjacent to the independently validated original branding anchor. Selected only when the exact source origin exists in the actual inventory and the caller explicitly supplies the anchor; no directory scan, caller-supplied subset policy or general fallback.",
+    "mandatory_checks": "Regular canonical nonsymlink inputs including ancestor aliases; exact size/SHA; copied SHA before key import; ordinary pinned native RPM signature/header/full payload still required; missing/corrupt selected companion never falls back to network.",
+    "delivery_consumer": "Adds only the exact canonical e2fsprogs URL/SHA tuple to independent existing RPM policy, keeping retained provenance, live inventory, complete source/payload/path/origin checks and aggregate dispatch intact.",
+    "cache_set": {"objects": 16, "bytes": 20668972, "original_packman_objects_unchanged": 14},
+    "dev_sbom": "Independent rerender found only the changed collector source fingerprint; ECM/MCP SPDX documents, timestamp/version and every other index field are unchanged.",
+    "sbom_review_sha256": "1641a635bcde3d774b7169ead0097c2613d6d370ce9aac008fa2831c5bf7447b"
+  },
+  "integration": {
+    "real_offline_collector_main": "PASS with both actual signed SRPMs selected from three unmodified original baseline inventory rows, each copied/rehash/native RPM signature/exact header/full payload reverified",
+    "actual_collector_index_sha256": "5d338d36c7926e0f73e2eb23a39a573c800695f9e39f815d7a03df069a8303cc",
+    "recorded_fixture": "backend/tests/fixtures/native_sources/retained-amd-source-subset.json.gz",
+    "independent_consumer_unit_boundary": "Recorded real collector index, original raw inventory and both actual retained SRPMs; only live RPM query mocked. Positive crosses _rpm_sources; hash/provenance/redirect/URL/fingerprint/omitted-origin/corrupt bytes rejected.",
+    "additional_controls": "Missing/renamed/nonregular/symlink/ancestor alias/truncated/same-size corrupt companion, wrong vendor/architecture/origin, absent explicit handoff, copied-byte corruption and signature failure; generic cache still requires all origins.",
+    "dangerous_hash_bypass_mutant": "Reject-corruption regression fails with DID NOT RAISE ValueError when companion hash verification is bypassed",
+    "mutant_log_sha256": "97d800f40581b596cb11b5290a1df7344dc91b3aabd6751c22c5d1460c9b8b1a",
+    "native_alpine_source_sbom_classifier_builder_gate_tests": 880,
+    "unchanged_existing_skip": 1,
+    "log_sha256": "a1207f89ca731033959e9d9e1dac54861e11ffa3bbfceb7a1fffd080bfe0c4a9",
+    "environment_note": "Initial broad diagnostic exhausted its 1GiB temporary filesystem; original failure retained, rerun received 4GiB without changing assertions. Initial consumer fixture reconstruction reordered raw inventory; original raw TSV was then retained verbatim rather than replacing its recorded hash. The next red test specifically rejected missing exact retained provenance policy before the bounded tuple addition."
+  },
+  "remaining": "Complete fresh AMD64 image and MCP isolation CI must re-run; other origins retain independent availability requirements. Original 404 runs remain failed. This bounded recovery does not finish Alpine owned evidence/compiler/static/GNU-wheel/aggregate source, unsuppressed advisory or MCP acceptance.",
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/{legacy-e2fs-retained-source-subject-01,legacy-e2fs-authentication-01,legacy-e2fs-collector-integration-01,e2fs-retained-*.log}",
+  "scope": "Exact same original source, never different-version substitution or source omission. Production Dockerfile/MCP Dockerfile, application baseline/pins, runtime providers/feeds/trust, generic complete-cache contract, security gates and aggregate dispatch remain unchanged. No release/merge/publication/deployment.",
+  "full_runtime_source_acceptance": false
+}

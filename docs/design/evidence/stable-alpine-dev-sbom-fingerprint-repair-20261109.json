@@ -57,6 +57,18 @@
     "arm64_log_sha256": "ea37518e05f03a9a7914f5912812fb9cf7e5fcd37dfbeade01fbc1d667aa0592",
     "scope": "This older head lacks9c4f7b2b and remains failed; it is not relabeled a passing run. The corrected paired-native run42712008650 is independently in progress."
   },
+  "native_corrected_head_final_result": {
+    "run_id": 42712008650,
+    "head_sha": "9c4f7b2b981ed0c2089e84e39c6b0635f90ec757",
+    "conclusion": "success",
+    "each_architecture_passed": 17158,
+    "each_architecture_skipped": 5,
+    "each_architecture_deselected": 2,
+    "unchanged_coverage_threshold": 56,
+    "amd64": {"job_id": 129483706048, "coverage_percent": 84.21, "log_sha256": "0938bcf1647766e408e444677e6bfbf8e96f4d44a366cff3de96c98d6c78cb97"},
+    "arm64": {"job_id": 129483706521, "coverage_percent": 84.22, "log_sha256": "e041fdc8b6856fea86055bd0771439632f1b2f0eb632a2972b8d257589782275"},
+    "scope": "The formerly pending paired-native recheck is now complete on both architectures; these are whole maintained backend-gate passes, not whole-image source/security/MCP acceptance. Original older failed runs remain failed."
+  },
   "scope": "One truthful source fingerprint in the explicitly transient non-permanent dev index only. Original index preserved exactly. No permanent release record, SPDX package list, timestamp/version, generator or test code, dependency pin, coverage rule, application/numeric golden, production Dockerfile or source/advisory/publication gate changed. Full/backend native CI rechecks remain required; neither bookkeeping repair clears Alpine aggregate/source/security/MCP acceptance.",
   "full_runtime_source_acceptance": false
 }

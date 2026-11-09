@@ -129,7 +129,8 @@ def test_retained_packman_cache_is_exact_complete_original_input_set():
         "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123"
     )
     assert {p.name for p in cache.iterdir() if p.name != "README.md"} == expected | {
-        retained_release
+        retained_release,
+        "4b90c6c666634fe3f97b2045a6556c4ae34709a9f48b53c3c930d32c665b8833",
     }
     assert len(expected) == 14
 

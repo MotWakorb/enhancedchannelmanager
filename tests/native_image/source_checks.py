@@ -39,6 +39,10 @@ EXACT_SOURCE_ROUTES = {
         "url": "https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261105-4389.1.src.rpm",
         "sha256": "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123",
     },
+    ("openSUSE", "x86_64", "e2fsprogs-1.47.4-1.1.src.rpm"): {
+        "url": "https://download.opensuse.org/tumbleweed/repo/src-oss/src/e2fsprogs-1.47.4-1.1.src.rpm",
+        "sha256": "4b90c6c666634fe3f97b2045a6556c4ae34709a9f48b53c3c930d32c665b8833",
+    },
 }
 LIBRARIES = {
     "avcodec",
