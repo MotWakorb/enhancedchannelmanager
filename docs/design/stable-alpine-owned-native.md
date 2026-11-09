@@ -452,6 +452,31 @@ Live installed files/control-script archives, source/compiler/attribution joins,
 original signed evidence delivery and aggregate acceptance remain separate work;
 the four pending owned obligations have not been removed or skipped.
 
+`alpine_owned_native.py` now composes all **six original raw component receipts**,
+the packager/content-addressed version, complete FFmpeg component composition and
+every signed source/runtime/receipt/loader entry. Both original architecture
+datasets pass independent signature/database-to-extracted-filesystem checks:
+559 regular files, 32 raw-text symlinks and 72 directories, including UID/GID,
+modes, sizes and hashes. Complete source inventories cover 506 files; existing
+sealed recipe/patch/configuration/vendor/CMS validators and eleven original
+archive hashes plus the FFmpeg signature input hash are rechecked without
+executing delivered code. A root-owned same-size source-file corruption is
+rejected after original native signature/database verification.
+
+This is **extracted original payload evidence**, not native ARM execution or
+running final-image filesystem acceptance. Automated signed evidence delivery,
+BusyBox composition, fresh FFmpeg GPG/source replay, compiler/static attribution,
+aggregate advisory/source and MCP acceptance remain separate obligations. See
+`stable-alpine-owned-components-filesystem-paired-20261109.json`.
+
+Native run `42692523987` now has a retained AMD64 final-candidate Rust delivery
+and bounded live-ELF pass; its aggregate gate still fails on missing `index.json`.
+ARM64 failed before build on the original Speex TLS EOF and supplies no Rust
+acceptance result. Fresh run `42701394840` includes the narrow EOF repair and
+has passed original pinned source acquisition on both native architectures.
+Neither observation clears the port; original failures remain preserved. See
+`stable-alpine-rust-native-amd64-20261109.json` and the updated TLS evidence.
+
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
 (84.19% coverage). Five failures correctly rejected the stale resdet helper hash;

@@ -1,5 +1,5 @@
 {
-  "status": "NATIVE_ARM_SOURCE_PREPARATION_FAILED_ABRUPT_TLS_EOF_TYPED_BOUNDED_RETRY_FIX_PENDING_NATIVE_RECHECK",
+  "status": "TYPED_BOUNDED_TLS_EOF_REPAIR_WITH_FRESH_PAIRED_NATIVE_SOURCE_ACQUISITION",
   "bead": "enhancedchannelmanager-eftdg",
   "run_id": 42692523987,
   "head_sha": "92fe8bd4646facbeee6b6b53f858f8191439733d",
@@ -23,6 +23,16 @@
     "mutant_log_sha256": "259e6904e2867a6a27105ce1bd9b013a32a8dce44b2dda8d6f81093a3abb422f"
   },
   "red_before_fix_log_sha256": "c6f875c315cb2b5c215bfa7eac32a701fff967a8597d3863b2f41e23c0251c79",
+  "fresh_native_acquisition": {
+    "run_id": 42701394840,
+    "head_sha": "cfc95c82eb5196fd4679a8d77bfc5e3c43302816",
+    "amd64_job": 129446767725,
+    "arm64_job": 129446768225,
+    "step": "Require native host and prepare reviewed source inputs",
+    "both_native_step_conclusions": "success",
+    "retained_step_receipt_sha256": "b08c5ddcd7dd5c6e6f7d50a34ad1e12b8835c8c05cbfa75382c3cc130f8624cd",
+    "scope": "Fresh native acquisition succeeds with the pushed typed repair. No assertion that the live remote repeated EOF or exercised a retry; deterministic retry/exhaustion/authentication guards establish that behavior. Compilation/final-image checks are not implied. Original failed run/attempt remains retained and failed."
+  },
   "native_final_image_acceptance": false,
-  "scope": "Transport retry repair, not passing ARM compilation or Rust/native/aggregate source/advisory/runtime acceptance. Original failure/log/artifact retained. The watcher also encountered a separate GitHub annotations HTTP504 and was restarted; GitHub currently rejects rerunning the ARM job while its overall run remains active. No failed step waived, TLS bypass, merge, publication or deployment."
+  "scope": "Transport retry repair and fresh paired native acquisition, not passing ARM compilation or Rust/native/aggregate source/advisory/runtime acceptance. Original failure/log/artifact retained. Initially the watcher hit a separate GitHub annotations HTTP504 and GitHub rejected the ARM-only rerun while the original run was active. That run later completed failed; the fresh pushed-head acquisition above is independent. No failed step waived, TLS bypass, merge, publication or deployment."
 }
