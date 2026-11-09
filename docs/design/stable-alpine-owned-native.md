@@ -55,6 +55,14 @@ original-image comparison on both native hosts. Tests in
 unit/configuration tests, not native compatibility proof. Verified original
 transport ZIPs are retained even when a subsequent comparison fails.
 
+`fetch_original_baseline.py` also supports explicitly pinned 14-day retention
+mirrors when GitHub reports the one-day primary artifact unavailable (404/410).
+Both wrapper and inner original ZIP hashes are mandatory; hash mismatches or
+permission failures are not treated as expiry. Actual AMD64 mirror dogfood
+forced a recorded primary 404, downloaded the real pinned mirror and recovered
+the identical original ZIP hash. OCI/config/rootfs verification remains a
+separate mandatory step, not bypassed by transport recovery.
+
 Native ARM investigation `42538393688` tried eight bounded numerical variants
 without editing the original recipe or references. Only `fast-selected-pow`
 matched **all 70** original-ARM checks; the unchanged `off-selected-pow` retained

@@ -61,9 +61,8 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           mkdir "$RUNNER_TEMP/paired-downloads"
-          baseline=$(python3 -c 'import json,os; print(json.load(open("docker/alpine-native/original-baselines.json"))["architectures"][os.environ["ARCH"]]["image_artifact"]["id"])')
           native=$(python3 -c 'import json,os; print(json.load(open("docker/alpine-native/original-baselines.json"))["architectures"][os.environ["ARCH"]]["native_package_artifact"]["id"])')
-          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$baseline/zip" > "$RUNNER_TEMP/paired-downloads/original.zip"
+          python3 scripts/fetch_original_baseline.py --arch "$ARCH" --output-file "$RUNNER_TEMP/paired-downloads/original.zip"
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$native/zip" > "$RUNNER_TEMP/paired-downloads/native.zip"
           python3 scripts/prepare_alpine_baseline.py --arch "$ARCH" \
             --baseline-zip "$RUNNER_TEMP/paired-downloads/original.zip" \
@@ -73,6 +72,7 @@ jobs:
         run: |
           mkdir "$RUNNER_TEMP/paired-evidence"
           cp "$RUNNER_TEMP/paired-inputs/input-receipt.json" "$RUNNER_TEMP/paired-evidence/input-receipt.json"
+          cp "$RUNNER_TEMP/paired-downloads/original.zip.receipt.json" "$RUNNER_TEMP/paired-evidence/transport-receipt.json"
           cp "$RUNNER_TEMP/paired-inputs/original-identity.json" "$RUNNER_TEMP/paired-evidence/original-identity.json"
           test "$(skopeo --version)" = "skopeo version 1.13.3"
           skopeo copy "oci-archive:$RUNNER_TEMP/paired-inputs/original.oci.tar" "docker-archive:$RUNNER_TEMP/paired-inputs/original.docker.tar:ecm-original-${{ matrix.arch }}:baseline"
@@ -205,13 +205,13 @@ jobs:
         run: |
           git fetch --no-tags origin 06cc4bf5a1b9eb1f6ef29f617513d237cda2f531 ceb96ba86c714b48bca28d4c945e7b741fa45cb7
           git diff --exit-code 06cc4bf5a1b9eb1f6ef29f617513d237cda2f531 ceb96ba86c714b48bca28d4c945e7b741fa45cb7 -- Dockerfile backend frontend mcp-server docker sbom scripts tests .dockerignore
-          baseline=$(python3 -c 'import json,os; print(json.load(open("docker/alpine-native/original-baselines.json"))["architectures"][os.environ["ARCH"]]["image_artifact"]["id"])')
-          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$baseline/zip" > "$RUNNER_TEMP/current-original.zip"
+          python3 scripts/fetch_original_baseline.py --arch "$ARCH" --output-file "$RUNNER_TEMP/current-original.zip"
           python3 scripts/prepare_alpine_baseline.py --arch "$ARCH" \
             --baseline-zip "$RUNNER_TEMP/current-original.zip" \
             --output-dir "$RUNNER_TEMP/current-original"
           mkdir "$RUNNER_TEMP/alpine-evidence/current-paired"
           cp "$RUNNER_TEMP/current-original/input-receipt.json" "$RUNNER_TEMP/alpine-evidence/current-paired/"
+          cp "$RUNNER_TEMP/current-original.zip.receipt.json" "$RUNNER_TEMP/alpine-evidence/current-paired/transport-receipt.json"
           cp "$RUNNER_TEMP/current-original/original-identity.json" "$RUNNER_TEMP/alpine-evidence/current-paired/"
       - name: Load sealed original and install this current signed APK
         run: |
