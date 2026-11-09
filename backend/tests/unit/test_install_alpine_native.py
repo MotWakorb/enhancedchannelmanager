@@ -2,11 +2,30 @@
 
 import importlib.util
 import json
+import zlib
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_negative_control_changes_authenticated_metadata_not_deflate_padding(
+    installer, tmp_path
+):
+    original = (
+        b"ADB.pckg" + b"\0" * 12 + b"\x10ecm-owned-native\0" + b"payload bytes" * 10000
+    )
+    compressor = zlib.compressobj(wbits=-15)
+    archive = tmp_path / "owned.apk"
+    archive.write_bytes(b"ADBd" + compressor.compress(original) + compressor.flush())
+    damaged = tmp_path / "damaged.apk"
+    installer.damage_signed_metadata(archive, damaged)
+    altered = zlib.decompress(damaged.read_bytes()[4:], -15)
+    assert len(altered) == len(original)
+    assert sum(a != b for a, b in zip(original, altered, strict=True)) == 1
+    assert b"fcm-owned-native\0" in altered
+    assert altered[512:] == original[512:]
 
 
 @pytest.fixture

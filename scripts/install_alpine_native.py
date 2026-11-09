@@ -14,6 +14,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import zlib
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -140,6 +141,44 @@ def validate_contents(
     )
 
 
+def damage_signed_metadata(source: Path, target: Path) -> None:
+    """Change a signed ADB package-name byte, not ignored compression padding."""
+    _require(
+        not target.exists() and not target.is_symlink(),
+        "negative-control output must be fresh",
+    )
+    decoder, encoder = zlib.decompressobj(-15), zlib.compressobj(wbits=-15)
+    with source.open("rb") as stream, target.open("xb") as output:
+        _require(
+            stream.read(4) == b"ADBd",
+            "owned signed APK must use reviewed ADB deflate format",
+        )
+        output.write(b"ADBd")
+        first = True
+        while chunk := stream.read(1024 * 1024):
+            data = decoder.decompress(chunk)
+            if first:
+                _require(
+                    data.startswith(b"ADB.pckg")
+                    and data[:512].count(b"ecm-owned-native") == 1,
+                    "owned signed APK metadata witness mismatch",
+                )
+                offset = data.index(b"ecm-owned-native")
+                _require(
+                    offset > 8 and data[offset - 1] == len(b"ecm-owned-native"),
+                    "owned APK package-name field witness mismatch",
+                )
+                data = data[:offset] + b"f" + data[offset + 1 :]
+                first = False
+            output.write(encoder.compress(data))
+        _require(
+            not first and decoder.eof and not decoder.unused_data,
+            "incomplete owned APK compressed stream",
+        )
+        output.write(encoder.compress(decoder.flush()))
+        output.write(encoder.flush())
+
+
 def install(directory: Path, arch: str, evidence: Path) -> dict:
     release = Path("/etc/alpine-release").read_text()
     validate_platform(release, platform.machine(), arch)
@@ -190,12 +229,7 @@ def install(directory: Path, arch: str, evidence: Path) -> dict:
                 env=env,
             )
             damaged = trust / ".damaged-owned.apk"
-            shutil.copyfile(package, damaged)
-            with damaged.open("r+b") as stream:
-                stream.seek(-1, 2)
-                byte = stream.read(1)
-                stream.seek(-1, 2)
-                stream.write(bytes([byte[0] ^ 1]))
+            damage_signed_metadata(package, damaged)
             tamper = subprocess.run(
                 [
                     "/sbin/apk",
@@ -211,7 +245,11 @@ def install(directory: Path, arch: str, evidence: Path) -> dict:
                 env=env,
                 timeout=60,
             )
-            _require(tamper.returncode != 0, "damaged signed APK unexpectedly accepted")
+            _require(
+                tamper.returncode != 0
+                and "UNTRUSTED signature" in tamper.stdout + tamper.stderr,
+                "changed signed APK metadata was not rejected by signature verification",
+            )
             installation = run(
                 [
                     "/sbin/apk",
@@ -266,6 +304,7 @@ def install(directory: Path, arch: str, evidence: Path) -> dict:
         "signature_verification": verification,
         "default_trust_denial": denial.stdout + denial.stderr,
         "damaged_package_denial": tamper.stdout + tamper.stderr,
+        "damaged_package_control": "one authenticated ADB package-name byte changed; compression padding is not the test subject",
         "installation": installation,
         "ownership": ownership,
         "contents": contents,
