@@ -239,6 +239,15 @@ The workflow adds an offline, unprivileged immutable-image check using its
 failure propagation. Wiring regressions were red before implementation and
 pass locally; fresh paired final-image builds/execution are still required.
 
+Fresh native run `42678037016` at `ad735ccf` subsequently passed this delivered
+external-source check against the **live** immutable image on both architectures:
+117 external APKs, 99 source groups and 314 inputs each. Both identity/persistence
+scenarios and all 27 functional/metadata checks also passed. Both complete runtime
+gates still fail `native_source_and_artifact_integrity` (missing the RPM index).
+The failed gates and independently rehashed paired artifacts are sealed in
+`stable-alpine-native-external-delivery-paired-20261109.json`; external-layer
+acceptance is not aggregate source acceptance.
+
 The consumer always returns `full_runtime_source_acceptance: false`; four owned
 providers, Python base, compiler/language support, complete license/advisory
 reconciliation and an aggregate source consumer remain required. The unchanged
@@ -295,6 +304,33 @@ unprivileged user in the native workflow. Wiring tests were red before this
 change. Fresh paired final-image execution remains required; the complete shared
 source-integrity gate is unchanged and still enforced. This additive consumer
 always reports `full_runtime_source_acceptance: false`.
+
+### Nested Rust inputs: verified archives, not complete runtime clearance
+
+`alpine_rust_source_inputs.py` binds the three exact reviewed patched locks to all
+546 distinct registry archives and all 29,957 original regular members (including
+original notices/source files). Actual offline nonroot/read-only verification
+passes. The 32 distinct original license strings, including 36 legacy slash
+expressions, are retained verbatim, not normalized or treated as legal approval.
+The changed-archive regression is proven red when archive hashing is bypassed.
+
+An isolated stable-Alpine Cargo diagnostic also resolved both musl target graphs
+with `--offline --locked` and read-only original patched workspaces; neither lock
+changed. This is conservative metadata, not original compilation or target
+execution. Embedded paths in four exact signed ARM64 ELFs match the collected
+crate identities, but string absence is not a complete linkage proof.
+
+Those ELF observations identify Rust 1.96.0 for glycin/libglycin and 1.95.0 for
+rav1e. Both complete original upstream compiler/standard-library source archives
+were independently release-signature verified; their embedded Git commit/version
+witnesses match those observations. The read-only helper rehashes those original
+archives and retains unextracted symlink evidence and original source witnesses.
+The diagnostic Cargo toolchain is 1.96.1, **not** relabeled as an original compiler.
+
+Evidence is `stable-alpine-rust-input-preparation-20261109.json`. Original Alpine
+build logs supplement this investigation, not cryptographic build attestations.
+Distro compiler patch/build provenance, full nested-source attribution, final
+delivery consumers and aggregate/security/MCP acceptance remain unfinished.
 
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
