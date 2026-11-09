@@ -19,9 +19,14 @@ approved. Both patches apply unchanged with fuzz zero to the pinned 2.13.9
 archive, and complete before/intermediate/final file hashes are sealed in the
 recipe. The source version, SONAME and configure options remain unchanged.
 
-The recipe/package/source contract subset passes (51 tests), but this is not
-native execution or advisory clearance. Fresh native builds, the unchanged
-upstream suites and image-level checks remain required. A proposed local
+The recipe/package/source contract subset passes (51 tests), but this alone is
+not native execution or advisory clearance. Run `42653686737` subsequently built
+the exact new recipe on both native architectures, including the existing
+`make check` step, installed it into each full candidate and passed the two
+identity/persistence scenarios and 25 functional runtime checks. The full
+runtime gates still failed on the three recorded distribution metadata/source
+checks. Exact recipe/patch/source witnesses and package receipt joins are sealed
+in `stable-alpine-libxml2-regexp-native-paired-20261109.json`. A proposed local
 sanitizer diagnostic has **not** been executed and supplies no passing evidence.
 Other libxml2 and FFmpeg advisories remain under source-level reconciliation;
 missing vectors or tracker scores of zero are not interpreted as safety.
@@ -121,6 +126,24 @@ functions retain their original bodies, except the two explicit metadata
 dispatch branches. In particular, the original source-integrity gate and every
 functional check remain unchanged. The incomplete source index therefore still
 fails: no compatibility or source gate has been waived.
+
+The completed first full-candidate run failed on the same three metadata/source
+checks on **both** architectures. Both passed the two identity/persistence
+scenarios and 25 functional runtime checks; the original raw AMD64 and ARM64
+reports are retained, not replaced by the adapter's unit results.
+
+Live immutable-candidate query output plus the actual installed APK database are
+now saved as `application/runtime-inventory.json` by the native workflow. The
+new `alpine_source_inventory.py` joins the complete query and database sets and
+groups exact origin/commit/version subjects. Its output is explicitly an
+**unauthenticated source work plan**, never a replacement source gate. Missing
+origins/commits remain unresolved; only the observed `.python-rundeps` record
+may be a zero-payload virtual package, with its dependency graph retained and
+with any file **or directory** payload rejected. Recorded real-data regression
+tests cover omissions, additions, duplicate identities, metadata changes,
+checksum changes and virtual-package abuse. Actual local full-capture execution
+joins all 94 packages and 68 source origins; this local environment is not the
+full application candidate and includes build-tool packages.
 
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
