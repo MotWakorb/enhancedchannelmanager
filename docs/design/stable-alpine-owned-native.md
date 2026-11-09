@@ -8,7 +8,7 @@ by this implementation. No image publication or deployment is authorized.
 
 ## Implemented providers
 
-### Independent original-image comparison (execution pending)
+### Independent original-image comparison and native ARM numerical correction
 
 `docker/alpine-native/original-baselines.json` seals the retained CI images from
 run `42438805097`, including their OCI manifest, configuration and rootfs
@@ -18,15 +18,36 @@ the workflow repeats that git comparison before consuming them.
 
 `prepare_alpine_baseline.py` verified the actual retained ZIPs and OCI identities
 for both architectures locally without executing ARM code. Original-only mode
-also passed against the retained ARM OCI. The new native workflow pairs each
+also passed against the retained ARM OCI. The native workflow pairs each
 **current** signed APK with its actual original image using 35 codec cases,
 four fresh processes per case, five complete framemd5 outputs and six complete
-capability listings. This native execution has not yet passed. The separate
-historical-package diagnostic cannot approve a current candidate. Tests in
+capability listings. Run `42537579406` passed the actual AMD64 historical-package
+comparison (142 processes); the corresponding ARM comparison failed with 54
+codec-check differences and only `synthetic.c2` differing among the five media
+outputs. The immutable failure artifacts remain retained. The separate
+historical-package diagnostic cannot approve a current candidate and is now
+explicitly opt-in; current signed packages still undergo the mandatory live
+original-image comparison on both native hosts. Tests in
 `test_alpine_native_workflow.py`, `test_compare_alpine_baseline.py` and
 `test_prepare_alpine_baseline.py` enforce wiring and rejection paths; they are
 unit/configuration tests, not native compatibility proof. Verified original
 transport ZIPs are retained even when a subsequent comparison fails.
+
+Native ARM investigation `42538393688` tried eight bounded numerical variants
+without editing the original recipe or references. Only `fast-selected-pow`
+matched **all 70** original-ARM checks; the unchanged `off-selected-pow` retained
+54 differences. This isolates contraction semantics, rather than a new tolerance
+or replacement libc. The recipe now selects `-ffp-contract=fast` on AArch64 and
+retains `off` on AMD64. Patch and complete post-patch source witnesses were
+recomputed from the unchanged original archive. Final signed-package/live-media
+verification of that correction is still pending.
+
+`stable-alpine-native-original-arm64-20261109.json.gz` records the actual old-ARM
+execution and media results bound to its original OCI identity. It supplements,
+never modifies, the original AMD64 recording or fixtures. The architecture-aware
+codec and media gates reject using the differing AMD64 bytes as an ARM proxy.
+The four other media outputs and all six capability listings are unchanged
+across the independently executed original architectures.
 
 All build stages enforce official stable v3.24 main/community repositories and
 native architecture. The Python builder remains the pinned Python 3.12 Alpine

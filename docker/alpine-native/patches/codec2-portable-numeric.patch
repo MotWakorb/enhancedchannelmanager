@@ -20,7 +20,7 @@ The private target-only renames and hidden wrappers must not leak libc aliases.
  #endif
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -425,3 +425,14 @@
+@@ -425,3 +425,19 @@
      ldpc_dec
      RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
  )
@@ -31,7 +31,12 @@ The private target-only renames and hidden wrappers must not leak libc aliases.
 +target_compile_definitions(codec2 PRIVATE
 +    USE_GLIBC_ABI=0 sincosf=codec2_sincosf sinf=codec2_sinf
 +    cosf=codec2_cosf atan2f=codec2_atan2f log10f=codec2_log10f)
-+target_compile_options(codec2 PRIVATE -ffp-contract=off)
++# Preserve each original native compiler's contraction semantics.
++if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
++    target_compile_options(codec2 PRIVATE -ffp-contract=fast)
++else()
++    target_compile_options(codec2 PRIVATE -ffp-contract=off)
++endif()
 +set_source_files_properties(
 +    numeric/sincosf.c numeric/sincosf_data.c numeric/codec2_numeric.c
 +    PROPERTIES COMPILE_OPTIONS "-fno-builtin;-fvisibility=hidden")

@@ -31,6 +31,7 @@ RUN --network=none case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm
     && test "$(gosu 1571:1572 /usr/bin/id -g)" = 1572
 COPY scripts/verify_alpine_ffmpeg.py /proof/scripts/verify_alpine_ffmpeg.py
 COPY docker/alpine-native/ffmpeg-baseline.json /proof/docker/alpine-native/ffmpeg-baseline.json
+COPY docs/design/evidence/stable-alpine-native-original-arm64-20261109.json.gz /proof/docs/design/evidence/stable-alpine-native-original-arm64-20261109.json.gz
 COPY tests/native_image/runtime_checks.py tests/native_image/rare_inputs.json /proof/fixtures/
 RUN --network=none python /proof/scripts/verify_alpine_ffmpeg.py \
     --fixtures-dir /proof/fixtures --output-file /proof/ffmpeg-behavior.json

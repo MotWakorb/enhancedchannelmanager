@@ -11,6 +11,11 @@ on:
       - 'scripts/*alpine*'
       - 'scripts/build_native_runtime.py'
   workflow_dispatch:
+    inputs:
+      historical_package_diagnostic:
+        description: 'Repeat the known historical-package negative control (not current acceptance)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,6 +27,7 @@ concurrency:
 jobs:
   original-baseline:
     name: Historical-package baseline diagnostic (${{ matrix.arch }}, not current-candidate acceptance)
+    if: github.event_name == 'workflow_dispatch' && inputs.historical_package_diagnostic
     permissions:
       contents: read
       actions: read

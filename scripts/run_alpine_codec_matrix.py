@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Run fresh native Codec2 processes against the unchanged recorded AMD64 corpus.
+"""Run fresh native Codec2 processes against unchanged original native corpora.
 
-ARM execution/reference equality is not an independent old-ARM-baseline proof.
+ARM uses independently executed original ARM results, not an AMD64 proxy.
 No tag resolution, network, new golden, normalization or numerical tolerance.
 """
 
@@ -17,6 +17,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE_SHA256 = "6aca56b6f3d03ca0f092116cb9b4d56a1e496a014654230322bbe36785dfeccf"
+ARM_REFERENCE_SHA256 = (
+    "1f78673968199bf91cbf3ad06ddcea30a9babef19669606bd5e1e5b3d190dda3"
+)
 FIELDS = (
     "mode",
     "mode_name",
@@ -36,10 +39,19 @@ class MatrixError(RuntimeError):
     """An exact real-image result or its recorded reference is incomplete."""
 
 
-def reference() -> dict[tuple[int, str], dict]:
-    path = ROOT / "docs/design/evidence/stable-alpine-native-amd64-20261108.json.gz"
+def reference(arch: str = "amd64") -> dict[tuple[int, str], dict]:
+    if arch not in {"amd64", "arm64"}:
+        raise MatrixError("unsupported native codec reference architecture")
+    filename = (
+        "stable-alpine-native-original-arm64-20261109.json.gz"
+        if arch == "arm64"
+        else "stable-alpine-native-amd64-20261108.json.gz"
+    )
+    path = ROOT / "docs/design/evidence" / filename
     data = path.read_bytes()
-    if hashlib.sha256(data).hexdigest() != REFERENCE_SHA256:
+    if hashlib.sha256(data).hexdigest() != (
+        ARM_REFERENCE_SHA256 if arch == "arm64" else REFERENCE_SHA256
+    ):
         raise MatrixError("recorded codec reference identity mismatch")
     rows = json.loads(gzip.decompress(data))["codec_matrix"]["cases"]
     result = {(r["mode"], r["corpus"]): r["baseline"] for r in rows}
@@ -81,7 +93,7 @@ def collect(image: str, arch: str, output: Path) -> None:
         raise MatrixError("full immutable local image ID required")
     if output.exists() or output.is_symlink():
         raise MatrixError("matrix output must be fresh")
-    expected = reference()
+    expected = reference(arch)
     output.mkdir(parents=True)
     records, failures = [], []
     script = ROOT / "scripts/alpine_codec_matrix.py"
@@ -157,12 +169,20 @@ def collect(image: str, arch: str, output: Path) -> None:
     summary = {
         "image": image,
         "architecture": arch,
-        "reference_sha256": REFERENCE_SHA256,
+        "reference_sha256": ARM_REFERENCE_SHA256
+        if arch == "arm64"
+        else REFERENCE_SHA256,
         "probe_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
         "executions": len(records),
         "failures": failures,
-        "status": "FAILED" if failures else "MATCHED_RECORDED_AMD64_CORPUS",
-        "scope": "Native 35-case encode/decode and 35-case baseline-stream decoding only. Not independent old-ARM-baseline/full-runtime/security proof.",
+        "status": "FAILED"
+        if failures
+        else (
+            "MATCHED_RECORDED_ORIGINAL_ARM64_CORPUS"
+            if arch == "arm64"
+            else "MATCHED_RECORDED_AMD64_CORPUS"
+        ),
+        "scope": "Native 35-case encode/decode and 35-case original-native baseline-stream decoding only. Not full-runtime/source/security proof; live old-image pairing remains a separate gate.",
     }
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     if failures:

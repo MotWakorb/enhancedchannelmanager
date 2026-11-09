@@ -8,6 +8,7 @@ import hashlib
 import itertools
 import json
 import platform
+import re
 import shutil
 import subprocess
 import zipfile
@@ -41,7 +42,7 @@ def variant_source(
         if text.count(witness) != 1:
             raise MatrixError("diagnostic source witness mismatch")
     shutil.copytree(source, target)
-    cmake = cmake.replace("-ffp-contract=off", "-ffp-contract=" + contract)
+    cmake = re.sub(r"-ffp-contract=(?:off|fast)", "-ffp-contract=" + contract, cmake)
     if wrappers == "native":
         cmake = cmake.replace("atan2f=codec2_atan2f log10f=codec2_log10f", "")
     if power == "expf":

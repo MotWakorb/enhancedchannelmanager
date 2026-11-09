@@ -1,0 +1,60 @@
+{
+  "artifact": {
+    "id": 13639654002,
+    "sha256": "e202d67b302ecc6efdf31f5356335d8c633c182d12694ba49a9bc1343273682d"
+  },
+  "checks_per_variant": 70,
+  "goldens_modified": false,
+  "original_execution_artifact": {
+    "id": 13639733957,
+    "sha256": "1ce3dda15bf53dda829ca137089632d6c17deb3d29ebd238f9a7d20ee6e5effd"
+  },
+  "pending": "Fresh signed-package builds and live original/candidate media pairing on both architectures.",
+  "results": {
+    "scope": "DIAGNOSTIC_ONLY_NOT_ACCEPTANCE",
+    "variants": [
+      {
+        "differences": 54,
+        "library_sha256": "5a68e090be7711ac2251b1faf218f1631b4bb19a9ebb89a6f133b51af79dc5f2",
+        "variant": "off-selected-pow"
+      },
+      {
+        "differences": 56,
+        "library_sha256": "24a054a935a0f8d92fb96743afb0dc3ef1f11be70e61f9fff0931d8d7b7a32b1",
+        "variant": "off-selected-expf"
+      },
+      {
+        "differences": 54,
+        "library_sha256": "60c51c06ef7729a6b1847797f85082713763557f12f958890b6ea0990a9c6e9f",
+        "variant": "off-native-pow"
+      },
+      {
+        "differences": 56,
+        "library_sha256": "564e5fbfff09e7b2ee07dbf075f35f27443f8db2ac6e6109c1494d6e5c8296ff",
+        "variant": "off-native-expf"
+      },
+      {
+        "differences": 0,
+        "library_sha256": "5d4c0b72aafd67e6758efee19432a159426c9b72d21886ee5e48e2842b7ca3cb",
+        "variant": "fast-selected-pow"
+      },
+      {
+        "differences": 34,
+        "library_sha256": "3423fb815aa876368d1767c065fd26e893ec37b8f0be590957c706128b3328c3",
+        "variant": "fast-selected-expf"
+      },
+      {
+        "differences": 28,
+        "library_sha256": "10229c91b337fe10cfbde8a8a913fd2e89016efde0237b954b307e99eaa65cd5",
+        "variant": "fast-native-pow"
+      },
+      {
+        "differences": 32,
+        "library_sha256": "9c5934a67860bca960d2cfe6e10dea13b4685372f7fae503659d94590770c471",
+        "variant": "fast-native-expf"
+      }
+    ]
+  },
+  "run_id": 42538393688,
+  "scope": "Actual native ARM diagnostic only. Not signed-package, final-image, source/advisory or production acceptance."
+}

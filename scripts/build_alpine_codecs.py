@@ -27,7 +27,7 @@ from build_native_runtime import (
     verify_elf,
 )
 
-RECIPE_SHA256 = "56865d627f9507a3d81701898453f44c7a279b5ab756b1e4a6354aed7036f8b6"
+RECIPE_SHA256 = "f6038fc0fe3cbbbbff33bfbdcd4ecbe36bee95c18db4e1204a254afc84f03ad3"
 SMOKE_SHA256 = "ab0a0b4f68141f69a2ad340683d55e329e2ce0f067cd5e1ace898991917f8186"
 
 

@@ -50,3 +50,15 @@ def test_reference_covers_all_five_real_inputs_and_six_complete_listings(verifie
     ]:
         with pytest.raises(verifier.VerificationError, match="frames"):
             verifier.validate_hashes(bad, reference["frames"], "frames")
+
+
+def test_arm_preserves_its_original_codec_bytes_and_all_other_original_outputs(
+    verifier,
+):
+    arm, amd = verifier.load_reference("arm64"), verifier.load_reference("amd64")
+    assert set(arm["frames"]) == set(amd["frames"])
+    assert arm["capabilities"] == amd["capabilities"]
+    assert arm["metadata_sha256"] == amd["metadata_sha256"]
+    assert arm["frames"]["synthetic.c2"] != amd["frames"]["synthetic.c2"]
+    for name in ["synthetic.jxl", "synthetic.mod", "synthetic.svg", "synthetic.vgm"]:
+        assert arm["frames"][name] == amd["frames"][name]

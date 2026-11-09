@@ -311,6 +311,9 @@ def test_numeric_sources_are_real_pinned_upstream_bytes_not_investigation_stub(
     patch = (ASSETS / "patches/codec2-portable-numeric.patch").read_text()
     assert "+#define POW10F(x) ((float)pow(10.0, (double)(float)(x)))" in patch
     assert "log10f=codec2_log10f" in patch
+    assert '+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")' in patch
+    assert '+    target_compile_options(codec2 PRIVATE -ffp-contract=fast)' in patch
+    assert '+    target_compile_options(codec2 PRIVATE -ffp-contract=off)' in patch
     assert {p.name for p in (source / "src/numeric").iterdir()} == {
         "sincosf.c",
         "sincosf.h",

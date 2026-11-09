@@ -52,11 +52,11 @@
         },
         {
           "file": "patches/codec2-portable-numeric.patch",
-          "sha256": "4503af0743bb4e4fc35417dad6e3089cdab9dc8bb776bd0c979e54463c480ad4",
+          "sha256": "46bcbf5f94ae4c8a5058d8dd421c78c40338257f8bdeabf8a1789a085261ae31",
           "origin": "ecm",
           "witnesses": [
             {"path": "src/defines.h", "before_sha256": "2823ad9940f510432de44bd467231cfb47450999d13fefaf2f33960fbf685072", "after_sha256": "fa3799995e98b7fe9e86b96cd1c2885bc4a84a2efb9dd5693168111903a53a5c"},
-            {"path": "src/CMakeLists.txt", "before_sha256": "7c8df0f43105b0bca6f0f119057a12f7a5f0f748a7e37a1b18878a0eba8f5e86", "after_sha256": "d1e32aab9db3d868d4a87c28c21ded3d64dbe66ddadd876840416edade80756d"}
+            {"path": "src/CMakeLists.txt", "before_sha256": "7c8df0f43105b0bca6f0f119057a12f7a5f0f748a7e37a1b18878a0eba8f5e86", "after_sha256": "33d33e7e07737b08066a7712b23f8926179769b76ea3cdcbcc2d082addbee776"}
           ]
         },
         {

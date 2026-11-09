@@ -30,6 +30,18 @@ def test_reference_is_the_complete_recorded_35_case_baseline(runner):
     assert sum(row["decoded_bytes"] // 2 for row in records.values()) == 153600
 
 
+def test_arm_reference_is_actual_original_arm_not_an_amd64_proxy(runner):
+    arm, amd = runner.reference("arm64"), runner.reference("amd64")
+    assert set(arm) == set(amd) and len(arm) == 35
+    for key, row in arm.items():
+        assert row["machine"] == "aarch64"
+        runner.compare(row, row, "arm64")
+        assert row["input_sha256"] == amd[key]["input_sha256"]
+    assert arm[0, "saw"]["decoded_sha256"] != amd[0, "saw"]["decoded_sha256"]
+    with pytest.raises(runner.MatrixError, match="decoded_sha256"):
+        runner.compare(arm[0, "saw"], amd[0, "saw"], "arm64")
+
+
 def test_exact_native_result_passes_but_any_output_or_input_drift_fails(runner):
     artifact = ROOT / "docs/design/evidence/stable-alpine-native-amd64-20261108.json.gz"
     record = json.loads(gzip.decompress(artifact.read_bytes()))["codec_matrix"][
@@ -59,7 +71,9 @@ def test_timeout_is_retained_as_a_failure_not_a_missing_receipt(
 ):
     baseline = next(iter(runner.reference().values()))
     monkeypatch.setattr(
-        runner, "reference", lambda: {(baseline["mode"], baseline["corpus"]): baseline}
+        runner,
+        "reference",
+        lambda *args: {(baseline["mode"], baseline["corpus"]): baseline},
     )
 
     def timeout(command, **kwargs):
