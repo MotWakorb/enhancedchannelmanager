@@ -43,6 +43,14 @@ EXACT_SOURCE_ROUTES = {
         "url": "https://download.opensuse.org/tumbleweed/repo/src-oss/src/e2fsprogs-1.47.4-1.1.src.rpm",
         "sha256": "4b90c6c666634fe3f97b2045a6556c4ae34709a9f48b53c3c930d32c665b8833",
     },
+    ("openSUSE", "x86_64", "gcc16-16.2.1+git9713-1.1.src.rpm"): {
+        "url": "https://download.opensuse.org/tumbleweed/repo/src-oss/src/gcc16-16.2.1+git9713-1.1.src.rpm",
+        "sha256": "e0eb6f15a65dec740af17424092d643806a00f40d9da227fea8825066efe87fa",
+    },
+    ("openSUSE", "x86_64", "sqlite3-3.54.1-1.1.src.rpm"): {
+        "url": "https://download.opensuse.org/tumbleweed/repo/src-oss/src/sqlite3-3.54.1-1.1.src.rpm",
+        "sha256": "f42c07f564efc29fa6b7f8edbbfaa2636d00682c50bc2d3893984d211374e629",
+    },
 }
 LIBRARIES = {
     "avcodec",

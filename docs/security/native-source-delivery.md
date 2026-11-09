@@ -270,6 +270,22 @@ networkless native collector integration reauthenticates both actual SRPMs from
 three unchanged original inventory rows. That bounded subset is not whole-image
 source/security/MCP acceptance. See the retained-source evidence document.
 
+The remaining-source survey subsequently found the exact GCC 16 and SQLite
+origins expired too. Both matching originals were recovered and freshly
+authenticated from the same sealed baseline. They join the explicit AMD companion
+policy with their unchanged canonical URLs and whole archive hashes, not a
+general archive fallback. GCC's 108,898,703-byte original exceeds GitHub's 100MiB
+blob limit, so two fixed ordered/hash/size-pinned transport parts are concatenated
+to the **identical** SRPM. The whole SRPM hash is mandatory before trust import;
+ordinary native RPM/header/complete payload verification remains mandatory after
+reassembly. No SPEC or source executes. Details and all object identities are in
+`docker/native-cache/README.md` and the additional-retention evidence. The current
+cache is 19 storage objects / 156,197,839 bytes for the unchanged 14 Packman
+objects and four exact SUSE source archives. The earlier two-source subset proof
+remains historical; the new networkless integration authenticates all four
+sources from their unmodified original inventory rows. Whole fresh image/MCP CI
+and Alpine aggregate/security acceptance remain separate requirements.
+
 A bounded actual-collector proof under BuildKit `RUN --network=none` reverified
 this retained source with native RPM tools and complete payload checks. Adding
 an ordinary fresh zlib origin failed offline without publishing an index, proving

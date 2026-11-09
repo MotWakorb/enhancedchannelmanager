@@ -51,13 +51,13 @@ independent requirements. There is no generic partial-cache permission or
 automatic mirror fallback.
 
 `test_retained_packman_cache_is_exact_complete_original_input_set` enforces all
-14 original hashes plus the two exact retained sources and absence of unindexed
+14 original hashes plus the five exact retained source objects and absence of unindexed
 files. Native signature/header and final
 source/media/image gates still have to execute; Git retention is not their pass.
 
 ## Exact e2fsprogs source companion
 
-The same explicit AMD handoff now also selects **only when present in the actual
+The same explicit AMD handoff also selects **only when present in the actual
 inventory** the exact `(openSUSE, x86_64, e2fsprogs-1.47.4-1.1.src.rpm)` companion:
 
 * SHA256 / filename: `4b90c6c666634fe3f97b2045a6556c4ae34709a9f48b53c3c930d32c665b8833`
@@ -70,15 +70,48 @@ These identical bytes were recovered as data from the previously sealed original
 AMD64 OCI source layer and freshly verified by the collector's ordinary native
 RPM signature, exact header and complete payload checks. Neither source nor SPEC
 was executed. This is not an upgraded package, replacement binary, new mirror,
-runtime library or partial generic cache. The directory now contains **16 objects
-/ 20,668,972 bytes**, plus this README.
+runtime library or partial generic cache. This first recovery brought the directory
+to 16 objects / 20,668,972 bytes; see the two additional exact sources below.
 
 `--retained-release-source` still accepts only the original anchor file, not a
-directory or caller-defined list. Its adjacent companion filename/hash/size and
-exact inventory tuple are fixed in collector code; there is no directory scan.
+directory or caller-defined list. Adjacent companion filenames/hashes/sizes and
+exact inventory tuples are fixed in collector code; there is no directory scan.
 If selected, missing/corrupt/aliased companion bytes fail before key import with
 no network fallback. Without the explicit anchor handoff or selected exact
-origin, this companion is not used. ARM gets no handoff. Both copied SRPMs still
+origin, a companion is not used. ARM gets no handoff. All copied SRPMs still
 undergo native signature/header/full payload authentication. The independent
 runtime consumer pins the same canonical e2fsprogs URL/hash and retained
 provenance. Generic cache indexes must still cover every selected origin.
+
+## Exact GCC 16 and SQLite companions
+
+A complete survey of the remaining 151 original SUSE source URLs found just two
+additional HTTP 404 responses, matching runtime source origins recorded by the
+failed build. Both identical originals were recovered from the same sealed OCI
+source layer and freshly authenticated with the same pinned SUSE key, exact RPM
+headers and complete Source/Patch payload checks:
+
+| Source | Original SHA256 | Bytes | Source license |
+| --- | --- | ---: | --- |
+| `gcc16-16.2.1+git9713-1.1.src.rpm` | `e0eb6f15a65dec740af17424092d643806a00f40d9da227fea8825066efe87fa` | 108,898,703 | GPL-3.0-or-later |
+| `sqlite3-3.54.1-1.1.src.rpm` | `f42c07f564efc29fa6b7f8edbbfaa2636d00682c50bc2d3893984d211374e629` | 26,630,164 | LicenseRef-SUSE-Public-Domain |
+
+SQLite is retained directly under its hash filename. GCC exceeds GitHub's
+100MiB single-blob limit; its **unchanged original bytes** are stored as two
+ordered parts (no recompression or content transformation):
+
+1. `1fb48b10a9fad6e9ce3da8571c3278ca1d53ea5e614e8a0f321061b6f39a0289` — 67,108,864 bytes.
+2. `f5fc9ab689b3e5069bcc23cf19c498d90b6c0f523b60cfd6594b595d92aa6339` — 41,789,839 bytes.
+
+The collector pins their order, separate hashes and sizes, joins bytes without
+executing/decompressing them, then verifies the **whole original SRPM hash before
+key import** and repeats normal RPM signature/header/full payload authentication.
+The delivered filename/archive is still the identical original source RPM, not
+these transport parts. Reordered, missing, corrupt or symlinked parts and corrupt
+joined output fail closed. All three companions require the explicit branding
+anchor and exact selected AMD origins. No generic partial-cache permission,
+network fallback or ARM source reuse is introduced.
+
+The complete directory now has **19 content-addressed objects / 156,197,839 bytes**
+plus this README: 14 unchanged Packman objects and five storage objects for four
+exact SUSE sources (branding, e2fsprogs, SQLite, and two parts of GCC).

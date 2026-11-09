@@ -50,7 +50,7 @@ EXACT_SOURCE_ROUTES = {
         "sha256": "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123",
     },
 }
-# One exact previously delivered AMD source companion to the explicit branding
+# Exact previously delivered AMD source companions to the explicit branding
 # handoff. Not a URL override, runtime provider, directory scan or generic cache.
 # The recovered vendor-signed bytes retain the canonical source_url and must go
 # through the ordinary signature, exact header and complete payload checks.
@@ -58,6 +58,20 @@ RETAINED_RELEASE_COMPANIONS = {
     ("openSUSE", "x86_64", "e2fsprogs-1.47.4-1.1.src.rpm"): {
         "sha256": "4b90c6c666634fe3f97b2045a6556c4ae34709a9f48b53c3c930d32c665b8833",
         "size": 7757243,
+    },
+    ("openSUSE", "x86_64", "gcc16-16.2.1+git9713-1.1.src.rpm"): {
+        "sha256": "e0eb6f15a65dec740af17424092d643806a00f40d9da227fea8825066efe87fa",
+        "size": 108898703,
+        # Original byte order; each part is below the GitHub blob-size limit.
+        # Reassembly still requires the complete original SRPM hash before trust.
+        "parts": [
+            {"sha256": "1fb48b10a9fad6e9ce3da8571c3278ca1d53ea5e614e8a0f321061b6f39a0289", "size": 67108864},
+            {"sha256": "f5fc9ab689b3e5069bcc23cf19c498d90b6c0f523b60cfd6594b595d92aa6339", "size": 41789839},
+        ],
+    },
+    ("openSUSE", "x86_64", "sqlite3-3.54.1-1.1.src.rpm"): {
+        "sha256": "f42c07f564efc29fa6b7f8edbbfaa2636d00682c50bc2d3893984d211374e629",
+        "size": 26630164,
     },
 }
 TOKEN = re.compile(r"[A-Za-z0-9_+~.-]+\Z")
@@ -587,7 +601,7 @@ def native_source_inputs(
 def retained_release_source(
     path: Path | None, architecture: str, origins: list[tuple]
 ) -> dict:
-    """Explicit branding anchor and exact selected companion, never a partial cache."""
+    """Explicit branding anchor and exact selected companions, never a partial cache."""
     if path is None:
         return {}
     matches = [
@@ -613,18 +627,22 @@ def retained_release_source(
     for (vendor, arch, filename), companion in RETAINED_RELEASE_COMPANIONS.items():
         if arch != architecture or (filename, vendor) not in origins:
             continue
-        source = path.parent / companion["sha256"]
-        if (
-            source.is_symlink()
-            or not source.is_file()
-            or source.absolute() != source.resolve()
-            or source.stat().st_size != companion["size"]
-            or sha256(source) != companion["sha256"]
-        ):
-            raise ValueError(
-                "retained release source companion filename/bytes mismatch"
-            )
-        retained[filename] = (source, companion["sha256"])
+        parts = companion.get("parts", [companion])
+        if sum(part["size"] for part in parts) != companion["size"]:
+            raise ValueError("retained release source part size policy mismatch")
+        paths = []
+        for part in parts:
+            source = path.parent / part["sha256"]
+            if (
+                source.is_symlink()
+                or not source.is_file()
+                or source.absolute() != source.resolve()
+                or source.stat().st_size != part["size"]
+                or sha256(source) != part["sha256"]
+            ):
+                raise ValueError("retained release source companion filename/bytes mismatch")
+            paths.append(source)
+        retained[filename] = (tuple(paths) if len(paths) > 1 else paths[0], companion["sha256"])
     return retained
 
 
@@ -654,7 +672,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--retained-release-source",
         type=Path,
-        help="hash-addressed AMD release SRPM plus its one exact selected source companion, never an arbitrary source cache",
+        help="hash-addressed AMD release SRPM plus its exact selected source companions, never an arbitrary source cache",
     )
     parser.add_argument(
         "--expected-sha256",
@@ -702,9 +720,16 @@ def main(argv: list[str] | None = None) -> None:
     directory.mkdir()
     release_retrieval = {}
     for filename, (source, digest) in release_inputs.items():
-        budget.consume(source.stat().st_size)
+        parts = source if isinstance(source, tuple) else (source,)
+        budget.consume(sum(part.stat().st_size for part in parts))
         path = directory / (filename + ".partial")
-        shutil.copyfile(source, path)
+        if len(parts) == 1:
+            shutil.copyfile(parts[0], path)
+        else:
+            with path.open("xb") as output:
+                for part in parts:
+                    with part.open("rb") as input_file:
+                        shutil.copyfileobj(input_file, output)
         if sha256(path) != digest:
             raise ValueError("retained release source copied checksum mismatch")
         budget.remaining()
