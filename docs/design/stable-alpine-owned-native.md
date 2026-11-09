@@ -94,6 +94,14 @@ unfixed-aware advisory enforcement, final immutable-image scans and MCP
 composition/isolation remain required. The production Dockerfiles and protected
 publication/deployment workflow are not switched by this candidate.
 
+`verify_alpine_application_source.py` now seals the 1,080 application input files
+against the approved baseline. Its only content exception is the existing
+`df80c49d` GNU date-format compatibility adaptation, bound to its exact bytes and
+recorded baseline vectors; it is not permission for another application refactor.
+Backend tests and Docker-excluded generated/cache files are outside that source
+map. Local source verification passed. The same guard runs before native builds
+so a PR merge checkout cannot silently substitute different application code.
+
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
 (84.19% coverage). Five failures correctly rejected the stale resdet helper hash;

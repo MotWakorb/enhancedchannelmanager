@@ -140,6 +140,7 @@ jobs:
         run: |
           test "$(uname -m)" = "$EXPECTED_MACHINE"
           mkdir "$RUNNER_TEMP/alpine-evidence"
+          python3 scripts/verify_alpine_application_source.py --output-file "$RUNNER_TEMP/alpine-evidence/application-source.json"
           python3 scripts/prepare_alpine_native_cache.py --output-dir "$RUNNER_TEMP/alpine-inputs"
           git rev-parse HEAD > "$RUNNER_TEMP/alpine-evidence/source-commit.txt"
       - name: Build owned codecs with networkless compilation

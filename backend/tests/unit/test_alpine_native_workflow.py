@@ -13,7 +13,7 @@ def test_native_evidence_uses_real_hosts_and_no_publication_or_required_check_al
     text = path.read_text()
     workflow = yaml.load(text, Loader=yaml.BaseLoader)
     assert workflow["permissions"] == {"contents": "read"}
-    assert '${{ github.sha }}' in workflow['concurrency']['group']
+    assert "${{ github.sha }}" in workflow["concurrency"]["group"]
     assert "scripts/run_alpine_codec_matrix.py" in text
     assert "Dockerfile.packages" in text
     assert "--build-context ffmpeg-evidence=" in text
@@ -118,16 +118,35 @@ def test_current_package_is_paired_after_signing_without_historical_substitution
 
 
 def test_full_application_candidate_uses_current_components_and_retains_real_gate_failures():
-    workflow = yaml.load((ROOT/'.github/workflows/alpine-native.yml').read_text(),Loader=yaml.BaseLoader)
-    steps = workflow['jobs']['native-components']['steps']
-    commands = '\n'.join(step.get('run','') for step in steps)
-    assert '--file docker/alpine-native/Dockerfile.candidate' in commands
-    assert '--build-context native-packages="$RUNNER_TEMP/alpine-evidence/packages"' in commands
-    assert '--build-context busybox-packages="$RUNNER_TEMP/alpine-evidence/busybox"' in commands
+    workflow = yaml.load(
+        (ROOT / ".github/workflows/alpine-native.yml").read_text(),
+        Loader=yaml.BaseLoader,
+    )
+    steps = workflow["jobs"]["native-components"]["steps"]
+    commands = "\n".join(step.get("run", "") for step in steps)
+    assert "--file docker/alpine-native/Dockerfile.candidate" in commands
+    assert (
+        '--build-context native-packages="$RUNNER_TEMP/alpine-evidence/packages"'
+        in commands
+    )
+    assert (
+        '--build-context busybox-packages="$RUNNER_TEMP/alpine-evidence/busybox"'
+        in commands
+    )
     assert '--build-context proof-wheels="$RUNNER_TEMP/application-wheels"' in commands
-    assert 'prepare_musllinux_wheels.py' in commands and 'prepare_busybox_cache.py' in commands
-    assert 'scripts/native_image_gate.py' in commands and '--phase bootstrap' in commands and '--phase runtime' in commands
-    runtime = next(step for step in steps if '--phase runtime' in step.get('run',''))
-    assert "steps.application-candidate.outcome == 'success'" in runtime['if']
-    assert 'continue-on-error' not in runtime
-    assert '|| true' not in runtime['run']
+    assert (
+        "prepare_musllinux_wheels.py" in commands
+        and "prepare_busybox_cache.py" in commands
+    )
+    assert (
+        "scripts/native_image_gate.py" in commands
+        and "--phase bootstrap" in commands
+        and "--phase runtime" in commands
+    )
+    runtime = next(step for step in steps if "--phase runtime" in step.get("run", ""))
+    assert "steps.application-candidate.outcome == 'success'" in runtime["if"]
+    assert "continue-on-error" not in runtime
+    assert "|| true" not in runtime["run"]
+    assert commands.index("verify_alpine_application_source.py") < commands.index(
+        "prepare_alpine_native_cache.py"
+    )
