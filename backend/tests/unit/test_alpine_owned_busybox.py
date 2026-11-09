@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import importlib.util
 import json
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -153,3 +154,70 @@ def test_untrusted_receipt_or_archive_bytes_are_not_owned_source_proof(
         expected["sha256"] = hashlib.sha256(package.read_bytes()).hexdigest()
     with pytest.raises(consumer.InputError):
         consumer.bind_installed_record(package, text, expected, arch)
+
+
+@pytest.fixture
+def original_source_recipe():
+    policy = json.loads((ROOT / "docker/alpine-busybox/manifest.json").read_text())
+    with tarfile.open(
+        ROOT / "docker/alpine-busybox" / policy["aports"]["file"]
+    ) as archive:
+        raw = archive.extractfile("main/busybox/APKBUILD").read()
+    return policy, raw
+
+
+def test_complete_actual_original_busybox_source_input_checksum_plan(
+    consumer, original_source_recipe
+):
+    policy, raw = original_source_recipe
+    result = consumer.source_inputs(policy, raw)
+    assert len(result) == 75
+    assert len({row["file"] for row in result}) == 75
+    assert result[0] == {
+        "file": "busybox-1.37.0.tar.bz2",
+        "sha512": policy["source"]["sha512"],
+    }
+    assert any(row["file"] == "0001-wget-add-header-Accept.patch" for row in result)
+    # Install/trigger scripts are in the original 80-file apports tree, not
+    # the 75-row upstream/source-input checksum block. The consumer checks
+    # those six additional apports members independently against that tar.
+    assert "busybox.post-install" not in {row["file"] for row in result}
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "original-recipe",
+        "missing-input",
+        "duplicate-input",
+        "unsafe-input",
+        "source-digest",
+    ],
+)
+def test_original_source_plan_is_not_replaced_by_self_reported_recipe_labels(
+    consumer, original_source_recipe, mutation
+):
+    policy, raw = original_source_recipe
+    if mutation == "original-recipe":
+        raw += b"\n# changed original\n"
+    elif mutation == "source-digest":
+        policy["source"]["sha512"] = "0" * 128
+    else:
+        lines = raw.splitlines(keepends=True)
+        index = next(
+            i for i, line in enumerate(lines) if b"  busybox-1.37.0.tar.bz2" in line
+        )
+        if mutation == "missing-input":
+            lines.pop(index)
+        elif mutation == "duplicate-input":
+            lines.insert(index, lines[index])
+        else:
+            lines[index] = lines[index].replace(
+                b"busybox-1.37.0.tar.bz2", b"../outside"
+            )
+        raw = b"".join(lines)
+        # Even if an untrusted receipt claims the changed recipe hash, complete
+        # input count/uniqueness/path/upstream digest checks remain independent.
+        policy["aports"]["original_recipe_sha256"] = hashlib.sha256(raw).hexdigest()
+    with pytest.raises(consumer.InputError):
+        consumer.source_inputs(policy, raw)

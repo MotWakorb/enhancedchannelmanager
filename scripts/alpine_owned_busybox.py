@@ -12,16 +12,170 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import re
 import tarfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from alpine_apk_v2 import AttributionError, inspect_apk, parts
 from alpine_source_inputs import InputError, require
 from alpine_source_inventory import InventoryError, payload_record
+from build_busybox_provider import derive_apkbuild, read_policy
+from build_native_runtime import BuildError
 from verify_alpine_external_sources import sha256
 
 __all__ = ["InputError", "bind_installed_record"]
 NAMES = {"busybox", "busybox-binsh", "ssl_client"}
+
+
+def source_inputs(policy: dict, original: bytes) -> list[dict]:
+    """Decode all original checksum rows, not a shell-evaluated source list.
+
+    Caller first authenticates the approved policy with read_policy. This pure
+    decoder alone is not policy authentication or compiled-source acceptance.
+    """
+    require(
+        hashlib.sha256(original).hexdigest()
+        == policy["aports"]["original_recipe_sha256"],
+        "original BusyBox source recipe identity differs",
+    )
+    rows = [
+        {"file": name.decode(), "sha512": digest.decode()}
+        for digest, name in re.findall(
+            rb"^([0-9a-f]{128})  (.+)$", original, re.MULTILINE
+        )
+    ]
+    require(
+        len(rows) == policy["aports"]["source_input_checksums"]
+        and len({row["file"] for row in rows}) == len(rows),
+        "complete unique original BusyBox source input set required",
+    )
+    for row in rows:
+        name = row["file"]
+        require(
+            bool(name)
+            and name not in {".", ".."}
+            and PurePosixPath(name).name == name
+            and str(PurePosixPath(name)) == name
+            and not any(character.isspace() for character in name),
+            "safe original BusyBox source input basename required",
+        )
+    require(
+        rows[0]
+        == {"file": policy["source"]["filename"], "sha512": policy["source"]["sha512"]},
+        "original BusyBox upstream archive checksum differs",
+    )
+    return rows
+
+
+def verify_original_sources(source: Path) -> dict:
+    """Independent original archive/aports/input/derived-recipe byte checks.
+
+    No delivered shell/Python source is evaluated and no patched tree or target
+    is executed. Full original-to-patched-source replay is a separate obligation.
+    """
+    require(
+        source.is_dir()
+        and not source.is_symlink()
+        and source.absolute() == source.resolve(),
+        "regular canonical original BusyBox sources required",
+    )
+    try:
+        policy = read_policy(source / "owned-recipe/manifest.json")
+        for row in [policy["aports"], *policy["patches"]]:
+            path = source / "owned-recipe" / row["file"]
+            require(
+                path.is_file()
+                and not path.is_symlink()
+                and path.resolve().is_relative_to(source)
+                and sha256(path) == row["sha256"],
+                "original BusyBox retained apports/owned patch identity differs",
+            )
+            if "sha512" in row:
+                require(
+                    hashlib.sha512(path.read_bytes()).hexdigest() == row["sha512"],
+                    "owned BusyBox patch SHA512 differs",
+                )
+        original_path = source / "original-aports/APKBUILD"
+        require(
+            original_path.is_file() and not original_path.is_symlink(),
+            "regular original BusyBox recipe required",
+        )
+        original = original_path.read_bytes()
+        rows = source_inputs(policy, original)
+        for row in rows:
+            path = source / (
+                row["file"]
+                if row["file"] == policy["source"]["filename"]
+                else "original-aports/" + row["file"]
+            )
+            require(
+                path.is_file()
+                and not path.is_symlink()
+                and path.resolve().is_relative_to(source)
+                and hashlib.sha512(path.read_bytes()).hexdigest() == row["sha512"],
+                "original BusyBox source input SHA512 differs: " + row["file"],
+            )
+        archive = source / policy["source"]["filename"]
+        require(
+            archive.stat().st_size == policy["source"]["size"]
+            and sha256(archive) == policy["source"]["sha256"],
+            "original BusyBox upstream archive SHA256/size differs",
+        )
+        apports_files = set()
+        with tarfile.open(source / "owned-recipe" / policy["aports"]["file"]) as bundle:
+            for member in bundle:
+                if member.isdir():
+                    continue
+                prefix = "main/busybox/"
+                require(
+                    member.isreg()
+                    and member.name.startswith(prefix)
+                    and member.size <= 1024**2,
+                    "reviewed original BusyBox apports member required",
+                )
+                name = member.name.removeprefix(prefix)
+                require(
+                    PurePosixPath(name).name == name and name not in apports_files,
+                    "unique flat original BusyBox apports member required",
+                )
+                apports_files.add(name)
+                path = source / "original-aports" / name
+                raw = bundle.extractfile(member)
+                require(
+                    raw is not None
+                    and path.is_file()
+                    and not path.is_symlink()
+                    and path.read_bytes() == raw.read(),
+                    "delivered original BusyBox apports file differs from retained archive",
+                )
+        require(
+            {path.name for path in (source / "original-aports").iterdir()}
+            == apports_files,
+            "complete original BusyBox apports tree required",
+        )
+        derived = source / "derived-APKBUILD"
+        require(
+            derived.is_file()
+            and not derived.is_symlink()
+            and derived.read_bytes()
+            == derive_apkbuild(original.decode(), policy).encode(),
+            "exact original-to-owned BusyBox derived recipe differs",
+        )
+    except BuildError as exc:
+        raise InputError(
+            "original BusyBox policy/derived recipe validation failed: " + str(exc)
+        ) from exc
+    return {
+        "status": "OWNED_BUSYBOX_ORIGINAL_ARCHIVE_APORTS_ALL_INPUTS_AND_DERIVED_RECIPE_JOIN_ONLY",
+        "original_source_inputs_verified": len(rows),
+        "original_aports_files_verified": len(apports_files),
+        "owned_patches_verified": len(policy["patches"]),
+        "upstream_archive_sha256": policy["source"]["sha256"],
+        "full_runtime_source_acceptance": False,
+        "source_patch_replay_established": False,
+        "historical_compiler_linkage_established": False,
+        "scope": "Approved policy hash, original upstream SHA256/SHA512/size, every original SHA512 input, all original retained apports member bytes, both owned patch hashes and exact deterministic APKBUILD derivation. No shell evaluation, build/source/target execution, patch replay, historical compiler/reproduced-build assertion or aggregate source/advisory acceptance.",
+    }
 
 
 def bind_installed_record(
