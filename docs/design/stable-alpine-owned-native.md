@@ -393,11 +393,45 @@ set. Only the verified source bundle and public receipt reach the final stage;
 Git/GPG/keyring do not. The additive native workflow check rederives against the
 **live** installed APK query/database and compares selected installed ELF bytes.
 Wiring tests were red before implementation; fresh paired native final-image
-execution remains required. Current-script paired data rechecks of the automated
-bundle are separate pending checks. Evidence and explicit gaps are in
-`stable-alpine-rust-source-delivery-local-20261109.json`. This consumer permanently
+execution remains required. Independent current-script rechecks of the automated
+bundle subsequently passed against **both actual architecture datasets**, on
+AMD64 without ARM execution. The complete 546-crate inventory digest matches on
+both. Native final-image run `42692523987` at `92fe8bd4` is in progress, not yet
+accepted. Initial and follow-up evidence and explicit gaps are in
+`stable-alpine-rust-source-delivery-local-20261109.json` and
+`stable-alpine-rust-delivery-offline-paired-20261109.json`. This consumer permanently
 reports `full_runtime_source_acceptance: false`; the shared aggregate runtime gate
 is unchanged and remains enforced.
+
+### Owned native APKv3: signature and full installed-record joins
+
+`alpine_owned_apk_v3.py` now uses **native APKv3 verification**, not the external
+APKv2/gzip parser. Its wrapper binds the original owned package/public-key hashes,
+requires a single scoped public signing key, runs `apk verify` and then
+`apk adbdump --format json` on that **same** file, and joins native metadata to
+the actual installed subject and original package artifact inventory. Parsing a
+recorded JSON document alone is explicitly not signature authentication.
+
+Actual independent offline nonroot/read-only checks pass on both original native
+CI datasets, on AMD64 without ARM execution. Each joins 559 regular SHA256 entries,
+32 safe symlinks, all 591 artifact entries, and every payload path/checksum/mode in
+the real installed database (72 directory records, excluding ADB's unnamed root).
+The reviewed native `f:S` database uses SHA256-160 inside legacy `Q1` tokens; it is
+not mislabeled as an APKv2 compressed-control or per-file SHA1 rule. Full signed
+file SHA256 and native package/payload verification remain separately enforced.
+
+An actual source-helper **payload-only** byte corruption is rejected by native
+APK verification with `file integrity error`, while the original signed metadata
+and `adbdump` JSON remain byte-semantically identical. A changed installed file
+checksum is also rejected with the original package checksum/APK/key unchanged;
+bypassing that guard makes both recorded-architecture regressions red. Complete
+real metadata/record fixtures are committed, and original artifacts preserved.
+
+Evidence is `stable-alpine-owned-apk3-metadata-paired-20261109.json`. Final live
+installed-file/component-source/compiler joins, the three owned BusyBox consumer
+joins, and aggregate/security/MCP acceptance remain unfinished. The four owned
+packages remain explicit obligations in the external consumer; this helper does
+not remove or blanket-skip them and always reports false aggregate acceptance.
 
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
