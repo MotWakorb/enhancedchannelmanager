@@ -63,6 +63,16 @@ RUN --mount=type=bind,source=scripts,target=/build-scripts \
         --output-dir /proof/external-sources --work-dir /proof/source-work \
         --receipt-file /proof/external-source-receipt.json
 
+FROM apk-source-builder AS rust-source-builder
+# The exact pre-builder runtime capture and independently authenticated external
+# source graph are inherited; builder GPG and Git never reach the final stage.
+RUN --mount=type=bind,source=scripts,target=/build-scripts \
+    apk add --no-cache gnupg \
+    && python /build-scripts/prepare_alpine_rust_sources.py \
+        --external-root /proof/external-sources --runtime-inventory /proof/runtime-inventory.json \
+        --output-dir /proof/rust-sources --work-dir /proof/rust-source-work \
+        --receipt-file /proof/rust-source-receipt.json
+
 FROM runtime-base AS python-base-source-builder
 RUN --mount=type=bind,source=scripts,target=/build-scripts \
     mkdir /proof \
@@ -87,7 +97,9 @@ COPY --from=apk-source-builder /proof/external-sources/ /usr/share/ecm/sources/a
 COPY --from=apk-source-builder /proof/external-source-receipt.json /usr/share/ecm/provenance/external-sources.json
 COPY --from=python-base-source-builder /proof/python-base-sources/ /usr/share/ecm/sources/python-base/
 COPY --from=python-base-source-builder /proof/python-base-source-receipt.json /usr/share/ecm/provenance/python-base-sources.json
-COPY scripts/verify_alpine_external_sources.py scripts/verify_alpine_python_base.py scripts/alpine_source_inventory.py scripts/alpine_source_inputs.py scripts/alpine_apk_v2.py scripts/verify_musllinux_gnu.py /usr/share/ecm/sources/verification/
+COPY --from=rust-source-builder /proof/rust-sources/ /usr/share/ecm/sources/rust/
+COPY --from=rust-source-builder /proof/rust-source-receipt.json /usr/share/ecm/provenance/rust-sources.json
+COPY scripts/verify_alpine_external_sources.py scripts/verify_alpine_python_base.py scripts/verify_alpine_rust_sources.py scripts/alpine_rust_source_inputs.py scripts/alpine_rust_auditable.py scripts/alpine_source_inventory.py scripts/alpine_source_inputs.py scripts/alpine_apk_v2.py scripts/verify_musllinux_gnu.py /usr/share/ecm/sources/verification/
 ENV PATH="/opt/venv/bin:$PATH"
 COPY backend/ /app/
 COPY --from=frontend-builder /app/frontend/dist /app/static

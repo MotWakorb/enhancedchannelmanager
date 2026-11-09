@@ -368,6 +368,37 @@ The origin-check bypass makes its regression red. Evidence and limitations are
 compiler build provenance, complete attribution and aggregate acceptance remain
 unfinished.
 
+### Nested Rust input delivery: automated, pending native final-image checks
+
+`prepare_alpine_rust_sources.py` now acquires the exact frozen registry graph and
+both original compiler sources, independently verifies the original Rust release
+signatures in an isolated builder keyring, delivers original recipe/Git/public
+evidence, and requires `verify_alpine_rust_sources.py` to pass offline. The actual
+automated bundle contains 562 files (558,968,555 bytes), including all 546 registry
+archives and both complete original compiler sources. No receipt's claimed status
+or clearance label is an authentication input.
+
+The standalone consumer first reauthenticates the complete external APK/source
+graph, derives all project locks from original source/patch bytes, inventories all
+crate members, verifies both compiler source/recipe/input/public-evidence graphs,
+rejects missing/unindexed files and directories, and checks the bounded selected
+ELF joins. A separately assembled original bundle passed nonroot/read-only/offline
+AMD64 verification. Actual same-size delivered-crate corruption is denied; a live
+ELF hash-check bypass makes its mutation regression red. Original source archives
+and failed controls are retained unchanged.
+
+The candidate adds a Rust source builder based on `apk-source-builder`, inheriting
+the **saved pre-builder runtime subject**, not querying its expanded build package
+set. Only the verified source bundle and public receipt reach the final stage;
+Git/GPG/keyring do not. The additive native workflow check rederives against the
+**live** installed APK query/database and compares selected installed ELF bytes.
+Wiring tests were red before implementation; fresh paired native final-image
+execution remains required. Current-script paired data rechecks of the automated
+bundle are separate pending checks. Evidence and explicit gaps are in
+`stable-alpine-rust-source-delivery-local-20261109.json`. This consumer permanently
+reports `full_runtime_source_acceptance: false`; the shared aggregate runtime gate
+is unchanged and remains enforced.
+
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
 (84.19% coverage). Five failures correctly rejected the stale resdet helper hash;

@@ -189,3 +189,26 @@ def test_python_base_source_gate_compares_live_installed_files_not_just_preparat
     assert "/usr/share/ecm/sources/python-base" in command and 'Path("/")' in command
     assert "application/python-base-sources.json" in command
     assert "continue-on-error" not in source and "|| true" not in command
+
+
+def test_rust_source_gate_reauthenticates_live_subject_and_selected_installed_elfs():
+    workflow = yaml.load(
+        (ROOT / ".github/workflows/alpine-native.yml").read_text(),
+        Loader=yaml.BaseLoader,
+    )
+    steps = workflow["jobs"]["native-components"]["steps"]
+    source = next(s for s in steps if "verify_alpine_rust_sources" in s.get("run", ""))
+    command = source["run"]
+    assert "--pull never --network none --read-only --cap-drop ALL" in command
+    assert "--user 1000:1000" in command
+    assert (
+        'Path("/lib/apk/db/installed").read_text()' in command
+        and '"/sbin/apk","query","--from","installed"' in command
+    )
+    assert (
+        "/usr/share/ecm/sources/rust" in command
+        and "/usr/share/ecm/sources/apk" in command
+        and 'Path("/")' in command
+    )
+    assert "application/rust-sources.json" in command
+    assert "continue-on-error" not in source and "|| true" not in command

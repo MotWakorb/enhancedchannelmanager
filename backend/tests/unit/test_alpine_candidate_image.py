@@ -99,3 +99,28 @@ def test_python_base_source_builder_delivers_only_verified_original_evidence():
     assert "scripts/verify_alpine_python_base.py" in text
     final = text.split("FROM runtime-base AS application-candidate\n", 1)[1]
     assert "apk add" not in final and "GNUPGHOME" not in final
+
+
+def test_rust_input_builder_uses_saved_subject_and_never_delivers_its_signing_keyring():
+    text = (ROOT / "docker/alpine-native/Dockerfile.candidate").read_text()
+    stage = text.split("FROM apk-source-builder AS rust-source-builder\n", 1)[1].split(
+        "\nFROM ", 1
+    )[0]
+    assert "prepare_alpine_rust_sources.py" in stage
+    assert "--external-root /proof/external-sources" in stage
+    assert "--runtime-inventory /proof/runtime-inventory.json" in stage
+    assert "apk query" not in stage and "--from installed" not in stage
+    assert (
+        "COPY --from=rust-source-builder /proof/rust-sources/ /usr/share/ecm/sources/rust/"
+        in text
+    )
+    assert (
+        "COPY --from=rust-source-builder /proof/rust-source-receipt.json /usr/share/ecm/provenance/rust-sources.json"
+        in text
+    )
+    assert (
+        "scripts/verify_alpine_rust_sources.py" in text
+        and "scripts/alpine_rust_auditable.py" in text
+    )
+    final = text.split("FROM runtime-base AS application-candidate\n", 1)[1]
+    assert "gnupg" not in final and "rust-source-work" not in final
