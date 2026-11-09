@@ -258,6 +258,11 @@ jobs:
             --file docker/alpine-native/Dockerfile.candidate --load \
             --tag ecm-alpine-application-candidate:${{ matrix.arch }} .
           docker image inspect ecm-alpine-application-candidate:${{ matrix.arch }} > "$RUNNER_TEMP/alpine-evidence/application/image-inspect.json"
+          image=$(docker image inspect --format '{{.Id}}' ecm-alpine-application-candidate:${{ matrix.arch }})
+          docker run --rm --pull never --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --entrypoint /usr/local/bin/python "$image" -I -c \
+            'import json,subprocess; from pathlib import Path; p=subprocess.run(["/sbin/apk","query","--from","installed","--format","json","--all-matches","*"],check=True,capture_output=True,text=True); print(json.dumps({"packages":json.loads(p.stdout),"installed_database":Path("/lib/apk/db/installed").read_text()},sort_keys=True,indent=2))' \
+            > "$RUNNER_TEMP/alpine-evidence/application/runtime-inventory.json"
       - name: Exercise real application identities and persistence on the immutable candidate
         run: |
           image=$(docker image inspect --format '{{.Id}}' ecm-alpine-application-candidate:${{ matrix.arch }})

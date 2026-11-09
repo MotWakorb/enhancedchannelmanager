@@ -150,3 +150,5 @@ def test_full_application_candidate_uses_current_components_and_retains_real_gat
     assert commands.index("verify_alpine_application_source.py") < commands.index(
         "prepare_alpine_native_cache.py"
     )
+    assert "application/runtime-inventory.json" in commands
+    assert "--pull never --network none --read-only --cap-drop ALL" in commands
