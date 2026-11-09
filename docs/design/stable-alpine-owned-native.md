@@ -145,6 +145,35 @@ checksum changes and virtual-package abuse. Actual local full-capture execution
 joins all 94 packages and 68 source origins; this local environment is not the
 full application candidate and includes build-tool packages.
 
+`alpine_source_inputs.py` now preserves the raw signed repository and control
+architectures (including abuild's noarch index rewrite), binds the compressed
+control checksum and payload datahash without weakening the existing GNU
+provider verifier, reconstructs complete original Git recipe trees and verifies
+every literal source checksum. Raw commit/root/path Git objects bind each
+recipe to its signed package commit; recipe labels alone are insufficient.
+Only two exact hash-reviewed, entirely recipe-generated release/configuration
+recipes can omit an external checksum block. Inline checksum blocks, recipe
+symlinks and public-key filenames containing `@` are retained, not normalized.
+
+Actual offline verification for the **local test environment only** joined all
+93 nonvirtual signed APKs through 68 source groups to all 347 checksummed inputs
+(265 local recipe files and 82 original external inputs). Control mutation was
+rejected as `BAD signature` under the same unchanged official key directory.
+The original archives, raw Git objects and HTTP/signature receipts are retained;
+the compact, explicitly bounded evidence is
+`stable-alpine-local-source-input-joins-20261109.json`. This is not full-candidate
+selection, source delivery/consumer, Python-base or owned/compiler-support source
+closure, license/advisory clearance or a source-gate waiver.
+
+Fresh full ARM64 run `42657433272` passed the exact metadata adapters, both
+identity/persistence scenarios, all 27 functional/metadata runtime checks and
+the 1,080-file application source guard. Its **only** remaining shared runtime
+failure is `native_source_and_artifact_integrity` (missing the RPM source index).
+The failed full report and actual getent/APK metadata are retained in
+`stable-alpine-application-arm64-metadata-20261109.json`. Fresh AMD64 adapter
+execution, the complete Alpine source consumer and final security/MCP gates
+are still required.
+
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
 (84.19% coverage). Five failures correctly rejected the stale resdet helper hash;
