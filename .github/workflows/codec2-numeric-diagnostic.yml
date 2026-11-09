@@ -37,7 +37,7 @@ jobs:
       - name: Investigate copied sources without changing recipes or goldens
         run: |
           mkdir "$RUNNER_TEMP/codec-diagnostic"
-          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+          docker run --rm --network none --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
             --mount type=bind,src="$GITHUB_WORKSPACE/scripts",dst=/diagnostic/scripts,readonly \
             --mount type=bind,src="$RUNNER_TEMP/original-arm.zip",dst=/diagnostic/original.zip,readonly \
             --mount type=bind,src="$RUNNER_TEMP/codec-diagnostic",dst=/diagnostic/output \
