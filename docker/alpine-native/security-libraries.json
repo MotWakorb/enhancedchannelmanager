@@ -129,9 +129,45 @@
               "after_sha256": "a0e49fb17d3e5b126bcc0cb14ab03198dda23b27add72579553959923cc16965"
             }
           ]
+        },
+        {
+          "id": "CVE-2026-86137",
+          "file": "patches/security/libxml2-CVE-2026-86137.patch",
+          "sha256": "e7747a70762040dee3ede34f407102717b643b1180d13da9a4ce704a0749ab7b",
+          "upstream_commit": "76fe08d97de88bfaef2f7d5cd27f11954cc5bee2",
+          "upstream_patch_sha256": "e7747a70762040dee3ede34f407102717b643b1180d13da9a4ce704a0749ab7b",
+          "witnesses": [
+            {
+              "path": "xmlregexp.c",
+              "before_sha256": "2d5c95bb0d2dc9eaa5d957cf326a83ab04daa364d381c6c45813cb8224962737",
+              "after_sha256": "e9b3e8705a6694bc3eb2cc723e4d234b1397e2a3b815a59b467414b6a9a87010"
+            }
+          ]
+        },
+        {
+          "id": "CVE-2026-86141",
+          "file": "patches/security/libxml2-CVE-2026-86141.patch",
+          "sha256": "88cd6d601c99333d4df079e6852b8f8ace2e8c1b6c0e2a237f77b9c4af7c9cb7",
+          "upstream_commit": "e89a8aae4c9b40cdafcf66b3f9e57c62db37bb55",
+          "upstream_patch_sha256": "88cd6d601c99333d4df079e6852b8f8ace2e8c1b6c0e2a237f77b9c4af7c9cb7",
+          "witnesses": [
+            {
+              "path": "xmlregexp.c",
+              "before_sha256": "e9b3e8705a6694bc3eb2cc723e4d234b1397e2a3b815a59b467414b6a9a87010",
+              "after_sha256": "5c0a2eba4af5e00049d4f07f5f04aabf29ddc28f2a51784dd1a5c343c77940a7"
+            }
+          ]
         }
       ],
       "retained_upstream_patches": [
+        {
+          "file": "patches/security/upstream/libxml2-CVE-2026-86137.patch",
+          "sha256": "e7747a70762040dee3ede34f407102717b643b1180d13da9a4ce704a0749ab7b"
+        },
+        {
+          "file": "patches/security/upstream/libxml2-CVE-2026-86141.patch",
+          "sha256": "88cd6d601c99333d4df079e6852b8f8ace2e8c1b6c0e2a237f77b9c4af7c9cb7"
+        },
         {
           "file": "patches/security/upstream/libxml2-CVE-2026-86138.patch",
           "sha256": "f228a9c9b75901b9f4bee563f123ecfe7ba5c4487b76d6de15ecccbcab2f5028"

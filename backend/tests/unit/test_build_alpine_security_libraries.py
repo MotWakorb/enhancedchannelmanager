@@ -51,7 +51,16 @@ def test_real_security_recipe_keeps_stable_xml_abi_and_all_reviewed_corrections(
         "CVE-2026-86142",
         "CVE-2026-86143",
         "CVE-2026-86144",
+        "CVE-2026-86137",
+        "CVE-2026-86141",
     }
+    patches = xml["patches"]
+    bounds = next(i for i, p in enumerate(patches) if p["id"] == "CVE-2026-86137")
+    assert patches[bounds + 1]["id"] == "CVE-2026-86141"
+    assert (
+        patches[bounds]["witnesses"][0]["after_sha256"]
+        == patches[bounds + 1]["witnesses"][0]["before_sha256"]
+    )
     speex = next(item for item in recipe["libraries"] if item["name"] == "speex")
     assert any(p["id"] == "CVE-2026-116741" for p in speex["patches"])
     assert any(p["id"] == "ecm-checked-append-capacity" for p in speex["patches"])

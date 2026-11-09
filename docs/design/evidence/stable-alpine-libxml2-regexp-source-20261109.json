@@ -1,0 +1,108 @@
+{
+  "actual_checks": [
+    "Both unchanged upstream patches apply in order with fuzz zero to pinned 2.13.9 source after all seven existing corrections.",
+    "Complete original/intermediate/final xmlregexp.c SHA256 witnesses recorded.",
+    "51 recipe/package/source contract subset tests pass."
+  ],
+  "not_claimed": [
+    "Targeted sanitizer execution (not run).",
+    "Native build and upstream suite execution for this new recipe.",
+    "Complete libxml2/FFmpeg advisory clearance.",
+    "Final ECM/MCP or publication acceptance."
+  ],
+  "patches": [
+    {
+      "file": "patches/security/libxml2-CVE-2026-86137.patch",
+      "id": "CVE-2026-86137",
+      "sha256": "e7747a70762040dee3ede34f407102717b643b1180d13da9a4ce704a0749ab7b",
+      "upstream_commit": "76fe08d97de88bfaef2f7d5cd27f11954cc5bee2",
+      "upstream_patch_sha256": "e7747a70762040dee3ede34f407102717b643b1180d13da9a4ce704a0749ab7b",
+      "witnesses": [
+        {
+          "after_sha256": "e9b3e8705a6694bc3eb2cc723e4d234b1397e2a3b815a59b467414b6a9a87010",
+          "before_sha256": "2d5c95bb0d2dc9eaa5d957cf326a83ab04daa364d381c6c45813cb8224962737",
+          "path": "xmlregexp.c"
+        }
+      ]
+    },
+    {
+      "file": "patches/security/libxml2-CVE-2026-86141.patch",
+      "id": "CVE-2026-86141",
+      "sha256": "88cd6d601c99333d4df079e6852b8f8ace2e8c1b6c0e2a237f77b9c4af7c9cb7",
+      "upstream_commit": "e89a8aae4c9b40cdafcf66b3f9e57c62db37bb55",
+      "upstream_patch_sha256": "88cd6d601c99333d4df079e6852b8f8ace2e8c1b6c0e2a237f77b9c4af7c9cb7",
+      "witnesses": [
+        {
+          "after_sha256": "5c0a2eba4af5e00049d4f07f5f04aabf29ddc28f2a51784dd1a5c343c77940a7",
+          "before_sha256": "e9b3e8705a6694bc3eb2cc723e4d234b1397e2a3b815a59b467414b6a9a87010",
+          "path": "xmlregexp.c"
+        }
+      ]
+    }
+  ],
+  "primary_fetch_receipts": {
+    "CVE-2026-86137": {
+      "headers": {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "max-age=0, private, must-revalidate",
+        "Content-Length": "1323",
+        "Content-Security-Policy": "default-src 'none'; base-uri 'self'; child-src github.githubassets.com github.com/assets-cdn/worker/ github.com/assets/ gist.github.com/assets-cdn/worker/; connect-src 'self' uploads.github.com www.githubstatus.com collector.github.com raw.githubusercontent.com api.github.com github-cloud.s3.amazonaws.com github-production-repository-file-5c1aeb.s3.amazonaws.com github-production-upload-manifest-file-7fdce7.s3.amazonaws.com github-production-user-asset-6210df.s3.amazonaws.com *.rel.tunnels.api.visualstudio.com wss://*.rel.tunnels.api.visualstudio.com github.githubassets.com objects-origin.githubusercontent.com copilot-proxy.githubusercontent.com proxy.individual.githubcopilot.com proxy.business.githubcopilot.com proxy.enterprise.githubcopilot.com *.actions.githubusercontent.com wss://*.actions.githubusercontent.com productionresultssa0.blob.core.windows.net productionresultssa1.blob.core.windows.net productionresultssa2.blob.core.windows.net productionresultssa3.blob.core.windows.net productionresultssa4.blob.core.windows.net productionresultssa5.blob.core.windows.net productionresultssa6.blob.core.windows.net productionresultssa7.blob.core.windows.net productionresultssa8.blob.core.windows.net productionresultssa9.blob.core.windows.net productionresultssa10.blob.core.windows.net productionresultssa11.blob.core.windows.net productionresultssa12.blob.core.windows.net productionresultssa13.blob.core.windows.net productionresultssa14.blob.core.windows.net productionresultssa15.blob.core.windows.net productionresultssa16.blob.core.windows.net productionresultssa17.blob.core.windows.net productionresultssa18.blob.core.windows.net productionresultssa19.blob.core.windows.net productionresultssa30.blob.core.windows.net productionresultssa31.blob.core.windows.net productionresultssa32.blob.core.windows.net github-production-repository-image-32fea6.s3.amazonaws.com github-production-release-asset-2e65be.s3.amazonaws.com insights.github.com wss://alive.github.com wss://alive-staging.github.com api.githubcopilot.com api.individual.githubcopilot.com api.business.githubcopilot.com api.enterprise.githubcopilot.com wss://production-copilot-host.webpubsub.azure.com wss://production-copilot-host-centralus.webpubsub.azure.com wss://production-copilot-host-centralus-02.webpubsub.azure.com wss://production-copilot-host-westus.webpubsub.azure.com wss://production-copilot-host-westus3.webpubsub.azure.com api.github.com/cmc_internal/api/; font-src github.githubassets.com; form-action 'self' github.com gist.github.com copilot-workspace.githubnext.com objects-origin.githubusercontent.com; frame-ancestors 'none'; frame-src viewscreen.githubusercontent.com notebooks.githubusercontent.com; img-src 'self' data: blob: github.githubassets.com media.githubusercontent.com camo.githubusercontent.com identicons.github.com avatars.githubusercontent.com private-avatars.githubusercontent.com github-cloud.s3.amazonaws.com objects.githubusercontent.com release-assets.githubusercontent.com secured-user-images.githubusercontent.com user-images.githubusercontent.com private-user-images.githubusercontent.com opengraph.githubassets.com repository-images.githubusercontent.com marketplace-screenshots.githubusercontent.com copilotprodattachments.blob.core.windows.net/github-production-copilot-attachments/ github-production-user-asset-6210df.s3.amazonaws.com customer-stories-feed.github.com spotlights-feed.github.com explore-feed.github.com *.googleusercontent.com objects-origin.githubusercontent.com *.githubusercontent.com; manifest-src 'self'; media-src github.com user-images.githubusercontent.com secured-user-images.githubusercontent.com private-user-images.githubusercontent.com github-production-user-asset-6210df.s3.amazonaws.com gist.github.com github.githubassets.com; script-src github.githubassets.com; style-src 'unsafe-inline' github.githubassets.com; upgrade-insecure-requests; worker-src github.githubassets.com github.com/assets-cdn/worker/ github.com/assets/ gist.github.com/assets-cdn/worker/",
+        "Content-Type": "text/plain; charset=utf-8",
+        "Date": "Mon, 09 Nov 2026 15:53:55 GMT",
+        "ETag": "W/\"e7747a70762040dee3ede34f40710271\"",
+        "Referrer-Policy": "no-referrer-when-downgrade",
+        "Server": "github.com",
+        "Set-Cookie": "_gh_sess=D0oZFCLKndL1irPeYvayDmgS582OtlcKZbTM6wWqNzL9Pz5LF1sUhqzJLWhJl6XbKiy8VKgVqeouDOVMMvc80ZtrAR9m1k82NzrIdqaeWFwKNf5t%2BQFJW1NqRO6TkKgOf13FEriksGE4jFvZAJcZQTPpto4zcq%2Bg7kelEHGoc7tOtvOfx1jZ9hUMinF26J2IkI4kUu8Z%2Bxntl7DTLAko1hum%2BmBI0PzDx%2B5JY08k0ulgxifEUdBy4pfjh%2BkJITLkOUrjvfQ%2BKjlpkpF%2FfySztw%3D%3D--krn4NgIc14tZrjz2--PAofpuFjnQUrlx6RGi7K%2FA%3D%3D; path=/; HttpOnly; secure; SameSite=Lax",
+        "Strict-Transport-Security": "max-age=31536000; includeSubdomains; preload",
+        "Vary": "X-PJAX, X-PJAX-Container, Turbo-Visit, Turbo-Frame, X-Requested-With, X-GitHub-Client-Version, Sec-Fetch-Site,Accept-Encoding, Accept, X-Requested-With",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "deny",
+        "X-GitHub-Request-Id": "E936:4BBE4:D9E014:137E7CA:6AF1EC93",
+        "X-XSS-Protection": "0",
+        "connection": "close",
+        "x-github-edge-region": "iad",
+        "x-repository-download": "git clone https://github.com/GNOME/libxml2.git"
+      },
+      "http_status": 200,
+      "sha256": "e7747a70762040dee3ede34f407102717b643b1180d13da9a4ce704a0749ab7b",
+      "url": "https://github.com/GNOME/libxml2/commit/76fe08d97de88bfaef2f7d5cd27f11954cc5bee2.patch"
+    },
+    "CVE-2026-86141": {
+      "headers": {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "max-age=0, private, must-revalidate",
+        "Content-Length": "971",
+        "Content-Security-Policy": "default-src 'none'; base-uri 'self'; child-src github.githubassets.com github.com/assets-cdn/worker/ github.com/assets/ gist.github.com/assets-cdn/worker/; connect-src 'self' uploads.github.com www.githubstatus.com collector.github.com raw.githubusercontent.com api.github.com github-cloud.s3.amazonaws.com github-production-repository-file-5c1aeb.s3.amazonaws.com github-production-upload-manifest-file-7fdce7.s3.amazonaws.com github-production-user-asset-6210df.s3.amazonaws.com *.rel.tunnels.api.visualstudio.com wss://*.rel.tunnels.api.visualstudio.com github.githubassets.com objects-origin.githubusercontent.com copilot-proxy.githubusercontent.com proxy.individual.githubcopilot.com proxy.business.githubcopilot.com proxy.enterprise.githubcopilot.com *.actions.githubusercontent.com wss://*.actions.githubusercontent.com productionresultssa0.blob.core.windows.net productionresultssa1.blob.core.windows.net productionresultssa2.blob.core.windows.net productionresultssa3.blob.core.windows.net productionresultssa4.blob.core.windows.net productionresultssa5.blob.core.windows.net productionresultssa6.blob.core.windows.net productionresultssa7.blob.core.windows.net productionresultssa8.blob.core.windows.net productionresultssa9.blob.core.windows.net productionresultssa10.blob.core.windows.net productionresultssa11.blob.core.windows.net productionresultssa12.blob.core.windows.net productionresultssa13.blob.core.windows.net productionresultssa14.blob.core.windows.net productionresultssa15.blob.core.windows.net productionresultssa16.blob.core.windows.net productionresultssa17.blob.core.windows.net productionresultssa18.blob.core.windows.net productionresultssa19.blob.core.windows.net productionresultssa30.blob.core.windows.net productionresultssa31.blob.core.windows.net productionresultssa32.blob.core.windows.net github-production-repository-image-32fea6.s3.amazonaws.com github-production-release-asset-2e65be.s3.amazonaws.com insights.github.com wss://alive.github.com wss://alive-staging.github.com api.githubcopilot.com api.individual.githubcopilot.com api.business.githubcopilot.com api.enterprise.githubcopilot.com wss://production-copilot-host.webpubsub.azure.com wss://production-copilot-host-centralus.webpubsub.azure.com wss://production-copilot-host-centralus-02.webpubsub.azure.com wss://production-copilot-host-westus.webpubsub.azure.com wss://production-copilot-host-westus3.webpubsub.azure.com api.github.com/cmc_internal/api/; font-src github.githubassets.com; form-action 'self' github.com gist.github.com copilot-workspace.githubnext.com objects-origin.githubusercontent.com; frame-ancestors 'none'; frame-src viewscreen.githubusercontent.com notebooks.githubusercontent.com; img-src 'self' data: blob: github.githubassets.com media.githubusercontent.com camo.githubusercontent.com identicons.github.com avatars.githubusercontent.com private-avatars.githubusercontent.com github-cloud.s3.amazonaws.com objects.githubusercontent.com release-assets.githubusercontent.com secured-user-images.githubusercontent.com user-images.githubusercontent.com private-user-images.githubusercontent.com opengraph.githubassets.com repository-images.githubusercontent.com marketplace-screenshots.githubusercontent.com copilotprodattachments.blob.core.windows.net/github-production-copilot-attachments/ github-production-user-asset-6210df.s3.amazonaws.com customer-stories-feed.github.com spotlights-feed.github.com explore-feed.github.com *.googleusercontent.com objects-origin.githubusercontent.com *.githubusercontent.com; manifest-src 'self'; media-src github.com user-images.githubusercontent.com secured-user-images.githubusercontent.com private-user-images.githubusercontent.com github-production-user-asset-6210df.s3.amazonaws.com gist.github.com github.githubassets.com; script-src github.githubassets.com; style-src 'unsafe-inline' github.githubassets.com; upgrade-insecure-requests; worker-src github.githubassets.com github.com/assets-cdn/worker/ github.com/assets/ gist.github.com/assets-cdn/worker/",
+        "Content-Type": "text/plain; charset=utf-8",
+        "Date": "Mon, 09 Nov 2026 15:53:56 GMT",
+        "ETag": "W/\"88cd6d601c99333d4df079e6852b8f8a\"",
+        "Referrer-Policy": "no-referrer-when-downgrade",
+        "Server": "github.com",
+        "Set-Cookie": "_gh_sess=0oy2Regd7WsuXab4WgsK0Wbs9ZY4yRQOCXnXcMU3muJAkzcU4psJ2pz74xwdt631qmNPd2LLVBZCFtAr10U1x2sFjpa1MMV0hcS%2FbzfA9AJSCyEj6EeE5TxewcSWlGqORa8BTVdWYxwi%2BUxKeuwZe73TcFQy61E2YoFPCoSX4vGN18Qocuk3S6%2BivZvRSAW5DTQUh8AQtkKUPMm7zbwrbkqKSM7iARw3v1EpfgHGREJZBxwYezuPI06GSrgss2T%2FcEkZ1xDp5eKl3HTfAeyaOg%3D%3D--NT71wCvzim0TjHxN--kkj0iaHcHpeZLXveRii5hQ%3D%3D; path=/; HttpOnly; secure; SameSite=Lax",
+        "Strict-Transport-Security": "max-age=31536000; includeSubdomains; preload",
+        "Vary": "X-PJAX, X-PJAX-Container, Turbo-Visit, Turbo-Frame, X-Requested-With, X-GitHub-Client-Version, Sec-Fetch-Site,Accept-Encoding, Accept, X-Requested-With",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "deny",
+        "X-GitHub-Request-Id": "E944:346081:CB6B17:1257891:6AF1EC93",
+        "X-XSS-Protection": "0",
+        "connection": "close",
+        "x-github-edge-region": "iad",
+        "x-repository-download": "git clone https://github.com/GNOME/libxml2.git"
+      },
+      "http_status": 200,
+      "sha256": "88cd6d601c99333d4df079e6852b8f8ace2e8c1b6c0e2a237f77b9c4af7c9cb7",
+      "url": "https://github.com/GNOME/libxml2/commit/e89a8aae4c9b40cdafcf66b3f9e57c62db37bb55.patch"
+    }
+  },
+  "recipe_sha256": "4940090f0dd959262a986933a43856279f5f33bda1c37980371939cf183f7bfa",
+  "scope": "Source-level correction correspondence only. No unknown severity or missing tracker vector is interpreted as not affected.",
+  "soname": "libxml2.so.2",
+  "source_archive": {
+    "filename": "libxml2-2.13.9.tar.xz",
+    "sha256": "a2c9ae7b770da34860050c309f903221c67830c86e4a7e760692b803df95143a",
+    "size": 2426164,
+    "url": "https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.9.tar.xz"
+  },
+  "status": "SOURCE_PATCH_CORRESPONDENCE_ONLY",
+  "version": "2.13.9"
+}

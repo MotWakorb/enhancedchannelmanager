@@ -8,6 +8,24 @@ by this implementation. No image publication or deployment is authorized.
 
 ## Implemented providers
 
+### Additional libxml2 advisory reconciliation (source checks only so far)
+
+The official unfixed-aware tracker identified two additional regexp advisories
+for review. The primary upstream corrections `76fe08d97de88bfaef2f7d5cd27f11954cc5bee2`
+and `e89a8aae4c9b40cdafcf66b3f9e57c62db37bb55` are now included together after
+the seven existing libxml2 backports. The second correction fixes allocation
+failure handling introduced by the first; no bounds-only runtime candidate is
+approved. Both patches apply unchanged with fuzz zero to the pinned 2.13.9
+archive, and complete before/intermediate/final file hashes are sealed in the
+recipe. The source version, SONAME and configure options remain unchanged.
+
+The recipe/package/source contract subset passes (51 tests), but this is not
+native execution or advisory clearance. Fresh native builds, the unchanged
+upstream suites and image-level checks remain required. A proposed local
+sanitizer diagnostic has **not** been executed and supplies no passing evidence.
+Other libxml2 and FFmpeg advisories remain under source-level reconciliation;
+missing vectors or tracker scores of zero are not interpreted as safety.
+
 ### Additional BusyBox provider: signed native proof in progress
 
 On 2026-11-09 the PO explicitly approved an additional source-pinned, patched
@@ -48,7 +66,11 @@ The subsequent static-source graph binds official utmps 0.1.3.3 and skalibs
 2.15.0.0 to their actual signed SDK/static APKs, source commits, upstream inputs,
 recipes and ISC notices. Local AMD64 source collection verifies installed SDK
 bytes and package ownership before compiling, and retains matching sources.
-Fresh native CI for that source-bound revision is still required. Complete
+Source-bound native run `42556901641` subsequently passed both architectures:
+913 upstream checks each, the exact official SDK/static-provider/source joins,
+delivered-source verification and installed runtime checks. Independently
+downloaded wrapper hashes and actual source commits are sealed in
+`stable-alpine-busybox-static-native-paired-20261109.json`. Complete
 compiler-support/rebuild delivery and independent unfixed-aware advisory
 enforcement remain unfinished. Production Dockerfiles are unchanged.
 
