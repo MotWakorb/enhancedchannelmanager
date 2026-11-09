@@ -23,6 +23,7 @@ from build_alpine_codecs import create_locations, validate_platform
 from build_alpine_ffmpeg import RECIPE_SHA256 as FFMPEG_SHA
 from build_alpine_gosu import RECIPE_SHA256 as GOSU_SHA
 from build_alpine_jxl import RECIPE_SHA256 as JXL_SHA
+from build_alpine_resdet import RECIPE_SHA256 as RESDET_SHA
 from build_alpine_security_libraries import RECIPE_SHA256 as SECURITY_SHA
 from build_native_runtime import (
     ARCHES,
@@ -40,6 +41,7 @@ COMPONENTS = {
     "jxl": (JXL_SHA, "BUILT_JXL_API_ONLY"),
     "ffmpeg": (FFMPEG_SHA, "BUILT_FFMPEG_ONLY"),
     "gosu": (GOSU_SHA, "BUILT_GOSU_ONLY"),
+    "resdet": (RESDET_SHA, "BUILT_RESDET_ONLY"),
 }
 PACKAGE_NAME = "ecm-owned-native"
 SONAME = re.compile(r"[A-Za-z0-9_+.-]+\.so(?:\.[A-Za-z0-9_+.-]+)*")

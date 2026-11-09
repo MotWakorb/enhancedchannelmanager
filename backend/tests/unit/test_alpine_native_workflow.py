@@ -13,10 +13,13 @@ def test_native_evidence_uses_real_hosts_and_no_publication_or_required_check_al
     text = path.read_text()
     workflow = yaml.load(text, Loader=yaml.BaseLoader)
     assert workflow["permissions"] == {"contents": "read"}
+    assert '${{ github.sha }}' in workflow['concurrency']['group']
     assert "scripts/run_alpine_codec_matrix.py" in text
     assert "Dockerfile.packages" in text
     assert "--build-context ffmpeg-evidence=" in text
     assert "--build-context gosu-evidence=" in text
+    assert "--build-context resdet-evidence=" in text
+    assert "Dockerfile.resdet" in text
     assert 'tar -C "$RUNNER_TEMP/alpine-evidence" -czf' in text
     assert "path: ${{ runner.temp }}/alpine-native-${{ matrix.arch }}.tar.gz" in text
     job = workflow["jobs"]["native-components"]

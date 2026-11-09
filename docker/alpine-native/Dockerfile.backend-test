@@ -11,9 +11,13 @@ COPY backend/requirements.txt /proof/requirements.txt
 # accidentally use the test runner's own installed interpreter and launcher.
 RUN test ! -e /opt/venv \
     && python -m venv /proof/venv \
-    && /proof/venv/bin/python -m pip install --no-index --only-binary=:all: --find-links=/proof/wheels -r /proof/requirements.txt \
+    && /proof/venv/bin/python -m pip install --no-index --only-binary=:all: --require-hashes --find-links=/proof/wheels -r /proof/wheels/requirements.txt \
     && /proof/venv/bin/python -m pip check
 COPY . /proof/source/
+RUN --network=none case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \
+    && /proof/venv/bin/python /proof/source/scripts/inventory_musllinux_wheels.py --verify --arch "$arch" \
+        --wheels-dir /proof/wheels --site-packages /proof/venv/lib/python3.12/site-packages \
+        --installed-python /proof/venv/bin/python > /proof/installed-wheel-bindings.json
 ARG TEST_UID=3000
 ARG TEST_GID=3000
 RUN groupadd --gid "$TEST_GID" appuser \

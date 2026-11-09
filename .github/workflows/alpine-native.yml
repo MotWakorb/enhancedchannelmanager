@@ -21,7 +21,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: alpine-native-${{ github.event.pull_request.number || github.ref }}
+  # Preserve immutable, in-flight native proofs when later migration work lands.
+  group: alpine-native-${{ github.event.pull_request.number || github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -179,6 +180,12 @@ jobs:
           docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
             --file docker/alpine-native/Dockerfile.gosu \
             --output type=local,dest="$RUNNER_TEMP/alpine-evidence/gosu" .
+      - name: Build original resdet and bundled KISS FFT without network
+        run: |
+          docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
+            --build-context resdet-cache="$RUNNER_TEMP/alpine-inputs" \
+            --file docker/alpine-native/Dockerfile.resdet \
+            --output type=local,dest="$RUNNER_TEMP/alpine-evidence/resdet" .
       - name: Sign and install the exact native APK without changing runtime trust
         run: |
           docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
@@ -187,6 +194,7 @@ jobs:
             --build-context jxl-evidence="$RUNNER_TEMP/alpine-evidence/jxl" \
             --build-context ffmpeg-evidence="$RUNNER_TEMP/alpine-evidence/ffmpeg" \
             --build-context gosu-evidence="$RUNNER_TEMP/alpine-evidence/gosu" \
+            --build-context resdet-evidence="$RUNNER_TEMP/alpine-evidence/resdet" \
             --file docker/alpine-native/Dockerfile.packages \
             --output type=local,dest="$RUNNER_TEMP/alpine-evidence/packages" .
       - name: Verify original image for comparison with this current signed APK

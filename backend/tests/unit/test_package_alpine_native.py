@@ -24,7 +24,14 @@ def packager(monkeypatch):
 
 
 def test_complete_component_set_is_required_not_a_subset_with_the_same_claim(packager):
-    assert set(packager.COMPONENTS) == {"codecs", "security", "jxl", "ffmpeg", "gosu"}
+    assert set(packager.COMPONENTS) == {
+        "codecs",
+        "security",
+        "jxl",
+        "ffmpeg",
+        "gosu",
+        "resdet",
+    }
     assert packager.COMPONENTS["jxl"][1] == "BUILT_JXL_API_ONLY"
     with pytest.raises(packager.BuildError, match="complete component set"):
         packager.validate_inputs({}, "amd64")
@@ -145,3 +152,10 @@ def test_packaging_rejects_different_component_builds_than_ffmpeg_consumed(
     (directories["jxl"] / "build-output.json").write_text(json.dumps(records["jxl"]))
     with pytest.raises(packager.BuildError, match="composed component receipt"):
         packager.validate_inputs(directories, "amd64")
+
+
+def test_existing_resdet_is_part_of_the_required_signed_component_set(packager):
+    assert packager.COMPONENTS["resdet"] == (
+        "530f7498262e5c38541513e01ca12b4f6964b61b80273f75ec8956ff5e17a82a",
+        "BUILT_RESDET_ONLY",
+    )

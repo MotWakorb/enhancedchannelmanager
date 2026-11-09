@@ -10,6 +10,7 @@ from pathlib import Path
 from build_alpine_codecs import load_recipe as codecs_recipe
 from build_alpine_ffmpeg import load_recipe as ffmpeg_recipe
 from build_alpine_jxl import load_recipe as jxl_recipe
+from build_alpine_resdet import source_input as resdet_input
 from build_alpine_security_libraries import load_recipe as security_recipe
 from build_native_runtime import BuildError, _require, fetch_input
 
@@ -27,6 +28,7 @@ def inputs() -> list[dict]:
         jxl["archive"],
         ffmpeg["ffmpeg"],
         ffmpeg["ffmpeg"]["signature"],
+        resdet_input(ROOT / "sbom/native-dependencies.json"),
     ]
 
 

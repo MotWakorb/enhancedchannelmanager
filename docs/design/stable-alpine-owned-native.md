@@ -65,6 +65,7 @@ hash-verified input preparation.
 | libjxl 0.12.0 | Authenticated baseline SKCMS and original vendor patch; threads/CMS, JPEG transcoding, boxes and original public exports |
 | gosu 1.19 | Existing commit/modules and Go 1.26.10, pinned official native Alpine Go builder, static binary and retained Go/module source |
 | FFmpeg 8.1.3 | Existing signed source, signer, RTSP patch and all 49 configure arguments; composed owned headers/libraries and explicit GNU iconv header/link selection |
+| resdet 2.4.3 / libresdet 3.2.0 | Original commit, source SHA, static KISS FFT, Y4M-only readers, pixel ceiling and checked Y4M multiplier; unchanged builder gains a rehashed offline-cache location |
 
 Recipes, source archives, patches, helpers, build inventories and products are
 recorded by each component builder. Receipt statuses deliberately say
@@ -73,6 +74,20 @@ recorded by each component builder. Receipt statuses deliberately say
 security recipe are recipe metadata, **not a claim of installed APK ownership**.
 
 ### Source distinctions and Cargo configuration
+
+The original resdet recipe now has an offline stable-Alpine component wrapper.
+Local AMD64 execution (`resdet-component-04`) passed the original version/reader,
+static KISS FFT and ELF checks, retaining its archive, helper, licenses, actual
+configuration and source/runtime inventories. It is required in the next signed
+owned APK composition. Native ARM resdet execution and fresh signed-package
+installation remain pending; this is not a full-image approval.
+
+The separate `alpine-python.yml` workflow uses each architecture's complete
+74-wheel hash-locked selection, verifies installed bytes and runs the unmodified
+full backend gate on real native hosts. Preparation passed both complete local
+caches and a fresh HTTPS acquisition of all 74 ARM wheels. This workflow adds no
+application-test exclusions or publication permissions. Its first native CI
+execution is pending.
 
 The GNOME librsvg archive differs from the signed baseline repack: upstream
 SHA256 `31f07d93…`, baseline SHA256 `5e6b8f8c…`. All 2,239 member content/link/type
