@@ -40,7 +40,7 @@
     "mcp-server/Dockerfile": "sha256:c5362f558ffbb15522bda00cc3a088b6e3e82429123c06720549c8a93e56b125",
     "mcp-server/requirements.txt": "sha256:de79f8bc7af6839295f4dfcb225e063fec46e841035468d17eaf84f48324833f",
     "sbom/native-dependencies.json": "sha256:530f7498262e5c38541513e01ca12b4f6964b61b80273f75ec8956ff5e17a82a",
-    "scripts/build_native_runtime.py": "sha256:e7472598f29acf12dda9158e448b265b85f7e51806c8ad110136c5567b7245bb",
+    "scripts/build_native_runtime.py": "sha256:fa196e8208c9bd1ff531c97396a209af8eda9e66011223d9f1e70b3086553ab2",
     "scripts/collect_native_sources.py": "sha256:882d2ae3980e7a77ea4c902300843a97fd85828de950368e18415751322902ac"
   },
   "documents": [

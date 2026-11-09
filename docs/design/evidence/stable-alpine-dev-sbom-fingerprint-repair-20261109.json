@@ -1,0 +1,39 @@
+{
+  "status": "REVIEWED_SINGLE_TRANSIENT_DEV_SBOM_SOURCE_FINGERPRINT_REPAIR",
+  "bead": "enhancedchannelmanager-ncgtj",
+  "cause": "The narrow typed TLS EOF transport repair changed scripts/build_native_runtime.py bytes, but the transient dev source-manifest index still fingerprinted the old helper. This is an actual missed metadata regression, not the expected final-image aggregate source index.json failure.",
+  "full_isolated_backend_before_repair": {
+    "staged_tree": "3a11c542cf083dd964f391ea53457fd3dd671c80",
+    "scope": "HEAD5d8d1170 plus reviewed workflow-control position repair and historical fixture/evidence; BusyBox source-root and later replay work excluded",
+    "passed": 17146,
+    "failed": 1,
+    "skipped": 5,
+    "deselected": 2,
+    "coverage_percent": 84,
+    "coverage_threshold_unchanged": 56,
+    "failure": "test_generate_sbom.py::test_the_sbom_for_the_current_version_matches_the_current_tree: index.json differs",
+    "log_sha256": "a7da193d6224254e12731ffdfe185f18867b3d3356b03f24321991c0293f7819",
+    "environment_note": "The initial read-only diagnostic stopped before tests because coverage tried to write backend/.coverage. The actual full run above used COVERAGE_FILE=/tmp/ecm-coverage only, with original coverage collection/threshold and test exclusions unchanged."
+  },
+  "review": {
+    "path": "sbom/dev/index.json",
+    "field": "sources.scripts/build_native_runtime.py",
+    "old": "sha256:e7472598f29acf12dda9158e448b265b85f7e51806c8ad110136c5567b7245bb",
+    "new": "sha256:fa196e8208c9bd1ff531c97396a209af8eda9e66011223d9f1e70b3086553ab2",
+    "version_unchanged": "0.18.2-0065",
+    "created_unchanged": "2026-11-08T01:53:48Z",
+    "ecm_and_mcp_spdx_documents_byte_identical": true,
+    "all_other_index_fields_unchanged": true,
+    "original_index_sha256": "a2bfd29b5c490b2e507b7b0235c87522bbb7d6f37a880a5673d9703f8f78820b",
+    "preserved_original": "backend/tests/fixtures/alpine/dev-sbom-index-pre-tls-fingerprint.json.gz",
+    "independent_rerender_review_sha256": "8357c8a38f9ef629036f2cf9812b3140e500c63298c135ae95fa976e82f12609"
+  },
+  "targeted_after_repair": {
+    "native_alpine_sbom_classifier_and_builder_tests_passed": 585,
+    "log_sha256": "fde8d7bbf8205f7753a53e5f994dc639d42d8a104ec742e8b4b74fd32c1dbadb",
+    "generate_sbom_verify": "PASS",
+    "generate_sbom_current_dev_audit": "PASS"
+  },
+  "scope": "One truthful source fingerprint in the explicitly transient non-permanent dev index only. Original index preserved exactly. No permanent release record, SPDX package list, timestamp/version, generator or test code, dependency pin, coverage rule, application/numeric golden, production Dockerfile or source/advisory/publication gate changed. Full/backend native CI rechecks remain required; neither bookkeeping repair clears Alpine aggregate/source/security/MCP acceptance.",
+  "full_runtime_source_acceptance": false
+}
