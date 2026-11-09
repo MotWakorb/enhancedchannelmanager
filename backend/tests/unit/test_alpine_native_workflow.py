@@ -174,3 +174,18 @@ def test_external_source_gate_rechecks_actual_immutable_image_without_replacing_
     assert "continue-on-error" not in source and "|| true" not in command
     runtime = next(step for step in steps if "--phase runtime" in step.get("run", ""))
     assert "always()" in runtime["if"] and "continue-on-error" not in runtime
+
+
+def test_python_base_source_gate_compares_live_installed_files_not_just_preparation_status():
+    workflow = yaml.load(
+        (ROOT / ".github/workflows/alpine-native.yml").read_text(),
+        Loader=yaml.BaseLoader,
+    )
+    steps = workflow["jobs"]["native-components"]["steps"]
+    source = next(s for s in steps if "verify_alpine_python_base" in s.get("run", ""))
+    command = source["run"]
+    assert "--pull never --network none --read-only --cap-drop ALL" in command
+    assert "--user 1000:1000" in command
+    assert "/usr/share/ecm/sources/python-base" in command and 'Path("/")' in command
+    assert "application/python-base-sources.json" in command
+    assert "continue-on-error" not in source and "|| true" not in command

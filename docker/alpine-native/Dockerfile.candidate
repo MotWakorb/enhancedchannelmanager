@@ -63,6 +63,15 @@ RUN --mount=type=bind,source=scripts,target=/build-scripts \
         --output-dir /proof/external-sources --work-dir /proof/source-work \
         --receipt-file /proof/external-source-receipt.json
 
+FROM runtime-base AS python-base-source-builder
+RUN --mount=type=bind,source=scripts,target=/build-scripts \
+    mkdir /proof \
+    && apk add --no-cache gnupg \
+    && case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \
+    && python /build-scripts/prepare_alpine_python_base.py --architecture "$arch" \
+        --output-dir /proof/python-base-sources --work-dir /proof/python-base-work \
+        --receipt-file /proof/python-base-source-receipt.json
+
 FROM runtime-base AS application-candidate
 LABEL io.ecm.alpine.source-and-advisory-closure=pending
 ARG GIT_COMMIT=unknown
@@ -76,7 +85,9 @@ COPY --from=python-builder /opt/venv /opt/venv
 COPY --from=python-builder /proof/installed-wheel-bindings.json /usr/share/ecm/provenance/installed-wheel-bindings.json
 COPY --from=apk-source-builder /proof/external-sources/ /usr/share/ecm/sources/apk/
 COPY --from=apk-source-builder /proof/external-source-receipt.json /usr/share/ecm/provenance/external-sources.json
-COPY scripts/verify_alpine_external_sources.py scripts/alpine_source_inventory.py scripts/alpine_source_inputs.py scripts/alpine_apk_v2.py scripts/verify_musllinux_gnu.py /usr/share/ecm/sources/verification/
+COPY --from=python-base-source-builder /proof/python-base-sources/ /usr/share/ecm/sources/python-base/
+COPY --from=python-base-source-builder /proof/python-base-source-receipt.json /usr/share/ecm/provenance/python-base-sources.json
+COPY scripts/verify_alpine_external_sources.py scripts/verify_alpine_python_base.py scripts/alpine_source_inventory.py scripts/alpine_source_inputs.py scripts/alpine_apk_v2.py scripts/verify_musllinux_gnu.py /usr/share/ecm/sources/verification/
 ENV PATH="/opt/venv/bin:$PATH"
 COPY backend/ /app/
 COPY --from=frontend-builder /app/frontend/dist /app/static

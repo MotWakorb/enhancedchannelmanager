@@ -77,3 +77,25 @@ def test_external_source_builder_consumes_the_prior_runtime_capture_not_its_git_
         in text
     )
     assert "source-and-advisory-closure=pending" in text
+
+
+def test_python_base_source_builder_delivers_only_verified_original_evidence():
+    text = (ROOT / "docker/alpine-native/Dockerfile.candidate").read_text()
+    stage = text.split("FROM runtime-base AS python-base-source-builder\n", 1)[1].split(
+        "\nFROM ", 1
+    )[0]
+    assert (
+        "apk add --no-cache gnupg" in stage and "prepare_alpine_python_base.py" in stage
+    )
+    assert "--output-dir /proof/python-base-sources" in stage
+    assert (
+        "COPY --from=python-base-source-builder /proof/python-base-sources/ /usr/share/ecm/sources/python-base/"
+        in text
+    )
+    assert (
+        "COPY --from=python-base-source-builder /proof/python-base-source-receipt.json /usr/share/ecm/provenance/python-base-sources.json"
+        in text
+    )
+    assert "scripts/verify_alpine_python_base.py" in text
+    final = text.split("FROM runtime-base AS application-candidate\n", 1)[1]
+    assert "apk add" not in final and "GNUPGHOME" not in final

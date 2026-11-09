@@ -251,8 +251,50 @@ the changed lock is hash-bound, not guessed or copied from another build.
 Official build resolution/target linkage, vendor/delivery consumers and licensing
 are not cleared by those downloads. CPython 3.12.16's official source archive also
 matches the actual base environment SHA256, including its bundled pip 25.0.1
-wheel; original OCI/Docker-recipe and installed-byte source binding remain
-separate unfinished work.
+wheel. The next bounded layer now binds the original OCI/Docker recipe and
+installed base bytes as described below; compiler/nested support and aggregate
+acceptance remain unfinished.
+
+### Python base: pinned source, recipe and installed-file correspondence
+
+`prepare_alpine_python_base.py` acquires the immutable official index, selected
+manifest/config, all original compressed layers and both original SPDX/SLSA
+predicates. It delivers the complete CPython 3.12.16 source (including bundled
+pip 25.0.1), original Docker recipe/license and original public signing evidence.
+The builder independently verifies the exact release-manager GPG fingerprint
+using a fresh private-to-the-builder public keyring. Neither keyring nor build
+tooling is copied into the final runtime trust store.
+
+`verify_alpine_python_base.py` rehashes the pinned OCI graph and compressed plus
+uncompressed layer identities offline, compares the entire original recipe to
+its digest-bound provenance and checks every original `/usr/local` entry against
+the installed root when supplied. This namespace contains 1,716 entries on both
+architectures: 1,488 regular files, 14 symlinks and 214 directories. The whole
+layer bytes are authenticated, but non-Python APK paths (including original
+tzdata hardlinks outside `/usr/local`) are not claimed as Python-base coverage.
+
+Of those regular files, 970 are byte-identical to original CPython source members
+and 416 to original bundled pip-wheel members. The other 102 are explicitly
+identified as original OCI recipe outputs, **not reproduced builds or direct
+source-byte matches**. Compiler/language support and complete attribution remain
+separate. The verifier does not execute source, recipes, pickles or target ELFs.
+
+Both automated architecture bundles passed independent offline, nonroot,
+read-only AMD64 rechecks. The native AMD64 test image also matched all 1,502
+base files/symlinks and the directory metadata. Its 163 additional bytecode-cache
+files are reported for the aggregate gate, not silently accepted as base inputs.
+A same-size installed-header corruption is rejected with original OCI evidence
+unchanged; the regression is proven red when the installed-file hash validator
+is bypassed. ARM64 bundle verification is data verification, not native ARM
+installed-file execution. Evidence is
+`stable-alpine-python-base-correspondence-paired-20261109.json`.
+
+Candidate composition now adds a builder-only GnuPG stage, copies the verified
+Python source bundle/receipt, and checks **live** installed bytes offline as an
+unprivileged user in the native workflow. Wiring tests were red before this
+change. Fresh paired final-image execution remains required; the complete shared
+source-integrity gate is unchanged and still enforced. This additive consumer
+always reports `full_runtime_source_acceptance: false`.
 
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
