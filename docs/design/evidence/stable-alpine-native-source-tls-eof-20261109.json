@@ -1,0 +1,28 @@
+{
+  "status": "NATIVE_ARM_SOURCE_PREPARATION_FAILED_ABRUPT_TLS_EOF_TYPED_BOUNDED_RETRY_FIX_PENDING_NATIVE_RECHECK",
+  "bead": "enhancedchannelmanager-eftdg",
+  "run_id": 42692523987,
+  "head_sha": "92fe8bd4646facbeee6b6b53f858f8191439733d",
+  "failed_job_id": 129415698880,
+  "failed_step": "Require native host and prepare reviewed source inputs",
+  "original_source_url": "https://downloads.xiph.org/releases/speex/speex-1.2.1.tar.gz",
+  "original_source_sha256": "4b44d4f2b38a370a2d98a78329fefc56a0cf93d1c1be70029217baae6628feea",
+  "original_failure": "URLError: [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1000), attempt 1/3",
+  "failed_job_log_sha256": "cd6459bdc0edc8e3fbfcc6b9208d5a0687b24b5494f0772dc3132a7d0b656071",
+  "original_failed_artifact_id": 13708335629,
+  "original_failed_artifact_sha256": "55cb873d678a2910459ff4a73654b30d5ae647dc061371a3796e394399d5aab2",
+  "classification_fix": "Add only Python's typed ssl.SSLEOFError (direct or URLError.reason) to the existing reset/timeout/incomplete-read transient allowlist. At most three attempts on the SAME original HTTPS URL; default TLS verification, publisher/redirect constraints, pinned hash/size and cache integrity checks are unchanged. SSLCertVerificationError and every other TLS/authentication/identity failure remain fail-fast. No alternate routes or source providers.",
+  "verification": "Recorded original native error fixture and scripted opening EOF -> partial-read EOF -> exact hash/size-verified bytes controls; EOF exhaustion is exactly three attempts; original certificate/publisher/hash/size/cache/local-file denial controls retained. Isolated staged-tree verification excludes the in-progress shared installed-record/owned BusyBox changes.",
+  "helper_sha256": "fa196e8208c9bd1ff531c97396a209af8eda9e66011223d9f1e70b3086553ab2",
+  "isolated_code_verification": {
+    "snapshot_tree": "36d679bd64df9673940e87d88393a0f7b613e26b",
+    "scope": "Initial code/test/error-fixture staged snapshot, before outcome fields and removal of incidental formatting-only changes outside the retry helper. Owned-provider work in progress excluded; final minimal diff is independently rechecked before commit.",
+    "native_alpine_tests_passed": 106,
+    "log_sha256": "b249b8cd0d180f9aba1dd9b9834d3b292cb512fb560bf8be31b9add85fe8562d",
+    "dangerous_mutant": "Treating all TLS errors as retryable makes both certificate and non-EOF TLS guards fail: permanent failure retried.",
+    "mutant_log_sha256": "259e6904e2867a6a27105ce1bd9b013a32a8dce44b2dda8d6f81093a3abb422f"
+  },
+  "red_before_fix_log_sha256": "c6f875c315cb2b5c215bfa7eac32a701fff967a8597d3863b2f41e23c0251c79",
+  "native_final_image_acceptance": false,
+  "scope": "Transport retry repair, not passing ARM compilation or Rust/native/aggregate source/advisory/runtime acceptance. Original failure/log/artifact retained. The watcher also encountered a separate GitHub annotations HTTP504 and was restarted; GitHub currently rejects rerunning the ARM job while its overall run remains active. No failed step waived, TLS bypass, merge, publication or deployment."
+}

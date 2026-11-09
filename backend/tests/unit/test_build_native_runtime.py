@@ -903,6 +903,36 @@ def test_fetch_reset_then_partial_timeout_then_exact_verified_bytes(
     assert all(f"{attempt}/3" in text for attempt in [1, 2, 3])
 
 
+def test_recorded_abrupt_speex_tls_eof_retries_same_https_until_exact_verified_bytes(
+    builder, tmp_path, monkeypatch
+):
+    recorded = json.loads(
+        (ROOT / "backend/tests/fixtures/alpine/native-fetch-tls-eof.json").read_text()
+    )
+    data, item = _transport_input()
+    item["url"] = recorded["url"]
+    destination = tmp_path / "archive"
+    sibling = tmp_path / "operator-file"
+    sibling.write_bytes(b"untouched")
+    calls, waits = [], []
+    error = ssl.SSLEOFError(ssl.SSL_ERROR_EOF, recorded["tls_reason"])
+
+    def open_url(url, *, timeout):
+        calls.append((url, timeout))
+        assert not destination.exists()
+        if len(calls) == 1:
+            raise URLError(error)
+        if len(calls) == 2:
+            return _InterruptedTransport(url, error)
+        return _transport_response(data, url)
+
+    monkeypatch.setattr(builder, "urlopen", open_url)
+    monkeypatch.setattr("time.sleep", waits.append)
+    builder.fetch_input(item, destination, None)
+    assert calls == [(recorded["url"], 120)] * 3 and waits == [1, 2]
+    assert destination.read_bytes() == data and sibling.read_bytes() == b"untouched"
+
+
 @pytest.mark.parametrize(
     "error",
     [
@@ -910,6 +940,8 @@ def test_fetch_reset_then_partial_timeout_then_exact_verified_bytes(
         TimeoutError("timeout"),
         URLError(TimeoutError("timeout")),
         IncompleteRead(b"partial", 100),
+        ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "abrupt TLS EOF"),
+        URLError(ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "abrupt TLS EOF")),
         *[
             HTTPError(
                 "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz",
@@ -981,6 +1013,7 @@ def test_fetch_exhausted_partial_reads_remove_only_owned_destination(
             None,
         ),
         URLError(ssl.SSLCertVerificationError("untrusted certificate")),
+        URLError(ssl.SSLError(ssl.SSL_ERROR_SSL, "other TLS handshake failure")),
         URLError("permanent unknown failure"),
         PermissionError("local file permissions"),
     ],

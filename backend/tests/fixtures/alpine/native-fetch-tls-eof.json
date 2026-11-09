@@ -1,0 +1,9 @@
+{
+  "run_id": 42692523987,
+  "job_id": 129415698880,
+  "architecture": "arm64",
+  "url": "https://downloads.xiph.org/releases/speex/speex-1.2.1.tar.gz",
+  "original_error": "Alpine input preparation failed: fetch failed: https://downloads.xiph.org/releases/speex/speex-1.2.1.tar.gz (attempt 1/3): <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1000)>",
+  "tls_reason": "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1000)",
+  "scope": "Exact observed native CI log/error vocabulary. Tests reconstruct Python's typed SSLEOFError for this abrupt EOF condition; this fixture does not assert remote exception-object introspection or authorize certificate/other TLS failures, new routes or hash bypasses."
+}
