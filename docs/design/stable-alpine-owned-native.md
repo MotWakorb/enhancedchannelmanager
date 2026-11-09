@@ -305,6 +305,17 @@ change. Fresh paired final-image execution remains required; the complete shared
 source-integrity gate is unchanged and still enforced. This additive consumer
 always reports `full_runtime_source_acceptance: false`.
 
+Fresh native final-candidate run `42681901847` at `011378d6` subsequently passed
+the live Python-base check on **both native architectures**, matching all 1,502
+original files/symlinks and 214 directories each. Both external-source live checks,
+identity/persistence scenarios and 27 functional/metadata checks also passed.
+Both aggregate runtime source gates remain failed with the missing RPM index.
+The final images report 202 additional paths each (149 bytecode and 53 owned
+native outputs/notices), plus 12 directories, for aggregate accounting. These
+are not the earlier diagnostic image's 163 bytecode additions. Independently
+rehashed raw artifacts/results are sealed in
+`stable-alpine-python-base-native-paired-20261109.json`.
+
 ### Nested Rust inputs: verified archives, not complete runtime clearance
 
 `alpine_rust_source_inputs.py` binds the three exact reviewed patched locks to all
@@ -331,6 +342,31 @@ Evidence is `stable-alpine-rust-input-preparation-20261109.json`. Original Alpin
 build logs supplement this investigation, not cryptographic build attestations.
 Distro compiler patch/build provenance, full nested-source attribution, final
 delivery consumers and aggregate/security/MCP acceptance remain unfinished.
+
+`derive_lock` now replays the **original source-archive Cargo.lock** through the
+exact original distro Cargo.lock hunks, without fuzz or offsets. Actual offline
+replays of both authenticated external-source datasets reproduce all three
+reviewed lock hashes. `compiler_recipe` also joins both pinned historical
+`main/rust` Git commit/path/tree graphs; all 12 literal source inputs per version
+match, including the independently signed upstream archive and ten distro
+patches. A separate diagnostic replays those ten patches per version with GNU
+patch and no fuzz/offsets on exact original regular target files. Neither this
+replay nor the original unsigned build logs authenticates a historical compiler
+build or establishes a reproduced compiler.
+
+`alpine_rust_auditable.py` consumes a single bounded ELF `.dep-v0` section without
+executing/loading a target, checks its format/schema/defaults/indexes/root/graph,
+and joins every declared package to its **origin-specific** frozen lock. The
+fixture is the complete original ARM64 rav1e ELF from the authenticated APK.
+Actual offline nonroot/read-only checks span both authenticated datasets' signed
+APKs, exact ELF payloads, conservative graphs, locks and all 546 source archives:
+rav1e joins 128 registry and two local workspace packages on each. The other
+three selected Rust ELFs per architecture **lack auditable metadata** and remain
+explicit gaps, not successes. Format 1 does not establish exact compiled features.
+The origin-check bypass makes its regression red. Evidence and limitations are
+`stable-alpine-rust-source-joins-20261109.json`; final nested-source delivery,
+compiler build provenance, complete attribution and aggregate acceptance remain
+unfinished.
 
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
