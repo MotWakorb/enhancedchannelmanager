@@ -338,6 +338,15 @@ def runtime_checks():
 def test_getent_checks_accept_recorded_gnu_libc_identities_only(
     runtime_checks, monkeypatch, version, accepted
 ):
+    # This fixture tests the GNU branch, even when pytest itself runs on Alpine.
+    real_is_file = Path.is_file
+    monkeypatch.setattr(
+        Path,
+        "is_file",
+        lambda path: (
+            False if str(path) == "/etc/alpine-release" else real_is_file(path)
+        ),
+    )
     outputs = {
         (
             "getent",

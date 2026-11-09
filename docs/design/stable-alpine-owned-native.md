@@ -174,6 +174,18 @@ The failed full report and actual getent/APK metadata are retained in
 execution, the complete Alpine source consumer and final security/MCP gates
 are still required.
 
+Full Python run `42657433240` then exposed eight **unit-fixture** failures per
+architecture: six GNU getent cases and two RPM metadata cases selected Alpine
+based on the test host instead of their fixture subject. The exact eight
+failures were reproduced in the local native AMD64 Alpine test image. Those
+fixtures now explicitly select their original platform; every original banner
+acceptance/rejection and RPM downgrade assertion is retained. Separate explicit
+Alpine dispatch tests also require adapter failures to propagate. The local
+native subset passes 18 cases, and the host regression subset passes 165. The
+previous full Python CI remains failed until fresh complete native runs pass;
+the runtime checks, application source and source-integrity gate were not changed
+by this fixture repair (`enhancedchannelmanager-xql87`).
+
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
 (84.19% coverage). Five failures correctly rejected the stale resdet helper hash;

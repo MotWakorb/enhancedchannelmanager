@@ -50,7 +50,8 @@ def test_fixed_runtime_descriptors_bind_each_native_architecture(
     ]
     assert selected["builder_repository"] == (
         "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/"
-        if arch == "amd64" else selected["official_repository"]
+        if arch == "amd64"
+        else selected["official_repository"]
     )
     assert selected["cohort"] == "20261105"
     rows = selected["security_runtime_rpms"]
@@ -71,9 +72,7 @@ def test_fixed_runtime_descriptors_bind_each_native_architecture(
     )[arch]
     assert selected["repository_metadata_sha256"] == recorded["repomd_sha256"]
     assert ca["metadata_checksum"] == recorded["package"]["checksum"]
-    assert (
-        ca["url"] == selected["builder_repository"] + recorded["package"]["location"]
-    )
+    assert ca["url"] == selected["builder_repository"] + recorded["package"]["location"]
 
 
 @pytest.mark.parametrize("name", VERSIONS)
@@ -239,6 +238,15 @@ def test_final_runtime_gate_checks_fixed_native_rpm_identities(monkeypatch, arch
         ROOT / "tests/native_image/runtime_checks.py",
     )
     monkeypatch.setattr(gate.platform, "machine", lambda: arch)
+    # Select the RPM subject represented by these fixtures, not the test host.
+    real_is_file = Path.is_file
+    monkeypatch.setattr(
+        Path,
+        "is_file",
+        lambda path: (
+            False if str(path) == "/etc/alpine-release" else real_is_file(path)
+        ),
+    )
     rows = []
     for name, (version, source) in VERSIONS.items():
         rpm_arch = "noarch" if name == "ca-certificates-mozilla" else arch

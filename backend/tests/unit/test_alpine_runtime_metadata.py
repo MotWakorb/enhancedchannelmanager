@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -154,3 +155,63 @@ def test_shared_runtime_loads_only_the_pinned_read_only_platform_adapter():
         adapter.SECURITY_RECIPE_SHA256
         == "4940090f0dd959262a986933a43856279f5f33bda1c37980371939cf183f7bfa"
     )
+
+
+@pytest.mark.parametrize("check", ["getent_checks", "security_runtime_packages"])
+@pytest.mark.parametrize("reject", [False, True])
+def test_shared_runtime_selects_alpine_metadata_explicitly_and_preserves_failures(
+    monkeypatch, check, reject
+):
+    path = ROOT / "tests/native_image/runtime_checks.py"
+    spec = importlib.util.spec_from_file_location("alpine_runtime_dispatch", path)
+    assert spec and spec.loader
+    runtime = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime)
+    real_is_file = Path.is_file
+    monkeypatch.setattr(
+        Path,
+        "is_file",
+        lambda path: True if str(path) == "/etc/alpine-release" else real_is_file(path),
+    )
+    outputs = {
+        (
+            "getent",
+            "passwd",
+            "appuser",
+        ): "appuser:x:1000:1000::/home/appuser:/bin/bash\n",
+        ("getent", "group", "appuser"): "appuser:x:1000:\n",
+    }
+
+    def command(*args):
+        return outputs[args]
+
+    monkeypatch.setattr(runtime, "command", command)
+    calls = []
+
+    def adapted(*args):
+        calls.append(args)
+        assert args[0] is command
+        if check == "getent_checks":
+            assert args[1:] == (
+                ["appuser", "x", "1000", "1000", "", "/home/appuser", "/bin/bash"],
+                ["appuser", "x", "1000", ""],
+            )
+        else:
+            assert len(args) == 1
+        if reject:
+            raise AssertionError("actual Alpine metadata mismatch")
+        return {"selected": "alpine-exact-metadata"}
+
+    monkeypatch.setattr(
+        runtime,
+        "alpine_metadata_adapter",
+        lambda: SimpleNamespace(
+            getent_metadata=adapted, security_runtime_packages=adapted
+        ),
+    )
+    if reject:
+        with pytest.raises(AssertionError, match="actual Alpine metadata mismatch"):
+            getattr(runtime, check)()
+    else:
+        assert getattr(runtime, check)() == {"selected": "alpine-exact-metadata"}
+    assert len(calls) == 1
