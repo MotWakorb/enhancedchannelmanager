@@ -24,6 +24,8 @@ def test_busybox_workflow_builds_and_installs_on_real_native_hosts_without_publi
     assert "--build-context busybox-packages=" in commands
     assert "official-base-runtime.json" in commands
     assert "--network none" in commands
+    assert 'tar -C "$RUNNER_TEMP/busybox-evidence" -czf' in commands
+    assert any(step.get('with',{}).get('path') == '${{ runner.temp }}/busybox-native-${{ matrix.arch }}.tar.gz' for step in job['steps'])
     assert "${{ github.sha }}" in workflow["concurrency"]["group"]
     assert "not final-image acceptance" in job["name"]
     assert all(

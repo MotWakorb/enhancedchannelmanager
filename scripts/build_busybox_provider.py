@@ -26,6 +26,7 @@ from build_native_runtime import (
     safe_extract,
     sha256,
 )
+from busybox_static_sources import STATIC_SOURCES_SHA256, verify_static_inputs
 from verify_musllinux_gnu import apk_payload
 
 __all__ = [
@@ -287,6 +288,17 @@ def prepare_build(
     verify_original_inputs(
         manifest, platform.machine(), recipe, output / "original-signatures.log"
     )
+    static = verify_static_inputs(
+        manifest.parent / "static-sources.json",
+        recipe,
+        platform.machine(),
+        work / "static-source-work",
+        work / "static-source-delivery",
+        output / "static-signatures.log",
+    )
+    (output / "static-source-output.json").write_text(
+        json.dumps(static, sort_keys=True, indent=2) + "\n"
+    )
     (work / "home").mkdir()
     safe_extract(manifest.parent / recipe["aports"]["file"], work / "original-aports")
     original = work / "original-aports/busybox"
@@ -481,6 +493,19 @@ def package(manifest: Path, arch: str, work: Path, output: Path) -> dict:
         shutil.copy2(manifest.parent / record["file"], target)
     shutil.copy2(directory / "APKBUILD", sources / "derived-APKBUILD")
     shutil.copy2(Path(__file__), sources / "build_busybox_provider.py")
+    shutil.copytree(work / "static-source-delivery", sources / "static-components")
+    shutil.copy2(
+        output / "static-source-output.json", sources / "static-source-output.json"
+    )
+    for name in [
+        "alpine_apk_v2.py",
+        "alpine_repository_policy.py",
+        "build_alpine_codecs.py",
+        "build_native_runtime.py",
+        "verify_musllinux_gnu.py",
+        "busybox_static_sources.py",
+    ]:
+        shutil.copy2(Path(__file__).parent / name, sources / name)
     selected = output / "runtime-packages"
     selected.mkdir()
     records = []
@@ -529,7 +554,9 @@ def package(manifest: Path, arch: str, work: Path, output: Path) -> dict:
         "build_packages": subprocess.run(
             ["/sbin/apk", "info", "-v"], check=True, capture_output=True, text=True
         ).stdout,
-        "static_dependency_source_status": "PENDING_SEPARATE_UTMPS_SKALIBS_CLOSURE",
+        "static_sources_sha256": STATIC_SOURCES_SHA256,
+        "static_dependency_source_status": "TWO_OFFICIAL_STATIC_PROVIDERS_SOURCE_BOUND",
+        "remaining_source_scope": "Compiler-support objects and final full-image source/rebuild delivery remain separate gates.",
         "scope": "Signed BusyBox backport, exact original applets/config and unchanged upstream checks only. No native installation, full static-source/advisory or whole-image approval.",
     }
     (output / "build-output.json").write_text(

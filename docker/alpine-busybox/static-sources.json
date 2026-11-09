@@ -1,0 +1,2702 @@
+{
+  "architecture_inputs": {
+    "aarch64": [
+      {
+        "artifact": {
+          "file": "static-provenance-inputs/aarch64/skalibs-dev-2.15.0.0-r0.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "550180",
+            "Connection": "close",
+            "Content-Length": "47496",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Mon, 09 Nov 2026 03:19:52 GMT",
+            "Etag": "\"6a0001b0-b988\"",
+            "Last-Modified": "Sun, 10 May 2026 03:55:28 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.27.5",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "43, 0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams-eham8680099-AMS, cache-chi-kigq8000162-CHI",
+            "X-Timer": "S1794194392.248282,VS0,VE3"
+          },
+          "http_status": 200,
+          "sha256": "48ca905e32549caad4ae01b96f0965d12e1492734f16c9855d7e2754f9c81530",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/skalibs-dev-2.15.0.0-r0.apk"
+        },
+        "index_record": {
+          "A": "aarch64",
+          "C": "Q1MwjoFckaEe0DpvGmsjGaret9ZcM=",
+          "D": "skalibs-libs=2.15.0.0-r0 pkgconfig",
+          "I": "214233",
+          "L": "ISC",
+          "P": "skalibs-dev",
+          "S": "47496",
+          "T": "Set of general-purpose C programming libraries for skarnet.org software. (development files)",
+          "U": "https://skarnet.org/software/skalibs/",
+          "V": "2.15.0.0-r0",
+          "c": "f148233038fa9b35932a7996df29f110b32c2160",
+          "m": "Laurent Bercot <ska-devel@skarnet.org>",
+          "o": "skalibs",
+          "p": "pc:libskarnet=2.15.0.0",
+          "t": "1778384706"
+        },
+        "payload": [
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/include",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/include/skalibs",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/alarm.h",
+            "sha256": "fdcb727da527bd81dc214b984643ffd3778e9711c26aa9050a30bc98857995ac",
+            "size": 270,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/alloc.h",
+            "sha256": "c8cb2d38d7dc629e3d092086ab0f768ce6d11f6251731bd5e9cf3f5f59ce86b9",
+            "size": 292,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/allreadwrite.h",
+            "sha256": "1ce63751b78cf6b72b896c03802907fe3f76c7ed008e85a99240b75dd05d1d5a",
+            "size": 983,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/ancil.h",
+            "sha256": "e8194fd998dc5b0eaa700f0e9b536b13768d4fe95d7c6b21321ef8858108b5ef",
+            "size": 160,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/avlnode.h",
+            "sha256": "fae1fadd7be8b2d0a4b7fedca881c1ce78767a2f8fa9341b08daa214e8260d9f",
+            "size": 1997,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/avltree.h",
+            "sha256": "5c80e04b54b40d2318a09f27585b230d858e4783553042d7b9a45bff45a46613",
+            "size": 2708,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/avltreen.h",
+            "sha256": "0ce833aa1df935c4e5bddf8efd2d86b1493e555694f38e2615340a44dac6b7fd",
+            "size": 4787,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/bigkv.h",
+            "sha256": "18fa7da4ebcd759a04a8857686dd53f6b5999187df4fdbd68edaac9f113aa24a",
+            "size": 1095,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/bitarray.h",
+            "sha256": "6939268b4acb854a840a609bebaad00e4b2822899968d329930dcb885149aa60",
+            "size": 1946,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/blake2s.h",
+            "sha256": "ad8780f27e6fab312366609b4841c13631aea1a1eff911cbc9e73c712ef6a7e0",
+            "size": 796,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/bsdsnowflake.h",
+            "sha256": "40bd052facf928912314a845935a20ab91a31881e21cecec7d72e993b6cad314",
+            "size": 1321,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/bufalloc.h",
+            "sha256": "2039eaed2509711206741e897dbcf0e5896d851bc050cd770c0020858ae48589",
+            "size": 1317,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/buffer.h",
+            "sha256": "7f68233b9ecfd88e63274c12da97e6eb8506a4c1fd22d6fddfe82effe8376a5e",
+            "size": 4037,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/bytestr.h",
+            "sha256": "946a25caa1a0903bcf242aedde6ea668cc7a88ac0c4ca31631f71919121777a5",
+            "size": 2435,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/cbuffer.h",
+            "sha256": "437d641216f08032b988b664313b0de7d79ac08708db2023459eff83255e9d3b",
+            "size": 1845,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/cdb.h",
+            "sha256": "f3988f89bd8bb9dad4cea3750b976844ce7a89dd0c09cc285552c74afe62c726",
+            "size": 1228,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/cdbmake.h",
+            "sha256": "61b11be7ea8229bfc929861c6721546b3542c786ec53f4c337f1df3ba26f0e56",
+            "size": 740,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/config.h",
+            "sha256": "f153559000d892af6935360155ccb379425fa16fc93b772e4d972795331097ea",
+            "size": 556,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/cplz.h",
+            "sha256": "58d4e20bc0f7d7698d386fc846cd4a54ef760a9a733a0ccfeea04403b0c47748",
+            "size": 216,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/crc32c.h",
+            "sha256": "3aff031d57d082de820746f0ef402106bb0060706d614de65be0b1889ff87df8",
+            "size": 178,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/cspawn.h",
+            "sha256": "2936e217e4f58a6ce86e0bdf11b822b95ec4f5ce98e6462714b08b86f4b7baf7",
+            "size": 7698,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/datastruct.h",
+            "sha256": "f332cde87e15a36eb7d2932d050a60b5d4b15684fd3cfa03efd5729fc6400ce1",
+            "size": 290,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/devino.h",
+            "sha256": "66682d4699fbd928f29e98c4a4bd34bc857fe336eaaf25d1855f26314189d2c5",
+            "size": 296,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/direntry.h",
+            "sha256": "416b0c96a341d6a3d2d834c063c14fd370ad5c39237be5cc2cd74645046e89e6",
+            "size": 249,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/disize.h",
+            "sha256": "ade12d7b157fca7b7fa465f261c1b1e94a7248190013f2c8a0df9613012bd916",
+            "size": 248,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/diuint.h",
+            "sha256": "25237859fafab61e5b171a24bea15922bc13c80864ff61a4f71e3ad659e19ff9",
+            "size": 235,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/diuint32.h",
+            "sha256": "a7d8305ff619ee4d22c8dc198a1d0f472c647a721deb9573ceba8523a52649e7",
+            "size": 266,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/djbtime.h",
+            "sha256": "8adec4130925ab8157dd1d0b292ce2a175e9a3230a150fb1f9ea653d962ad701",
+            "size": 2465,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/djbunix.h",
+            "sha256": "5ac0f1dbc1c8aa559072e0d86fe01b5e35938cc8169641eb28916d20c14b7faa",
+            "size": 6470,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/env.h",
+            "sha256": "cad82e9ab4c2592ee7cd39699b7bde0a06c842d08bdd0a674a9e38f179b3a550",
+            "size": 1658,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/envalloc.h",
+            "sha256": "0f7905d66cb0170255f2bba3c5a2d8c4b8b92888e04888498c9ceb7a3c263b03",
+            "size": 420,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/envexec.h",
+            "sha256": "4a34060e3c37b0b80192bb736c94ee02028c2e3d46c111dc73455d78c77a1cf0",
+            "size": 211,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/error.h",
+            "sha256": "c60bc657e35cd03ce3f20fe74ea0e98f3bbb79413fff2c48804481de2cda05b2",
+            "size": 273,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/exec.h",
+            "sha256": "369ba4d5d021705a20c1f906ab070f1774549a5f69fcedaac9208f9f77f8a0ca",
+            "size": 9743,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/fcntl.h",
+            "sha256": "ea3cf2cb5112c9ed2b9f2a6811813de0880b8431115fbdc596431565b0e681f0",
+            "size": 381,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/fmtscan.h",
+            "sha256": "f8f26292c1452e2f1d182eced5305c8d29a24cac12601b3b74dfd447cede3cdc",
+            "size": 1398,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/functypes.h",
+            "sha256": "e2aba8226af949ae04cac56e181ef61c0b6a2e852fce128ea902d29a2740b5c4",
+            "size": 1885,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/gccattributes.h",
+            "sha256": "3fbaf873b0f76cb22e2b1a1b0c334522a14595c3dcdea161fe7de5caf0c9309c",
+            "size": 1295,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/genalloc.h",
+            "sha256": "ce4703d1788c9f9106153b612490964544404d0ad26ac127fcdfdce045207ed6",
+            "size": 1687,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/genqdyn.h",
+            "sha256": "baa8d60dce42492080296e3dba3f568bd244c6c5db912762b08fe3ab3edaa276",
+            "size": 970,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/genset.h",
+            "sha256": "91a73b2bd6167b84ae0974b485a6f601f191c1017e60a1f2f46185e53e7a12b4",
+            "size": 1589,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/gensetdyn.h",
+            "sha256": "70445d1d6a7696812dca1c17207b21caca701a89f6514a8931b471b99ffe278f",
+            "size": 1679,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/genwrite.h",
+            "sha256": "311dbe615c8c846355db6648da30f79b040f16384ad6e6fce7e03601281575e4",
+            "size": 1267,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/gol.h",
+            "sha256": "1ea41de1bb781f9ccbb24aa97f45ecf8d07102897fd40967151addebf6215b16",
+            "size": 1361,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/iopause.h",
+            "sha256": "142fb544d0f7accb0a2359823b7d1e8e78e07ad150d46f71edb2229406dd870e",
+            "size": 878,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/ip46.h",
+            "sha256": "e33cb820fe8eefe9de22339b3f61ed99685ab4389fd2d497f8bdd1e6216dfe7b",
+            "size": 3893,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/keventbridge.h",
+            "sha256": "21fee1aad89c91828e7b13b9d8d4ee9fa50addf373bec403a6da4d31718cefc9",
+            "size": 675,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/kolbak.h",
+            "sha256": "d118512d8680a2e14d0990ee5896b7af9d03067f869ededef809a85ea1bf8a97",
+            "size": 914,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/lolstdio.h",
+            "sha256": "cdc01737463943ea4a3b459f160b9b8c26a9720f4dab68897ffb2509e0bb3bec",
+            "size": 793,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/netstring.h",
+            "sha256": "38e58dbf6f06265d2b15f746ca2ca95525ddbefb790cb8d2bdc0f06222408b84",
+            "size": 1022,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/nonposix.h",
+            "sha256": "284af29cecb9c42551ad85c710f3d9468e1564fd19181a95bfb0c6be17035882",
+            "size": 1730,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/nsig.h",
+            "sha256": "5a1ac3420abfeaef5c2d94842c7d47018f34b40196c8d1cb0cd87245bd6d5641",
+            "size": 762,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/playnice.h",
+            "sha256": "f452b9c056d0b20451f725305d96e4cb425272f14ca13282988dc3fb800a2a4f",
+            "size": 117,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/posixishard.h",
+            "sha256": "613a367ac1a9ce8c6d41ac5b5e3263bd589b86a8d25d04816a694c24e52ef6e2",
+            "size": 1019,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/posixplz.h",
+            "sha256": "5f96b9097a9c2b02d95f7459d7352f94914a1ce032b115c32c5e693ba991d2b8",
+            "size": 2015,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/prog.h",
+            "sha256": "2b91f52ba8eac7f44c75cc843df91a54845ac6c91655fefbd8458e1fc608c150",
+            "size": 433,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/pthread.h",
+            "sha256": "8b8687209f5d5c5a6ed0feab995a5636347295e6cd30c62e2c5e7fc62daad0de",
+            "size": 300,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/random.h",
+            "sha256": "59bd16af4b45ec4c011c7d72b2ac0e3b67baa8ad2c9cf7850046e88272aaafb6",
+            "size": 1231,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sass.h",
+            "sha256": "5b8e2298c904d1e8fce231cf724751eedbc0bc7035f6c8b2f90fdf3d539c15e5",
+            "size": 123,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sassclient.h",
+            "sha256": "c8094b7a6053858c461bad97eecdfddf87883d502a241b9d7e1961815d2750e4",
+            "size": 2104,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sassserver.h",
+            "sha256": "c2b56473c1a3768346fdc6e74b37b7764532e4d781d8781fc3933f34819b3eb7",
+            "size": 2801,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/segfault.h",
+            "sha256": "7c8ebe95b71f36e37a31c87ec5d45a9e8d4115a669ab15dc95c10a0fd20bc981",
+            "size": 168,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/selfpipe.h",
+            "sha256": "34917f4de77c4a5748f066ef146e92dd424931405ab46356c8431fe9a4c80e3e",
+            "size": 323,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/setgroups.h",
+            "sha256": "7cc10010789a429b69fafb7abd1b6222b6f6da7ac3e941c1223c2941d12b8ae2",
+            "size": 827,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sgetopt.h",
+            "sha256": "30a668491f223bafcf137306a6e3b6e165f7f0dc38a33f5d05b883326af4d62e",
+            "size": 1108,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sha1.h",
+            "sha256": "7d5d2e535b84253656564646c9566a8b3c1136e046ee63341b5d5bd944a16029",
+            "size": 642,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sha256.h",
+            "sha256": "3248431f15739af1c40ad8b60b19161b01d6ade1d70d1856fc6b2edcc74fd4eb",
+            "size": 698,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sha512.h",
+            "sha256": "3af0952d8f7b0ac575fb644ee0074faa8153650e0b7391b3e5632886b9b308b1",
+            "size": 697,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sig.h",
+            "sha256": "b720c73376c9e2b46f77afb37ff99ac8a517940cb955bb43f4fdaad92e076ad4",
+            "size": 678,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/siovec.h",
+            "sha256": "52b414f97097f83d975156bdf7710e1e190f3e871a005d54c7f64daf054c7afa",
+            "size": 882,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/skaclient.h",
+            "sha256": "a87e88bc74d18a3e1552fea932c85714115937c76d884dcd8d7713726b380184",
+            "size": 10716,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/skalibs.h",
+            "sha256": "160486db71ebf03e7a6beb21c527fe173f70a904100970bd7d280e2ecf9b29a0",
+            "size": 810,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/skamisc.h",
+            "sha256": "6e82ea439593a4e01c9c3b0091de57b6acd74f83c26918b601a3a0c79b84e936",
+            "size": 2127,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/socket.h",
+            "sha256": "e7f12aa106f7c10e8e37bccb8ea203b359b13884491325e474d80cc7efeabbd9",
+            "size": 8918,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/stat.h",
+            "sha256": "85ec43ad978cbb3cc9a48f49f084a7964aabdc4bd5125c4f3a1b67664cc23e4e",
+            "size": 490,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/stdcrypto.h",
+            "sha256": "ffd4b28eb94f754c5486bb3d20988412ae7a6b3d1194d821be2cd74965498be6",
+            "size": 224,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/stddjb.h",
+            "sha256": "2ff2010b3030a8c4b91fd260f410c1ed7ac3f522247f13f9802953575f5b1250",
+            "size": 1351,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/stralloc.h",
+            "sha256": "95686f57639c5c0ce252c7b31c2156b194fb54153a18eafd311343c4c4afbdb8",
+            "size": 1632,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/strerr.h",
+            "sha256": "e10e421ad4b4721b38dbb187ddf408beb82fabd1bb67f7ba28674bf1924fae9c",
+            "size": 24844,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/surf.h",
+            "sha256": "f1901b49052cb326783a9dafa595a2e80cd1bae06932de828b6f4e9ada28b003",
+            "size": 760,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sysdeps.h",
+            "sha256": "d4bb1bc3fdbdf54d4f5ef8d7ff419f44559f6b0d480cda6420355876c0c99244",
+            "size": 4947,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/tai.h",
+            "sha256": "d18d97adf72988074da7875af1552b861d95202811164ce832e1a56fbd70cc97",
+            "size": 6072,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/textclient.h",
+            "sha256": "45bd79d8dc6c2ee8aa03ed12c2424da564418f6b12de937e453e27249f0cfea5",
+            "size": 7036,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/textmessage.h",
+            "sha256": "d2bf5e5cc9c5ea9bf0baabb4b7f981800f83f7c102c32d446f9bbd83f5dbc04d",
+            "size": 4505,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/types.h",
+            "sha256": "48d5803c41413200f3d16d5cf276812a476fe535895de2c34d7db9b2c51824fb",
+            "size": 14622,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/uint16.h",
+            "sha256": "7f2e1f6043915f080c364bd12d124b60c5014b550a0b7c81a3d4cc1457d74355",
+            "size": 3182,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/uint32.h",
+            "sha256": "1cb096fe860ae31d3af6f46bac5b53968b0653912ada33d2ed0c7284dc6245f6",
+            "size": 3248,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/uint64.h",
+            "sha256": "783b2947f2ffe8edae63a94aa60d24ad6cf931c108990ad7c2a27220754f9765",
+            "size": 3890,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/unix-timed.h",
+            "sha256": "c9da27f40959765579f181ccce15eb6471f5579c0684838ce18c61f71bace8ea",
+            "size": 3931,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/unix-transactional.h",
+            "sha256": "f3d7746cceaa4d5688eadc86e1f76a5dd72b16e9ca6e19d4bdbd61bd81719745",
+            "size": 2094,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/unixconnection.h",
+            "sha256": "57f9caef3ebed2bea09bcb169fa54688618f61ed4642a9b61ac342528f400dfe",
+            "size": 889,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/unixmessage.h",
+            "sha256": "ff594899529522400512b4849b8be40dcdf72065ff594ba96aa52dcce7f89dde",
+            "size": 6100,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/unixonacid.h",
+            "sha256": "89457469dc680a69bf2fe8a0a828b71eb4f7af29df16a3d4a354e28c7f57b960",
+            "size": 469,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 511,
+            "path": "usr/lib/libskarnet.so",
+            "target": "libskarnet.so.2.15",
+            "type": "symlink",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib/pkgconfig",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/pkgconfig/libskarnet.pc",
+            "sha256": "8ae48ebc4ecf54450a3f8c21c13f19af7a1c476a508875ea050190d958a18a7b",
+            "size": 227,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib/skalibs",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib/skalibs/sysdeps",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/pthread.lib",
+            "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+            "size": 1,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/socket.lib",
+            "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+            "size": 1,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/spawn.lib",
+            "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+            "size": 1,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/sysclock.lib",
+            "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+            "size": 1,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/sysdeps",
+            "sha256": "3aebe3426180cbfcb36c5821d6193f473b9f437e4835091d191ba20118a455fe",
+            "size": 1343,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/target",
+            "sha256": "dfeeeefc4233945392341c80d06635421ad91004b43cafb4eee74fb0eb7f48bf",
+            "size": 26,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/timer.lib",
+            "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+            "size": 1,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/util.lib",
+            "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+            "size": 1,
+            "type": "file",
+            "uid": 0
+          }
+        ]
+      },
+      {
+        "artifact": {
+          "file": "static-provenance-inputs/aarch64/skalibs-static-2.15.0.0-r0.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "1586052",
+            "Connection": "close",
+            "Content-Length": "177981",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Mon, 09 Nov 2026 03:19:52 GMT",
+            "Etag": "\"6a0001b0-2b73d\"",
+            "Last-Modified": "Sun, 10 May 2026 03:55:28 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.27.5",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "2, 0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams-eham8680084-AMS, cache-chi-kigq8000168-CHI",
+            "X-Timer": "S1794194392.303086,VS0,VE1"
+          },
+          "http_status": 200,
+          "sha256": "db0cbcda40f8ba934630772b4301ab40f7a50e9d14131e673b357d772a81d59c",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/skalibs-static-2.15.0.0-r0.apk"
+        },
+        "index_record": {
+          "A": "aarch64",
+          "C": "Q12IwUfVAKEoK2on8soUvhO7sKloY=",
+          "D": "skalibs-dev",
+          "I": "1447960",
+          "L": "ISC",
+          "P": "skalibs-static",
+          "S": "177981",
+          "T": "Set of general-purpose C programming libraries for skarnet.org software. (static library)",
+          "U": "https://skarnet.org/software/skalibs/",
+          "V": "2.15.0.0-r0",
+          "c": "f148233038fa9b35932a7996df29f110b32c2160",
+          "m": "Laurent Bercot <ska-devel@skarnet.org>",
+          "o": "skalibs",
+          "t": "1778384706"
+        },
+        "payload": [
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/libskarnet.a",
+            "sha256": "305f236c06a98aba782a8bd0cd8de6edd0615dcdf4717ef8c6d7ea6fe2909a36",
+            "size": 1447960,
+            "type": "file",
+            "uid": 0
+          }
+        ]
+      },
+      {
+        "artifact": {
+          "file": "static-provenance-inputs/aarch64/utmps-dev-0.1.3.3-r0.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "2210771",
+            "Connection": "close",
+            "Content-Length": "3705",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Mon, 09 Nov 2026 03:19:52 GMT",
+            "Etag": "\"6a0001b0-e79\"",
+            "Last-Modified": "Sun, 10 May 2026 03:55:28 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.29.0",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "12, 0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams-eham8680083-AMS, cache-chi-kigq8000092-CHI",
+            "X-Timer": "S1794194392.372100,VS0,VE2"
+          },
+          "http_status": 200,
+          "sha256": "7af699bfbe389d9eaaf94a0ba1a9eadc22c27e69e876edc69eec18c2df303a44",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/utmps-dev-0.1.3.3-r0.apk"
+        },
+        "index_record": {
+          "A": "aarch64",
+          "C": "Q17WfUWq+QeSaKsUegkBnD1VPQ3D4=",
+          "D": "utmps-libs=0.1.3.3-r0 pc:libskarnet>=2.15.0.0 pkgconfig",
+          "I": "5394",
+          "L": "ISC",
+          "P": "utmps-dev",
+          "S": "3705",
+          "T": "A secure utmp/wtmp implementation (development files)",
+          "U": "https://skarnet.org/software/utmps/",
+          "V": "0.1.3.3-r0",
+          "c": "900a4ecef77ae677eab8243b99f2c40cbf8ea35b",
+          "m": "Laurent Bercot <ska-devel@skarnet.org>",
+          "o": "utmps",
+          "p": "pc:libutmps=0.1.3.3",
+          "t": "1778384706"
+        },
+        "payload": [
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/include",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/include/utmps",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/utmps/config.h",
+            "sha256": "06a5853c992a1e84c4aa581675889353d2f3c85ae687cad9d5d4b508ee3656c1",
+            "size": 624,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/utmps/utmp.h",
+            "sha256": "96264f8ae22178dc7da4213a650de45839137e856c7c12d9c291228c22a35b9e",
+            "size": 841,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/utmps/utmps.h",
+            "sha256": "748c0dfb3f42270cacfda96f5d51b5935dbfc67ba230df79f98fd7c0a2b83750",
+            "size": 1412,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/utmps/utmpx.h",
+            "sha256": "6d1953e981b50d7524177bed9077cb29092bbc31509a58f4324e04324a21fd98",
+            "size": 2211,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 511,
+            "path": "usr/lib/libutmps.so",
+            "target": "libutmps.so.0.1",
+            "type": "symlink",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib/pkgconfig",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/pkgconfig/libutmps.pc",
+            "sha256": "d292bc52b7e5e6131abd4f9e654d04d7e444e2259b134ed57ec6d9a5dae63614",
+            "size": 306,
+            "type": "file",
+            "uid": 0
+          }
+        ]
+      },
+      {
+        "artifact": {
+          "file": "static-provenance-inputs/aarch64/utmps-static-0.1.3.3-r0.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "965260",
+            "Connection": "close",
+            "Content-Length": "6555",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Mon, 09 Nov 2026 03:19:52 GMT",
+            "Etag": "\"6a0001b0-199b\"",
+            "Last-Modified": "Sun, 10 May 2026 03:55:28 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.29.0",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "20, 0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams-eham8680097-AMS, cache-chi-kigq8000120-CHI",
+            "X-Timer": "S1794194392.409585,VS0,VE2"
+          },
+          "http_status": 200,
+          "sha256": "efbecee796ef55f90f1e8f8d63d4f1fbaf218a4491751863ebda381f80259aa4",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/utmps-static-0.1.3.3-r0.apk"
+        },
+        "index_record": {
+          "A": "aarch64",
+          "C": "Q1KPe9d/2CRhNlANBlxLwhZVqyYoQ=",
+          "D": "skalibs-static",
+          "I": "41002",
+          "L": "ISC",
+          "P": "utmps-static",
+          "S": "6555",
+          "T": "A secure utmp/wtmp implementation (static library)",
+          "U": "https://skarnet.org/software/utmps/",
+          "V": "0.1.3.3-r0",
+          "c": "900a4ecef77ae677eab8243b99f2c40cbf8ea35b",
+          "m": "Laurent Bercot <ska-devel@skarnet.org>",
+          "o": "utmps",
+          "t": "1778384706"
+        },
+        "payload": [
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/libutmps.a",
+            "sha256": "a3505c4a591ffe7433c524676f36c34c2c5a09214919c342e134bf3a394a7b17",
+            "size": 41002,
+            "type": "file",
+            "uid": 0
+          }
+        ]
+      }
+    ],
+    "x86_64": [
+      {
+        "artifact": {
+          "file": "static-provenance-inputs/x86_64/skalibs-dev-2.15.0.0-r0.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "976435",
+            "Connection": "close",
+            "Content-Length": "47508",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Mon, 09 Nov 2026 03:19:52 GMT",
+            "Etag": "\"6a00145c-b994\"",
+            "Last-Modified": "Sun, 10 May 2026 05:15:08 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.29.0",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "5, 0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams-eham8680097-AMS, cache-chi-kigq8000122-CHI",
+            "X-Timer": "S1794194392.034310,VS0,VE3"
+          },
+          "http_status": 200,
+          "sha256": "6923ac4dafbf0678b2d473e2d969afe1044a5164ef87416ea9fa83988d99b109",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/skalibs-dev-2.15.0.0-r0.apk"
+        },
+        "index_record": {
+          "A": "x86_64",
+          "C": "Q1ueHSl7ZNB/YCc7E3DP1WzhSjYvw=",
+          "D": "skalibs-libs=2.15.0.0-r0 pkgconfig",
+          "I": "214199",
+          "L": "ISC",
+          "P": "skalibs-dev",
+          "S": "47508",
+          "T": "Set of general-purpose C programming libraries for skarnet.org software. (development files)",
+          "U": "https://skarnet.org/software/skalibs/",
+          "V": "2.15.0.0-r0",
+          "c": "f148233038fa9b35932a7996df29f110b32c2160",
+          "m": "Laurent Bercot <ska-devel@skarnet.org>",
+          "o": "skalibs",
+          "p": "pc:libskarnet=2.15.0.0",
+          "t": "1778384706"
+        },
+        "payload": [
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/include",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/include/skalibs",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/alarm.h",
+            "sha256": "fdcb727da527bd81dc214b984643ffd3778e9711c26aa9050a30bc98857995ac",
+            "size": 270,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/alloc.h",
+            "sha256": "c8cb2d38d7dc629e3d092086ab0f768ce6d11f6251731bd5e9cf3f5f59ce86b9",
+            "size": 292,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/allreadwrite.h",
+            "sha256": "1ce63751b78cf6b72b896c03802907fe3f76c7ed008e85a99240b75dd05d1d5a",
+            "size": 983,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/ancil.h",
+            "sha256": "e8194fd998dc5b0eaa700f0e9b536b13768d4fe95d7c6b21321ef8858108b5ef",
+            "size": 160,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/avlnode.h",
+            "sha256": "fae1fadd7be8b2d0a4b7fedca881c1ce78767a2f8fa9341b08daa214e8260d9f",
+            "size": 1997,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/avltree.h",
+            "sha256": "5c80e04b54b40d2318a09f27585b230d858e4783553042d7b9a45bff45a46613",
+            "size": 2708,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/avltreen.h",
+            "sha256": "0ce833aa1df935c4e5bddf8efd2d86b1493e555694f38e2615340a44dac6b7fd",
+            "size": 4787,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/bigkv.h",
+            "sha256": "18fa7da4ebcd759a04a8857686dd53f6b5999187df4fdbd68edaac9f113aa24a",
+            "size": 1095,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/bitarray.h",
+            "sha256": "6939268b4acb854a840a609bebaad00e4b2822899968d329930dcb885149aa60",
+            "size": 1946,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/blake2s.h",
+            "sha256": "ad8780f27e6fab312366609b4841c13631aea1a1eff911cbc9e73c712ef6a7e0",
+            "size": 796,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/bsdsnowflake.h",
+            "sha256": "40bd052facf928912314a845935a20ab91a31881e21cecec7d72e993b6cad314",
+            "size": 1321,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/bufalloc.h",
+            "sha256": "2039eaed2509711206741e897dbcf0e5896d851bc050cd770c0020858ae48589",
+            "size": 1317,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/buffer.h",
+            "sha256": "7f68233b9ecfd88e63274c12da97e6eb8506a4c1fd22d6fddfe82effe8376a5e",
+            "size": 4037,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/bytestr.h",
+            "sha256": "946a25caa1a0903bcf242aedde6ea668cc7a88ac0c4ca31631f71919121777a5",
+            "size": 2435,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/cbuffer.h",
+            "sha256": "437d641216f08032b988b664313b0de7d79ac08708db2023459eff83255e9d3b",
+            "size": 1845,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/cdb.h",
+            "sha256": "f3988f89bd8bb9dad4cea3750b976844ce7a89dd0c09cc285552c74afe62c726",
+            "size": 1228,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/cdbmake.h",
+            "sha256": "61b11be7ea8229bfc929861c6721546b3542c786ec53f4c337f1df3ba26f0e56",
+            "size": 740,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/config.h",
+            "sha256": "f153559000d892af6935360155ccb379425fa16fc93b772e4d972795331097ea",
+            "size": 556,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/cplz.h",
+            "sha256": "58d4e20bc0f7d7698d386fc846cd4a54ef760a9a733a0ccfeea04403b0c47748",
+            "size": 216,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/crc32c.h",
+            "sha256": "3aff031d57d082de820746f0ef402106bb0060706d614de65be0b1889ff87df8",
+            "size": 178,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/cspawn.h",
+            "sha256": "2936e217e4f58a6ce86e0bdf11b822b95ec4f5ce98e6462714b08b86f4b7baf7",
+            "size": 7698,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/datastruct.h",
+            "sha256": "f332cde87e15a36eb7d2932d050a60b5d4b15684fd3cfa03efd5729fc6400ce1",
+            "size": 290,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/devino.h",
+            "sha256": "66682d4699fbd928f29e98c4a4bd34bc857fe336eaaf25d1855f26314189d2c5",
+            "size": 296,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/direntry.h",
+            "sha256": "416b0c96a341d6a3d2d834c063c14fd370ad5c39237be5cc2cd74645046e89e6",
+            "size": 249,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/disize.h",
+            "sha256": "ade12d7b157fca7b7fa465f261c1b1e94a7248190013f2c8a0df9613012bd916",
+            "size": 248,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/diuint.h",
+            "sha256": "25237859fafab61e5b171a24bea15922bc13c80864ff61a4f71e3ad659e19ff9",
+            "size": 235,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/diuint32.h",
+            "sha256": "a7d8305ff619ee4d22c8dc198a1d0f472c647a721deb9573ceba8523a52649e7",
+            "size": 266,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/djbtime.h",
+            "sha256": "8adec4130925ab8157dd1d0b292ce2a175e9a3230a150fb1f9ea653d962ad701",
+            "size": 2465,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/djbunix.h",
+            "sha256": "5ac0f1dbc1c8aa559072e0d86fe01b5e35938cc8169641eb28916d20c14b7faa",
+            "size": 6470,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/env.h",
+            "sha256": "cad82e9ab4c2592ee7cd39699b7bde0a06c842d08bdd0a674a9e38f179b3a550",
+            "size": 1658,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/envalloc.h",
+            "sha256": "0f7905d66cb0170255f2bba3c5a2d8c4b8b92888e04888498c9ceb7a3c263b03",
+            "size": 420,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/envexec.h",
+            "sha256": "4a34060e3c37b0b80192bb736c94ee02028c2e3d46c111dc73455d78c77a1cf0",
+            "size": 211,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/error.h",
+            "sha256": "c60bc657e35cd03ce3f20fe74ea0e98f3bbb79413fff2c48804481de2cda05b2",
+            "size": 273,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/exec.h",
+            "sha256": "369ba4d5d021705a20c1f906ab070f1774549a5f69fcedaac9208f9f77f8a0ca",
+            "size": 9743,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/fcntl.h",
+            "sha256": "ea3cf2cb5112c9ed2b9f2a6811813de0880b8431115fbdc596431565b0e681f0",
+            "size": 381,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/fmtscan.h",
+            "sha256": "f8f26292c1452e2f1d182eced5305c8d29a24cac12601b3b74dfd447cede3cdc",
+            "size": 1398,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/functypes.h",
+            "sha256": "e2aba8226af949ae04cac56e181ef61c0b6a2e852fce128ea902d29a2740b5c4",
+            "size": 1885,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/gccattributes.h",
+            "sha256": "3fbaf873b0f76cb22e2b1a1b0c334522a14595c3dcdea161fe7de5caf0c9309c",
+            "size": 1295,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/genalloc.h",
+            "sha256": "ce4703d1788c9f9106153b612490964544404d0ad26ac127fcdfdce045207ed6",
+            "size": 1687,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/genqdyn.h",
+            "sha256": "baa8d60dce42492080296e3dba3f568bd244c6c5db912762b08fe3ab3edaa276",
+            "size": 970,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/genset.h",
+            "sha256": "91a73b2bd6167b84ae0974b485a6f601f191c1017e60a1f2f46185e53e7a12b4",
+            "size": 1589,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/gensetdyn.h",
+            "sha256": "70445d1d6a7696812dca1c17207b21caca701a89f6514a8931b471b99ffe278f",
+            "size": 1679,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/genwrite.h",
+            "sha256": "311dbe615c8c846355db6648da30f79b040f16384ad6e6fce7e03601281575e4",
+            "size": 1267,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/gol.h",
+            "sha256": "1ea41de1bb781f9ccbb24aa97f45ecf8d07102897fd40967151addebf6215b16",
+            "size": 1361,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/iopause.h",
+            "sha256": "142fb544d0f7accb0a2359823b7d1e8e78e07ad150d46f71edb2229406dd870e",
+            "size": 878,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/ip46.h",
+            "sha256": "e33cb820fe8eefe9de22339b3f61ed99685ab4389fd2d497f8bdd1e6216dfe7b",
+            "size": 3893,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/keventbridge.h",
+            "sha256": "21fee1aad89c91828e7b13b9d8d4ee9fa50addf373bec403a6da4d31718cefc9",
+            "size": 675,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/kolbak.h",
+            "sha256": "d118512d8680a2e14d0990ee5896b7af9d03067f869ededef809a85ea1bf8a97",
+            "size": 914,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/lolstdio.h",
+            "sha256": "cdc01737463943ea4a3b459f160b9b8c26a9720f4dab68897ffb2509e0bb3bec",
+            "size": 793,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/netstring.h",
+            "sha256": "38e58dbf6f06265d2b15f746ca2ca95525ddbefb790cb8d2bdc0f06222408b84",
+            "size": 1022,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/nonposix.h",
+            "sha256": "284af29cecb9c42551ad85c710f3d9468e1564fd19181a95bfb0c6be17035882",
+            "size": 1730,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/nsig.h",
+            "sha256": "5a1ac3420abfeaef5c2d94842c7d47018f34b40196c8d1cb0cd87245bd6d5641",
+            "size": 762,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/playnice.h",
+            "sha256": "f452b9c056d0b20451f725305d96e4cb425272f14ca13282988dc3fb800a2a4f",
+            "size": 117,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/posixishard.h",
+            "sha256": "613a367ac1a9ce8c6d41ac5b5e3263bd589b86a8d25d04816a694c24e52ef6e2",
+            "size": 1019,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/posixplz.h",
+            "sha256": "5f96b9097a9c2b02d95f7459d7352f94914a1ce032b115c32c5e693ba991d2b8",
+            "size": 2015,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/prog.h",
+            "sha256": "2b91f52ba8eac7f44c75cc843df91a54845ac6c91655fefbd8458e1fc608c150",
+            "size": 433,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/pthread.h",
+            "sha256": "8b8687209f5d5c5a6ed0feab995a5636347295e6cd30c62e2c5e7fc62daad0de",
+            "size": 300,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/random.h",
+            "sha256": "59bd16af4b45ec4c011c7d72b2ac0e3b67baa8ad2c9cf7850046e88272aaafb6",
+            "size": 1231,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sass.h",
+            "sha256": "5b8e2298c904d1e8fce231cf724751eedbc0bc7035f6c8b2f90fdf3d539c15e5",
+            "size": 123,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sassclient.h",
+            "sha256": "c8094b7a6053858c461bad97eecdfddf87883d502a241b9d7e1961815d2750e4",
+            "size": 2104,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sassserver.h",
+            "sha256": "c2b56473c1a3768346fdc6e74b37b7764532e4d781d8781fc3933f34819b3eb7",
+            "size": 2801,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/segfault.h",
+            "sha256": "7c8ebe95b71f36e37a31c87ec5d45a9e8d4115a669ab15dc95c10a0fd20bc981",
+            "size": 168,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/selfpipe.h",
+            "sha256": "34917f4de77c4a5748f066ef146e92dd424931405ab46356c8431fe9a4c80e3e",
+            "size": 323,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/setgroups.h",
+            "sha256": "7cc10010789a429b69fafb7abd1b6222b6f6da7ac3e941c1223c2941d12b8ae2",
+            "size": 827,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sgetopt.h",
+            "sha256": "30a668491f223bafcf137306a6e3b6e165f7f0dc38a33f5d05b883326af4d62e",
+            "size": 1108,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sha1.h",
+            "sha256": "7d5d2e535b84253656564646c9566a8b3c1136e046ee63341b5d5bd944a16029",
+            "size": 642,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sha256.h",
+            "sha256": "3248431f15739af1c40ad8b60b19161b01d6ade1d70d1856fc6b2edcc74fd4eb",
+            "size": 698,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sha512.h",
+            "sha256": "3af0952d8f7b0ac575fb644ee0074faa8153650e0b7391b3e5632886b9b308b1",
+            "size": 697,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sig.h",
+            "sha256": "b720c73376c9e2b46f77afb37ff99ac8a517940cb955bb43f4fdaad92e076ad4",
+            "size": 678,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/siovec.h",
+            "sha256": "52b414f97097f83d975156bdf7710e1e190f3e871a005d54c7f64daf054c7afa",
+            "size": 882,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/skaclient.h",
+            "sha256": "a87e88bc74d18a3e1552fea932c85714115937c76d884dcd8d7713726b380184",
+            "size": 10716,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/skalibs.h",
+            "sha256": "160486db71ebf03e7a6beb21c527fe173f70a904100970bd7d280e2ecf9b29a0",
+            "size": 810,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/skamisc.h",
+            "sha256": "6e82ea439593a4e01c9c3b0091de57b6acd74f83c26918b601a3a0c79b84e936",
+            "size": 2127,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/socket.h",
+            "sha256": "e7f12aa106f7c10e8e37bccb8ea203b359b13884491325e474d80cc7efeabbd9",
+            "size": 8918,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/stat.h",
+            "sha256": "85ec43ad978cbb3cc9a48f49f084a7964aabdc4bd5125c4f3a1b67664cc23e4e",
+            "size": 490,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/stdcrypto.h",
+            "sha256": "ffd4b28eb94f754c5486bb3d20988412ae7a6b3d1194d821be2cd74965498be6",
+            "size": 224,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/stddjb.h",
+            "sha256": "2ff2010b3030a8c4b91fd260f410c1ed7ac3f522247f13f9802953575f5b1250",
+            "size": 1351,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/stralloc.h",
+            "sha256": "95686f57639c5c0ce252c7b31c2156b194fb54153a18eafd311343c4c4afbdb8",
+            "size": 1632,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/strerr.h",
+            "sha256": "e10e421ad4b4721b38dbb187ddf408beb82fabd1bb67f7ba28674bf1924fae9c",
+            "size": 24844,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/surf.h",
+            "sha256": "f1901b49052cb326783a9dafa595a2e80cd1bae06932de828b6f4e9ada28b003",
+            "size": 760,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/sysdeps.h",
+            "sha256": "28b81b2714f06d3c56bd6cf06cec1e4d50b4f81c3caa2fd5fe9e69ea2b87b8a8",
+            "size": 4915,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/tai.h",
+            "sha256": "d18d97adf72988074da7875af1552b861d95202811164ce832e1a56fbd70cc97",
+            "size": 6072,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/textclient.h",
+            "sha256": "45bd79d8dc6c2ee8aa03ed12c2424da564418f6b12de937e453e27249f0cfea5",
+            "size": 7036,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/textmessage.h",
+            "sha256": "d2bf5e5cc9c5ea9bf0baabb4b7f981800f83f7c102c32d446f9bbd83f5dbc04d",
+            "size": 4505,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/types.h",
+            "sha256": "48d5803c41413200f3d16d5cf276812a476fe535895de2c34d7db9b2c51824fb",
+            "size": 14622,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/uint16.h",
+            "sha256": "7f2e1f6043915f080c364bd12d124b60c5014b550a0b7c81a3d4cc1457d74355",
+            "size": 3182,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/uint32.h",
+            "sha256": "1cb096fe860ae31d3af6f46bac5b53968b0653912ada33d2ed0c7284dc6245f6",
+            "size": 3248,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/uint64.h",
+            "sha256": "783b2947f2ffe8edae63a94aa60d24ad6cf931c108990ad7c2a27220754f9765",
+            "size": 3890,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/unix-timed.h",
+            "sha256": "c9da27f40959765579f181ccce15eb6471f5579c0684838ce18c61f71bace8ea",
+            "size": 3931,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/unix-transactional.h",
+            "sha256": "f3d7746cceaa4d5688eadc86e1f76a5dd72b16e9ca6e19d4bdbd61bd81719745",
+            "size": 2094,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/unixconnection.h",
+            "sha256": "57f9caef3ebed2bea09bcb169fa54688618f61ed4642a9b61ac342528f400dfe",
+            "size": 889,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/unixmessage.h",
+            "sha256": "ff594899529522400512b4849b8be40dcdf72065ff594ba96aa52dcce7f89dde",
+            "size": 6100,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/skalibs/unixonacid.h",
+            "sha256": "89457469dc680a69bf2fe8a0a828b71eb4f7af29df16a3d4a354e28c7f57b960",
+            "size": 469,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 511,
+            "path": "usr/lib/libskarnet.so",
+            "target": "libskarnet.so.2.15",
+            "type": "symlink",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib/pkgconfig",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/pkgconfig/libskarnet.pc",
+            "sha256": "8ae48ebc4ecf54450a3f8c21c13f19af7a1c476a508875ea050190d958a18a7b",
+            "size": 227,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib/skalibs",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib/skalibs/sysdeps",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/pthread.lib",
+            "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+            "size": 1,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/socket.lib",
+            "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+            "size": 1,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/spawn.lib",
+            "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+            "size": 1,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/sysclock.lib",
+            "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+            "size": 1,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/sysdeps",
+            "sha256": "7fbee7dfabcd71a0890808a261b167079fafca805275fc0bcf0fec91923a971c",
+            "size": 1342,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/target",
+            "sha256": "66c45e7df6309dd685144a621b781d80bce1064015211b26f85313cfa834b671",
+            "size": 25,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/timer.lib",
+            "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+            "size": 1,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/skalibs/sysdeps/util.lib",
+            "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+            "size": 1,
+            "type": "file",
+            "uid": 0
+          }
+        ]
+      },
+      {
+        "artifact": {
+          "file": "static-provenance-inputs/x86_64/skalibs-static-2.15.0.0-r0.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "1589213",
+            "Connection": "close",
+            "Content-Length": "167018",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Mon, 09 Nov 2026 03:19:52 GMT",
+            "Etag": "\"6a00145c-28c6a\"",
+            "Last-Modified": "Sun, 10 May 2026 05:15:08 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.27.5",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "46, 0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams-eham8680052-AMS, cache-chi-kigq8000055-CHI",
+            "X-Timer": "S1794194392.085982,VS0,VE3"
+          },
+          "http_status": 200,
+          "sha256": "946fa230323c1819bb2f5c603427ac7ca94d6be3fb60f5d3aab72d12eb4ee084",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/skalibs-static-2.15.0.0-r0.apk"
+        },
+        "index_record": {
+          "A": "x86_64",
+          "C": "Q1xUTOvok8tGSwnqNIUmfnp0f9VIk=",
+          "D": "skalibs-dev",
+          "I": "1375456",
+          "L": "ISC",
+          "P": "skalibs-static",
+          "S": "167018",
+          "T": "Set of general-purpose C programming libraries for skarnet.org software. (static library)",
+          "U": "https://skarnet.org/software/skalibs/",
+          "V": "2.15.0.0-r0",
+          "c": "f148233038fa9b35932a7996df29f110b32c2160",
+          "m": "Laurent Bercot <ska-devel@skarnet.org>",
+          "o": "skalibs",
+          "t": "1778384706"
+        },
+        "payload": [
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/libskarnet.a",
+            "sha256": "4a7b26ba6e78749d286295153706faab977952b79b4d96852e9c3ab649e6c3a0",
+            "size": 1375456,
+            "type": "file",
+            "uid": 0
+          }
+        ]
+      },
+      {
+        "artifact": {
+          "file": "static-provenance-inputs/x86_64/utmps-dev-0.1.3.3-r0.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "2175275",
+            "Connection": "close",
+            "Content-Length": "3725",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Mon, 09 Nov 2026 03:19:52 GMT",
+            "Etag": "\"6a00145c-e8d\"",
+            "Last-Modified": "Sun, 10 May 2026 05:15:08 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.27.5",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "37, 0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams-eham8680047-AMS, cache-chi-kigq8000124-CHI",
+            "X-Timer": "S1794194392.148616,VS0,VE1"
+          },
+          "http_status": 200,
+          "sha256": "002b767fd49e0ee01b51e26e1e9d2e46aed3972e9e5ece7a8ef5cc513f20c2c2",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/utmps-dev-0.1.3.3-r0.apk"
+        },
+        "index_record": {
+          "A": "x86_64",
+          "C": "Q1oy8PkKeEz0Fj/cuUMgRvFEwH/Hs=",
+          "D": "utmps-libs=0.1.3.3-r0 pc:libskarnet>=2.15.0.0 pkgconfig",
+          "I": "5394",
+          "L": "ISC",
+          "P": "utmps-dev",
+          "S": "3725",
+          "T": "A secure utmp/wtmp implementation (development files)",
+          "U": "https://skarnet.org/software/utmps/",
+          "V": "0.1.3.3-r0",
+          "c": "900a4ecef77ae677eab8243b99f2c40cbf8ea35b",
+          "m": "Laurent Bercot <ska-devel@skarnet.org>",
+          "o": "utmps",
+          "p": "pc:libutmps=0.1.3.3",
+          "t": "1778384706"
+        },
+        "payload": [
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/include",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/include/utmps",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/utmps/config.h",
+            "sha256": "06a5853c992a1e84c4aa581675889353d2f3c85ae687cad9d5d4b508ee3656c1",
+            "size": 624,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/utmps/utmp.h",
+            "sha256": "96264f8ae22178dc7da4213a650de45839137e856c7c12d9c291228c22a35b9e",
+            "size": 841,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/utmps/utmps.h",
+            "sha256": "748c0dfb3f42270cacfda96f5d51b5935dbfc67ba230df79f98fd7c0a2b83750",
+            "size": 1412,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/include/utmps/utmpx.h",
+            "sha256": "6d1953e981b50d7524177bed9077cb29092bbc31509a58f4324e04324a21fd98",
+            "size": 2211,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 511,
+            "path": "usr/lib/libutmps.so",
+            "target": "libutmps.so.0.1",
+            "type": "symlink",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib/pkgconfig",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/pkgconfig/libutmps.pc",
+            "sha256": "d292bc52b7e5e6131abd4f9e654d04d7e444e2259b134ed57ec6d9a5dae63614",
+            "size": 306,
+            "type": "file",
+            "uid": 0
+          }
+        ]
+      },
+      {
+        "artifact": {
+          "file": "static-provenance-inputs/x86_64/utmps-static-0.1.3.3-r0.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "1596322",
+            "Connection": "close",
+            "Content-Length": "6341",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Mon, 09 Nov 2026 03:19:52 GMT",
+            "Etag": "\"6a00145c-18c5\"",
+            "Last-Modified": "Sun, 10 May 2026 05:15:08 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.29.0",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "50, 0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams-eham8680076-AMS, cache-chi-kigq8000174-CHI",
+            "X-Timer": "S1794194392.182210,VS0,VE6"
+          },
+          "http_status": 200,
+          "sha256": "0443037abdbddbd55430394cb899066c614d401cc49ec9c24ea438c8e5f52a25",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/utmps-static-0.1.3.3-r0.apk"
+        },
+        "index_record": {
+          "A": "x86_64",
+          "C": "Q13ukk2cVO4o/s8DgeMa1voMpdHcc=",
+          "D": "skalibs-static",
+          "I": "38594",
+          "L": "ISC",
+          "P": "utmps-static",
+          "S": "6341",
+          "T": "A secure utmp/wtmp implementation (static library)",
+          "U": "https://skarnet.org/software/utmps/",
+          "V": "0.1.3.3-r0",
+          "c": "900a4ecef77ae677eab8243b99f2c40cbf8ea35b",
+          "m": "Laurent Bercot <ska-devel@skarnet.org>",
+          "o": "utmps",
+          "t": "1778384706"
+        },
+        "payload": [
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 493,
+            "path": "usr/lib",
+            "type": "directory",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/libutmps.a",
+            "sha256": "d88866df1679446da3c7e81137a10e10752aac1444d610efb5d30d341c8e9b49",
+            "size": 38594,
+            "type": "file",
+            "uid": 0
+          }
+        ]
+      }
+    ]
+  },
+  "components": [
+    {
+      "aports": {
+        "commit": "f148233038fa9b35932a7996df29f110b32c2160",
+        "file": "static-source-assets/c70546e022f3f242c386d22c20f6dc92e55a77998db62972c58cf46374697cae",
+        "original_recipe_sha256": "7878dd8832e4248e5ad535f7b8beabc9c962cdfc059b1c732d30742d57adc027",
+        "sha256": "c70546e022f3f242c386d22c20f6dc92e55a77998db62972c58cf46374697cae",
+        "source_input_checksums": 1
+      },
+      "license": "ISC",
+      "name": "skalibs",
+      "notice": {
+        "file": "static-source-assets/26bee3a3c78ae6a29c81c18832cadb1a4433cf8a786624312f11667d93fcce41",
+        "sha256": "26bee3a3c78ae6a29c81c18832cadb1a4433cf8a786624312f11667d93fcce41"
+      },
+      "package_version": "2.15.0.0-r0",
+      "source": {
+        "file": "static-source-assets/7fde96e8afb4191593a15328883e9c7726c96891cf071222146821e8c87f8007",
+        "filename": "skalibs-2.15.0.0.tar.gz",
+        "headers": {
+          "Accept-Ranges": "bytes",
+          "Cache-Control": "private",
+          "Connection": "close",
+          "Content-Length": "267454",
+          "Content-Security-Policy": "default-src 'self' https://liberapay.com; style-src 'self' 'unsafe-inline';",
+          "Content-Type": "application/octet-stream",
+          "Date": "Mon, 09 Nov 2026 03:19:25 GMT",
+          "Last-Modified": "Sat, 09 May 2026 13:53:12 GMT",
+          "Referrer-Policy": "same-origin",
+          "Server": "tipidee/0.0.8.0",
+          "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+          "Vary": "Accept-Encoding",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "DENY"
+        },
+        "http_status": 200,
+        "sha256": "7fde96e8afb4191593a15328883e9c7726c96891cf071222146821e8c87f8007",
+        "sha512": "3fefca199a17a236a7d160bccd35b0a1ff55fa50433da613d19d919665468dbe3da09402423d61794b44cb083835bab74bee437e96d6b9ae386d41d9a8ebb8d9",
+        "size": 267454,
+        "url": "https://skarnet.org/software/skalibs/skalibs-2.15.0.0.tar.gz"
+      },
+      "version": "2.15.0.0"
+    },
+    {
+      "aports": {
+        "commit": "900a4ecef77ae677eab8243b99f2c40cbf8ea35b",
+        "file": "static-source-assets/d205cffb41759d970835455639ab2f0803c41b05e720e405c7d253a195b70014",
+        "original_recipe_sha256": "40e59c8bf91709421c237776b427d95aed192ee8d7453ba31bde751230f06fa4",
+        "sha256": "d205cffb41759d970835455639ab2f0803c41b05e720e405c7d253a195b70014",
+        "source_input_checksums": 9
+      },
+      "license": "ISC",
+      "name": "utmps",
+      "notice": {
+        "file": "static-source-assets/babe23e98a17858e1a8163a1f223848842f1cc2939ef69c91dbdec294f77ea6e",
+        "sha256": "babe23e98a17858e1a8163a1f223848842f1cc2939ef69c91dbdec294f77ea6e"
+      },
+      "package_version": "0.1.3.3-r0",
+      "source": {
+        "file": "static-source-assets/e2212bd02fe17730424f7f5e30a4dde71d0862a52b23d8b729eed74420a349a2",
+        "filename": "utmps-0.1.3.3.tar.gz",
+        "headers": {
+          "Accept-Ranges": "bytes",
+          "Cache-Control": "private",
+          "Connection": "close",
+          "Content-Length": "35679",
+          "Content-Security-Policy": "default-src 'self' https://liberapay.com; style-src 'self' 'unsafe-inline';",
+          "Content-Type": "application/octet-stream",
+          "Date": "Mon, 09 Nov 2026 03:19:27 GMT",
+          "Last-Modified": "Sat, 09 May 2026 13:52:52 GMT",
+          "Referrer-Policy": "same-origin",
+          "Server": "tipidee/0.0.8.0",
+          "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+          "Vary": "Accept-Encoding",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "DENY"
+        },
+        "http_status": 200,
+        "sha256": "e2212bd02fe17730424f7f5e30a4dde71d0862a52b23d8b729eed74420a349a2",
+        "sha512": "950ccd0588ff066fbf9f862835ec03468da45a2e99a12b45ea6b5d222b19e1ead47d540ba7193f6b8a5bf69749e1351c4bbf09e22f19c3fb35fcb5bf9b8bec54",
+        "size": 35679,
+        "url": "https://skarnet.org/software/utmps/utmps-0.1.3.3.tar.gz"
+      },
+      "version": "0.1.3.3"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "Corresponding-source and exact installed SDK/archive bindings for two official static-library providers only. No rebuild equivalence, compiler-support-source, advisory or whole-image approval."
+}

@@ -25,6 +25,7 @@ from build_native_runtime import (
     run,
     sha256,
 )
+from busybox_static_sources import STATIC_SOURCES_SHA256, verify_delivery
 from install_alpine_native import temporary_trust
 
 __all__ = [
@@ -197,6 +198,22 @@ def load_packages(directory: Path, arch: str, manifest: Path) -> dict:
     _require(
         record["source_files"] == owned_artifacts(directory / "sources"),
         "BusyBox delivered source inventory mismatch",
+    )
+    _require(
+        record["static_sources_sha256"] == STATIC_SOURCES_SHA256
+        and record["static_dependency_source_status"]
+        == "TWO_OFFICIAL_STATIC_PROVIDERS_SOURCE_BOUND",
+        "BusyBox static source receipt mismatch",
+    )
+    verify_delivery(directory / "sources/static-components")
+    static = json.loads((directory / "sources/static-source-output.json").read_text())
+    _require(
+        static["status"] == "TWO_OFFICIAL_STATIC_PROVIDERS_SOURCE_BOUND"
+        and static["machine"] == ARCHES[arch][0]
+        and static["static_sources_sha256"] == STATIC_SOURCES_SHA256
+        and static["source_files"]
+        == owned_artifacts(directory / "sources/static-components"),
+        "BusyBox static provider delivery mismatch",
     )
     check = json.loads((directory / "check-output.json").read_text())
     busybox = next(p for p in record["runtime_packages"] if p["name"] == "busybox")
@@ -414,6 +431,8 @@ def install(directory: Path, arch: str, manifest: Path, evidence: Path) -> dict:
         "architecture": arch,
         "recipe_sha256": MANIFEST_SHA256,
         "package_receipt_sha256": sha256(directory / "build-output.json"),
+        "static_sources_sha256": record["static_sources_sha256"],
+        "static_provider_source_status": record["static_dependency_source_status"],
         "runtime_packages": record["runtime_packages"],
         "public_key": record["public_key"],
         "default_trust_denials": denials,
@@ -427,7 +446,7 @@ def install(directory: Path, arch: str, manifest: Path, evidence: Path) -> dict:
         "runtime_trusted_keys": before,
         "repositories_sha256": sha256(Path("/etc/apk/repositories")),
         "temporary_trust_removed": True,
-        "scope": "Exact three signed BusyBox APKs and installed bytes/modes/UID/GID/links/ownership only. Static utmps/skalibs source, advisory and full-image approval remain separate.",
+        "scope": "Exact three signed BusyBox APKs, installed bytes/modes/UID/GID/links/ownership/control scripts and two static-provider delivered-source bindings only. Complete compiler-support sources, advisory and full-image approval remain separate.",
     }
     evidence.parent.mkdir(parents=True, exist_ok=True)
     evidence.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")

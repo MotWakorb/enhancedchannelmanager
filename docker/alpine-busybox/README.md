@@ -71,8 +71,22 @@ authority.
 
 ## Remaining closure
 
-Static utmps/skalibs corresponding-source closure is **pending**. The source
-bundle also still needs final rebuild-helper/provenance delivery integration.
-The build receipt explicitly does not claim source/advisory clearance. Complete
-unfixed-aware advisory reconciliation, final ECM/MCP composition and final
-unsuppressed immutable-image scans remain required.
+`static-sources.json` now seals both official utmps/skalibs source graphs: the
+signed SDK/static APKs on each architecture, source commit, original aports
+recipe, upstream SHA512 inputs and original ISC notices. The builder verifies
+actual installed SDK headers and archives, including package ownership, before
+compilation. These exact source archives, recipes and notices travel in the
+source bundle and are rehashed by the installation consumer. This is source
+correspondence for those two providers, not independently reproduced archive
+bytes or complete compiler-support-source closure.
+
+Native run `42555656082` passed on AMD64 and ARM64: 913 upstream checks per
+architecture, exact signed installation/control scripts, all 32 URL rejections
+and five local transfers. That run predates the additional static-source graph;
+the source-bound build requires a fresh native run.
+
+Compiler-support sources and final rebuild-helper/provenance delivery
+integration are still required. The build receipt does not claim complete
+source/advisory clearance. Complete unfixed-aware advisory reconciliation,
+final ECM/MCP composition and final unsuppressed immutable-image scans remain
+required.

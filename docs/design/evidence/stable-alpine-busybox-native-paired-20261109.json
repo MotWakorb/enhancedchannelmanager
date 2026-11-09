@@ -1,0 +1,125 @@
+{
+  "architectures": {
+    "amd64": {
+      "actual_source_commit": "cb5939400e906e21a96d75c32c05c46c6de0c2d1",
+      "applet_count": 304,
+      "artifact": {
+        "id": 13647830201,
+        "sha256": "7a6abfb59dfc874a658102393753c25706e60f137620e23854ed969bebe8011d"
+      },
+      "configuration_settings": 1084,
+      "control_scripts": [
+        {
+          "gid": 0,
+          "installed_name": "busybox-1.37.0_p20261109-r0.X18d9e155c2cb2bdbee4b96d04f9ae8d5dd660858c.post-install",
+          "mode": 493,
+          "path": ".post-install",
+          "sha256": "13c120a1c714ecafa7fe1fc748406a89dfffc549118ebce324b53d4bbb4ba75f",
+          "size": 335,
+          "uid": 0
+        },
+        {
+          "gid": 0,
+          "installed_name": "busybox-1.37.0_p20261109-r0.X18d9e155c2cb2bdbee4b96d04f9ae8d5dd660858c.post-upgrade",
+          "mode": 493,
+          "path": ".post-upgrade",
+          "sha256": "3cf0a22d2d6c6ed34be6b77ed3973b7c0b7434525744026c0159f5a76f827f49",
+          "size": 1640,
+          "uid": 0
+        },
+        {
+          "gid": 0,
+          "installed_name": "busybox-1.37.0_p20261109-r0.X18d9e155c2cb2bdbee4b96d04f9ae8d5dd660858c.trigger",
+          "mode": 493,
+          "path": ".trigger",
+          "sha256": "c7840b111dd82669de2074ea3c7e345c063928db2bbff650a81289777b3ff98f",
+          "size": 576,
+          "uid": 0
+        }
+      ],
+      "local_transfers": 5,
+      "runtime_binary_sha256": "77dbb7d5a0398c0727aee1818c2080ae519e110fb385d7be5fa5c99caa1573b2",
+      "runtime_status": "PATCHED_BUSYBOX_BOUNDED_RUNTIME_ONLY",
+      "selected_apks": [
+        {
+          "name": "busybox",
+          "sha256": "84f073b187d11044cee607d875dc99c83958911d3f131a54dcafa7dd746ec1d8"
+        },
+        {
+          "name": "busybox-binsh",
+          "sha256": "3ac5cfe20537f13ad537169c4d7a6f65dd35847fb62e87170a96c22df16215d4"
+        },
+        {
+          "name": "ssl_client",
+          "sha256": "a8c8f50c2632119feee62a90035a428d28a9133bc072f54a1ef102d11b1116d8"
+        }
+      ],
+      "signature_mutation_denial": "/tmp/ecm-install-trust-8voce9ij/damaged.apk: BAD signature\n",
+      "temporary_trust_removed": true,
+      "upstream_pass_lines": 913,
+      "url_control_cases": 32
+    },
+    "arm64": {
+      "actual_source_commit": "cb5939400e906e21a96d75c32c05c46c6de0c2d1",
+      "applet_count": 304,
+      "artifact": {
+        "id": 13647476515,
+        "sha256": "4c03865928970db725d54f42f7a46ec644832bb62f4979fee30a28c0cab52d67"
+      },
+      "configuration_settings": 1084,
+      "control_scripts": [
+        {
+          "gid": 0,
+          "installed_name": "busybox-1.37.0_p20261109-r0.X1908f517734b8053494dfd926125f251d4eb6595e.post-install",
+          "mode": 493,
+          "path": ".post-install",
+          "sha256": "13c120a1c714ecafa7fe1fc748406a89dfffc549118ebce324b53d4bbb4ba75f",
+          "size": 335,
+          "uid": 0
+        },
+        {
+          "gid": 0,
+          "installed_name": "busybox-1.37.0_p20261109-r0.X1908f517734b8053494dfd926125f251d4eb6595e.post-upgrade",
+          "mode": 493,
+          "path": ".post-upgrade",
+          "sha256": "3cf0a22d2d6c6ed34be6b77ed3973b7c0b7434525744026c0159f5a76f827f49",
+          "size": 1640,
+          "uid": 0
+        },
+        {
+          "gid": 0,
+          "installed_name": "busybox-1.37.0_p20261109-r0.X1908f517734b8053494dfd926125f251d4eb6595e.trigger",
+          "mode": 493,
+          "path": ".trigger",
+          "sha256": "c7840b111dd82669de2074ea3c7e345c063928db2bbff650a81289777b3ff98f",
+          "size": 576,
+          "uid": 0
+        }
+      ],
+      "local_transfers": 5,
+      "runtime_binary_sha256": "62f00b180e479a6b88807d5eddcccb35070ee46a6ef352cd4e2f5c3436eedb53",
+      "runtime_status": "PATCHED_BUSYBOX_BOUNDED_RUNTIME_ONLY",
+      "selected_apks": [
+        {
+          "name": "busybox",
+          "sha256": "a5c1e39cc84cd57ec8276332f0ae6390decf81f2e8e69a06af336ab6025bd336"
+        },
+        {
+          "name": "busybox-binsh",
+          "sha256": "5411e0e51d25d7a0eeeae07b05a4c9eadda01a123a5d7770f422475ce937436a"
+        },
+        {
+          "name": "ssl_client",
+          "sha256": "e0479fa8c5ab066e8c4143d0589129e53b15bd69c86b2e5fee5797a4dd7e60db"
+        }
+      ],
+      "signature_mutation_denial": "/tmp/ecm-install-trust-4_nz66g3/damaged.apk: BAD signature\n",
+      "temporary_trust_removed": true,
+      "upstream_pass_lines": 913,
+      "url_control_cases": 32
+    }
+  },
+  "head_sha": "8af64cc679e17c765b72f6267e8c0f3580a41b57",
+  "run_id": 42555656082,
+  "scope": "Actual native BusyBox build/install/local-runtime proof only; two static provider source bindings were added subsequently and are not included in this run. No final ECM/MCP or advisory clearance."
+}

@@ -77,11 +77,15 @@ jobs:
             --build-context busybox-packages="$RUNNER_TEMP/busybox-evidence/build" \
             --file docker/alpine-busybox/Dockerfile.runtime \
             --output type=local,dest="$RUNNER_TEMP/busybox-evidence/installed" .
+      - name: Preserve source modes and symlinks in the retained artifact
+        if: always()
+        run: |
+          tar -C "$RUNNER_TEMP/busybox-evidence" -czf "$RUNNER_TEMP/busybox-native-${{ matrix.arch }}.tar.gz" .
       - name: Retain all native proof including negative controls and raw test logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: alpine-busybox-native-${{ matrix.arch }}-${{ github.sha }}
-          path: ${{ runner.temp }}/busybox-evidence/
+          path: ${{ runner.temp }}/busybox-native-${{ matrix.arch }}.tar.gz
           retention-days: 14
           if-no-files-found: error

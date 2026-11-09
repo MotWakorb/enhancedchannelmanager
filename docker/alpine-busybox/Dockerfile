@@ -4,7 +4,7 @@ COPY scripts/alpine_repository_policy.py /proof/scripts/alpine_repository_policy
 RUN python /proof/scripts/alpine_repository_policy.py \
     && apk upgrade --no-cache \
     && apk add --no-cache abuild build-base linux-headers openssl-dev utmps-dev utmps-static perl zip pkgconf
-COPY scripts/build_busybox_provider.py scripts/build_native_runtime.py scripts/build_alpine_codecs.py scripts/verify_musllinux_gnu.py scripts/alpine_apk_v2.py /proof/scripts/
+COPY scripts/build_busybox_provider.py scripts/build_native_runtime.py scripts/build_alpine_codecs.py scripts/verify_musllinux_gnu.py scripts/alpine_apk_v2.py scripts/busybox_static_sources.py /proof/scripts/
 COPY docker/alpine-busybox/ /proof/assets/
 COPY --from=busybox-cache / /proof/cache/
 RUN --network=none case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \

@@ -38,10 +38,19 @@ an unknown key reports `UNTRUSTED signature`. The regression fixture preserves
 the real outputs. A parser error or unknown-key error cannot satisfy the patched
 package's authenticated-byte negative control. No signature gate is bypassed.
 
-Real native AMD64/ARM64 BusyBox CI is the next gate; static utmps/skalibs
-corresponding-source closure, complete rebuild-helper delivery and independent
-unfixed-aware advisory enforcement remain unfinished. Production Dockerfiles
-are unchanged.
+Native run `42555656082` then passed these build/install/runtime checks on both
+AMD64 and ARM64, including 913 upstream checks per architecture and three exact
+installed control scripts. The independently downloaded results are sealed in
+`stable-alpine-busybox-native-paired-20261109.json`; their original-base failures
+remain separate evidence.
+
+The subsequent static-source graph binds official utmps 0.1.3.3 and skalibs
+2.15.0.0 to their actual signed SDK/static APKs, source commits, upstream inputs,
+recipes and ISC notices. Local AMD64 source collection verifies installed SDK
+bytes and package ownership before compiling, and retains matching sources.
+Fresh native CI for that source-bound revision is still required. Complete
+compiler-support/rebuild delivery and independent unfixed-aware advisory
+enforcement remain unfinished. Production Dockerfiles are unchanged.
 
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
