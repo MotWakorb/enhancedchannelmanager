@@ -69,6 +69,35 @@ string. The original official-base failing result is retained separately.
 adds real architecture-specific build/install/probe evidence, not publication
 authority.
 
+## Independent corresponding-source replay
+
+`source-replay/` is **proof data, not a build input or changed patch stack**.
+The original manifest, vendor/owned patches, build recipe and test expectations
+remain unchanged. A strict literal replay of that original stack rejects some
+historical hunk positions; an independent GNU `--fuzz=0` control also rejects the
+original awk test hunk. Those failures are retained, not described as passes.
+
+Independent GNU-default application nevertheless reproduces all 66 recorded full
+pre/post file hashes and all 50 final prepared-source witnesses. Four vendor
+patches and the owned wget patch need explicit source-only literal diff copies
+for replay without offset/search/fuzz. Each copy binds the original patch hash
+and **identical full pre/post file witnesses**. They are not applied by the
+builder, do not change a source/test byte in the resulting tree, and introduce
+no application golden or numerical-tolerance change.
+
+`alpine_source_patch.py` performs exact in-memory line/byte transforms; it never
+executes a delivered recipe, source, compiler, target or test. The caller must
+explicitly supply the separately hash-sealed `source-replay.json`; there is no
+automatic fallback. The complete 2,881-file result must match the independent
+GNU source inventory, including modes and hashes. GNU diagnostic backup files
+are retained separately and bound to original stage preimage hashes, not silently
+accepted by a filename suffix exemption. Original BusyBox GPL-2.0-only source
+and notices remain the authority for these corresponding diff snippets.
+
+This proves source transformation correspondence, **not** historical compiler
+or static linkage, reproduced runtime binaries, native ARM execution, live final
+image acceptance or aggregate source/advisory/MCP clearance.
+
 ## Remaining closure
 
 `static-sources.json` now seals both official utmps/skalibs source graphs: the

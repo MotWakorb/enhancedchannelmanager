@@ -1,0 +1,29 @@
+--- a/editors/awk.c
++++ b/editors/awk.c
+@@ -2638,8 +2638,13 @@
+ 					resbuf = qrealloc(resbuf, residx + replen + n, &resbufsize);
+ 					memcpy(resbuf + residx, sp + pmatch[j].rm_so - start_ofs, n);
+ 					residx += n;
+-				} else
++				} else {
++/* '\\' and '&' following a backslash keep its original meaning, any other
++ * occurrence of a '\\' should be treated as literal */
++					if (bslash && c != '\\' && c != '&')
++						resbuf[residx++] = '\\';
+ 					resbuf[residx++] = c;
++				}
+ 				bslash = 0;
+ 			}
+ 		}
+--- a/testsuite/awk.tests
++++ b/testsuite/awk.tests
+@@ -619,4 +619,9 @@
+ 	'' ''
+ }
+ 
++testing 'awk sub literal backslash in replacement' \
++	'awk '$sq'sub(/abc/, "\\\d")'$sq \
++	'\d\n' \
++	'' 'abc\n'
++
+ exit $FAILCOUNT

@@ -34,6 +34,29 @@
     "generate_sbom_verify": "PASS",
     "generate_sbom_current_dev_audit": "PASS"
   },
+  "full_isolated_backend_after_repair": {
+    "pushed_commit": "9c4f7b2b981ed0c2089e84e39c6b0635f90ec757",
+    "exact_pushed_tree": "eda2b0daf462da810f24688e64f76a566e48fa87",
+    "passed": 17158,
+    "failed": 0,
+    "skipped": 5,
+    "deselected": 2,
+    "coverage_percent": 84.21,
+    "coverage_threshold_unchanged": 56,
+    "execution": "Native AMD64 Alpine with all74pins, isolated exact pushed snapshot, no network, read-only source/root, exec-capable task-owned temporary filesystem; coverage file only redirected to /tmp",
+    "log_sha256": "4c0bee95119f28db17c4980e8173a33ad2f05d6cfdc427b733f62c40e3cda1f4",
+    "scope": "Complete maintained backend gate, not the separate e2e/performance/live-image/advisory gates. BusyBox literal source replay work in progress excluded. Fresh native ARM64 CI remains pending, not inferred from this AMD64 pass."
+  },
+  "native_previous_head_diagnostic": {
+    "run_id": 42706788846,
+    "head_sha": "b7704c9a51c26a9d3c585390c15b92dde67d019d",
+    "each_architecture_passed": 17151,
+    "each_architecture_failed": 1,
+    "sole_failure": "Stale dev SBOM fingerprint; workflow classifier regression is gone",
+    "amd64_log_sha256": "b0a0a41d297ece6f0487dd7be3570af87c64384200199c4fda8a78f9a898b022",
+    "arm64_log_sha256": "ea37518e05f03a9a7914f5912812fb9cf7e5fcd37dfbeade01fbc1d667aa0592",
+    "scope": "This older head lacks9c4f7b2b and remains failed; it is not relabeled a passing run. The corrected paired-native run42712008650 is independently in progress."
+  },
   "scope": "One truthful source fingerprint in the explicitly transient non-permanent dev index only. Original index preserved exactly. No permanent release record, SPDX package list, timestamp/version, generator or test code, dependency pin, coverage rule, application/numeric golden, production Dockerfile or source/advisory/publication gate changed. Full/backend native CI rechecks remain required; neither bookkeeping repair clears Alpine aggregate/source/security/MCP acceptance.",
   "full_runtime_source_acceptance": false
 }

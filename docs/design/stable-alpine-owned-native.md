@@ -477,6 +477,28 @@ has passed original pinned source acquisition on both native architectures.
 Neither observation clears the port; original failures remain preserved. See
 `stable-alpine-rust-native-amd64-20261109.json` and the updated TLS evidence.
 
+The subsequent native paired run `42701394840` passes external/Python-base/Rust
+source and bounded live ELF checks, both bootstrap identities and persistence,
+and 27 functional checks on **each native architecture**. Both complete runtime
+gates still fail solely on `native_source_and_artifact_integrity`'s missing
+`index.json`. Original artifacts were independently rehashed; this is not
+aggregate source or advisory approval. See
+`stable-alpine-native-source-paired-20261109.json`.
+
+BusyBox now also has a complete **corresponding patched-source** replay. The
+original strict literal stack rejects historical hunk locations, and a separate
+GNU `--fuzz=0` control fails an original awk-test hunk. Those failures remain
+retained. A GNU-default data-only control matches all 66 original full pre/post
+hashes and all 50 final prepared-source hashes. Five separately sealed literal
+diff copies preserve the exact same witnesses; they are proof data, never build
+inputs or an automatic fuzzy fallback. Pure byte replay reaches the same complete
+2,881-file source inventory without executing upstream code or changing a
+resulting source/test/golden byte. Original patches and recipes remain intact.
+See `stable-alpine-busybox-corresponding-source-replay-20261109.json` and
+`docker/alpine-busybox/source-replay/source-replay.json`. Historical compiler/
+static linkage, live-file/control-script composition, signed evidence delivery
+and aggregate acceptance remain unresolved.
+
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
 (84.19% coverage). Five failures correctly rejected the stale resdet helper hash;

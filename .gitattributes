@@ -13,3 +13,6 @@ docker/alpine-native/patches/libjxl-notail.patch -text -diff
 # Verbatim GCC license/exception payloads include upstream trailing whitespace
 # and blank lines. Keep exact bytes; the GNU source inventory rehashes them.
 docker/python-third-party/gnu-source-assets/notices/* -text -diff
+# Literal corresponding-source proof diffs retain exact context bytes. They are
+# not build inputs; sealed original/full pre/post hashes independently bind them.
+docker/alpine-busybox/source-replay/patches/*.patch -text -diff
