@@ -74,6 +74,13 @@ A synthetic database grammar probe detects all 122 packages; this is not proof
 of a rebuilt/installed candidate. Recorded paired real reports remain regression
 fixtures that must fail complete-inventory validation.
 
+The first corrected-version ARM64 build installed the APK, then exposed two
+downstream filename validators still restricted to the old format. Both now
+use a shared exact producer/component-derived basename and version check, not
+a broader filename regex. A paired-architecture transport regression crosses
+the actual retainer and namespace reader with unsigned stand-ins; this verifies
+consumer wiring, not native signature or final-image acceptance.
+
 Comprehensive scanning of the retained AMD64 image detects the APK-owned
 `gosu` Go metadata (four packages), plus 84 Rust packages, without relaxing the
 inventory gate. Both ECM collect/block steps now request that mode. The same

@@ -131,6 +131,49 @@ def test_separate_original_busybox_source_root_reuses_all_existing_validation(
     assert not (out / "busybox/sources").exists()
 
 
+def test_current_producer_filename_crosses_retainer_and_namespace_reader(
+    copier, subject
+):
+    """Real consumer wiring with unsigned stand-ins, not signature acceptance."""
+    import package_alpine_native as packager
+    import verify_alpine_owned_sources as reader
+
+    native, busy, arch, _source, out, _calls = subject
+    path = native / "package-output.json"
+    record = json.loads(path.read_text())
+    old_name = record["package"]["file"]
+    record["helper_sha256"] = hashlib.sha256(
+        Path(packager.__file__).read_bytes()
+    ).hexdigest()
+    version = packager.package_version(record["components"], record["helper_sha256"])
+    record["package"]["version"] = version
+    record["package"]["file"] = "ecm-owned-native-" + version + ".apk"
+    (native / old_name).rename(native / record["package"]["file"])
+    path.write_text(json.dumps(record))
+    root = out / "runtime-root"
+    delivered = root / reader.NAMESPACE
+    delivered.parent.mkdir(parents=True)
+    copier.retain(native, busy, arch, delivered)
+    result = reader.read_namespace(root, arch)
+    assert result["native"] == record
+    assert (delivered / "native" / record["package"]["file"]).read_bytes() == (
+        native / record["package"]["file"]
+    ).read_bytes()
+
+    # A safe-looking filename for a different digest must fail before copying.
+    record["package"]["version"] = packager.package_version(
+        record["components"], "0" * 64
+    )
+    changed_name = "ecm-owned-native-" + record["package"]["version"] + ".apk"
+    (native / record["package"]["file"]).rename(native / changed_name)
+    record["package"]["file"] = changed_name
+    path.write_text(json.dumps(record))
+    with pytest.raises(
+        (copier.BuildError, ValueError), match="package.*(basename|identity|version)"
+    ):
+        copier.retain(native, busy, arch, out / "invalid-copy")
+
+
 @pytest.mark.parametrize(
     "defect",
     [

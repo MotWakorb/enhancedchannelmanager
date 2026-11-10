@@ -15,6 +15,7 @@ import re
 import shutil
 from pathlib import Path
 
+from alpine_owned_native import reviewed_package_basename
 from build_native_runtime import BuildError, _require, owned_artifacts, sha256
 from install_alpine_native import load_package
 from install_busybox_provider import load_packages
@@ -107,14 +108,7 @@ def retain(
         and busybox_record["public_key"]["file"] == "ecm-busybox.rsa.pub",
         "reviewed owned public-key basenames required",
     )
-    _require(
-        re.fullmatch(
-            r"ecm-owned-native-1\.0~[0-9a-f]{64}-r0\.apk",
-            native_record["package"]["file"],
-        )
-        is not None,
-        "reviewed owned package basename required",
-    )
+    reviewed_package_basename(native_record)
     _require(
         [row["name"] for row in busybox_record["runtime_packages"]]
         == ["busybox", "busybox-binsh", "ssl_client"],

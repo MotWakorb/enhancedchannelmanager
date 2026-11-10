@@ -21,6 +21,7 @@ from alpine_apk_v2 import parts
 from alpine_owned_apk_v3 import verify_owned_apk
 from alpine_owned_busybox import bind_installed_record, replay_original_sources
 from alpine_owned_native import (
+    reviewed_package_basename,
     COMPONENTS,
     PROVENANCE,
     bind_components,
@@ -117,14 +118,7 @@ def read_namespace(root: Path, architecture: str) -> dict:
             and busy["public_key"]["file"] == "ecm-busybox.rsa.pub",
             "original public key basenames required",
         )
-        require(
-            isinstance(native["package"]["file"], str)
-            and re.fullmatch(
-                r"ecm-owned-native-1\.0~[0-9a-f]{64}-r0\.apk", native["package"]["file"]
-            )
-            is not None,
-            "original native package basename required",
-        )
+        reviewed_package_basename(native)
         require(
             [row["name"] for row in busy["runtime_packages"]]
             == ["busybox", "busybox-binsh", "ssl_client"],

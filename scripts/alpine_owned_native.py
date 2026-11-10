@@ -73,6 +73,23 @@ def reviewed_packager_bytes(digest: str) -> bytes:
     return helper
 
 
+def reviewed_package_basename(receipt: dict) -> str:
+    """Bind a safe basename to the exact current or historical producer version."""
+    digest = receipt["helper_sha256"]
+    reviewed_packager_bytes(digest)
+    version = package_version(
+        receipt["components"], digest, legacy=digest == LEGACY_PACKAGER_SHA256
+    )
+    basename = package_alpine_native.PACKAGE_NAME + "-" + version + ".apk"
+    require(
+        receipt["package"]["name"] == package_alpine_native.PACKAGE_NAME
+        and receipt["package"]["version"] == version
+        and receipt["package"]["file"] == basename,
+        "reviewed owned package basename/version identity differs",
+    )
+    return basename
+
+
 def bind_components(
     receipt: dict, original_receipts: dict[str, bytes], architecture: str
 ) -> dict:
