@@ -70,6 +70,14 @@ def test_selection_cannot_fetch_a_different_package_under_same_name(
         producer.select_packages(plan, indexes)
 
 
+def test_current_krb5_route_is_exact_official_original_source_not_a_version_substitution(producer):
+    route = producer.UPSTREAM_ROUTES[("krb5", "krb5-1.22.3.tar.gz")]
+    assert route == {
+        "sha512": "0276d83dee90e76d50a506d22901e658212094c1191fc09b8510273b4bfc56195ab1dd1c80b5fd8288b4aa9323c62f0b60ab3f6227ea113b4712bc54cb144abb",
+        "url": "https://web.mit.edu/kerberos/dist/krb5/1.22/krb5-1.22.3.tar.gz",
+    }
+
+
 def test_wrong_source_bytes_never_try_an_alternate_url(producer, tmp_path, monkeypatch):
     calls = []
 

@@ -1,4 +1,4 @@
-"""The native runtime delivers the sources of its actual installed graph."""
+"""Historical SUSE source graph; Alpine composition has independent current tests."""
 
 import importlib.util
 from pathlib import Path
@@ -16,7 +16,7 @@ def _stages():
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module._docker_stages((ROOT / "Dockerfile").read_text(), "Dockerfile")
+    return module._docker_stages((ROOT / "docker/native/Dockerfile.suse").read_text(), "Dockerfile.suse")
 
 
 def test_native_runtime_uses_reviewed_shared_graph_and_separate_source_builder():

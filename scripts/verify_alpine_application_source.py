@@ -11,7 +11,7 @@ import stat
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_SHA256 = "4359eae8a0e529d61adf2a7b62e367f90e68f557527e5d8e5fa6ef90875e37e6"
+MANIFEST_SHA256 = "3d5d9ec5e89486ecab8899b40e33adc9a329d2ad2e55704b451999efd4bf3076"
 IGNORED_DIRECTORIES = frozenset(
     {
         "node_modules",
@@ -130,8 +130,12 @@ def verify(root: Path, manifest: dict) -> dict:
         "file_count": len(rows),
         "manifest_sha256": MANIFEST_SHA256,
         "baseline_application_commit": manifest.get("baseline_application_commit"),
-        "adaptations": [row for row in rows if "adaptation_commit" in row],
-        "scope": "Exact tracked application input content plus one pre-existing date compatibility adaptation, excluding backend tests and Docker-excluded build/cache artifacts. Not runtime or advisory approval.",
+        "adaptations": [
+            row
+            for row in rows
+            if "adaptation_commit" in row or "adaptation_reason" in row
+        ],
+        "scope": "Exact tracked application input content plus the recorded date and container-base compatibility adaptations, excluding backend tests and Docker-excluded build/cache artifacts. Not runtime or advisory approval.",
     }
 
 

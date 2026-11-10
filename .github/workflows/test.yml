@@ -305,8 +305,6 @@ jobs:
       - name: Build the ECM and MCP images for the isolation gate
         id: isolation_build
         if: needs.detect.outputs.code_paths_changed != 'false'
-        env:
-          ECM_RECOVER_NATIVE_BASE: "true"
         run: bash scripts/test_mcp_container_hardening.sh --build-only
 
       - name: Assert MCP container runtime isolation

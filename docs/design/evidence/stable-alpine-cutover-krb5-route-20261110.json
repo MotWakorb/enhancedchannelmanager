@@ -1,0 +1,25 @@
+{
+  "date": "2026-11-10",
+  "status": "EXACT_ORIGINAL_SOURCE_AVAILABILITY_ROUTE_ONLY",
+  "subject": {
+    "package": "krb5-libs",
+    "version": "1.22.3-r0",
+    "aports_commit": "95ecd1043f781a308ae20a7aa08b86070806946f",
+    "recipe": "main/krb5/APKBUILD",
+    "filename": "krb5-1.22.3.tar.gz"
+  },
+  "primary": {
+    "url": "https://distfiles.alpinelinux.org/distfiles/v3.24/krb5-1.22.3.tar.gz",
+    "status": 404,
+    "observed_in": "/tmp/opencode/ecm-alpine-cutover-standalone-build-hostnet.log"
+  },
+  "official_upstream": {
+    "url": "https://web.mit.edu/kerberos/dist/krb5/1.22/krb5-1.22.3.tar.gz",
+    "final_url": "https://web.mit.edu/kerberos/dist/krb5/1.22/krb5-1.22.3.tar.gz",
+    "status": 200,
+    "bytes": 8758584,
+    "sha512": "0276d83dee90e76d50a506d22901e658212094c1191fc09b8510273b4bfc56195ab1dd1c80b5fd8288b4aa9323c62f0b60ab3f6227ea113b4712bc54cb144abb",
+    "sha256": "fe90af8441ad9fa9b064b8e53077cefb782a96f8a68276b031dc54af1789ff0b"
+  },
+  "scope": "Allow the exact official upstream URL only after mirror HTTP404 and an exact original-recipe SHA512 match. No version change, checksum exception, generic mirror fallback, advisory remediation or complete image acceptance is claimed. Existing transport/wrong-byte failure rules remain unchanged."
+}

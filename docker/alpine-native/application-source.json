@@ -5869,7 +5869,9 @@
     {
       "executable": false,
       "path": "mcp-server/Dockerfile",
-      "sha256": "c5362f558ffbb15522bda00cc3a088b6e3e82429123c06720549c8a93e56b125",
+      "baseline_sha256": "c5362f558ffbb15522bda00cc3a088b6e3e82429123c06720549c8a93e56b125",
+      "adaptation_reason": "ADR-017 stable Alpine 3.24 release-qualified Python base alignment; package floors and application instructions unchanged",
+      "sha256": "c6df846d46c91cd5937956565c80044cd7a13392e5d47002305a80dc26f09efc",
       "type": "file"
     },
     {

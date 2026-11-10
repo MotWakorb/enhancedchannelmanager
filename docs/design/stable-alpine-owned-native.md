@@ -3,8 +3,11 @@
 Tracks `enhancedchannelmanager-g3vd3` and `enhancedchannelmanager-mgt2t`, under
 [ADR-017](../adr/ADR-017-stable-alpine-runtime.md). This is **intermediate build
 evidence**, not completion of the [compatibility matrix](stable-alpine-parity.md).
-Production `Dockerfile`, publication gates and deployed services are not switched
-by this implementation. No image publication or deployment is authorized.
+The original incremental implementation did not switch production. The
+[self-contained build integration](../../docker/alpine-native/README.md) now
+composes those same recipes into the root `Dockerfile`; native verification of
+that integration is tracked separately. No image publication or deployment is
+authorized by these implementation notes.
 
 ## Unfixed-aware advisory input decoding (not yet a complete gate)
 

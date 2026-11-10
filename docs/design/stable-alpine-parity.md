@@ -79,7 +79,11 @@ The PO has prioritized finishing the containers before further advisory fixes.
 See the [ADR priority update](../adr/ADR-017-stable-alpine-runtime.md) and
 [completed assessment](stable-alpine-advisory-feasibility.md). Normal build-path
 integration, MCP stable-base alignment and APK scanner contracts remain open;
-production promotion checks are unchanged.
+production promotion checks are unchanged. The working implementation now wires
+the root `Dockerfile` to the self-contained Alpine graph and aligns MCP's pinned
+base. Their build/runtime and scanner verification is in progress; these edits
+are not yet completed native acceptance. See the
+[container build instructions](../../docker/alpine-native/README.md).
 
 - Stable-only repository policy: 26 direct regressions; 330 policy/SBOM checks
   pass. The guard also runs read-only/offline on actual existing MCP stable

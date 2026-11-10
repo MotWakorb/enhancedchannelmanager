@@ -1,4 +1,61 @@
-# Incremental owned Alpine library builds
+# Stable Alpine container build
+
+The root `Dockerfile` is the self-contained ECM build. No separately downloaded
+CI artifact or named build context is required:
+
+```sh
+docker buildx build --platform linux/amd64 --load -t ecm:alpine .
+docker buildx build --platform linux/amd64 --load -t ecm-mcp:alpine mcp-server
+```
+
+Use a native ARM64 builder and `--platform linux/arm64` for ARM64 verification;
+cross-building is not evidence of native runtime compatibility. Building requires
+network access to the pinned source archives, official stable APK repositories,
+PyPI wheel URLs and npm. Native compilation itself retains the component
+recipes' network-disabled steps. BusyBox's original network-dependent upstream
+checks are preserved rather than skipped.
+
+`scripts/compose_alpine_dockerfile.py` generates the root recipe from
+`Dockerfile.inputs`, the existing component builders, the signed-package builder
+and `Dockerfile.candidate`. After intentionally editing a component recipe, run:
+
+```sh
+python3 scripts/compose_alpine_dockerfile.py
+python3 scripts/compose_alpine_dockerfile.py --check
+```
+
+The production contract also freezes every normalized build instruction in
+`scripts/generate_sbom.py`; updating the generated file alone cannot authorize a
+different recipe. Keep tests and source-manifest SBOM fingerprints current.
+`docker/native/Dockerfile.suse` is retained only for historical regression tests,
+not a fallback build or runtime base.
+
+## Verification and remaining security work
+
+Run `scripts/native_image_gate.py` with the full immutable image ID, not a tag.
+Its Alpine source check composes the external APK, four owned package,
+Python-base, installed wheel/GNU and retained Rust-input verifiers. These are
+bounded integrity checks, not a claim of complete source reconstruction or
+advisory clearance. The image deliberately retains its pending-closure label.
+
+The production scanner joins every APK scan row to a query/database capture of
+the same immutable image, including `.python-rundeps`; it does not replace the
+old RPM count with a smaller guessed Alpine count. Complete unsuppressed
+findings, HIGH/CRITICAL and reviewed-P1 checks remain required for promotion.
+Alpine package detection baselines are not RPM version-equivalence claims.
+
+The PO has deferred further advisory remediation while the containers are
+finished. See [ADR-017](../../docs/adr/ADR-017-stable-alpine-runtime.md) and the
+[advisory assessment](../../docs/design/stable-alpine-advisory-feasibility.md).
+Building a local development image does not merge, publish or deploy it.
+
+## Historical incremental build and maintenance notes
+
+The following records the earlier component-only phase. Statements about the
+production path remaining unchanged describe that phase, not the integration
+above; its bounded evidence and maintenance details remain applicable.
+
+### Incremental owned Alpine library builds
 
 Tracks `enhancedchannelmanager-g3vd3`. The PO approved maintaining pinned,
 reviewed Alpine-native sources/backports for seven library providers: Codec2,
@@ -7,7 +64,7 @@ the existing signed FFmpeg and gosu contracts. Native hosted AMD64/ARM64 CI is
 in `.github/workflows/alpine-native.yml`. Production images remain unchanged;
 component builds do not complete final-image packaging/source/security work.
 
-## Inputs and maintenance
+### Inputs and maintenance
 
 - `codecs.json` records exact upstream URLs, SHA256, sizes, configuration and
   ordered patches. Its full bytes are pinned in `scripts/build_alpine_codecs.py`;
@@ -30,7 +87,7 @@ component builds do not complete final-image packaging/source/security work.
   actual APK inventory/compiler, but **does not yet retain/authenticate the full
   builder APK/source closure** or make mutable APK feeds reproducible.
 
-## Disposable native x86 proof
+### Disposable native x86 proof
 
 Use a new content-addressed cache directory with the three original archives
 named by their `sha256` in `codecs.json`. Independently verify their bytes against
@@ -69,7 +126,7 @@ TwoLAME's optional libsndfile frontend is not built. The baseline runtime had
 builder-only. This retains the baseline library integrations; final FFmpeg
 configuration and required media behaviors must still be demonstrated separately.
 
-## Verification and historical differences
+### Verification and historical differences
 
 `test_build_alpine_codecs.py` covers recipe/patch/smoke tampering, source-cache
 corruption, repository and platform mismatch, unsafe locations, patch witnesses,

@@ -403,7 +403,7 @@ def parse_dockerfile_images(text: str, source: str) -> list[dict[str, str]]:
     rejected: an SBOM naming a floating tag records nothing verifiable.
     """
     images: dict[tuple[str, str], dict[str, str]] = {}
-    stage_base: dict[str, tuple[str, str]] = {}
+    stage_base: dict[str, tuple[str, str] | None] = {}
     runtime_key: tuple[str, str] | None = None
 
     def _record(entry: dict[str, str]) -> tuple[str, str]:
@@ -414,7 +414,7 @@ def parse_dockerfile_images(text: str, source: str) -> list[dict[str, str]]:
     for stage in _docker_stages(text, source):
         reference, number = stage["base"], stage["line"]
         key = stage_base.get(reference)
-        if key is None:
+        if reference != "scratch" and reference not in stage_base:
             key = _record(_pinned_image(reference, source, number, "base"))
         runtime_key = key
         # Only completed previous stages may be COPY sources (never self/future).
@@ -779,11 +779,38 @@ def _validate_suse_stages(stages: list[dict[str, Any]], source: str) -> None:
     ])
 
 
+ALPINE_GRAPH_SHA256 = "5b0e07bd5cd6fe94541838c01885a96f99331a60509f0ac890317de2e69f642b"
+ALPINE_RESDET_DOCUMENT_SHA256 = "43b58514faeddd9bc81580c464a9d2097a5079fa7fca644e632b40536c66817e"
+
+
 def validate_native_runtime_docker_contract(dockerfile: str, source: str) -> None:
     """Publication accepts only the current graph, never historical compatibility."""
     stages = _docker_stages(dockerfile, source)
     parse_dockerfile_images(dockerfile, source)
-    _validate_suse_stages(stages, source)
+    _validate_alpine_stages(stages, source)
+
+
+def validate_historical_suse_docker_contract(dockerfile: str, source: str) -> None:
+    """Retained regression fixtures only; not called by publication policy."""
+    parse_dockerfile_images(dockerfile, source)
+    _validate_suse_stages(_docker_stages(dockerfile, source), source)
+
+
+def _validate_alpine_stages(stages: list[dict[str, Any]], source: str) -> None:
+    # Freeze the complete normalized graph, including all acquisition, signature,
+    # offline build, source-delivery and final instructions. No substring-based
+    # allowlist or fall-through to historical RPM/source-carrier contracts.
+    graph = [
+        [stage["base"], stage["alias"], [
+            [kind, args] for kind, args, _line in stage["instructions"]
+        ]]
+        for stage in stages
+    ]
+    digest = hashlib.sha256(
+        json.dumps(graph, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+    if digest != ALPINE_GRAPH_SHA256:
+        raise SbomError(f"{source} must contain only the exact reviewed Alpine recipe")
 
 
 def validate_resdet_docker_contract(document: Any, dockerfile: str, source: str) -> None:
@@ -795,6 +822,14 @@ def validate_resdet_docker_contract(document: Any, dockerfile: str, source: str)
         raise SbomError(f"{NATIVE_DEPENDENCIES_PATH} has no resdet build metadata")
     stages = _docker_stages(dockerfile, source)
     parse_dockerfile_images(dockerfile, source)
+    if any(stage["alias"] == "application-candidate" for stage in stages):
+        _validate_alpine_stages(stages, source)
+        digest = hashlib.sha256(
+            json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if digest != ALPINE_RESDET_DOCUMENT_SHA256:
+            raise SbomError(f"{source} requires the original reviewed resdet/KISS FFT pins")
+        return
     # The historical source-manifest fixtures remain reproducible, but no other
     # graph can fall through into that weaker historical tail contract.
     historical = (
@@ -1002,6 +1037,52 @@ def _native_package(entry: dict[str, str]) -> dict[str, Any]:
     if "sha256" in entry:
         package["checksums"] = [{"algorithm": "SHA256", "checksumValue": entry["sha256"]}]
     return package
+
+
+def _alpine_runtime_native_inputs(root: Path, sources: dict[str, str]) -> list[dict[str, str]]:
+    """Project owned source identities; APK inventories remain image evidence."""
+    packages = []
+
+    def add(name: str, version: str, archive: dict, license: str = NOASSERTION) -> None:
+        if not isinstance(version, str) or not version or not isinstance(archive, dict):
+            raise SbomError(f"malformed Alpine owned source identity: {name}")
+        digest = archive.get("sha256")
+        if not isinstance(digest, str) or SHA256.fullmatch(digest) is None:
+            raise SbomError(f"missing Alpine owned source checksum: {name}")
+        _validate_https_url(archive.get("url"), name, "ecm", 0)
+        packages.append({
+            "id": name, "name": name, "version": version, "license": license,
+            "purl": f"pkg:generic/{name}@{version}",
+            "downloadLocation": archive["url"], "sha256": digest,
+        })
+
+    directory = root / "docker/alpine-native"
+    for filename in ("codecs.json", "security-libraries.json"):
+        for row in _read_json(directory / filename)["libraries"]:
+            add(row["name"], row["version"], row["archive"], row["license"])
+    jxl = _read_json(directory / "libjxl.json")
+    add("libjxl", jxl["version"], jxl["archive"])
+    for name in ("ffmpeg", "gosu"):
+        row = _read_json(directory / f"{name}.json")[name]
+        add(name, row["version"], row)
+    busybox = _read_json(root / "docker/alpine-busybox/manifest.json")
+    add("busybox", busybox["upstream_version"], busybox["source"])
+    for relative in ("docker/alpine-native", "docker/alpine-busybox", "docker/native", "docker/trust"):
+        base = root / relative
+        if base.is_symlink():
+            raise SbomError(f"native source input must not be a symlink: {base}")
+        for path in sorted(base.rglob("*")):
+            if path.is_symlink():
+                raise SbomError(f"native source input must not be a symlink: {path}")
+            if path.is_file():
+                sources[path.relative_to(root).as_posix()] = sha256_file(path)
+    # The input recipe copies scripts/ as a whole: fingerprint every copied
+    # Python helper, not only the four entrypoints visible in its RUN lines.
+    for path in sorted((root / "scripts").glob("*.py")):
+        if path.is_symlink():
+            raise SbomError(f"native source input must not be a symlink: {path}")
+        sources[path.relative_to(root).as_posix()] = sha256_file(path)
+    return packages
 
 
 def _runtime_native_inputs(root: Path, sources: dict[str, str]) -> list[dict[str, str]]:
@@ -1253,7 +1334,9 @@ def render(root: Path, version: str, created: str) -> dict[str, Any]:
     dockerfile = _read_text(root / "Dockerfile")
     validate_resdet_docker_contract(native_document, dockerfile, "Dockerfile")
     runtime_packages = (
-        _runtime_native_inputs(root, sources)
+        _alpine_runtime_native_inputs(root, sources)
+        if any(stage["alias"] == "application-candidate" for stage in _docker_stages(dockerfile, "Dockerfile"))
+        else _runtime_native_inputs(root, sources)
         if any(stage["alias"] == "native-builder" for stage in _docker_stages(dockerfile, "Dockerfile"))
         else []
     )
@@ -1338,11 +1421,11 @@ def render(root: Path, version: str, created: str) -> dict[str, Any]:
         },
         "coverage": {
             "includes": list(COVERAGE_INCLUDES) + ([
-                ("Source-built FFmpeg/gosu identities from docker/native/manifest.json; "
-                 "native recipe assets and builder/source-collector bytes are fingerprinted"),
+                 ("Source-built native identities from the active runtime recipes; "
+                  "native recipe assets and copied Python build/source helpers are fingerprinted"),
             ] if runtime_packages else []),
             "excludes": ([
-                ("Operating-system RPM packages resolved at build time by zypper are not "
+                 ("Operating-system packages resolved at build time by the distribution package manager are not "
                  "enumerated by this source-manifest SBOM; use the runtime image inventory"),
                 *COVERAGE_EXCLUDES[1:],
             ] if runtime_packages else list(COVERAGE_EXCLUDES)),

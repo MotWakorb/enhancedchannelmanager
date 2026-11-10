@@ -250,7 +250,7 @@ def test_codec_transaction_cannot_refresh_after_native_build_delay(
 def docker_run(stage):
     # Preserve spaces inside shell quotes: the SBOM parser canonicalizes them
     # for comparison and is intentionally not an executable-shell renderer.
-    text = (ROOT / "Dockerfile").read_text().split(" AS " + stage + "\n", 1)[1]
+    text = (ROOT / "docker/native/Dockerfile.suse").read_text().split(" AS " + stage + "\n", 1)[1]
     text = text.split("\nFROM ", 1)[0]
     pieces = []
     for line in text.splitlines():

@@ -21,7 +21,7 @@ def verifier():
     return module
 
 
-def test_real_recorded_application_map_allows_only_the_existing_date_adaptation(
+def test_real_recorded_application_map_allows_only_date_and_container_adaptations(
     verifier,
 ):
     manifest = verifier.load_manifest(
@@ -39,6 +39,11 @@ def test_real_recorded_application_map_allows_only_the_existing_date_adaptation(
         r["path"] != "backend/requirements.txt" or "adaptation_commit" not in r
         for r in manifest["files"]
     )
+    result = verifier.verify(ROOT, manifest)
+    assert {r["path"] for r in result["adaptations"]} == {
+        "backend/date_placeholders.py",
+        "mcp-server/Dockerfile",
+    }
 
 
 def test_changed_missing_or_extra_application_source_fails(verifier, tmp_path):

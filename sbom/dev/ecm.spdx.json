@@ -3,7 +3,7 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "ecm-0.18.2-0065",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0065/ecm-eb8bc02b8e0126eabe28df698eebff97810c6a402b71ab05b88b37c2d0ee6da7",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0065/ecm-426355f2926866419d4c7e5e68025bc1417b8ed70eeff0c1e5b6cffe00fe36be",
   "creationInfo": {
     "created": "2026-11-08T01:53:48Z",
     "creators": [
@@ -28,8 +28,56 @@
       "primaryPackagePurpose": "CONTAINER"
     },
     {
+      "SPDXID": "SPDXRef-Package-native-busybox-1.37.0",
+      "name": "busybox",
+      "versionInfo": "1.37.0",
+      "downloadLocation": "https://busybox.net/downloads/busybox-1.37.0.tar.bz2",
+      "filesAnalyzed": false,
+      "supplier": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/busybox@1.37.0"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-native-codec2-1.2.0",
+      "name": "codec2",
+      "versionInfo": "1.2.0",
+      "downloadLocation": "https://codeload.github.com/drowe67/codec2/tar.gz/refs/tags/1.2.0",
+      "filesAnalyzed": false,
+      "supplier": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LGPL-2.1-only",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/codec2@1.2.0"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "cbccae52b2c2ecc5d2757e407da567eb681241ff8dadce39d779a7219dbcf449"
+        }
+      ]
+    },
+    {
       "SPDXID": "SPDXRef-Package-native-ffmpeg-8.1.3",
-      "name": "FFmpeg",
+      "name": "ffmpeg",
       "versionInfo": "8.1.3",
       "downloadLocation": "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz",
       "filesAnalyzed": false,
@@ -65,7 +113,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:github/tianon/gosu@1.19"
+          "referenceLocator": "pkg:generic/gosu@1.19"
         }
       ],
       "checksums": [
@@ -94,6 +142,78 @@
       ]
     },
     {
+      "SPDXID": "SPDXRef-Package-native-libjxl-0.12.0",
+      "name": "libjxl",
+      "versionInfo": "0.12.0",
+      "downloadLocation": "https://codeload.github.com/libjxl/libjxl/tar.gz/refs/tags/v0.12.0",
+      "filesAnalyzed": false,
+      "supplier": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/libjxl@0.12.0"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "03e9be69a30be4011f559da75328b6d7cea8ad921fabfbd551ce10bf45cdc992"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-native-librsvg-2.63.4",
+      "name": "librsvg",
+      "versionInfo": "2.63.4",
+      "downloadLocation": "https://download.gnome.org/sources/librsvg/2.63/librsvg-2.63.4.tar.xz",
+      "filesAnalyzed": false,
+      "supplier": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LGPL-2.1-or-later AND MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/librsvg@2.63.4"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "31f07d9350dad3f8964fd613c31309ac160fdef13dfac59df6fd082de78d6e8f"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-native-libxml2-2.13.9",
+      "name": "libxml2",
+      "versionInfo": "2.13.9",
+      "downloadLocation": "https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.9.tar.xz",
+      "filesAnalyzed": false,
+      "supplier": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/libxml2@2.13.9"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "a2c9ae7b770da34860050c309f903221c67830c86e4a7e760692b803df95143a"
+        }
+      ]
+    },
+    {
       "SPDXID": "SPDXRef-Package-native-resdet-2.4.3",
       "name": "resdet",
       "versionInfo": "2.4.3",
@@ -108,6 +228,78 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:github/0x09/resdet@2.4.3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-native-shine-3.1.1",
+      "name": "shine",
+      "versionInfo": "3.1.1",
+      "downloadLocation": "https://github.com/toots/shine/releases/download/3.1.1/shine-3.1.1.tar.gz",
+      "filesAnalyzed": false,
+      "supplier": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LGPL-2.0-only",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/shine@3.1.1"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "58e61e70128cf73f88635db495bfc17f0dde3ce9c9ac070d505a0cd75b93d384"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-native-speex-1.2.1",
+      "name": "speex",
+      "versionInfo": "1.2.1",
+      "downloadLocation": "https://downloads.xiph.org/releases/speex/speex-1.2.1.tar.gz",
+      "filesAnalyzed": false,
+      "supplier": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/speex@1.2.1"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "4b44d4f2b38a370a2d98a78329fefc56a0cf93d1c1be70029217baae6628feea"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-native-twolame-0.4.0",
+      "name": "twolame",
+      "versionInfo": "0.4.0",
+      "downloadLocation": "https://downloads.sourceforge.net/project/twolame/twolame/0.4.0/twolame-0.4.0.tar.gz",
+      "filesAnalyzed": false,
+      "supplier": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LGPL-2.1-only",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/twolame@0.4.0"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "cc35424f6019a88c6f52570b63e1baf50f62963a3eac52a03a800bb070d7c87d"
         }
       ]
     },
@@ -7085,9 +7277,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-oci-ghcr.io.astral-sh.uv.latest-e85be8442038",
-      "name": "ghcr.io/astral-sh/uv:latest",
-      "versionInfo": "sha256:e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1",
+      "SPDXID": "SPDXRef-Package-oci-golang.1.26.10-alpine3.24-87c65a688975",
+      "name": "golang:1.26.10-alpine3.24",
+      "versionInfo": "sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7097,15 +7289,15 @@
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1"
+          "checksumValue": "87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696"
         }
       ],
-      "comment": "Pulled during the build to copy a tool out of; not published. Its own OS package set is NOT enumerated by this document, and the Dockerfile applies OS security upgrades on top of it at build time.",
+      "comment": "Intermediate build-stage base image; not published. Its own OS package set is NOT enumerated by this document, and the Dockerfile applies OS security upgrades on top of it at build time.",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:oci/uv@sha256:e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1?repository_url=ghcr.io%2Fastral-sh%2Fuv&tag=latest"
+          "referenceLocator": "pkg:oci/golang@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696?repository_url=docker.io%2Flibrary%2Fgolang&tag=1.26.10-alpine3.24"
         }
       ]
     },
@@ -7135,9 +7327,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-oci-registry.opensuse.org.opensuse.tumbleweed-c807eabd03ac",
-      "name": "registry.opensuse.org/opensuse/tumbleweed",
-      "versionInfo": "sha256:c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55",
+      "SPDXID": "SPDXRef-Package-oci-python.3.12-alpine3.24-e064671ca452",
+      "name": "python:3.12-alpine3.24",
+      "versionInfo": "sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7147,7 +7339,7 @@
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55"
+          "checksumValue": "e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7"
         }
       ],
       "comment": "Final base image of the published container. Its own OS package set is NOT enumerated by this document, and the Dockerfile applies OS security upgrades on top of it at build time.",
@@ -7155,7 +7347,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:oci/tumbleweed@sha256:c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55?repository_url=registry.opensuse.org%2Fopensuse%2Ftumbleweed"
+          "referenceLocator": "pkg:oci/python@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7?repository_url=docker.io%2Flibrary%2Fpython&tag=3.12-alpine3.24"
         }
       ]
     },
@@ -8764,7 +8956,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-oci-ghcr.io.astral-sh.uv.latest-e85be8442038",
+      "spdxElementId": "SPDXRef-Package-oci-golang.1.26.10-alpine3.24-87c65a688975",
       "relationshipType": "BUILD_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -8776,12 +8968,47 @@
     {
       "spdxElementId": "SPDXRef-Package-ecm",
       "relationshipType": "CONTAINS",
-      "relatedSpdxElement": "SPDXRef-Package-oci-registry.opensuse.org.opensuse.tumbleweed-c807eabd03ac"
+      "relatedSpdxElement": "SPDXRef-Package-oci-python.3.12-alpine3.24-e064671ca452"
     },
     {
       "spdxElementId": "SPDXRef-Package-ecm",
       "relationshipType": "CONTAINS",
       "relatedSpdxElement": "SPDXRef-Package-native-resdet-2.4.3"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-ecm",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-native-codec2-1.2.0"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-ecm",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-native-twolame-0.4.0"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-ecm",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-native-shine-3.1.1"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-ecm",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-native-libxml2-2.13.9"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-ecm",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-native-speex-1.2.1"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-ecm",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-native-librsvg-2.63.4"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-ecm",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-native-libjxl-0.12.0"
     },
     {
       "spdxElementId": "SPDXRef-Package-ecm",
@@ -8792,6 +9019,11 @@
       "spdxElementId": "SPDXRef-Package-ecm",
       "relationshipType": "CONTAINS",
       "relatedSpdxElement": "SPDXRef-Package-native-gosu-1.19"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-ecm",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-native-busybox-1.37.0"
     },
     {
       "spdxElementId": "SPDXRef-Package-native-resdet-2.4.3",
