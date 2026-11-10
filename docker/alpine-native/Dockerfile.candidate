@@ -53,6 +53,7 @@ RUN --network=none --mount=type=bind,source=scripts,target=/build-scripts \
         --output-dir /usr/share/ecm/provenance/owned-signatures \
     && apk query --from installed --format json --all-matches '*' > /usr/share/ecm/provenance/installed-apks.json \
     && cp /lib/apk/db/installed /usr/share/ecm/provenance/installed-apk-database.txt
+COPY docker/alpine-busybox/source-replay/ /usr/share/ecm/provenance/busybox-source-replay/
 
 FROM runtime-base AS apk-source-builder
 # Select the saved runtime subject before adding builder-only Git. Never query

@@ -530,6 +530,30 @@ evidence-delivery change. Production SUSE runtime/source/scan passes must not be
 relabeled as Alpine aggregate/security clearance. Full candidate/compiler/static/
 source/advisory/MCP acceptance remains unfinished.
 
+### Independent owned-evidence consumer
+
+`scripts/verify_alpine_owned_sources.py` now composes the closed public-evidence
+namespace, complete live query/database plan, four native signatures/full owned
+installed records, live bytes/raw links/identities/modes, six component sources,
+BusyBox original sources/static/check evidence and installed control scripts.
+It also replays the sealed corresponding-source plan in memory. The six plan
+files are delivered separately under provenance; the original 110-file BusyBox
+source inventory and builder patch inputs are unchanged.
+
+Native CI invokes trusted checkout code through a read-only scripts bind against
+the saved immutable image ID, nonroot/offline. It does not execute delivered
+provider code. This is added to an existing verifier step, not the candidate
+build step: rejection still leaves the independent `always()` aggregate runtime
+gate running. No reviewed control positions or conditionals are changed.
+
+The actual AMD64 candidate `runtime-base` passes this CLI, including all 66 stage
+and 50 final BusyBox witnesses. Four actual-image tampering controls reject with
+no partial success report. The full application/native ARM results remain for
+CI; source planning still reports all four owned packages unresolved. No pending
+origin, compiler/static/feature, GNU-wheel, advisory or MCP obligation is waived.
+See `evidence/stable-alpine-owned-consumer-20261109.json` for precise proof scope,
+hashes and the retained limitations of the negative-control experiments.
+
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
 (84.19% coverage). Five failures correctly rejected the stale resdet helper hash;

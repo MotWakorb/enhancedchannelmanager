@@ -212,3 +212,33 @@ def test_rust_source_gate_reauthenticates_live_subject_and_selected_installed_el
     )
     assert "application/rust-sources.json" in command
     assert "continue-on-error" not in source and "|| true" not in command
+
+
+def test_owned_consumer_uses_trusted_readonly_checkout_and_immutable_image_before_full_gate():
+    workflow = yaml.load(
+        (ROOT / ".github/workflows/alpine-native.yml").read_text(),
+        Loader=yaml.BaseLoader,
+    )
+    steps = workflow["jobs"]["native-components"]["steps"]
+    source = next(s for s in steps if "verify_alpine_owned_sources" in s.get("run", ""))
+    command = source["run"]
+    assert "image=$(jq -er '.[0].Id'" in command
+    assert (
+        '--mount type=bind,src="$GITHUB_WORKSPACE/scripts",dst=/proof/scripts,readonly'
+        in command
+    )
+    assert '--entrypoint /usr/local/bin/python "$image" -B -I -c' in command
+    assert 'sys.path.insert(0,"/proof/scripts")' in command
+    assert "application/owned-sources.json" in command
+    assert "--user 1000:1000" in command
+    assert "--pull never --network none --read-only --cap-drop ALL" in command
+    assert "continue-on-error" not in source and "|| true" not in command
+    # Reuse an existing verifier step without changing reviewed control indices.
+    # Do not put this into application-candidate: failures must not skip full gate.
+    assert (
+        "verify_alpine_external_sources" in command
+        and source.get("id") != "application-candidate"
+    )
+    runtime = next(s for s in steps if "--phase runtime" in s.get("run", ""))
+    assert steps.index(source) < steps.index(runtime)
+    assert "always()" in runtime["if"] and "continue-on-error" not in runtime

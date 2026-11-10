@@ -75,6 +75,21 @@ def test_candidate_declares_public_evidence_transport_after_both_installers():
     assert "source-and-advisory-closure=pending" in text
 
 
+def test_corresponding_busybox_plan_is_separate_proof_data_not_builder_patch_input():
+    text = (ROOT / "docker/alpine-native/Dockerfile.candidate").read_text()
+    runtime = text.split(" AS runtime-base\n", 1)[1].split(
+        "FROM runtime-base AS apk-source-builder", 1
+    )[0]
+    assert (
+        "COPY docker/alpine-busybox/source-replay/ /usr/share/ecm/provenance/busybox-source-replay/"
+        in runtime
+    )
+    assert (
+        "source-replay" not in (ROOT / "docker/alpine-busybox/Dockerfile").read_text()
+    )
+    assert "/usr/share/ecm/sources/busybox/source-replay" not in text
+
+
 def test_external_source_builder_consumes_the_prior_runtime_capture_not_its_git_dependencies():
     text = (ROOT / "docker/alpine-native/Dockerfile.candidate").read_text()
     stage = text.split("FROM runtime-base AS apk-source-builder\n", 1)[1].split(
