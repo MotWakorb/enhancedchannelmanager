@@ -30,7 +30,6 @@ URLS = {
     "mpfr-4.2.2.tar.xz": "https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.2.tar.xz",
     "musl-1.2.5.tar.gz": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
     "linux-headers-4.19.88-2.tar.xz": "https://ftp.barfooze.de/pub/sabotage/tarballs/linux-headers-4.19.88-2.tar.xz",
-    "config.sub": "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.sub;hb=3d5db9ebe860",
 }
 
 

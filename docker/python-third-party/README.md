@@ -67,6 +67,21 @@ label substitutes for actual source bytes, and copying a candidate never upgrade
 its authentication status. This closes only the GNU subset, not other wheel
 components or production source/SBOM/advisory integration.
 
+The exact original GNU `config.sub` input is retained in
+`gnu-source-assets/config.sub` after Savannah returned HTTP 502 on all three
+attempts in native ARM run `42746663339`. Its original revision is
+`3d5db9ebe860` at
+<https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.sub;hb=3d5db9ebe860>.
+The unchanged source map binds all 36,159 bytes to SHA256
+`75d5d255a2a273b6e651f82eecfabf6cbcd8eaeae70e86b417384c8f4a58d8d3`.
+The preparer now selects it as a repository input, not a download fallback;
+missing, aliased or changed bytes fail before any network request (covered by
+`test_prepare_musllinux_gnu_sources.py`). This retains 27 deliveries from the
+same 21 inputs, now 13 repository assets and eight downloads. The embedded
+copyright/license notice is preserved; the existing GPLv3 notice remains in
+`gnu-source-assets/notices/COPYING3`. This source-only copy does not execute
+the script or establish new compiler, source or advisory clearance.
+
 Producer metadata remains raw, including cryptography ARM's
 `pkg:apk/NotpineForGHA/libgcc@14.2.0-r6`; it is not normalized into Alpine or
 used as corresponding-source authority.

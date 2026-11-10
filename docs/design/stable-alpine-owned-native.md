@@ -42,6 +42,17 @@ complete fresh live snapshot or full advisory gate is claimed or wired into CI
 based on unit stand-ins. Known advisory holds must survive incomplete upstream
 data. See `evidence/stable-alpine-advisory-snapshot-boundary-20261110.json`.
 
+A later four-endpoint acquisition at `2026-11-10T04:02:23Z` succeeded without
+changing the helper or its rejection policy. The complete snapshot passed the
+native offline reader; comparison against the **saved runtime-base inventory**
+still identifies the same 19 potential unfixed records and four unresolved owned
+packages. That is not a fresh final-image or ARM advisory gate. The earlier empty
+response remains retained as a separate failed acquisition. The exact GNU
+`config.sub` source is now also retained to remove the Savannah HTTP502 dependency
+that interrupted ARM run `42746663339`, without changing its source hash or recipe
+version. See `evidence/stable-alpine-resumption-20261110.json` for these bounded
+results and remaining obligations.
+
 ## Implemented providers
 
 ### Additional libxml2 advisory reconciliation (bounded native proof only)

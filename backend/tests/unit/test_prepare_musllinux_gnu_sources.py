@@ -27,8 +27,8 @@ def test_recorded_plan_covers_all27_deliveries_and21_unique_original_inputs(prep
         sum(len(row["source_files"]) for row in manifest["source_closures"].values())
         == 27
     )
-    assert sum("local" in row for row in inputs) == 12
-    assert sum("url" in row for row in inputs) == 9
+    assert sum("local" in row for row in inputs) == 13
+    assert sum("url" in row for row in inputs) == 8
     assert {row["sha256"] for row in inputs} == {
         row["sha256"]
         for family in manifest["source_closures"].values()
@@ -44,6 +44,53 @@ def test_recorded_plan_covers_all27_deliveries_and21_unique_original_inputs(prep
         "AUTHENTICATED_PROVIDER_SOURCE",
         "REPRODUCED_CORRESPONDING_SOURCE",
     }
+
+
+def test_original_config_sub_is_retained_without_a_savannah_network_dependency(
+    preparer,
+):
+    _manifest, inputs = preparer.source_inputs()
+    row = next(
+        row
+        for row in inputs
+        if row["sha256"]
+        == "75d5d255a2a273b6e651f82eecfabf6cbcd8eaeae70e86b417384c8f4a58d8d3"
+    )
+    assert row == {
+        "local": "docker/python-third-party/gnu-source-assets/config.sub",
+        "size": 36159,
+        "sha256": "75d5d255a2a273b6e651f82eecfabf6cbcd8eaeae70e86b417384c8f4a58d8d3",
+    }
+    assert preparer.sha256(ROOT / row["local"]) == row["sha256"]
+
+
+@pytest.mark.parametrize("defect", ["missing", "corrupt", "symlink"])
+def test_retained_config_sub_is_validated_before_any_download(
+    preparer, tmp_path, monkeypatch, defect
+):
+    manifest, inputs = preparer.source_inputs()
+    row = next(
+        row
+        for row in inputs
+        if row.get("local") == "docker/python-third-party/gnu-source-assets/config.sub"
+    )
+    retained = tmp_path / "config.sub"
+    if defect == "corrupt":
+        original = (ROOT / row["local"]).read_bytes()
+        retained.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+    elif defect == "symlink":
+        retained.symlink_to(ROOT / row["local"])
+    row["local"] = str(retained)
+    monkeypatch.setattr(preparer, "source_inputs", lambda: (manifest, inputs))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("invalid retained config.sub must fail before network")
+
+    monkeypatch.setattr(preparer, "fetch_input", forbidden)
+    work, output = tmp_path / "work", tmp_path / "sources"
+    with pytest.raises(preparer.AttributionError, match="retained GNU source asset"):
+        preparer.prepare(work, output)
+    assert not work.exists() and not output.exists()
 
 
 @pytest.mark.parametrize(
