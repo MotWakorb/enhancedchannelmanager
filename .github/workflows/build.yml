@@ -463,7 +463,7 @@ jobs:
           test "$(uname -m)" = x86_64
           python3 scripts/compose_alpine_dockerfile.py --check
           echo "version=$(jq -r '.version' frontend/package.json)" >> "$GITHUB_OUTPUT"
-          test "${{ github.ref }}" = refs/heads/dev && channel=dev || channel=latest
+          if test "${{ github.ref }}" = refs/heads/dev || test "${{ github.base_ref }}" = dev; then channel=dev; else channel=latest; fi
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - name: Build immutable ECM AMD64 candidate
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
@@ -504,7 +504,7 @@ jobs:
           test "$(uname -m)" = aarch64
           python3 scripts/compose_alpine_dockerfile.py --check
           echo "version=$(jq -r '.version' frontend/package.json)" >> "$GITHUB_OUTPUT"
-          test "${{ github.ref }}" = refs/heads/dev && channel=dev || channel=latest
+          if test "${{ github.ref }}" = refs/heads/dev || test "${{ github.base_ref }}" = dev; then channel=dev; else channel=latest; fi
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - name: Build immutable ECM ARM64 candidate
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
