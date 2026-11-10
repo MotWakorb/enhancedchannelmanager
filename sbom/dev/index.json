@@ -202,7 +202,7 @@
     "scripts/release_gate_policy.py": "sha256:78487cbd6b1dd42835afbf95fcf6120f89fd8583cd60d287b74555d53590a23f",
     "scripts/retain_alpine_owned_evidence.py": "sha256:1c124b8451483cd7eee81d657d23b712ca5383a306ebd95f6accec2f81d1e7b1",
     "scripts/run_alpine_codec_matrix.py": "sha256:10866bb4847123e702646801e68934186a4af01e7af1f5a9778a0ab8e951c3db",
-    "scripts/verify_alpine_application_source.py": "sha256:2d145884c8733e40816b85983752bdd9b5481b1c19728bb11e1912a02d0289f7",
+    "scripts/verify_alpine_application_source.py": "sha256:b8f1da2c70c6622c47c30156a89e17ce7f79fa144b9bda0e2539f4b481d2ae75",
     "scripts/verify_alpine_external_sources.py": "sha256:fc19460fe6181f3980f05e29455ccc24798cbbbd94ef9563613e8ddc4addd811",
     "scripts/verify_alpine_ffmpeg.py": "sha256:c358af66b7b0704d95461b9413abc74c0717a976af86c7a9752bd8c6d1438e1e",
     "scripts/verify_alpine_owned_sources.py": "sha256:37928de2b948dfd6e1c1c5744cedbded14fa7c5ea2ffce4404a2cd77a88085b4",

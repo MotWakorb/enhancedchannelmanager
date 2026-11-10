@@ -19,6 +19,7 @@ IGNORED_DIRECTORIES = frozenset(
         "venv",
         "__pycache__",
         ".pytest_cache",
+        ".hypothesis",
         ".mypy_cache",
         ".ruff_cache",
     }

@@ -88,3 +88,36 @@ def test_source_symlinks_cannot_redirect_to_operator_files(verifier, tmp_path):
                 ]
             },
         )
+
+
+@pytest.mark.parametrize(
+    "cache_file",
+    [".gitignore", "constants/01e8b1e3e53c700f", "examples/a-recorded-example"],
+)
+def test_generated_hypothesis_cache_is_not_shipped_application_source(
+    verifier, tmp_path, cache_file
+):
+    source = tmp_path / "backend/service.py"
+    source.parent.mkdir()
+    source.write_bytes(b"original application bytes")
+    manifest = {
+        "files": [
+            {
+                "path": "backend/service.py",
+                "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "type": "file",
+                "executable": False,
+            }
+        ]
+    }
+    cache = source.parent / ".hypothesis" / cache_file
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text("recorded generated test-cache bytes")
+    assert verifier.verify(tmp_path, manifest)["file_count"] == 1
+    assert "**/.hypothesis" in (ROOT / ".dockerignore").read_text().splitlines()
+    # The exact cache name is not a blanket exemption for hidden/new code.
+    unexpected = source.parent / ".hypothesis_extra/service.py"
+    unexpected.parent.mkdir()
+    unexpected.write_text("unreviewed application code")
+    with pytest.raises(verifier.SourceError, match="source coverage"):
+        verifier.verify(tmp_path, manifest)
