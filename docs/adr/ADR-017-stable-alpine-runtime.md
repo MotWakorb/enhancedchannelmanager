@@ -8,6 +8,22 @@
 
 ## Decision
 
+### Delivery priority update — 2026-11-10
+
+The PO directed: **"lets get the alpine containers done, we can worry about
+shoring up the security issues later."** Finish stable-Alpine container build
+integration and functional compatibility first. Further advisory remediation is
+deferred to the follow-ups recorded in the
+[completed advisory assessment](../design/stable-alpine-advisory-feasibility.md);
+do not expand the owned-package cohort merely to reduce advisory counts.
+
+This changes implementation order, not historical evidence or existing
+production security checks. Keep unsuppressed scans and HIGH/CRITICAL/reviewed-P1
+promotion checks. A working development container is not publication approval,
+and bounded source consumers must continue reporting their actual scope rather
+than claiming full source or advisory acceptance. Compatibility, source
+integrity, identity and isolation requirements remain in scope.
+
 The PO explicitly directed: **"We shouldn't be using rolling repositories. We
 should be making this standard on alpine."** ECM's runtime and native builders
 will migrate to a supported **stable Alpine release**, aligned with the MCP

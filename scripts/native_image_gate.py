@@ -123,6 +123,8 @@ class DockerGate:
             "none",
             "--mount",
             f"type=bind,source={FIXTURES},target=/native-image,readonly",
+            "--mount",
+            f"type=bind,source={FIXTURES.parents[1] / 'scripts'},target=/native-image-scripts,readonly",
             "--env",
             "PYTHONDONTWRITEBYTECODE=1",
         ]

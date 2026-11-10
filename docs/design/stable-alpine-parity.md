@@ -66,6 +66,21 @@ tampering controls on the replacement path.
 
 ## Evidence so far — deliberately incomplete
 
+**2026-11-10 update:** The earlier feasibility bullets below are historical.
+Native full candidates have since built on AMD64 and ARM64, with functional
+runtime and bootstrap checks passing; their aggregate source check still used
+the old RPM layout. The Alpine replacement composes the existing external APK,
+four-owned-package, Python-base, installed wheel/GNU and Rust-input consumers.
+Its targeted composition/delivery/gate regression subset passes 231 tests; real
+paired-image execution of the new composition is still required. It explicitly
+does **not** claim full runtime source or advisory acceptance.
+
+The PO has prioritized finishing the containers before further advisory fixes.
+See the [ADR priority update](../adr/ADR-017-stable-alpine-runtime.md) and
+[completed assessment](stable-alpine-advisory-feasibility.md). Normal build-path
+integration, MCP stable-base alignment and APK scanner contracts remain open;
+production promotion checks are unchanged.
+
 - Stable-only repository policy: 26 direct regressions; 330 policy/SBOM checks
   pass. The guard also runs read-only/offline on actual existing MCP stable
   Alpine files. It is not yet production Docker/CI integration.

@@ -12,6 +12,7 @@ import platform
 import re
 import stat
 import subprocess
+import sys
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
@@ -230,8 +231,13 @@ def _rpm_sources(root, architecture):
         route = EXACT_SOURCE_ROUTES.get((vendor, architecture, name))
         assert source["url"] == (route["url"] if route else repository + "src/" + name)
         if route:
-            assert source["sha256"] == route["sha256"], "pinned source checksum mismatch"
-        if source.get("retrieval") == "reverified-retained-source" or "retained_sha256" in source:
+            assert source["sha256"] == route["sha256"], (
+                "pinned source checksum mismatch"
+            )
+        if (
+            source.get("retrieval") == "reverified-retained-source"
+            or "retained_sha256" in source
+        ):
             assert (
                 route is not None
                 and source.get("retrieval") == "reverified-retained-source"
@@ -295,7 +301,9 @@ def _owned(root, architecture):
     _hash(_file(directory, "recipe/build_native_runtime.py"), record["helper_sha256"])
     assert record["base_image"] == recipe["base_image"]
     selected = recipe["architectures"][arch]
-    assert record["builder_repository"] == selected.get("builder_repository", selected["official_repository"])
+    assert record["builder_repository"] == selected.get(
+        "builder_repository", selected["official_repository"]
+    )
     assert record["source_identity"] == {key: recipe[key] for key in ("ffmpeg", "gosu")}
     listing = _file(root, "usr/share/ecm/provenance/native-sources.json")
     _hash(listing, record["source_files_sha256"])
@@ -577,6 +585,7 @@ def _filesystem_names(root):
         "/sys": "virtual sys filesystem",
         "/dev": "virtual device filesystem",
         "/native-image": "external read-only gate fixture mount",
+        "/native-image-scripts": "external read-only trusted verifier mount",
     }
     patterns = {
         "cjson": r"cjson",
@@ -634,7 +643,7 @@ def _filesystem_names(root):
         "exit_status": 0,
         "errors": [],
         "method": "Python os.scandir, stat(follow_symlinks=False), readlink; case-insensitive path and symlink-target regex search",
-        "scope": "Complete running-image rootfs names, including /app, /opt/venv and copied/unowned providers, except the four stated mounts. Names inside compressed archives and file contents are not searched. Matches are review data, not CVE judgments; nonmatches are not universal static-component absence proof.",
+        "scope": "Complete running-image rootfs names, including /app, /opt/venv and copied/unowned providers, except the stated mounts. Names inside compressed archives and file contents are not searched. Matches are review data, not CVE judgments; nonmatches are not universal static-component absence proof.",
         "excluded": excluded,
         "observed_exclusions": sorted(observed),
         "path_count": count,
@@ -645,11 +654,36 @@ def _filesystem_names(root):
     }
 
 
+def _alpine_delivery(root, architecture):
+    # Trusted checkout code is mounted read-only by native_image_gate.py, never
+    # imported from an upstream source archive or a provider-supplied recipe.
+    helpers = Path("/native-image-scripts")
+    assert helpers.is_dir() and not helpers.is_symlink(), (
+        "missing trusted Alpine verifiers"
+    )
+    sys.path.insert(0, str(helpers))
+    from alpine_repository_policy import validate_repositories
+    from verify_alpine_runtime_sources import capture_live, verify
+
+    release = _file(root, "etc/alpine-release").read_text()
+    validate_repositories(release, _file(root, "etc/apk/repositories").read_text())
+    arch = {"x86_64": "amd64", "aarch64": "arm64"}[architecture]
+    result = verify(root, capture_live(root), arch)
+    result["python_sources"] = _python(root, "sources", "usr/share/ecm/sources/python")
+    result["python_notices"] = _python(
+        root, "notices", "usr/share/doc/ecm/python-third-party"
+    )
+    result["filesystem_name_search"] = _filesystem_names(root)
+    return {"native_source_and_artifact_integrity": result}
+
+
 def native_source_and_artifact_integrity(root=Path("/")):
     """Root is solely a temp-tree unit seam; production always checks `/`."""
     root = Path(root).resolve(strict=True)
     architecture = platform.machine()
     assert architecture in ("x86_64", "aarch64"), "unsupported image architecture"
+    if (root / "etc/alpine-release").exists():
+        return _alpine_delivery(root, architecture)
     packages, sources = _rpm_sources(root, architecture)
     artifacts = _owned(root, architecture)
     _resdet(root)
