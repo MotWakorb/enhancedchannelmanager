@@ -55,6 +55,26 @@ def test_candidate_installs_signed_native_and_busybox_products_and_preserves_inc
     )
 
 
+def test_candidate_declares_public_evidence_transport_after_both_installers():
+    """Dockerfile structure only; copier/native CI separately exercise behavior."""
+    text = (ROOT / "docker/alpine-native/Dockerfile.candidate").read_text()
+    runtime = text.split("FROM python:3.12-alpine3.24", 2)[2].split(
+        "FROM runtime-base AS apk-source-builder", 1
+    )[0]
+    marker = "python /build-scripts/retain_alpine_owned_evidence.py"
+    assert marker in runtime
+    assert runtime.index("install_alpine_native.py") < runtime.index(marker)
+    assert runtime.index("install_busybox_provider.py") < runtime.index(marker)
+    assert runtime.index(marker) < runtime.index("apk query --from installed")
+    command = runtime[runtime.index(marker) :].split("&&", 1)[0]
+    assert "--native-packages /native-packages" in command
+    assert "--busybox-packages /busybox-packages" in command
+    assert '--arch "$arch"' in command
+    assert "--output-dir /usr/share/ecm/provenance/owned-signatures" in command
+    assert "/etc/apk/keys" not in command and "/lib/apk/keys" not in command
+    assert "source-and-advisory-closure=pending" in text
+
+
 def test_external_source_builder_consumes_the_prior_runtime_capture_not_its_git_dependencies():
     text = (ROOT / "docker/alpine-native/Dockerfile.candidate").read_text()
     stage = text.split("FROM runtime-base AS apk-source-builder\n", 1)[1].split(

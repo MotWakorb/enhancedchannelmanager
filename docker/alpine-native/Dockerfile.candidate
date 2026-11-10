@@ -48,6 +48,9 @@ RUN --network=none --mount=type=bind,source=scripts,target=/build-scripts \
     && cp /busybox-packages/build-output.json /usr/share/ecm/provenance/busybox-package.json \
     && cp -a /busybox-packages/sources /usr/share/ecm/sources/busybox \
     && python -c 'import json,shutil; from pathlib import Path; out=Path("/usr/share/ecm/provenance"); [shutil.copy2(root/json.loads((root/receipt).read_text())["public_key"]["file"],out/name) for root,receipt,name in [(Path("/native-packages"),"package-output.json","native-signing-public-key.pub"),(Path("/busybox-packages"),"build-output.json","busybox-signing-public-key.pub")]]' \
+    && python /build-scripts/retain_alpine_owned_evidence.py --native-packages /native-packages \
+        --busybox-packages /busybox-packages --arch "$arch" \
+        --output-dir /usr/share/ecm/provenance/owned-signatures \
     && apk query --from installed --format json --all-matches '*' > /usr/share/ecm/provenance/installed-apks.json \
     && cp /lib/apk/db/installed /usr/share/ecm/provenance/installed-apk-database.txt
 

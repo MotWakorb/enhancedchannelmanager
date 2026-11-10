@@ -499,6 +499,37 @@ See `stable-alpine-busybox-corresponding-source-replay-20261109.json` and
 static linkage, live-file/control-script composition, signed evidence delivery
 and aggregate acceptance remain unresolved.
 
+## Original signed public evidence delivery (bounded)
+
+The candidate now retains the original four signed APKs, separate original-name
+public keys, raw native/BusyBox receipts, BusyBox check receipt/log and trusted
+copier source under `/usr/share/ecm/provenance/owned-signatures/`. The helper
+`scripts/retain_alpine_owned_evidence.py` reuses the original input/source/check
+validators and writes only that closed public namespace. It does not duplicate
+the BusyBox source tree, copy a private key, import runtime trust or claim source
+acceptance. Native signature verification remains mandatory; public PEM envelope
+checks are not cryptographic authentication. Candidate labels and all four
+`OWNED_PENDING` origins remain pending.
+
+Both original architecture datasets pass copying followed by independent native
+four-APK signature/full installed-record replay on AMD64. The actual AMD64
+candidate `runtime-base` target also builds with the helper CLI. A separate
+read-only/networkless check of that immutable image passes native signature/DB
+and live path/identity/mode/raw-link joins, all three BusyBox installed control
+scripts and four default-trust denials, with runtime repositories/keys unchanged.
+That target is not the complete application image or native ARM execution.
+See `stable-alpine-owned-public-evidence-delivery-20261109.json` for exact images,
+counts, original receipts, mutation controls and limits.
+
+The legacy source-availability CI regression is independently fixed at
+`e1b41f2b`: production Build `42722956635`, Tests `42722956357` and paired native
+Alpine Python `42722956241` pass. Each native Python architecture passes 17,222
+tests with unchanged skips/deselections and 84.22% coverage against the original
+56% threshold. These results belong to that exact prior commit, not the new
+evidence-delivery change. Production SUSE runtime/source/scan passes must not be
+relabeled as Alpine aggregate/security clearance. Full candidate/compiler/static/
+source/advisory/MCP acceptance remains unfinished.
+
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
 (84.19% coverage). Five failures correctly rejected the stale resdet helper hash;
