@@ -53,6 +53,14 @@ that interrupted ARM run `42746663339`, without changing its source hash or reci
 version. See `evidence/stable-alpine-resumption-20261110.json` for these bounded
 results and remaining obligations.
 
+The subsequent [complete advisory feasibility assessment](stable-alpine-advisory-feasibility.md)
+covers every original finding and all four owned subjects using both current
+native candidate artifacts, signature-verified stable indexes and primary
+upstream source corrections. Thirteen original findings have concrete code or
+release remedy paths; none was implemented or waived by that investigation.
+The report distinguishes the absent SQLite C CLI, Cairo's unmatched reference,
+tar/chroot contracts, existing FFmpeg/libxml2 corrections and remaining backports.
+
 ## Implemented providers
 
 ### Additional libxml2 advisory reconciliation (bounded native proof only)
