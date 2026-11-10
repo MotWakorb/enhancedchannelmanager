@@ -28,6 +28,20 @@ unresolved; neither its zero score nor a missing runtime tool proves safety.
 See `evidence/stable-alpine-advisory-decoder-20261109.json` for exact recordings,
 the deliberately blocked diagnostic and retained acquisition/schema failures.
 
+`scripts/alpine_advisory_snapshot.py` now supplies the bounded four-endpoint
+transport/reader boundary: exact official HTTPS response identity, closed
+hash-bound data/helper layout, bounded single-stream decompression and a six-hour
+UTC acquisition-age limit with no future-time exception. Raw response evidence
+is retained separately before validation, not published as a successful snapshot.
+Fixed-secdb version-zero entries and non-CVE/composite aliases remain intact.
+
+The first live collection was **rejected**: community returned HTTP200 with a
+163-byte empty Collection after the earlier 1,996-item response. The final helper
+also rejects that exact captured body under isolated native Alpine replay. No
+complete fresh live snapshot or full advisory gate is claimed or wired into CI
+based on unit stand-ins. Known advisory holds must survive incomplete upstream
+data. See `evidence/stable-alpine-advisory-snapshot-boundary-20261110.json`.
+
 ## Implemented providers
 
 ### Additional libxml2 advisory reconciliation (bounded native proof only)
@@ -575,6 +589,15 @@ CI; source planning still reports all four owned packages unresolved. No pending
 origin, compiler/static/feature, GNU-wheel, advisory or MCP obligation is waived.
 See `evidence/stable-alpine-owned-consumer-20261109.json` for precise proof scope,
 hashes and the retained limitations of the negative-control experiments.
+
+Native run `42741403746` now verifies that consumer inside the **full application
+candidate on both AMD64 and ARM64** at PR head `34c2c74f`. Original artifact ZIPs
+were independently rehashed and their exact source merge commit/verifier bytes
+checked. All four signatures/full installed records, live paths, control scripts,
+component-source joins and BusyBox corresponding-source replay pass on both.
+The complete runtime gate still fails solely on its unchanged RPM source-index
+path; no aggregate/source/advisory waiver follows. See
+`evidence/stable-alpine-owned-consumer-native-paired-20261110.json`.
 
 Full AMD64 Python execution against the pre-repair test-image snapshot completed
 with 16,608 passes, six failures, five unchanged skips and two deselections
