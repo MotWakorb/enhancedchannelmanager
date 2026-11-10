@@ -19,6 +19,31 @@ GATE = ROOT / "scripts/native_image_gate.py"
 IMAGE = "sha256:" + "a" * 64
 
 
+def test_full_runtime_deadline_covers_measured_pinned_rust_source_audit(monkeypatch):
+    spec = importlib.util.spec_from_file_location("runtime_budget_gate", GATE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    gate = module.DockerGate(IMAGE, "docker", 30)
+    checks = json.loads((ROOT / "tests/native_image/checks.json").read_text())
+    report = {"status": "PASS", "checks": checks, "metadata": {}, "failures": {}}
+
+    def complete(*args, **kwargs):
+        assert kwargs["timeout"] == 900
+        return SimpleNamespace(returncode=0, stdout=json.dumps(report))
+
+    monkeypatch.setattr(module.subprocess, "run", complete)
+    assert gate.runtime() == report
+    assert "native_source_and_artifact_integrity" in checks
+
+    def timed_out(*args, **kwargs):
+        assert kwargs["timeout"] == 900
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(module.subprocess, "run", timed_out)
+    with pytest.raises(module.GateError, match="timed out"):
+        gate.runtime()
+
+
 @pytest.fixture
 def docker_fixture(tmp_path):
     executable = tmp_path / "docker-fixture"

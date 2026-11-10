@@ -64,6 +64,45 @@ def test_all_original_raw_receipts_join_version_and_every_signed_artifact(
     assert result["full_runtime_source_acceptance"] is False
 
 
+def test_legacy_receipts_require_exact_retained_packager_bytes(
+    consumer, original, monkeypatch, tmp_path
+):
+    receipt, components, arch = original
+    retained = tmp_path / "retained/package_alpine_native-v1.py.gz"
+    retained.parent.mkdir()
+    raw = gzip.decompress(
+        (ROOT / "scripts/retained/package_alpine_native-v1.py.gz").read_bytes()
+    )
+    retained.write_bytes(gzip.compress(raw, mtime=0))
+    monkeypatch.setattr(consumer, "__file__", str(tmp_path / "alpine_owned_native.py"))
+    consumer.bind_components(receipt, components, arch)
+    retained.write_bytes(gzip.compress(b"X" + raw[1:], mtime=0))
+    with pytest.raises(consumer.InputError, match="packager bytes differ"):
+        consumer.bind_components(receipt, components, arch)
+
+
+def test_current_producer_binds_numeric_version_and_exact_helper(consumer, original):
+    receipt, components, arch = original
+    receipt = copy.deepcopy(receipt)
+    helper = Path(consumer.package_alpine_native.__file__).read_bytes()
+    receipt["helper_sha256"] = hashlib.sha256(helper).hexdigest()
+    receipt["package"]["version"] = consumer.package_version(
+        receipt["components"], receipt["helper_sha256"]
+    )
+    helper_row = next(
+        row
+        for row in receipt["installed_artifacts"]
+        if row["path"].endswith("/owned/package_alpine_native.py")
+    )
+    helper_row.update(sha256=receipt["helper_sha256"], size=len(helper))
+    assert consumer.bind_components(receipt, components, arch)["architecture"] == arch
+    receipt["package"]["version"] = consumer.package_version(
+        receipt["components"], receipt["helper_sha256"], legacy=True
+    )
+    with pytest.raises(consumer.InputError, match="package version differs"):
+        consumer.bind_components(receipt, components, arch)
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -121,7 +160,7 @@ def test_package_label_and_self_reported_status_never_clear_incomplete_component
             raw[name]
         ).hexdigest()
         receipt["package"]["version"] = consumer.package_version(
-            receipt["components"], receipt["helper_sha256"]
+            receipt["components"], receipt["helper_sha256"], legacy=True
         )
     elif mutation == "package-version":
         receipt["package"]["version"] = "1.0~" + "0" * 64 + "-r0"

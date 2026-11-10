@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -49,6 +51,30 @@ def test_package_version_changes_when_the_packaging_source_changes(packager):
     )
     assert packager.package_version(components, "c" * 64) != packager.package_version(
         components, "d" * 64
+    )
+
+
+def test_default_package_version_is_apk_scanner_compatible_and_keeps_all_digest_bits(
+    packager,
+):
+    components = {"codecs": {"recipe_sha256": "a" * 64, "receipt_sha256": "b" * 64}}
+    digest = hashlib.sha256(
+        json.dumps(
+            {
+                "components": components,
+                "packager_sha256": "c" * 64,
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    version = packager.package_version(components, "c" * 64)
+    assert re.fullmatch(r"1\.0(?:\.\d{1,10}){8}-r0", version)
+    words = version.removesuffix("-r0").split(".")[2:]
+    assert all(0 <= int(word) <= 0xFFFFFFFF for word in words)
+    assert "".join(f"{int(word):08x}" for word in words) == digest
+    assert (
+        packager.package_version(components, "c" * 64, legacy=True)
+        == "1.0~" + digest + "-r0"
     )
 
 

@@ -141,7 +141,11 @@ class DockerGate:
                 self.image,
                 "-I",
                 "/native-image/runtime_checks.py",
-                timeout=240,
+                # The mandatory Rust source consumer streams both pinned full
+                # compiler archives: measured 358s on the real Alpine image.
+                # Keep all checks and their individual behavioral timeouts;
+                # bound the expanded aggregate integrity workload separately.
+                timeout=900,
             )
         )
         expected = decode_json((FIXTURES / "checks.json").read_text())

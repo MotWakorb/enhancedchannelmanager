@@ -701,6 +701,8 @@ jobs:
       # independently block HIGH/CRITICAL (including unfixed) findings.
       - name: Collect complete findings and inventory
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_DETECTION_PRIORITY: comprehensive
         with:
           version: v0.76.1
           input: /tmp/trivy-ecm-amd64-scan.docker.tar
@@ -720,6 +722,8 @@ jobs:
           python scripts/check_native_image_scan.py --report native-scan/findings.json --identity native-scan/identity.json --scanner-identity native-scan/scanner.json --architecture amd64 --runtime-inventory native-scan/runtime-inventory.json
       - name: Block all HIGH and CRITICAL findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_DETECTION_PRIORITY: comprehensive
         with:
           version: v0.76.1
           input: /tmp/trivy-ecm-amd64-scan.docker.tar
@@ -767,6 +771,8 @@ jobs:
           printf '%s\n' '${{ github.sha }}' > native-scan/source-sha.txt
       - name: Collect complete findings and inventory
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_DETECTION_PRIORITY: comprehensive
         with:
           version: v0.76.1
           input: /tmp/trivy-ecm-arm64-scan.docker.tar
@@ -786,6 +792,8 @@ jobs:
           python scripts/check_native_image_scan.py --report native-scan/findings.json --identity native-scan/identity.json --scanner-identity native-scan/scanner.json --architecture arm64 --runtime-inventory native-scan/runtime-inventory.json
       - name: Block all HIGH and CRITICAL findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_DETECTION_PRIORITY: comprehensive
         with:
           version: v0.76.1
           input: /tmp/trivy-ecm-arm64-scan.docker.tar

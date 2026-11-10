@@ -8,6 +8,7 @@ not prove reproduced builds, historical compiler linkage or advisory acceptance.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import os
@@ -43,6 +44,35 @@ def file_row(path: str, data: bytes, mode: int = 0o644) -> dict:
     }
 
 
+LEGACY_PACKAGER_SHA256 = (
+    "5709937febe6a9fe76dd7642e256ebff3feb9e3bc3f851e9f65f6ccd7bc50ea9"
+)
+
+
+def reviewed_packager_bytes(digest: str) -> bytes:
+    """Select only current trusted bytes or the one exact retained producer."""
+    if digest == LEGACY_PACKAGER_SHA256:
+        retained = (
+            Path(__file__).with_name("retained") / "package_alpine_native-v1.py.gz"
+        )
+        require(
+            retained.is_file()
+            and not retained.is_symlink()
+            and retained.stat().st_size <= 32 * 1024,
+            "bounded retained original packager required",
+        )
+        with gzip.open(retained, "rb") as stream:
+            helper = stream.read(14696)
+        require(len(helper) == 14695, "original packager byte length differs")
+    else:
+        helper = Path(package_alpine_native.__file__).read_bytes()
+    require(
+        hashlib.sha256(helper).hexdigest() == digest,
+        "reviewed original packager bytes differ",
+    )
+    return helper
+
+
 def bind_components(
     receipt: dict, original_receipts: dict[str, bytes], architecture: str
 ) -> dict:
@@ -61,13 +91,10 @@ def bind_components(
         set(original_receipts) == set(receipt["components"]) == set(COMPONENTS),
         "complete reviewed owned component set required",
     )
-    helper = Path(package_alpine_native.__file__).read_bytes()
+    legacy = receipt["helper_sha256"] == LEGACY_PACKAGER_SHA256
+    helper = reviewed_packager_bytes(receipt["helper_sha256"])
     require(
-        hashlib.sha256(helper).hexdigest() == receipt["helper_sha256"],
-        "reviewed original packager bytes differ",
-    )
-    require(
-        package_version(receipt["components"], receipt["helper_sha256"])
+        package_version(receipt["components"], receipt["helper_sha256"], legacy=legacy)
         == receipt["package"]["version"],
         "owned component-derived package version differs",
     )
@@ -266,7 +293,7 @@ def verify_sources(root: Path, records: dict) -> dict:
     expected = [
         file_row(
             "package_alpine_native.py",
-            Path(package_alpine_native.__file__).read_bytes(),
+            reviewed_packager_bytes(sha256(base / "package_alpine_native.py")),
             0o755,
         )
     ]

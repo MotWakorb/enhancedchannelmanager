@@ -129,3 +129,46 @@ def test_alpine_scan_requires_immutable_live_binding_and_full_ecm_not_a_sidecar(
         "immutable Alpine live inventory binding" in r
         for r in scan.check_report(report, identity, scanner, "amd64", bound)
     )
+
+
+@pytest.mark.parametrize("architecture", ["amd64", "arm64"])
+def test_real_final_scans_refuse_the_original_scanner_invisible_owned_package(
+    scan, architecture
+):
+    path = (
+        ROOT
+        / f"backend/tests/fixtures/native_scan/alpine-ecm-20261110-{architecture}.json.gz"
+    )
+    recorded = json.loads(gzip.decompress(path.read_bytes()))
+    report = recorded["report"]
+    assert len(report["Results"][0]["Packages"]) == 121
+    assert len(recorded["runtime_inventory"]["capture"]["packages"]) == 122
+    failures = scan.check_report(
+        report,
+        recorded["identity"],
+        recorded["scanner"],
+        architecture,
+        recorded["runtime_inventory"],
+    )
+    assert failures == [
+        "complete Alpine scan/query/database identity or source/checksum mismatch",
+        "missing required Alpine ECM runtime providers",
+        "missing Go package detection inventory",
+    ]
+    if architecture == "amd64":
+        comprehensive = recorded["comprehensive_report"]
+        go = [r for r in comprehensive["Results"] if r.get("Type") == "gobinary"]
+        assert len(go) == 1 and go[0]["Target"] == "usr/local/bin/gosu"
+        assert len(go[0]["Packages"]) == 4
+        # Broader analysis restores Go detection; it must NOT paper over the
+        # invalid original APK version or turn the 121-row report into a pass.
+        assert (
+            scan.check_report(
+                comprehensive,
+                recorded["identity"],
+                recorded["scanner"],
+                architecture,
+                recorded["runtime_inventory"],
+            )
+            == failures[:2]
+        )

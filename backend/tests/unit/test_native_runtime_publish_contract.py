@@ -122,6 +122,7 @@ def check_contract(workflow):
         assert len(scans) == 2
         for s in scans:
             assert "if" not in s
+            assert s.get("env") == {"TRIVY_DETECTION_PRIORITY": "comprehensive"}
             settings = s["with"]
             assert settings["input"] == f"/tmp/trivy-ecm-{arch}-scan.docker.tar"
             assert settings["version"] == "v0.76.1"
@@ -166,8 +167,13 @@ python scripts/check_native_image_scan.py --report native-scan/findings.json --i
         assert steps[-1]["with"]["if-no-files-found"] == "error"
         assert steps[-1]["with"]["name"] == f"native-scan-{arch}-${{{{ github.sha }}}}"
         for s in steps:
-            assert set(s) <= {"uses", "with", "name", "run", "if"}
-            assert not s.get("continue-on-error") and not s.get("env")
+            assert set(s) <= {"uses", "with", "name", "run", "if", "env"}
+            assert not s.get("continue-on-error")
+            assert s.get("env", {}) == (
+                {"TRIVY_DETECTION_PRIORITY": "comprehensive"}
+                if s.get("uses") == TRIVY
+                else {}
+            )
             assert s is steps[-1] or "if" not in s
     assert workflow.get("env") == {"REGISTRY": "ghcr.io"}
     assert "defaults" not in workflow
@@ -296,6 +302,7 @@ def test_native_contract_rejects_unsafe_runtime_mutations(workflow, arch, mutati
         "defaultshell",
         "livebinding",
         "livecapture",
+        "ownedbinaryfilter",
     ],
 )
 def test_native_contract_rejects_unsafe_scan_mutations(workflow, arch, mutation):
@@ -338,6 +345,8 @@ def test_native_contract_rejects_unsafe_scan_mutations(workflow, arch, mutation)
         job["steps"][2]["run"] = job["steps"][2]["run"].replace(
             '"/sbin/apk","query"', '"/bin/echo","invented inventory"'
         )
+    elif mutation == "ownedbinaryfilter":
+        collect["env"]["TRIVY_DETECTION_PRIORITY"] = "precise"
     else:
         step = next(
             s

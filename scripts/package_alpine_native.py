@@ -200,11 +200,19 @@ def validate_locations(directories: dict[str, Path], work: Path, output: Path) -
             )
 
 
-def package_version(components: dict, helper_sha: str) -> str:
+def package_version(components: dict, helper_sha: str, *, legacy: bool = False) -> str:
     data = json.dumps(
         {"components": components, "packager_sha256": helper_sha}, sort_keys=True
     ).encode()
-    return "1.0~" + hashlib.sha256(data).hexdigest() + "-r0"
+    digest = hashlib.sha256(data).hexdigest()
+    if legacy:
+        # Read-only verification of pinned historical receipts, never emitted
+        # by package(). APK scanners reject this old tilde/hash grammar.
+        return "1.0~" + digest + "-r0"
+    # Eight bounded decimal version components retain all 256 content-address
+    # bits while satisfying both apk-tools and Trivy's APK-version grammar.
+    words = [str(int(digest[offset : offset + 8], 16)) for offset in range(0, 64, 8)]
+    return "1.0." + ".".join(words) + "-r0"
 
 
 def package(directories: dict[str, Path], arch: str, work: Path, output: Path) -> dict:

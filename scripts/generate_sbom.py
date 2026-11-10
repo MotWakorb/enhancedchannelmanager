@@ -1082,6 +1082,15 @@ def _alpine_runtime_native_inputs(root: Path, sources: dict[str, str]) -> list[d
         if path.is_symlink():
             raise SbomError(f"native source input must not be a symlink: {path}")
         sources[path.relative_to(root).as_posix()] = sha256_file(path)
+    retained = root / "scripts/retained"
+    if retained.is_symlink():
+        raise SbomError(
+            f"retained verification directory must not be a symlink: {retained}"
+        )
+    for path in sorted(retained.glob("*")):
+        if path.is_symlink() or not path.is_file():
+            raise SbomError(f"regular retained verification input required: {path}")
+        sources[path.relative_to(root).as_posix()] = sha256_file(path)
     return packages
 
 

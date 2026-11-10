@@ -66,6 +66,27 @@ tampering controls on the replacement path.
 
 ## Evidence so far — deliberately incomplete
 
+**2026-11-10 final-image repair:** Both full ECM candidates compiled, but paired
+Trivy 0.76.1 reports omitted exactly `ecm-owned-native` (121 scanned versus 122
+installed APKs): its old `1.0~<digest>-r0` version is rejected by Trivy. The
+producer now uses eight decimal uint32 components retaining the full SHA256.
+A synthetic database grammar probe detects all 122 packages; this is not proof
+of a rebuilt/installed candidate. Recorded paired real reports remain regression
+fixtures that must fail complete-inventory validation.
+
+Comprehensive scanning of the retained AMD64 image detects the APK-owned
+`gosu` Go metadata (four packages), plus 84 Rust packages, without relaxing the
+inventory gate. Both ECM collect/block steps now request that mode. The same
+immutable retained image (`sha256:6d21546425a525b44248644731e2121ad0f3097db2d3a301e0203d280e183f04`)
+passes both bootstrap identities and all 28 runtime checks with the repaired
+gate. Its runtime phase takes 373.764 seconds, including the mandatory full Rust
+compiler-source audit; the aggregate deadline is now 900 seconds rather than
+240. Individual functional timeouts are unchanged. Historical producer bytes
+are retained as exact hash-bound data, never executed, so existing signed
+receipts remain verifiable. **Fresh corrected-package builds, scans and runtime
+acceptance on both native architectures remain required.** Track this work in
+`enhancedchannelmanager-2ixgf.2`; no publication or advisory clearance is claimed.
+
 **2026-11-10 update:** The earlier feasibility bullets below are historical.
 Native full candidates have since built on AMD64 and ARM64, with functional
 runtime and bootstrap checks passing; their aggregate source check still used
