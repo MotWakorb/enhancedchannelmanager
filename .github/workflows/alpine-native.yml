@@ -240,6 +240,8 @@ jobs:
       - name: Prepare exact Python wheels and build the current signed BusyBox provider
         run: |
           python3 scripts/prepare_musllinux_wheels.py --arch '${{ matrix.arch }}' --output-dir "$RUNNER_TEMP/application-wheels"
+          python3 scripts/prepare_musllinux_gnu_sources.py --work-dir "$RUNNER_TEMP/gnu-source-inputs" \
+            --output-dir "$RUNNER_TEMP/gnu-sources" --receipt-file "$RUNNER_TEMP/alpine-evidence/gnu-source-copy.json"
           python3 scripts/prepare_busybox_cache.py --output-dir "$RUNNER_TEMP/busybox-inputs"
           docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
             --build-context busybox-cache="$RUNNER_TEMP/busybox-inputs" \
@@ -253,6 +255,7 @@ jobs:
             --build-context native-packages="$RUNNER_TEMP/alpine-evidence/packages" \
             --build-context busybox-packages="$RUNNER_TEMP/alpine-evidence/busybox" \
             --build-context proof-wheels="$RUNNER_TEMP/application-wheels" \
+            --build-context gnu-sources="$RUNNER_TEMP/gnu-sources" \
             --build-arg GIT_COMMIT="$(git rev-parse HEAD)" \
             --metadata-file "$RUNNER_TEMP/alpine-evidence/application/build-metadata.json" \
             --file docker/alpine-native/Dockerfile.candidate --load \
@@ -276,11 +279,15 @@ jobs:
             > "$RUNNER_TEMP/alpine-evidence/application/external-sources.json"
       - name: Verify original Python base source and live installed-file correspondence
         run: |
-          image=$(docker image inspect --format '{{.Id}}' ecm-alpine-application-candidate:${{ matrix.arch }})
+          image=$(jq -er '.[0].Id' "$RUNNER_TEMP/alpine-evidence/application/image-inspect.json")
           docker run --rm --pull never --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
             --user 1000:1000 --entrypoint /usr/local/bin/python "$image" -B -I -c \
             'import json,sys; from pathlib import Path; sys.path.insert(0,"/usr/share/ecm/sources/verification"); from verify_alpine_python_base import verify; print(json.dumps(verify(Path("/usr/share/ecm/sources/python-base"),"${{ matrix.arch }}",Path("/")),sort_keys=True,indent=2))' \
-            > "$RUNNER_TEMP/alpine-evidence/application/python-base-sources.json"
+             > "$RUNNER_TEMP/alpine-evidence/application/python-base-sources.json"
+          docker run --rm --pull never --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user 1000:1000 \
+            --mount type=bind,src="$GITHUB_WORKSPACE/scripts",dst=/proof/scripts,readonly \
+            --entrypoint /usr/local/bin/python "$image" -B -I -c 'import sys;sys.path.insert(0,"/proof/scripts");from verify_alpine_wheel_sources import main;main()' \
+            --arch ${{ matrix.arch }} > "$RUNNER_TEMP/alpine-evidence/application/wheel-sources.json"
       - name: Verify delivered frozen Rust inputs and bounded live ELF joins
         run: |
           image=$(docker image inspect --format '{{.Id}}' ecm-alpine-application-candidate:${{ matrix.arch }})

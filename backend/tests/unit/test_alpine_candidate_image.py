@@ -90,6 +90,14 @@ def test_corresponding_busybox_plan_is_separate_proof_data_not_builder_patch_inp
     assert "/usr/share/ecm/sources/busybox/source-replay" not in text
 
 
+def test_candidate_delivers_complete_reviewed_gnu_sources_separately_from_runtime_libraries():
+    text = (ROOT / "docker/alpine-native/Dockerfile.candidate").read_text()
+    final = text.split("FROM runtime-base AS application-candidate\n", 1)[1]
+    assert "COPY --from=gnu-sources / /usr/share/ecm/sources/wheel-gnu/" in final
+    assert "gnu-sources / /usr/lib" not in text
+    assert "source-and-advisory-closure=pending" in final
+
+
 def test_external_source_builder_consumes_the_prior_runtime_capture_not_its_git_dependencies():
     text = (ROOT / "docker/alpine-native/Dockerfile.candidate").read_text()
     stage = text.split("FROM runtime-base AS apk-source-builder\n", 1)[1].split(

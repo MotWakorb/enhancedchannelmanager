@@ -242,3 +242,38 @@ def test_owned_consumer_uses_trusted_readonly_checkout_and_immutable_image_befor
     runtime = next(s for s in steps if "--phase runtime" in s.get("run", ""))
     assert steps.index(source) < steps.index(runtime)
     assert "always()" in runtime["if"] and "continue-on-error" not in runtime
+
+
+def test_gnu_source_delivery_and_final_wheel_consumer_do_not_replace_the_aggregate_gate():
+    workflow = yaml.load(
+        (ROOT / ".github/workflows/alpine-native.yml").read_text(),
+        Loader=yaml.BaseLoader,
+    )
+    steps = workflow["jobs"]["native-components"]["steps"]
+    preparation = next(
+        s for s in steps if "prepare_musllinux_gnu_sources.py" in s.get("run", "")
+    )
+    assert "--receipt-file" in preparation["run"]
+    build = next(s for s in steps if s.get("id") == "application-candidate")
+    assert '--build-context gnu-sources="$RUNNER_TEMP/gnu-sources"' in build["run"]
+    gate = next(s for s in steps if "verify_alpine_wheel_sources" in s.get("run", ""))
+    assert "image=$(jq -er '.[0].Id'" in gate["run"]
+    assert (
+        '--mount type=bind,src="$GITHUB_WORKSPACE/scripts",dst=/proof/scripts,readonly'
+        in gate["run"]
+    )
+    assert '--entrypoint /usr/local/bin/python "$image" -B -I -c' in gate["run"]
+    assert (
+        "--user 1000:1000" in gate["run"]
+        and "--read-only --cap-drop ALL" in gate["run"]
+    )
+    assert "application/wheel-sources.json" in gate["run"]
+    assert "continue-on-error" not in gate and "|| true" not in gate["run"]
+    runtime = next(s for s in steps if "--phase runtime" in s.get("run", ""))
+    assert (
+        steps.index(preparation)
+        < steps.index(build)
+        < steps.index(gate)
+        < steps.index(runtime)
+    )
+    assert "always()" in runtime["if"] and "continue-on-error" not in runtime

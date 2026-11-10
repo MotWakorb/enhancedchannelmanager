@@ -1035,3 +1035,30 @@ and the 129-byte ARM candidate remain preserved in their separate receipts.
 This is only GNU subset closure. Production-image delivery/source consumers,
 other wheel components/crates, external APK attribution/advisories, SBOMs and
 the complete application/native-ARM/security matrices remain unfinished.
+
+### Final-image GNU source delivery and installed-wheel consumer
+
+`prepare_musllinux_gnu_sources.py` now acquires the same 21 unique pinned inputs
+and delivers all 27 reviewed source/recipe/notice/proof files. Twelve inputs are
+exact retained repository assets; nine are exact upstream HTTPS source inputs.
+An explicit offline cache must have the complete expected index and all inputs;
+missing cache data cannot trigger an implicit network fallback. Both original
+GNU source statuses and the curated map stay unchanged.
+
+The application candidate copies these source bytes separately to
+`/usr/share/ecm/sources/wheel-gnu/`. No historical runtime APK or compiler/tool
+binary is installed. `verify_alpine_wheel_sources.py` rechecks pinned inventories,
+the final application lock, every reviewed installed wheel payload, notices/raw
+SBOM files, complete native/GNU ELF sets and all delivered GNU source files. It
+uses the already sealed whole-ELF correspondence map; it executes no target,
+source, repair tool or compiler and does not claim new source reproduction.
+
+The actual AMD64 candidate Python-builder plus a disposable final-layout fixture
+passes all 74 installed distributions, 48 native ELFs, nine GNU copies and 27
+source files. Five actual-layout corruption/extra-file controls reject. This is
+not a complete ECM image or native ARM execution result. Native CI now invokes
+the trusted read-only checkout consumer against each saved immutable full-image
+ID, within an existing verifier step. All control positions and the independent
+blocking aggregate gate remain unchanged. See
+`evidence/stable-alpine-final-wheel-gnu-integration-20261109.json` for exact proof
+hashes, fixture-build limits and remaining non-GNU/source/security obligations.

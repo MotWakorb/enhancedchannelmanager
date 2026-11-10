@@ -97,6 +97,7 @@ RUN groupadd --gid 1000 appuser \
     && useradd --uid 1000 --gid appuser --create-home --shell /bin/bash appuser
 COPY --from=python-builder /opt/venv /opt/venv
 COPY --from=python-builder /proof/installed-wheel-bindings.json /usr/share/ecm/provenance/installed-wheel-bindings.json
+COPY --from=gnu-sources / /usr/share/ecm/sources/wheel-gnu/
 COPY --from=apk-source-builder /proof/external-sources/ /usr/share/ecm/sources/apk/
 COPY --from=apk-source-builder /proof/external-source-receipt.json /usr/share/ecm/provenance/external-sources.json
 COPY --from=python-base-source-builder /proof/python-base-sources/ /usr/share/ecm/sources/python-base/
