@@ -6,6 +6,28 @@ evidence**, not completion of the [compatibility matrix](stable-alpine-parity.md
 Production `Dockerfile`, publication gates and deployed services are not switched
 by this implementation. No image publication or deployment is authorized.
 
+## Unfixed-aware advisory input decoding (not yet a complete gate)
+
+`scripts/alpine_advisories.py` decodes complete recorded official stable-branch
+JSON-LD responses, filters exact branch states and rejects conflicting duplicate
+evidence. The real community response repeats identical documents/state IDs and
+embeds many other branches. Its `cvss3` field also contains CVSS4 vectors. Null
+vectors/zero scores remain unknown, not safe. Tests preserve those real shapes.
+
+The exact saved 122-row runtime-base query/database matches 19 published unfixed
+records across cairo/coreutils/glib/tar/sqlite, 18 unscored. Those are potential
+findings requiring primary-source/reachability/fix review, not a claim of 19
+reachable exploits. `enhancedchannelmanager-4izbc` tracks this blocking assessment
+and a fresh-current-candidate comparison. All four owned packages stay unresolved;
+owned pseudo-versions and existing backports are not automatic exemptions.
+
+This decoder does not yet supply fresh authenticated advisory snapshots, full
+CPE/owned correction reconciliation or final-image CI enforcement. Fixed-only
+secdb/Trivy absence cannot replace those requirements. CVE-2026-11979 remains
+unresolved; neither its zero score nor a missing runtime tool proves safety.
+See `evidence/stable-alpine-advisory-decoder-20261109.json` for exact recordings,
+the deliberately blocked diagnostic and retained acquisition/schema failures.
+
 ## Implemented providers
 
 ### Additional libxml2 advisory reconciliation (bounded native proof only)
