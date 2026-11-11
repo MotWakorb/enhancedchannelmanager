@@ -1,14 +1,32 @@
 # Maintained SQLite, coreutils and GLib remedies
 
-**2026-11-11 · evy2p · proposed, not approved or deployed.** Coordination:
+**2026-11-11 · evy2p · PO decided: official vendor updates only.** Coordination:
 `enhancedchannelmanager-uv80n`. Baseline is published, working 0066 commit
 `95fc8e4e88c22744327de0ed75767ce5e8b28af9`, not the older investigation's images.
 Calibrated for **small-team ci-release**, with home-lab data/DBAS compatibility.
 
-## Decision for the PO
+## Accepted PO decision: vendor-only, remediation still blocked
 
-**Recommend authorizing exactly three additional maintained Alpine-native source
-families on stable 3.24**, bounded as follows:
+The PO explicitly chose **official signed stable Alpine 3.24 vendor updates
+only** and **rejected maintenance of four additional owned source families:
+SQLite, coreutils, GLib and tar**. The coordinating parent acknowledged this
+choice. Do not implement or wire those additional owned providers. No automatic
+vendor polling or repeated index acquisition is authorized; the retained survey
+below is sufficient for this decision record.
+
+The decision-record work is complete; **security remediation and promotion remain
+blocked** until equivalent official fixes and complete acceptance actually exist.
+The prior proposal/prototypes at `08b3b636` are retained as **historical evidence,
+not authorized implementation**. Existing approved libxml2-provider corrections
+continue separately with their assigned worker and are not changed here. Tar is
+part of the PO's broader rejection, but its three findings remain under `4yxbm`,
+not silently added to or discharged by this bead's 13-remedy scope.
+
+### Rejected historical owned-provider proposal
+
+Before the PO's choice, the investigation proposed the following three additional
+source families. This list preserves the technical comparison and correction
+benchmarks; it is **not the selected delivery route**:
 
 1. **SQLite:** complete corrected **3.54.1 library**, existing features/limits and
    `libsqlite3.so.0`; do not introduce the vulnerable CLI.
@@ -18,26 +36,25 @@ families on stable 3.24**, bounded as follows:
 3. **GLib:** retained **2.88.1** plus `656ad458` and `c9da977c`, including the
    original invalid-nesting regression and its ported registration.
 
-This is a concrete **maintenance choice**, not approval inferred from “work all
-P1s.” The alternative is obtaining equivalent **official signed stable 3.24
-vendor backports**; none is present in the inspected feeds. Choosing vendor-only
-leaves this P1 and promotion blocked until those packages actually exist and pass
-source/ABI/native acceptance. It is not a technical waiver or permission to stop
-other engineering work.
+Equivalent **official signed stable 3.24 vendor fixes** were absent from the
+recorded inspected feeds. The vendor may ship a corrected release or equivalent
+backport: no particular version string substitutes for actual source-fix proof.
+The PO's selected route is not a waiver, risk downgrade, remediation delivery or
+permission to stop unrelated authorized engineering work.
 
 No stable-branch/cohort expansion, edge/testing feed, distro Python replacement,
 74-pin application update, GNU feature removal or new production wiring occurs
-in this proposal. Those are constraints for the proposed implementation, **not
-claims already enforced by a new provider**.
+in this record. These remain acceptance requirements, **not claims already
+enforced by a new provider or a new gate**.
 
 ```mermaid
 flowchart LR
   A[Fresh signed stable indexes + immutable0066 DB] --> B{Equivalent source fixes?}
-  B -->|No in captured feeds| C{PO maintenance choice}
-  C -->|Approve bounded3 families| D[Owned Alpine builds and native acceptance]
-  C -->|Vendor only| E[Obtain official stable backports; P1 remains open]
-  D --> F[Both-arch final-file, source, ABI and advisory binding]
+  B -->|No in captured feeds| C[PO selected official stable vendor updates only]
+  C --> E[Await equivalent official fixes; P1 and promotion blocked]
+  C -.-> D[Additional owned providers rejected; historical proofs only]
   E --> F
+  F[Complete both-arch final-file, source, ABI, native and advisory acceptance]
 ```
 
 ## Fresh vendor result, not a version-only inference
@@ -76,11 +93,11 @@ The complete field survey, attached to the bead before writing fixture tests:
 
 ## Upstream release evaluation and source proof
 
-| Alternative | Actual examined source result | Choice |
+| Alternative | Actual examined source result | Historical technical comparison, not delivery authorization |
 |---|---|---|
-| SQLite 3.54.1 complete release | Canonical source SHA256 `387e7f6c…240c71b`; new official amalgamation SHA3 matches the primary download page. Loaded library source ID matches canonical manifest `555e07ef…e6ca76`. Existing eight straightforward fix contexts replay; authorization follow-up also reverse-matches, while CTE/later edits and initial authorization patch require semantic review. | Prefer complete corrected library over maintaining ten old-version backports. |
-| coreutils 9.12 upstream release | Allocation and wide-blank changes present, but the **blank** branch still adds raw `c32width(g.ch)`. The negative-width patch applies unchanged. A clamp in the sibling nonblank branch does **not** fix it. Downloaded release signature is retained but not verified; no signed-release acceptance claimed. | Blind 9.12 bump is insufficient and broadens behavior changes. Prefer bounded 9.11 four-patch port. |
-| GLib 2.88.4 latest 2.88 release | Official SHA256 matches. Still has the bad `<node>` parent condition and lacks `test_invalid`; the correction code applies, with the same registration-layout conflict. | Bare micro bump is insufficient. Prefer paired 2.88.1 backport over unrelated changes. |
+| SQLite 3.54.1 complete release | Canonical source SHA256 `387e7f6c…240c71b`; new official amalgamation SHA3 matches the primary download page. Loaded library source ID matches canonical manifest `555e07ef…e6ca76`. Existing eight straightforward fix contexts replay; authorization follow-up also reverse-matches, while CTE/later edits and initial authorization patch require semantic review. | Benchmark for equivalent official vendor corrections; owned release-build proposal rejected. |
+| coreutils 9.12 upstream release | Allocation and wide-blank changes present, but the **blank** branch still adds raw `c32width(g.ch)`. The negative-width patch applies unchanged. A clamp in the sibling nonblank branch does **not** fix it. Downloaded release signature is retained but not verified; no signed-release acceptance claimed. | Blind 9.12 bump is insufficient. Official vendor source must include all four equivalent corrections; owned four-patch proposal rejected. |
+| GLib 2.88.4 latest 2.88 release | Official SHA256 matches. Still has the bad `<node>` parent condition and lacks `test_invalid`; the correction code applies, with the same registration-layout conflict. | Bare micro bump is insufficient. Official vendor source must include the paired correction/regression; owned backport proposal rejected. |
 
 Original primary correction URLs and retained source-feature review for each
 SQLite correction are in
@@ -91,8 +108,10 @@ test execution or claim that a source archive is a delivered runtime correction.
 
 ## Actual prototype verification
 
-New files under [`proofs/stable-remedies/`](proofs/stable-remedies/) are isolated
-decision/proof artifacts, **not installed recipes or production gate changes**.
+Files under [`proofs/stable-remedies/`](proofs/stable-remedies/) are retained
+historical decision/proof artifacts, **not authorized owned providers, installed
+recipes or production gate changes**. The results below predate the PO decision;
+this decision-only follow-up does not compile or run new provider prototypes.
 
 | Check and layer | Observed result | Boundary |
 |---|---|---|
@@ -163,36 +182,74 @@ claimed. `CVE-2016-2781` remains a separate shared-TTY/chroot contract review;
 `CVE-2026-119586` is not fixed by 3.54.1, and absent image CLI does not clear
 external operator recovery tools. Neither is absorbed into the 13 fixes.
 
-## Bounded maintenance cost, delivery and exit
+## Exact unresolved tracking: 13 remedies, no paper remediation
+
+Every row below remains **blocked awaiting an equivalent official vendor fix and
+complete acceptance**, through `evy2p` → `4izbc` → `g3vd3`. The choice settles the
+delivery route, not any CVE disposition. The machine-readable list is checked by
+`test_decision_preserves_exact_thirteen_unresolved_remedy_records`.
+
+| Source | Exact unresolved remedy records | Count |
+|---|---|---|
+| SQLite | CVE-2026-119371, CVE-2026-119372, CVE-2026-119373, CVE-2026-119374, CVE-2026-119375, CVE-2026-119376, CVE-2026-119377, CVE-2026-119378, CVE-2026-119379, CVE-2026-119591 | 10 |
+| coreutils | CVE-2026-56391, CVE-2026-56392 | 2 |
+| GLib | CVE-2026-58016 | 1 |
+
+The other six original `4izbc` findings are not absorbed: Cairo
+CVE-2025-50422 (`eeh2i`), chroot CVE-2016-2781, absent-image SQLite CLI
+CVE-2026-119586, and GNU tar CVE-2025-45582/CVE-2026-18477/CVE-2026-18508
+(`4yxbm`). Existing source/compiler/static/feature and advisory obligations under
+`g3vd3` remain unchanged, including separate existing-provider work.
+
+## Selected route: concrete acceptance trigger and issue disposition
+
+Evaluation resumes when an **actual official stable 3.24 update** is available,
+not via an automatic polling loop. Before any of these 13 remedies is accepted:
+
+1. Authenticate official stable 3.24 package/index signatures on the relevant
+   architectures and bind exact installed outputs, source recipe commits,
+   archives, patches, config and notices to the actual immutable final files.
+   Upstream HTTPS/checksum evidence alone is not an official signed vendor APK.
+2. Establish **actual source-fix equivalence** for every affected feature and
+   correction, including the SQLite authorization follow-up, complete unexpand
+   sequence and GLib parser/regression. A tracker `fixed` flag, newer version,
+   CVE disappearance, empty Trivy result or fixed-only secdb omission is no waiver.
+3. Complete **both native AMD64 and ARM64 ABI and compatibility acceptance**:
+   unchanged SQLite ABI/features/limits plus WAL, migrations, concurrency and
+   current/legacy DBAS; full GNU capabilities and multibyte/musl regressions;
+   GLib symbol/SONAME/dependent-media/introspection and gcompat checks. Preserve
+   stable 3.24, Python 3.12 and all 74 application pins. AMD64 unit execution and
+   ARM signature verification do not satisfy ARM64 native execution.
+4. Complete retained **source and advisory acceptance**, including compiler/static
+   dependencies, complete finding reconciliation and required scans against
+   actual final outputs on both architectures, with independent review. Preserve
+   unknown severity as UNKNOWN rather than Low. Full `g3vd3` acceptance criteria
+   are not narrowed by this decision.
+
+These are **future acceptance requirements, not a new gate implementation or an
+assertion that they passed**. The existing historical proof limits above remain.
+
+`evy2p`'s choice-only deliverable is fulfilled, but its description also preserves
+ABI/features, source/notices, native tests and scans. Therefore its disposition
+is **BLOCKED awaiting official updates and complete acceptance**, not closed as
+remediated. No issue is closed or acceptance criterion changed by this record;
+`4izbc`, dependent `g3vd3` security acceptance and promotion remain unresolved.
+
+### Historical maintenance alternatives retained for traceability
 
 | Route | Maintenance surface / trade-off | Exit |
 |---|---|---|
-| Official stable backports | No additional owned source family; still requires six installed output identities and both-architecture source/ABI checks. Currently unavailable. | Normal stable package refresh once actual fixes are proven. |
-| Proposed three owned families | **3 recipes, 6 installed package outputs per architecture**; two patch series plus one release build, source/notice/compiler closure, signing, scans and future advisory monitoring. More ownership, least behavioral change from0066. | Retire each owned family independently when official stable source has equivalent fixes and both native final-image contracts pass. |
+| Official stable backports — **selected** | No additional owned source family; still requires six installed output identities and both-architecture source/ABI checks. Unavailable in the recorded survey. | Normal stable package refresh only once actual fixes and complete acceptance are proven. |
+| Proposed three owned families — **rejected** | Historical estimate: **3 recipes, 6 installed package outputs per architecture**, two patch series plus one release build and ongoing source/signing/advisory ownership. | Not authorized to implement; retained comparison only. |
 | Blind upstream release bumps | 9.12 and 2.88.4 are demonstrably incomplete; broader compatibility surface without removing ownership. | Rejected as a standalone remedy. |
 
-**Phase 1:** after explicit approval, produce signed, accurately identified owned
-outputs without impersonating official vendor packages; preserve exact sources,
-notices and original tests. Resolve coreutils native build preparation, then run
-native AMD64/ARM64 full-package tests, symbol/SONAME comparison, unchanged GNU
-semantics, SQLite WAL/migration/concurrency/current+legacy DBAS, GLib dependent
-media/introspection and gcompat checks. Bind compiler/static dependencies and
-complete advisory dispositions to actual final files, with independent review.
-This is **Large** bounded provider work, not a simple APK version edit.
-
-**Phase 2:** upstream the bounded backports for stable-vendor adoption. The exit
-trigger is source-fix equivalence **and** both-architecture final acceptance, not
-“newer version” or disappearance from Trivy/secdb. No new registry/service or
-recurring runtime infrastructure cost is proposed. Build/maintenance resource
-cost is the three-family/six-output surface above; no invented calendar estimate.
-
-Until those steps run, `evy2p` stays **in progress** and source/advisory acceptance
-stays unresolved. The implementation trigger is the PO's explicit three-family
-maintenance approval, tracked in `evy2p` under `uv80n`.
+The former owned-build phases are **not an active implementation plan**. The
+selected exit from the blocker is equivalent official signed stable updates
+followed by the complete acceptance trigger above, not owned-provider approval.
 
 ## Evidence and replay
 
-- Machine-readable proposal:
+- Machine-readable decision with rejected historical proposal and exact tracking:
   [`evidence/stable-remedies-20261111.json`](evidence/stable-remedies-20261111.json).
 - Committed original-receipt capsule:
   `evidence/stable-remedies-20261111.receipts.json.gz`; includes complete recorded

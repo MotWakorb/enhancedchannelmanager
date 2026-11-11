@@ -3,6 +3,15 @@
 These files are **proposal/evidence only**, not production provider wiring or a
 new backend-gate selection. See `../../stable-alpine-maintained-remedies.md`.
 
+**PO decision, 2026-11-11:** official signed stable 3.24 vendor updates only.
+Additional owned SQLite/coreutils/GLib/tar families were **rejected**. The patches,
+private prototypes, prior results and replay instructions below are historical
+evidence, not permission to implement or wire providers. The decision-only
+follow-up runs the recorded-evidence tests, not new provider prototypes. No
+automatic vendor polling is authorized. The 13 remedies remain unresolved under
+`evy2p` → `4izbc` → `g3vd3` until equivalent official fixes and complete both-arch
+ABI/native/source/advisory acceptance; no flag/version disappearance is clearance.
+
 ## Executed layers
 
 - `test_evidence_contract.py`: original recorded vendor-row/inventory joins,

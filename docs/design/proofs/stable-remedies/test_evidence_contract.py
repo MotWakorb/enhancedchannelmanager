@@ -153,8 +153,67 @@ def test_no_aggregate_clearance_or_maintenance_approval_is_implied():
     assert proposal["production_wiring_changed"] is False
     assert proposal["arm64_prototype_execution"] is False
     assert proposal["source_advisory_clearance"] is False
-    assert {item["source"] for item in proposal["recommendation"]} == {
+    assert "recommendation" not in proposal
+    assert {
+        item["source"] for item in proposal["historical_owned_provider_proposal"]
+    } == {
         "sqlite",
         "glib",
         "coreutils",
     }
+    decision = proposal["po_decision"]
+    assert (
+        decision["selected_route"] == "official_signed_stable_3.24_vendor_updates_only"
+    )
+    assert set(decision["additional_owned_source_families_rejected"]) == {
+        "sqlite",
+        "coreutils",
+        "glib",
+        "tar",
+    }
+    assert decision["decision_record_complete"] is True
+    assert decision["remediation_complete"] is False
+    assert decision["automatic_vendor_polling_authorized"] is False
+    trigger = proposal["vendor_acceptance_trigger"]
+    assert trigger["official_branch"] == "v3.24"
+    assert trigger["official_signature_required"] is True
+    assert trigger["actual_source_fix_equivalence_required"] is True
+    assert trigger["final_image_file_binding_required"] is True
+    assert trigger["required_native_architectures"] == ["amd64", "arm64"]
+    assert set(trigger["complete_acceptance_required"]) == {
+        "abi",
+        "native_compatibility",
+        "source",
+        "advisory",
+    }
+    assert trigger["version_or_tracker_disappearance_is_clearance"] is False
+
+
+def test_decision_preserves_exact_thirteen_unresolved_remedy_records():
+    proposal = json.loads(
+        EVIDENCE.with_name("stable-remedies-20261111.json").read_text()
+    )
+    expected = {
+        "sqlite": {
+            *(f"CVE-2026-{suffix}" for suffix in range(119371, 119380)),
+            "CVE-2026-119591",
+        },
+        "coreutils": {"CVE-2026-56391", "CVE-2026-56392"},
+        "glib": {"CVE-2026-58016"},
+    }
+    coverage = proposal["unresolved_remedy_tracking"]
+    assert len(coverage) == 3
+    assert {item["source"] for item in coverage} == set(expected)
+    for item in coverage:
+        assert set(item["cves"]) == expected[item["source"]]
+        assert len(item["cves"]) == len(expected[item["source"]])
+        assert (
+            item["disposition"]
+            == "BLOCKED_AWAITING_OFFICIAL_FIX_AND_COMPLETE_ACCEPTANCE"
+        )
+        assert item["issue_path"] == [
+            "enhancedchannelmanager-evy2p",
+            "enhancedchannelmanager-4izbc",
+            "enhancedchannelmanager-g3vd3",
+        ]
+    assert sum(len(item["cves"]) for item in coverage) == 13
