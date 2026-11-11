@@ -15,6 +15,8 @@ import platform
 import posixpath
 import re
 import shutil
+import subprocess
+import sys
 import tarfile
 import tomllib
 from pathlib import Path, PurePosixPath
@@ -34,6 +36,12 @@ from build_native_runtime import (
 
 RECIPE_SHA256 = "4940090f0dd959262a986933a43856279f5f33bda1c37980371939cf183f7bfa"
 SMOKE_SHA256 = "c30e55b7265151165d04e973e43be391b582dd6c30b2d20ff5b370ea8577b547"
+UPSTREAM_HELPER_SHA256 = (
+    "b0b731c8855bfd7966b8bf23179818b4c6c387865955e6ec5f5f1dbce5063846"
+)
+UPSTREAM_CONTRACT_SHA256 = (
+    "cb440eb5aee1ec5d679a543a391dff82c99b0c3bd231705173bd9a9cb7e83a6b"
+)
 
 
 def load_recipe(path: Path) -> dict:
@@ -299,6 +307,171 @@ def capacity_command(
     return command
 
 
+def libxml2_upstream_proof(
+    source: Path, *, work: Path, sources: Path, assets: Path, env: dict
+) -> dict:
+    """Run the sealed upstream phase as UID3000; retain exact proof/log bytes.
+
+    Tests in test_libxml2_production_upstream.py enforce fail-before-install,
+    command order, bounded ownership changes and exact retained log identities.
+    This does not replace the native mutation/ABI matrix or final-image checks.
+    """
+    _require(
+        source.is_dir()
+        and not source.is_symlink()
+        and source.absolute() == source.resolve()
+        and source.resolve() != work.resolve()
+        and source.resolve().is_relative_to(work.resolve()),
+        "libxml2 proof must own only its disposable extracted source",
+    )
+    helper = Path(__file__).with_name("prove_libxml2_recursion.py")
+    contract_path = assets / "libxml2-upstream-test-contract.json"
+    for path, digest, label in [
+        (helper, UPSTREAM_HELPER_SHA256, "proof helper"),
+        (contract_path, UPSTREAM_CONTRACT_SHA256, "proof contract"),
+    ]:
+        _require(
+            path.is_file() and not path.is_symlink() and sha256(path) == digest,
+            "reviewed libxml2 " + label + " identity mismatch",
+        )
+    contract = json.loads(contract_path.read_text())
+    scratch = source / ".proof-tmp"
+    scratch.mkdir()
+    for directory, directories, files in os.walk(source, followlinks=False):
+        for path in [
+            Path(directory),
+            *(Path(directory) / name for name in directories + files),
+        ]:
+            os.chown(path, 3000, 3000, follow_symlinks=False)
+    proof_env = {
+        **env,
+        "ECM_DISPOSABLE_LIBXML2_PROOF": "1",
+        "HOME": str(source),
+        "TMPDIR": str(scratch),
+    }
+    proof_env.pop("RNG_INCLUDE_LIMIT", None)
+    command = [
+        sys.executable,
+        str(helper),
+        "upstream",
+        "--repo",
+        str(helper.parent.parent),
+        "--assets",
+        str(assets),
+        "--source",
+        str(source),
+    ]
+    command_log = sources / "recipe/libxml2-upstream-command.log"
+    with command_log.open("wb") as log:
+        subprocess.run(
+            command,
+            cwd=source,
+            env=proof_env,
+            user=3000,
+            group=3000,
+            extra_groups=[],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            check=True,
+        )
+    receipt_path = source / "proof-upstream.json"
+    _require(
+        receipt_path.is_file()
+        and not receipt_path.is_symlink()
+        and 0 < receipt_path.stat().st_size <= 65536,
+        "regular bounded libxml2 upstream receipt required",
+    )
+    proof = json.loads(receipt_path.read_text())
+    _require(
+        isinstance(proof, dict)
+        and set(proof)
+        == {
+            "status",
+            "upstream",
+            "runtest_summary",
+            "catalog_golden_pairs",
+            "contract_sha256",
+        }
+        and proof["status"] == "PASS"
+        and proof["contract_sha256"] == UPSTREAM_CONTRACT_SHA256
+        and proof["catalog_golden_pairs"]
+        == [pair["catalog"] for pair in contract["catalog_golden_pairs"]],
+        "libxml2 upstream proof incomplete or bound to another contract",
+    )
+    counters = proof["runtest_summary"]
+    _require(
+        isinstance(counters, dict)
+        and set(counters) == {"executed", "errors", "leaks"}
+        and all(type(value) is int for value in counters.values())
+        and counters["executed"] > 0
+        and counters["errors"] == counters["leaks"] == 0,
+        "libxml2 upstream execution counters incomplete",
+    )
+    expected = [
+        (["./runtest"], "runtest"),
+        (["./testparser"], "testparser"),
+        (["make", "Catatests"], "Catatests"),
+    ]
+    _require(
+        isinstance(proof["upstream"], list) and len(proof["upstream"]) == len(expected),
+        "libxml2 upstream commands incomplete",
+    )
+    paths = [receipt_path]
+    for row, (argv, name) in zip(proof["upstream"], expected, strict=True):
+        _require(
+            isinstance(row, dict)
+            and set(row) == {"command", "log", "sha256"}
+            and row["command"] == argv
+            and row["log"] == f"proof-upstream-{name}.log",
+            "libxml2 upstream command identity mismatch",
+        )
+        path = source / row["log"]
+        _require(
+            path.is_file()
+            and not path.is_symlink()
+            and 0 < path.stat().st_size <= 4 * 1024**2
+            and sha256(path) == row["sha256"],
+            "libxml2 upstream log bytes differ",
+        )
+        paths.append(path)
+    retained = sources / "recipe/libxml2-upstream-proof"
+    retained.mkdir()
+    for path in paths:
+        shutil.copy2(path, retained / path.name)
+    return {
+        "command": command,
+        "execution_uid": 3000,
+        "execution_gid": 3000,
+        "helper_sha256": UPSTREAM_HELPER_SHA256,
+        "contract_sha256": UPSTREAM_CONTRACT_SHA256,
+        "command_log_sha256": sha256(command_log),
+        "retained_files": owned_artifacts(retained),
+    }
+
+
+def build_autotools(
+    item: dict,
+    source: Path,
+    sdk: Path,
+    env: dict,
+    *,
+    work: Path,
+    sources: Path,
+    assets: Path,
+) -> dict | None:
+    """Keep make check; require the libxml2 upstream proof before installation."""
+    run([str(source / "configure"), *item["configure"]], cwd=source, env=env)
+    run(["/usr/bin/make", "-j2"], cwd=source, env=env)
+    run(["/usr/bin/make", "-j2", "check"], cwd=source, env=env)
+    proof = None
+    if item["name"] == "libxml2":
+        proof = libxml2_upstream_proof(
+            source, work=work, sources=sources, assets=assets, env=env
+        )
+    run(["/usr/bin/make", "install", "DESTDIR=" + str(sdk)], cwd=source, env=env)
+    return proof
+
+
 def build(
     manifest: Path, arch: str, work: Path, output: Path, cache: Path | None
 ) -> dict:
@@ -347,8 +520,13 @@ def build(
         Path(__file__).with_name("build_alpine_codecs.py"),
         Path(__file__).with_name("build_native_runtime.py"),
         Path(__file__).with_name("alpine_repository_policy.py"),
+        Path(__file__).with_name("prove_libxml2_recursion.py"),
     ]:
         shutil.copy2(helper, sources / "recipe" / helper.name)
+    shutil.copy2(
+        manifest.parent / "libxml2-upstream-test-contract.json",
+        sources / "recipe/libxml2-upstream-test-contract.json",
+    )
     inventory = run(["/sbin/apk", "info", "-v"], cwd=work, env=env)
     records = []
     for item in recipe["libraries"]:
@@ -387,6 +565,7 @@ def build(
             }
             configure_cargo(source, Path(env["CARGO_HOME"]), sources / "recipe")
         patched_source = owned_artifacts(source)
+        upstream_proof = None
         if item["name"] == "librsvg":
             directory = work / "rsvg-build"
             run(
@@ -419,11 +598,14 @@ def build(
                 env=env,
             )
         else:
-            run([str(source / "configure"), *item["configure"]], cwd=source, env=env)
-            run(["/usr/bin/make", "-j2"], cwd=source, env=env)
-            run(["/usr/bin/make", "-j2", "check"], cwd=source, env=env)
-            run(
-                ["/usr/bin/make", "install", "DESTDIR=" + str(sdk)], cwd=source, env=env
+            upstream_proof = build_autotools(
+                item,
+                source,
+                sdk,
+                env,
+                work=work,
+                sources=sources,
+                assets=manifest.parent,
             )
         _install_builder_sdk(sdk)
         capacity_proof = None
@@ -482,6 +664,11 @@ def build(
                 "needed": needed,
                 "vendor_proof": vendor_record,
                 "capacity_proof": capacity_proof,
+                **(
+                    {"upstream_proof": upstream_proof}
+                    if item["name"] == "libxml2"
+                    else {}
+                ),
             }
         )
     smoke = work / "security-smoke"

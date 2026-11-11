@@ -6,7 +6,7 @@ RUN python /proof/scripts/alpine_repository_policy.py \
     && apk add --no-cache build-base bash coreutils binutils patch pkgconf \
         xz-dev zlib-dev bzip2-dev libxml2-dev cargo cargo-c rust meson clang22 compiler-rt \
         cairo-dev dav1d-dev font-dejavu gdk-pixbuf-dev glib-dev pango-dev
-COPY scripts/build_native_runtime.py scripts/build_alpine_codecs.py scripts/build_alpine_security_libraries.py /proof/scripts/
+COPY scripts/build_native_runtime.py scripts/build_alpine_codecs.py scripts/build_alpine_security_libraries.py scripts/prove_libxml2_recursion.py /proof/scripts/
 COPY docker/alpine-native/ /proof/recipe/
 COPY --from=security-cache / /proof/cache/
 RUN --network=none --mount=type=cache,target=/proof/cargo-target \
