@@ -2,6 +2,16 @@
 
 Bead: `enhancedchannelmanager-jtrlf`.
 
+Delivery preparation reserves build `0.18.2-0067` above published `0066`.
+The Alpine application-source snapshot records the independently reviewed
+application commit `4dc2601d` and the three version touchpoints, adds the new
+shared helper to the complete inventory, and retains the preceding snapshot's
+date/container compatibility history. The source preflight still checks exact
+bytes, executable flags, regular path types and complete membership. Its tests
+reconstruct and pin the preceding 1,080-entry inventory rather than exempting
+changed application files. Source hashes and this preparation are not image
+compatibility, advisory, publication or deployed-acceptance evidence.
+
 ## Policy and boundaries
 
 The immediate group-delete route and Edit Mode bulk consumer call

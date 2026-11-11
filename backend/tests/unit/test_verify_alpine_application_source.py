@@ -102,13 +102,13 @@ def test_version_bump_source_preflight_rejects_each_stale_touchpoint(
     assert not output.exists()
 
 
-def test_real_recorded_application_map_allows_only_date_and_container_adaptations(
+def test_real_recorded_application_map_retains_date_and_container_adaptations(
     verifier,
 ):
     manifest = verifier.load_manifest(
         ROOT / "docker/alpine-native/application-source.json"
     )
-    assert len(manifest["files"]) == 1080
+    assert len(manifest["files"]) == 1081
     assert (
         manifest["baseline_application_commit"]
         == "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531"
@@ -125,6 +125,99 @@ def test_real_recorded_application_map_allows_only_date_and_container_adaptation
         "backend/date_placeholders.py",
         "mcp-server/Dockerfile",
     }
+
+
+def test_reviewed_group_delete_snapshot_extends_the_complete_previous_inventory(
+    verifier,
+):
+    """Reconstruct the preceding inventory, including path/type/mode/hash data."""
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    update = manifest["approved_application_update"]
+    assert update["application_commit"] == "4dc2601d578235c3111c81447ce2c00b05c2ebcb"
+    assert update["base_commit"] == "95fc8e4e88c22744327de0ed75767ce5e8b28af9"
+    assert update["bead"] == "enhancedchannelmanager-jtrlf"
+    assert update["version"] == "0.18.2-0067"
+    assert (
+        update["previous_manifest_sha256"]
+        == "a3520f9549250c896d90c5d8477fb5cdf24bc56f9829e83ce9eff4ba2c9e2156"
+    )
+    assert set(update["changed_files"]) == {
+        "backend/main.py",
+        "backend/routers/backup.py",
+        "frontend/package.json",
+        "backend/routers/channel_groups.py",
+        "backend/routers/channels.py",
+    }
+    assert update["added_files"] == ["backend/channel_group_delete.py"]
+    rows = {row["path"]: row for row in manifest["files"]}
+    assert rows["backend/channel_group_delete.py"]["type"] == "file"
+    assert rows["backend/channel_group_delete.py"]["executable"] is False
+    previous = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            continue
+        restored = dict(row)
+        if row["path"] in update["changed_files"]:
+            assert row["sha256"] != update["changed_files"][row["path"]]
+            restored["sha256"] = update["changed_files"][row["path"]]
+        previous.append(restored)
+    assert len(previous) == 1080
+    # Pin independently of the update metadata: resealing a dropped path,
+    # changed executable/type or unrelated hash cannot bless a smaller snapshot.
+    assert (
+        hashlib.sha256(
+            json.dumps(previous, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        == "09bd8191d77d71612c0fa3ab9ac3be727da3ca43164934116c3a384ba1f568fd"
+    )
+    result = verifier.verify(ROOT, manifest)
+    assert result["approved_application_update"] == update
+
+
+@pytest.mark.parametrize("mutation", ["missing", "unlisted", "executable"])
+def test_application_source_cli_rejects_incomplete_or_mode_changed_snapshot(
+    verifier, tmp_path, mutation
+):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    source_root = tmp_path / "source"
+    for row in manifest["files"]:
+        source = ROOT / row["path"]
+        target = source_root / row["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        target.chmod(source.stat().st_mode & 0o777)
+    helper = source_root / "backend/channel_group_delete.py"
+    if mutation == "missing":
+        helper.unlink()
+        expected = "regular application source file required"
+    elif mutation == "unlisted":
+        (source_root / "backend/unlisted.py").write_text("unreviewed source")
+        expected = "application source coverage mismatch"
+    else:
+        helper.chmod(0o755)
+        expected = "application source bytes or executable bit differ"
+    output = tmp_path / "application-source.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--root",
+            str(source_root),
+            "--output-file",
+            str(output),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert expected in result.stderr
+    assert not output.exists()
 
 
 def test_changed_missing_or_extra_application_source_fails(verifier, tmp_path):
