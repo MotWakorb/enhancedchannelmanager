@@ -895,7 +895,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "587d70dfd62e91c1a75283ce2074c43a4eedb7ce49632b0255cd4729f7997de2",
+      "sha256": "ed841cb30749e6eec7d88171f77ded278f45b277ca0dbf40da7a91e21fce1e7b",
       "type": "file"
     },
     {
@@ -1009,7 +1009,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "198f9bf2537085efb88675584d478f49a4bf7e26a7d8ae0887148e4c09f2bc77",
+      "sha256": "158543bbf83c7f29d5e60e20ea5b1f539be9ec1c9cc94a46a93f114477019bbc",
       "type": "file"
     },
     {
@@ -1711,7 +1711,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "acd30324e29bf8977b90736df1c166b1c3c6df9b53bd8e85bcef0eeb6696e129",
+      "sha256": "f5e62eef1a1d2bb945c3378242a823d4665f34f5279faa936aa6e45322f7c5fe",
       "type": "file"
     },
     {

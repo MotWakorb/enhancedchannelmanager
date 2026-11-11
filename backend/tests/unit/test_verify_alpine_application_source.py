@@ -2,11 +2,21 @@
 
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
+SCRIPT = ROOT / "scripts/verify_alpine_application_source.py"
+VERSION_TOUCHPOINTS = (
+    "backend/main.py",
+    "backend/routers/backup.py",
+    "frontend/package.json",
+)
 
 
 @pytest.fixture
@@ -19,6 +29,77 @@ def verifier():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_version_bump_source_preflight_accepts_the_complete_committed_tree(tmp_path):
+    """Exercise the same pinned-manifest evidence producer as native CI."""
+    output = tmp_path / "application-source.json"
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--output-file", str(output)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    record = json.loads(output.read_text())
+    manifest_path = ROOT / "docker/alpine-native/application-source.json"
+    manifest = json.loads(manifest_path.read_text())
+    assert record["status"] == "PINNED_APPLICATION_SOURCE_ONLY"
+    assert record["file_count"] == len(manifest["files"])
+    assert (
+        record["manifest_sha256"]
+        == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    )
+
+
+@pytest.mark.parametrize("relative", VERSION_TOUCHPOINTS)
+def test_version_bump_source_preflight_rejects_each_stale_touchpoint(
+    verifier, tmp_path, relative
+):
+    """Version declarations remain exact source bytes, never exempt metadata."""
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    source_root = tmp_path / "source"
+    for row in manifest["files"]:
+        source = ROOT / row["path"]
+        target = source_root / row["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        target.chmod(source.stat().st_mode & 0o777)
+    version = json.loads((ROOT / "frontend/package.json").read_text())["version"]
+    release, separator, build = version.rpartition("-")
+    stale = (
+        f"{release}-{int(build) - 1:04d}"
+        if separator and build.isdigit() and int(build) > 0
+        else "0.0.0-0000"
+    )
+    assert stale != version
+    path = source_root / relative
+    original = path.read_bytes()
+    assert original.count(version.encode()) == 1
+    path.write_bytes(original.replace(version.encode(), stale.encode()))
+    output = tmp_path / "application-source.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--root",
+            str(source_root),
+            "--output-file",
+            str(output),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "application source bytes or executable bit differ: " + relative in (
+        result.stderr
+    )
+    assert not output.exists()
 
 
 def test_real_recorded_application_map_allows_only_date_and_container_adaptations(
