@@ -53,6 +53,10 @@ def test_real_security_recipe_keeps_stable_xml_abi_and_all_reviewed_corrections(
         "CVE-2026-86144",
         "CVE-2026-86137",
         "CVE-2026-86141",
+        "CVE-2025-8732-depth",
+        "CVE-2025-8732",
+        "CVE-2026-0989",
+        "CVE-2026-11979",
     }
     patches = xml["patches"]
     bounds = next(i for i, p in enumerate(patches) if p["id"] == "CVE-2026-86137")

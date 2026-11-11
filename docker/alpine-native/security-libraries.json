@@ -157,6 +157,83 @@
               "after_sha256": "5c0a2eba4af5e00049d4f07f5f04aabf29ddc28f2a51784dd1a5c343c77940a7"
             }
           ]
+        },
+        {
+          "id": "CVE-2025-8732-depth",
+          "file": "patches/security/libxml2-CVE-2025-8732-depth.patch",
+          "sha256": "5858468824d8a96300c45aa0b975ec5aab727f1df1b0ce436af6f51454abb203",
+          "upstream_commit": "eae9291aa73907694dd3a4274d306e31217e746e",
+          "origin": "SGML depth plumbing and complete recursive old-harness fixtures; adapted 2.13 comments/mutex representation",
+          "witnesses": [
+            {
+              "path": "catalog.c",
+              "before_sha256": "c985ea50eaa57345643a67c64b711bef285843de509332d324b3a9338b6c74fb",
+              "after_sha256": "9693237b06cfa89ae2a1152e0abafb36166fc7669a84972468c69d90d0d22c50"
+            }
+          ],
+          "upstream_patch_sha256": "be4d7a524074869750a74896c1c41025e87b2e28e2606b4b70f2223c8c0a7c0d"
+        },
+        {
+          "id": "CVE-2025-8732",
+          "file": "patches/security/libxml2-CVE-2025-8732.patch",
+          "sha256": "509c2af8c80fb63884748895ecaeddfb3a4a5bbda8440e0ea019c7b0443502fd",
+          "upstream_commit": "ee9fdfcc244a5d06b5b087437f5cb3decd05d689",
+          "witnesses": [
+            {
+              "path": "catalog.c",
+              "before_sha256": "9693237b06cfa89ae2a1152e0abafb36166fc7669a84972468c69d90d0d22c50",
+              "after_sha256": "97dc5ed8f68f5b472c37ef21bb7a81706035343bdf315e3179142a12ae0c3a80"
+            }
+          ],
+          "upstream_patch_sha256": "d427b474acee40696a00ead9c2f89af487f8ba38013bb487a2a18e47a4e53ab1"
+        },
+        {
+          "id": "CVE-2026-0989",
+          "file": "patches/security/libxml2-CVE-2026-0989.patch",
+          "sha256": "b9bac9a710c9fe6f0c90b8f098a14cba32b178528d472bfa79057bc0863b175a",
+          "upstream_commit": "19549c61590c1873468c53e0026a2fbffae428ef",
+          "witnesses": [
+            {
+              "path": "include/libxml/relaxng.h",
+              "before_sha256": "9a2ca0046680c69c621b5ea4cc659b6a1f4f97ce13ba7cea28841ff467139211",
+              "after_sha256": "f13b69e8f7c4d9557c8110134c3fef1eb2b6fcef9cb736cfb118e5e0cbff69b0"
+            },
+            {
+              "path": "relaxng.c",
+              "before_sha256": "a468c9a1d7e13217eb18b93b58be7efee3929dac98de7abc1a2a0973eee3778e",
+              "after_sha256": "a724f40f238743bc2e3da4d11629f8a0b79455e537564a47bf45905d1bec27e1"
+            },
+            {
+              "path": "runtest.c",
+              "before_sha256": "cb3e4a572f771731e26628becb0eb563f115e9effb4bed528eb249628d6120ac",
+              "after_sha256": "450cf9a1f60aceab28fa1825d00b7b0f75d36f1cba7dc82ab4aaf05c3885b436"
+            }
+          ],
+          "upstream_patch_sha256": "5cd5c77d9d6045664053443cd878d2ff512bfa98469f5d9cf1ba9f018ef317a3"
+        },
+        {
+          "id": "CVE-2026-11979",
+          "file": "patches/security/libxml2-CVE-2026-11979.patch",
+          "sha256": "3d9df59efdf88546ce437f89aa4746c537e0eb4e89d9a97ed52b1db7640f5c4f",
+          "upstream_commit": "c2e233fc1b341685fc99621b2768b503f777a72e",
+          "witnesses": [
+            {
+              "path": "xmlcatalog.c",
+              "before_sha256": "009990adc095025b38331c611447027c2edb40cf2dc70b2fcd13270c8b2991bc",
+              "after_sha256": "6898480baaeb4dff433b582ac60db169c61e5f86a93301e7bc14f4758c8b15b3"
+            },
+            {
+              "path": "Makefile.am",
+              "before_sha256": "486f54ab2a7e839e9668335be42138f899e8d5861bdc259a19247ccedb8f07d1",
+              "after_sha256": "13f75c50478849d1225e38c20112230df08c00dd310d4eb0f3b8e6dbe893d7ab"
+            },
+            {
+              "path": "Makefile.in",
+              "before_sha256": "9b70c044db74fe6857e92d760b77005684c6e08552036a396c76a49d8ea7ac69",
+              "after_sha256": "856678c37057dff00ddcc58745b15d247d150548915b845693a4ec3ad11cf920"
+            }
+          ],
+          "upstream_patch_sha256": "a8aaa97f64f7c186087bff6959c00a5504cae7778f908ccd1563a2d760b109cc"
         }
       ],
       "retained_upstream_patches": [
@@ -199,6 +276,22 @@
         {
           "file": "patches/security/upstream/CVE-2026-6732.patch",
           "sha256": "42d45b35f36bf29229e39a9e5349d7347e51d92099573b5a509f448dbf0e34d7"
+        },
+        {
+          "file": "patches/security/upstream/libxml2-CVE-2025-8732-depth.patch",
+          "sha256": "be4d7a524074869750a74896c1c41025e87b2e28e2606b4b70f2223c8c0a7c0d"
+        },
+        {
+          "file": "patches/security/upstream/libxml2-CVE-2025-8732.patch",
+          "sha256": "d427b474acee40696a00ead9c2f89af487f8ba38013bb487a2a18e47a4e53ab1"
+        },
+        {
+          "file": "patches/security/upstream/libxml2-CVE-2026-0989.patch",
+          "sha256": "5cd5c77d9d6045664053443cd878d2ff512bfa98469f5d9cf1ba9f018ef317a3"
+        },
+        {
+          "file": "patches/security/upstream/libxml2-CVE-2026-11979.patch",
+          "sha256": "a8aaa97f64f7c186087bff6959c00a5504cae7778f908ccd1563a2d760b109cc"
         }
       ]
     },

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "bead": "enhancedchannelmanager-m8m42",
+  "status": "AMD64_COMPONENT_PROOF_ONLY_PARENT_INTEGRATION_AND_ARM_PENDING",
+  "base_commit": "95fc8e4e88c22744327de0ed75767ce5e8b28af9",
+  "recipe_sha256": "48e2ed4fbd287889eb3b6edaef1974208b47965bd7a18f10e109ad9fc46c7d59",
+  "archive": {
+    "filename": "libxml2-2.13.9.tar.xz",
+    "url": "https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.9.tar.xz",
+    "sha256": "a2c9ae7b770da34860050c309f903221c67830c86e4a7e760692b803df95143a",
+    "size": 2426164
+  },
+  "native_matrix": {
+    "cases": 14,
+    "c_lifecycles_per_case": 32,
+    "c_cases": 13,
+    "shell_cases": 3,
+    "baseline_expected_red": 12,
+    "baseline_controls_pass": 2,
+    "patched_pass": 14
+  },
+  "dangerous_mutants": 7,
+  "upstream_runtest_count": 3809,
+  "independent_catalog_golden_pairs": 7,
+  "exported_original_records": 1627,
+  "added_export": "xmlRelaxParserSetIncLImit",
+  "python_subset_pass": 9,
+  "stack_limit_bytes": 8388608,
+  "toolchain": {
+    "base_config_digest": "sha256:0c5586b42b0da040b974f5e87b80c6075374216186f28ad3833eb4cab704fc2f",
+    "cpu_nano": 2000000000,
+    "memory_bytes": 3221225472,
+    "writable_layer_bytes": 266505323,
+    "networks": {},
+    "native_execution_uid": 3000,
+    "repo_mount_readonly": true,
+    "platform": "linux/amd64",
+    "recorded_at": "2026-11-11T16:28:59.465095+00:00"
+  },
+  "binaries": {
+    "baseline/.libs/libxml2.so.2": "9162b1c8da75c58a733bbd81728cb7560b08227fd1fcde436e7fbfcaafd63553",
+    "baseline/recursion-smoke": "db88ad3f6531d65ff1117bd519fd6dfe3e06d9519c32257087ec2dbe84712645",
+    "patched/.libs/libxml2.so.2": "803d6a96d4b715e3bd00049595433512d331e3f7a8b7b6de6d4da65d1b32127d",
+    "patched/recursion-smoke": "db88ad3f6531d65ff1117bd519fd6dfe3e06d9519c32257087ec2dbe84712645",
+    "production/.libs/libxml2.so.2": "553b8f13b1a46e21d612ead8315bfd319e8ef55f0fd0ee6ac0cd63b7863a11b5",
+    "production/recursion-smoke": "db88ad3f6531d65ff1117bd519fd6dfe3e06d9519c32257087ec2dbe84712645"
+  },
+  "scope": "Native AMD64 component proofs only. No ARM execution, no final application/image/source/advisory clearance, no protected merge/publication/deployment. No claim about arbitrary smaller thread stacks. Parent must refresh global recipe/source bindings and run full both-architecture acceptance.",
+  "receipts": {
+    "file": "docs/design/evidence/libxml2-recursion-native-amd64-20261111.receipts.json.gz",
+    "sha256": "1bedd27e2f322a38f0c5826e32e2a7c8273fad327161a4f56dd7bf350291fdb5",
+    "bytes": 161874
+  },
+  "production_flags_verification": {
+    "CFLAGS": "-O2 -fPIC",
+    "matrix_pass": 14,
+    "dangerous_mutants_detected": 7,
+    "upstream_runtest_count": 3809,
+    "catalog_golden_pairs": 7,
+    "abi": "original1627 preserved plus1setter; identicalSONAME/NEEDED/features; old-header consumer PASS"
+  }
+}
