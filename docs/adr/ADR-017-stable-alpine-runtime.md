@@ -1,6 +1,6 @@
 # ADR-017: Standardize application images on stable Alpine
 
-- **Status:** Target accepted by the Product Owner; migration implementation and verification pending
+- **Status:** Stable-Alpine build integration implemented; paired 0065 acceptance validated at `84473c96`; 0066 verification, independent review and publication pending
 - **Date:** 2026-11-07
 - **Bead:** `enhancedchannelmanager-2ixgf`
 - **Tier:** ECM/MCP home-lab; image publication small-team. Effective scope: small-team.
@@ -112,8 +112,8 @@ different package suffixes. No new artifact service is chosen by this ADR.
    complete scans, full application gates and real Compose MCP isolation on the
    actual candidate. Require independent review before protected integration.
 
-Phase 1 remains incomplete until these execute. The initial targeted feasibility
-spike is evidence only, not a published runtime or a passing migration.
+The initial targeted feasibility spike was evidence only, not a published runtime
+or a passing migration. Current delivery evidence and its limits are recorded below.
 
 ## Phase 2: Keep stable builds maintainable
 
@@ -131,13 +131,20 @@ input set demonstrates a need.
   after the initial RED run, and it ran successfully read-only/offline against
   an existing immutable MCP image's actual `3.24.4` files. The fixture records
   that image identity rather than inventing a repository response.
-- That policy is **not yet wired into production image builds**, and does not
-  authenticate APKs or freeze mutable stable inputs. Release-qualified image
-  reference enforcement, native package/source handling and final Docker/CI
-  integration remain migration work, not implied by these tests.
-- Existing native behavior, scanner identity/advisory, source, bootstrap and
-  isolation gates remain authoritative until their tested Alpine replacements
-  are connected. Earlier SUSE successes are historical, not Alpine passes.
+- The root `Dockerfile` now composes the self-contained stable-Alpine build graph,
+  including repository-policy checks, and MCP uses the aligned stable base.
+  Stable feeds remain mutable; this is not complete builder/source closure.
+- Paired native 0065 ECM candidates passed complete scans, 28 runtime checks each
+  and both bootstrap identities in the acceptance validated at `84473c96`.
+  Their embedded image source marker is `89ad115a`, not the validation head.
+  See the [acceptance record](../design/stable-alpine-parity.md#current-delivery-status)
+  for exact identities, CI runs and scope. Earlier SUSE successes and incremental
+  Alpine failures remain historical evidence, not substitutes for these results.
+- Preparation of `0.18.2-0066` does not inherit an exact-SHA native pass or
+  publication result. Fresh CI, independent review, protected PR #1064 integration
+  and verification of both ECM/MCP `:dev` publications remain required under
+  `enhancedchannelmanager-2ixgf.3`. Advisory follow-ups above remain deferred;
+  source checks remain bounded and production promotion checks are unchanged.
 - Preserve draft #1063, all earlier owning branches and unrelated work. The
   migration starts in a separate checkout at committed `06cc4bf5`.
 

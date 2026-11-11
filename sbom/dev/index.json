@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": "0.18.2-0065",
+  "version": "0.18.2-0066",
   "created": "2026-11-08T01:53:48Z",
   "kind": "source-manifest",
   "channel": "dev",
@@ -74,7 +74,7 @@
     "docker/alpine-native/Dockerfile.packages": "sha256:f80fe254e9f14a1ea9349704ec66f261117975866eeda9b7fcc1aa16f233a9b9",
     "docker/alpine-native/Dockerfile.resdet": "sha256:9faead49870765cdac2c0f0050be6d88cf2ba9effc0b1abf3ac454972e8d41ce",
     "docker/alpine-native/Dockerfile.security-libraries": "sha256:d071e8f07fa14b1678d5d4269506140c118a6e2150bce6aae467c670b337a44c",
-    "docker/alpine-native/README.md": "sha256:77fb937a51b63b93d19e9a5c66df46edd15938d53e8f344552577e22009e18f9",
+    "docker/alpine-native/README.md": "sha256:1d47aa3089cd5ef8841523a40383b91175f1496e5d0e5d33ae50d5ab224f9d85",
     "docker/alpine-native/application-source.json": "sha256:3d5d9ec5e89486ecab8899b40e33adc9a329d2ad2e55704b451999efd4bf3076",
     "docker/alpine-native/codec-smoke.c": "sha256:ab0a0b4f68141f69a2ad340683d55e329e2ce0f067cd5e1ace898991917f8186",
     "docker/alpine-native/codec2-exports.txt": "sha256:df951fc24bdfcc6c611e35432eec4eb72ef0d2269b6b1132bbfd1da39011b717",
@@ -303,7 +303,7 @@
           ]
         ]
       },
-      "sha256": "1f39689af3198c545ff932860d53176effca670ec88b572b836915a7b854e6b2"
+      "sha256": "947df5f8f4642a168ed2b802de9a9a76417e675d73f0b45e5eb6aa2fec75bfca"
     },
     {
       "path": "mcp.spdx.json",
@@ -314,7 +314,7 @@
         "packages": [],
         "relationships": []
       },
-      "sha256": "5c764aa13f7abb5d9744cd0b60603575b460babf4243ed59ea3fe48d20f49178"
+      "sha256": "ae26e206d82bec6f1702c8b2727bb94bb9432bd6b73c1abef18a139bbb46865c"
     }
   ]
 }

@@ -64,7 +64,46 @@ equivalent behavioral and APK-specific assertions, not disappear along with the
 implementation they name. Keep strict completeness, architecture, source and
 tampering controls on the replacement path.
 
-## Evidence so far — deliberately incomplete
+## Current delivery status
+
+The self-contained root ECM build and aligned MCP build now use stable Alpine.
+`0.18.2-0066` is prepared for `enhancedchannelmanager-2ixgf.3`, not yet verified
+or published. Fresh 0066 CI and independent review must precede protected PR
+#1064 integration; exact-SHA ECM and MCP `:dev` publication must then be checked.
+No production deployment is authorized by this preparation.
+
+The paired acceptance validated at `84473c966171e1c4c42ef8ca2b417220aae5d33a`
+is **0065 evidence**, not 0066 evidence. The retained images themselves carry
+`GIT_COMMIT=89ad115a995cdf8aca72c38f122a117171ccca47` and dev-channel metadata;
+the validation head must not be substituted for that embedded image marker.
+
+| ECM platform | Manifest digest | Config digest | Recorded result |
+|---|---|---|---|
+| AMD64 | `sha256:4501f47d2f2738bcc6359118417fea806265155d44115149202617a50a5f21b6` | `sha256:6b73f704c1b761770e3a91ebf978f5ee8866cb8eb149c85dbe8adc0e321e50d1` | Complete scan PASS; 28 runtime checks PASS; both bootstrap identities PASS |
+| ARM64 | `sha256:030a5c59d852b347f6b99d2dcc1f598e7b8d505e3420a3ccdbae376b1b427dcf` | `sha256:dd32b7d5e7f432a8a85883f8b162f252349a15b6528698c1a0b8751964c4de8d` | Complete scan PASS; 28 runtime checks PASS; both bootstrap identities PASS |
+
+Each complete ECM scan covers 122 APK, 77 Python, 84 Rust and four Go packages.
+Bootstrap covers `1000:1000` and `1571:1572`, including restart and recreation
+persistence. The paired summary is retained at
+`/tmp/opencode/ecm-alpine-final-image-debug-20261110/paired-final-acceptance-84473c96.json`.
+The successful runs at validation head `84473c96` are
+[Build 42900152482](https://github.com/MotWakorb/enhancedchannelmanager/actions/runs/42900152482),
+[Tests 42900155041](https://github.com/MotWakorb/enhancedchannelmanager/actions/runs/42900155041),
+[native Python 42900152490](https://github.com/MotWakorb/enhancedchannelmanager/actions/runs/42900152490)
+and [native evidence 42900152724](https://github.com/MotWakorb/enhancedchannelmanager/actions/runs/42900152724).
+These are pre-integration results, not evidence of mutable-tag publication.
+
+The [advisory assessment](stable-alpine-advisory-feasibility.md) and follow-ups
+`enhancedchannelmanager-evy2p`, `eeh2i`, `4yxbm` and `m8m42` remain in scope but
+deferred by the PO. Complete scanner coverage does not establish advisory
+clearance; bounded source consumers do not establish full source reconstruction.
+Existing HIGH/CRITICAL and reviewed-P1 promotion checks remain unchanged.
+
+## Historical incremental evidence — superseded delivery status
+
+The pending statements below describe earlier trees and remain as a record of
+the failures and repairs. Current results are above; original failed receipts
+have not been relabelled as passing.
 
 **2026-11-10 final-image repair:** Both full ECM candidates compiled, but paired
 Trivy 0.76.1 reports omitted exactly `ecm-owned-native` (121 scanned versus 122

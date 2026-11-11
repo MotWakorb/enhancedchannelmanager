@@ -49,6 +49,17 @@ finished. See [ADR-017](../../docs/adr/ADR-017-stable-alpine-runtime.md) and the
 [advisory assessment](../../docs/design/stable-alpine-advisory-feasibility.md).
 Building a local development image does not merge, publish or deploy it.
 
+### Current delivery status
+
+`0.18.2-0066` preparation follows the paired **0065** acceptance validated at
+`84473c96`: both ECM platforms passed complete scans, 28 runtime checks each and
+both bootstrap identities. The retained images carry source marker `89ad115a`;
+see the [acceptance record](../../docs/design/stable-alpine-parity.md#current-delivery-status)
+for exact image identities and successful CI runs. Fresh 0066 CI, independent
+review, protected integration and verification of ECM/MCP `:dev` publication
+remain required. Advisory deferrals and bounded source-closure limits above are
+unchanged; neither this preparation nor the 0065 results authorize production.
+
 ## Historical incremental build and maintenance notes
 
 The following records the earlier component-only phase. Statements about the

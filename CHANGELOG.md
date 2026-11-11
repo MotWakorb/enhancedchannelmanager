@@ -83,6 +83,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **Standardize ECM and MCP container builds on stable Alpine (build 0.18.2-0066; `enhancedchannelmanager-2ixgf.3`).** Both build paths use digest-pinned Alpine 3.24 inputs and stable repositories. ECM retains Python 3.12, the existing media/codec and resdet capabilities, application and MCP authentication/confirmation contracts, persistence and default/custom identity bootstrap. Native AMD64/ARM64 runtime, bootstrap and complete scan evidence validated at `84473c96` describes the preceding 0065 candidates, not this bump; fresh 0066 CI, independent review, protected integration and exact-SHA ECM/MCP `:dev` publication verification remain required. Further advisory remediation stays deferred under the [recorded assessment](docs/design/stable-alpine-advisory-feasibility.md); bounded source checks and passing scans are not full source closure, advisory clearance or production-deployment authorization.
+
 - **Cross-instance sync documentation reflects the implemented field contract (beads `enhancedchannelmanager-10wnq` and `enhancedchannelmanager-zszjd`; build 0.18.2-0034).** ADR-013 and the operator guide now explain default-on logo scheduling, existing-account field convergence, exclusions, credential readback limits and destination-only custom-property keys. Historical decisions are distinguished from current behavior.
 
 - **Backup permission regression coverage is independent of the runner's umask (bead `enhancedchannelmanager-0m06f.2.4`; build 0.18.2-0034).** The symlink fixture explicitly sets its target permissions so the check can detect unintended permission changes under restrictive test environments.
