@@ -1,0 +1,3 @@
+# Literal unified-diff context includes a single space on empty source lines.
+# Preserve hash-bound patch bytes while retaining ordinary textual diff review.
+*.patch -text -whitespace

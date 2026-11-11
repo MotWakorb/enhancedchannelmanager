@@ -1,0 +1,117 @@
+# Proof-only backport proposal, not production provider authorization.
+# GNU coreutils 9.11: existing GPL-3.0-or-later notices remain unchanged.
+# Original upstream code AND regression hunks retained; NEWS integrated below.
+# https://git.savannah.gnu.org/cgit/coreutils.git/commit/?id=d64e35a8a4c0e4608321433e0d84d917e4e36371
+# https://git.savannah.gnu.org/cgit/coreutils.git/commit/?id=b60a159fdc5bfcf9988d3a4cb6f53abe8ad5d35d
+# https://git.savannah.gnu.org/cgit/coreutils.git/commit/?id=4ade9cf77f6c7b39e3fdc5ce97a778f8e294694c
+# https://git.savannah.gnu.org/cgit/coreutils.git/commit/?id=52e5694f4136b34e12e5e7997949bbc63430cbba
+# Negative-width musl regression added alongside upstream allocation/wide tests.
+--- a/src/uniq.c
++++ b/src/uniq.c
+@@ -285,8 +285,8 @@
+   else
+     {
+       char *ep = lp;
+-      for (idx_t i = check_chars; 0 < i && lp < lim; i--)
+-        ep += mcel_scan (lp, lim).len;
++      for (idx_t i = check_chars; 0 < i && ep < lim; i--)
++        ep += mcel_scan (ep, lim).len;
+       len = ep - lp;
+     }
+ 
+--- a/src/unexpand.c
++++ b/src/unexpand.c
+@@ -131,7 +131,7 @@
+   /* The worst case is a non-blank character, then one blank, then a
+      tab stop, then MAX_COLUMN_WIDTH - 1 blanks, then a non-blank; so
+      allocate MAX_COLUMN_WIDTH bytes to store the blanks.  */
+-  pending_blank = ximalloc (max_column_width * sizeof (char) * MB_LEN_MAX);
++  pending_blank = xinmalloc (max_column_width, MB_CUR_MAX);
+ 
+   while (true)
+     {
+@@ -199,9 +199,10 @@
+                         }
+                       else
+                         {
+-                          column += c32width (g.ch);
+-
+-                          if (! (prev_blank && column == next_tab_column))
++                          int width = c32width (g.ch);
++                          column += width < 0 ? 1 : width;
++
++                          if (! (prev_blank && column >= next_tab_column))
+                             {
+                               /* It is not yet known whether the pending blanks
+                                  will be replaced by tabs.  */
+--- a/tests/uniq/uniq.pl
++++ b/tests/uniq/uniq.pl
+@@ -234,6 +234,9 @@
+         "  - 'separate'\n" .
+         "  - 'both'\n" .
+         "Try '$prog --help' for more information.\n"}],
++ # Test for read buffer overrun.
++ do { my $longline = "\360\237\230\200" . "A" x 255 . "\n";
++      ['146', '-w256', {IN  => $longline x 2}, {OUT => $longline}] },
+ );
+ 
+ # Locale related tests
+--- a/tests/unexpand/mb.sh
++++ b/tests/unexpand/mb.sh
+@@ -17,6 +17,7 @@
+ 
+ . "${srcdir=.}/tests/init.sh"; path_prepend_ ./src
+ print_ver_ unexpand printf
++getlimits_
+ 
+ test "$LOCALE_FR_UTF8" != none || skip_ "French UTF-8 locale not available"
+ export LC_ALL="$LOCALE_FR_UTF8"
+@@ -161,4 +162,26 @@
+ unexpand -a ./in ./in > out || fail=1
+ compare exp out > /dev/null 2>&1 || fail=1
+ 
++# Ensure overflow is handed gracefully
++# coreutils v9.11 induced a buffer overflow with mb_mul=4 (or 16).
++for mb_mul in 4 6; do
++  printf '   \n' | unexpand -t $(expr $SIZE_MAX / $mb_mul + 1) 2>err; ret=$?
++  test "$ret" = 1 || test "$ret" = 0 || { cat err; fail=1; }
++done
++
++# A blank whose display width exceeds the tab distance must not overrun
++# the pending-blank buffer.  With -t1 every column is a tab stop, so a
++# width-2 ideographic space steps over the stop without landing on it;
++# the run of blanks then grew pending_blank without bound.
++ideo_space=$(env printf '\u3000')
++{ yes "$ideo_space" | head -n 40000 | tr -d '\n'; echo; } |
++  unexpand -t1 >out 2>err; ret=$?
++test "$ret" = 0 || { cat err; fail=1; }
++
++# ECM follow-up: U+0085 is a separator with negative width on musl.
++next_line=$(env printf '\u0085')
++{ yes "$next_line" | head -n 40000 | tr -d '\n'; echo; } |
++  unexpand -t1 >out 2>err; ret=$?
++test "$ret" = 0 || { cat err; fail=1; }
++
+ Exit $fail
+--- a/NEWS
++++ b/NEWS
+@@ -1,3 +1,9 @@
++GNU coreutils ECM prototype backports (not an upstream release)
++
++  uniq -w: bound and advance multibyte scans (d64e35a8).
++  unexpand: overflow-safe allocation (b60a159f), wide blank tab
++  overshoot (4ade9cf7), and negative-width musl blanks (52e5694f).
++
+ GNU coreutils NEWS                                    -*- outline -*-
+ 
+ * Noteworthy changes in release 9.11 (2026-04-20) [stable]
+--- a/THANKS.in
++++ b/THANKS.in
+@@ -459,6 +459,7 @@
+ Michal Politowski                   mpol@charybda.icm.edu.pl
+ Michal Svec                         msvec@suse.cz
+ Michal Trunecka                     mtruneck@redhat.com
++Michał Majchrowicz                  mmajchrowicz@afine.com
+ Michel Robitaille                   robitail@IRO.UMontreal.CA
+ Michiel Bacchiani                   bacchian@raven.bu.edu
+ Mike Castle                         dalgoda@ix.netcom.com

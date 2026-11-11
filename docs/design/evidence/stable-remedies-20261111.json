@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "bead": "enhancedchannelmanager-evy2p",
+  "coordination": "enhancedchannelmanager-uv80n",
+  "assessment_date": "2026-11-11",
+  "base_commit": "95fc8e4e88c22744327de0ed75767ce5e8b28af9",
+  "status": "MAINTENANCE_CHOICE_REQUIRED_BOUNDED_PROTOTYPES_NOT_DELIVERED_FIXES",
+  "additional_provider_maintenance_approved": false,
+  "production_wiring_changed": false,
+  "arm64_prototype_execution": false,
+  "source_advisory_clearance": false,
+  "retention_root": "/tmp/opencode/ecm-evy2p-20261111",
+  "report": "docs/design/stable-alpine-maintained-remedies.md",
+  "receipts": "docs/design/evidence/stable-remedies-20261111.receipts.json.gz",
+  "receipts_sha256": "ac1f08854a5a06c1ca68292af7b63b9e014e0c09cb6bfd363d48a1df4c63d42d",
+  "receipts_bytes": 376054,
+  "bounded_subset": "15 passed: 5 recorded-evidence + 3 SQLite behavior + 7 GLib behavior, NOT the backend gate",
+  "proposal_patch_sha256": {
+    "glib-2.88.1-complete-regression-port.patch": "df27d9337c52c0279551c44b920401e11c663b70944db9fad351bc962fb6b918",
+    "coreutils-9.11-complete-regression-port.patch": "b6f4069ba7bd72cb16e40f2279b7f713ed5fc164ded0b96d12c0cb2a83b5fca1"
+  },
+  "vendor_remedies_available_in_inspected_signed_stable_indexes": false,
+  "recommendation": [
+    {
+      "source": "sqlite",
+      "vendor_version": "3.53.4-r0",
+      "vendor_source_commit": "a9c3ba8b9129ec0f294d0a9bf538c2f1632bb016",
+      "proposed_source": "3.54.1 complete corrected release, library only",
+      "canonical_sha256": "387e7f6cad4797b17848c07d453dc6606917bb356a6cfe5a3abafd38c240c71b",
+      "amalgamation_sha256": "926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e",
+      "amalgamation_publisher_sha3_256": "b6ced585c750916b1052667239a12c25a7ff34e7f06e1e6e01ecb0427657d9c4",
+      "source_id": "555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76",
+      "bounded_native_amd64_result": "3 passed; old 3.53.4 2 failed/1 passed; initial incomplete authorization mutant 1 failed/2 passed",
+      "runtime_abi_contract": "libsqlite3.so.0, existing compile features and limits, Python3.12/74pins; no added CLI",
+      "remaining": "Maintained signed Alpine package, full exported-symbol/ABI comparison, WAL/migrations/concurrency/DBAS and native ARM64; all ten source-feature dispositions bound to final outputs"
+    },
+    {
+      "source": "coreutils",
+      "vendor_version": "9.11-r0",
+      "vendor_source_commit": "8e261cdab4fd1bc77881cbff73b9ea962e9bd49f",
+      "proposed_source": "9.11 plus d64e35a8, b60a159f, 4ade9cf7, 52e5694f and full regression port",
+      "latest_release_checked": "9.12",
+      "latest_release_disposition": "Allocation and wide-blank fixes present, negative-width blank fix absent; same clamp in sibling nonblank path is not clearance",
+      "bounded_native_result": "Not executed: private utility compile blocked on missing retained gnulib hard-locale declarations; source/test port fuzz0 succeeds",
+      "runtime_contract": "Full GNU semantics and all four installed coreutils split packages, no BusyBox substitution",
+      "remaining": "Resolve and explain native build preparation, execute original multibyte/musl tests and no-fix mutants on both architectures, preserve source/compiler/notices and operational chroot review"
+    },
+    {
+      "source": "glib",
+      "vendor_version": "2.88.1-r1",
+      "vendor_source_commit": "bd96e2db11c9ba7d7795454d16af620d577614c7",
+      "proposed_source": "2.88.1 plus 656ad458 and c9da977c with original regression registered in retained harness",
+      "latest_same_series_release_checked": "2.88.4",
+      "latest_release_disposition": "Incorrect node-parent predicate remains and original invalid regression absent; bare version bump insufficient",
+      "bounded_native_amd64_result": "7 passed; old parser 4 invalid nesting subprocesses SIGSEGV and 3 controls passed",
+      "runtime_contract": "Preserve six GLib/GIO/GObject/GModule/GThread/GIRepository .so.0 families, introspection, native reverse dependencies and gcompat behavior",
+      "remaining": "Full maintained Alpine package build, original C harness execution, both-architecture ABI/symbol/dependent feature checks and signed final-image binding"
+    }
+  ],
+  "risk": {
+    "tracker_target_findings": 15,
+    "remedy_findings": 13,
+    "target_tracker_scores": "All15 score0/vectornull represent UNKNOWN, never Low or severity0. GLib primary vendor historical CVSS7.5 retained separately.",
+    "ecm_effective_risk": "Not numerically established: source applicability does not establish an attacker-controlled runtime path. UNKNOWN scores are not waived or downgraded.",
+    "priority": "P1; promotion remains blocked pending verified implementation and independent acceptance",
+    "excluded_from_remedy_clearance": ["CVE-2016-2781 sharedTTY/chroot contract", "CVE-2026-119586 absent SQLite CLI, external operator tools not cleared"]
+  }
+}
