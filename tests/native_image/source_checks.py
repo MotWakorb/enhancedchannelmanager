@@ -12,6 +12,7 @@ import platform
 import re
 import stat
 import subprocess
+import sys
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
@@ -22,7 +23,7 @@ PYTHON_SUMS = {
     "notices": "cc1790cbfca9d206333084155cbf8f1a0c66fb6512615dea692a9c0a5daa903d",
 }
 RESDET_SCRIPTS = {
-    "build_resdet.py": "1f071637352c3e21abc94388dd4101c7d819998cc31b94cd5a34af939febf611",
+    "build_resdet.py": "1c73568784cd1821d513cbb155437d9699dbedb9c4a78d02e62dfa76a0628355",
 }
 PYTHON_INDEXES = {
     "x86_64": "08ed75d9a94dae5cb10fa8353dfc01ea27a9a531d199c786b29eaecacc4ca1f0",
@@ -38,6 +39,18 @@ EXACT_SOURCE_ROUTES = {
     ("openSUSE", "x86_64", "openSUSE-release-20261105-4389.1.src.rpm"): {
         "url": "https://ftp.gwdg.de/pub/opensuse/source/tumbleweed/repo/oss/src/openSUSE-release-20261105-4389.1.src.rpm",
         "sha256": "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123",
+    },
+    ("openSUSE", "x86_64", "e2fsprogs-1.47.4-1.1.src.rpm"): {
+        "url": "https://download.opensuse.org/tumbleweed/repo/src-oss/src/e2fsprogs-1.47.4-1.1.src.rpm",
+        "sha256": "4b90c6c666634fe3f97b2045a6556c4ae34709a9f48b53c3c930d32c665b8833",
+    },
+    ("openSUSE", "x86_64", "gcc16-16.2.1+git9713-1.1.src.rpm"): {
+        "url": "https://download.opensuse.org/tumbleweed/repo/src-oss/src/gcc16-16.2.1+git9713-1.1.src.rpm",
+        "sha256": "e0eb6f15a65dec740af17424092d643806a00f40d9da227fea8825066efe87fa",
+    },
+    ("openSUSE", "x86_64", "sqlite3-3.54.1-1.1.src.rpm"): {
+        "url": "https://download.opensuse.org/tumbleweed/repo/src-oss/src/sqlite3-3.54.1-1.1.src.rpm",
+        "sha256": "f42c07f564efc29fa6b7f8edbbfaa2636d00682c50bc2d3893984d211374e629",
     },
 }
 LIBRARIES = {
@@ -218,8 +231,13 @@ def _rpm_sources(root, architecture):
         route = EXACT_SOURCE_ROUTES.get((vendor, architecture, name))
         assert source["url"] == (route["url"] if route else repository + "src/" + name)
         if route:
-            assert source["sha256"] == route["sha256"], "pinned source checksum mismatch"
-        if source.get("retrieval") == "reverified-retained-source" or "retained_sha256" in source:
+            assert source["sha256"] == route["sha256"], (
+                "pinned source checksum mismatch"
+            )
+        if (
+            source.get("retrieval") == "reverified-retained-source"
+            or "retained_sha256" in source
+        ):
             assert (
                 route is not None
                 and source.get("retrieval") == "reverified-retained-source"
@@ -283,7 +301,9 @@ def _owned(root, architecture):
     _hash(_file(directory, "recipe/build_native_runtime.py"), record["helper_sha256"])
     assert record["base_image"] == recipe["base_image"]
     selected = recipe["architectures"][arch]
-    assert record["builder_repository"] == selected.get("builder_repository", selected["official_repository"])
+    assert record["builder_repository"] == selected.get(
+        "builder_repository", selected["official_repository"]
+    )
     assert record["source_identity"] == {key: recipe[key] for key in ("ffmpeg", "gosu")}
     listing = _file(root, "usr/share/ecm/provenance/native-sources.json")
     _hash(listing, record["source_files_sha256"])
@@ -565,6 +585,7 @@ def _filesystem_names(root):
         "/sys": "virtual sys filesystem",
         "/dev": "virtual device filesystem",
         "/native-image": "external read-only gate fixture mount",
+        "/native-image-scripts": "external read-only trusted verifier mount",
     }
     patterns = {
         "cjson": r"cjson",
@@ -622,7 +643,7 @@ def _filesystem_names(root):
         "exit_status": 0,
         "errors": [],
         "method": "Python os.scandir, stat(follow_symlinks=False), readlink; case-insensitive path and symlink-target regex search",
-        "scope": "Complete running-image rootfs names, including /app, /opt/venv and copied/unowned providers, except the four stated mounts. Names inside compressed archives and file contents are not searched. Matches are review data, not CVE judgments; nonmatches are not universal static-component absence proof.",
+        "scope": "Complete running-image rootfs names, including /app, /opt/venv and copied/unowned providers, except the stated mounts. Names inside compressed archives and file contents are not searched. Matches are review data, not CVE judgments; nonmatches are not universal static-component absence proof.",
         "excluded": excluded,
         "observed_exclusions": sorted(observed),
         "path_count": count,
@@ -633,11 +654,36 @@ def _filesystem_names(root):
     }
 
 
+def _alpine_delivery(root, architecture):
+    # Trusted checkout code is mounted read-only by native_image_gate.py, never
+    # imported from an upstream source archive or a provider-supplied recipe.
+    helpers = Path("/native-image-scripts")
+    assert helpers.is_dir() and not helpers.is_symlink(), (
+        "missing trusted Alpine verifiers"
+    )
+    sys.path.insert(0, str(helpers))
+    from alpine_repository_policy import validate_repositories
+    from verify_alpine_runtime_sources import capture_live, verify
+
+    release = _file(root, "etc/alpine-release").read_text()
+    validate_repositories(release, _file(root, "etc/apk/repositories").read_text())
+    arch = {"x86_64": "amd64", "aarch64": "arm64"}[architecture]
+    result = verify(root, capture_live(root), arch)
+    result["python_sources"] = _python(root, "sources", "usr/share/ecm/sources/python")
+    result["python_notices"] = _python(
+        root, "notices", "usr/share/doc/ecm/python-third-party"
+    )
+    result["filesystem_name_search"] = _filesystem_names(root)
+    return {"native_source_and_artifact_integrity": result}
+
+
 def native_source_and_artifact_integrity(root=Path("/")):
     """Root is solely a temp-tree unit seam; production always checks `/`."""
     root = Path(root).resolve(strict=True)
     architecture = platform.machine()
     assert architecture in ("x86_64", "aarch64"), "unsupported image architecture"
+    if (root / "etc/alpine-release").exists():
+        return _alpine_delivery(root, architecture)
     packages, sources = _rpm_sources(root, architecture)
     artifacts = _owned(root, architecture)
     _resdet(root)

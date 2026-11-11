@@ -107,32 +107,30 @@ def test_existing_output_is_never_overwritten(recovery, tmp_path):
     assert marker.read_text() == "keep"
 
 
-def test_both_native_ci_builds_recover_base_without_obsolete_source_carriers():
+def test_both_native_ci_builds_use_self_contained_alpine_without_suse_recovery():
     jobs = yaml.safe_load((ROOT / ".github/workflows/build.yml").read_text())["jobs"]
     for arch in ("amd64", "arm64"):
         steps = jobs["build-" + arch]["steps"]
         preparation = next(s for s in steps if s.get("id") == "version")
-        assert "recover_native_base.py" in preparation["run"]
-        assert "--arch " + arch in preparation["run"]
-        assert "--with-sources" not in preparation["run"]
+        assert "compose_alpine_dockerfile.py --check" in preparation["run"]
+        assert {"amd64": "x86_64", "arm64": "aarch64"}[arch] in preparation["run"]
+        assert "recover_native_base.py" not in preparation["run"]
         build = next(s for s in steps if s.get("uses", "").startswith("docker/build-push-action@"))
-        assert build["with"]["build-contexts"].splitlines() == [
-            "${{ steps.version.outputs.context }}",
-        ]
+        assert "build-contexts" not in build["with"]
         assert "docker/setup-buildx-action@" in str(steps)
 
 
-def test_mcp_ci_enables_same_recovery_without_skipping_isolation():
+def test_mcp_ci_builds_alpine_without_skipping_either_isolation_identity():
     steps = yaml.safe_load((ROOT / ".github/workflows/test.yml").read_text())["jobs"]["mcp-server"]["steps"]
     build = next(s for s in steps if s.get("id") == "isolation_build")
-    assert build["env"]["ECM_RECOVER_NATIVE_BASE"] == "true"
+    assert "ECM_RECOVER_NATIVE_BASE" not in build.get("env", {})
     assert build["run"] == "bash scripts/test_mcp_container_hardening.sh --build-only"
     isolation = next(s for s in steps if s.get("id") == "isolation")
     assert isolation["env"]["COMPOSE_BUILD"] == "false"
     assert "PUID=1571 PGID=1572" in isolation["run"]
     script = (ROOT / "scripts/test_mcp_container_hardening.sh").read_text()
-    assert 'scripts/recover_native_base.py" --arch "$native_arch"' in script
-    assert "--with-sources" not in script
+    assert 'scripts/compose_alpine_dockerfile.py" --check' in script
+    assert "recover_native_base.py" not in script
 
 
 def test_compose_context_only_changes_base_transport(recovery, tmp_path):

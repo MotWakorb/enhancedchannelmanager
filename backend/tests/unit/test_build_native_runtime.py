@@ -49,6 +49,42 @@ def test_cli_has_locations_and_architecture_not_source_overrides(builder):
 
 
 @pytest.mark.parametrize("arch", ["amd64", "arm64"])
+def test_alpine_owned_go_path_is_version_checked_before_source_or_rpm_operations(
+    builder, tmp_path, monkeypatch, arch
+):
+    commands = []
+
+    def wrong_compiler(command, **kwargs):
+        commands.append(command)
+        assert command == ["/usr/local/go/bin/go", "version"]
+        return f"go version go1.26.9 linux/{arch}\n"
+
+    monkeypatch.setattr(builder, "run", wrong_compiler)
+    monkeypatch.setattr(
+        builder,
+        "fetch_input",
+        lambda *a: pytest.fail("source fetched before compiler verification"),
+    )
+    monkeypatch.setattr(
+        builder,
+        "prepare_arm_go",
+        lambda *a: pytest.fail("Alpine builder selected foreign SDK path"),
+    )
+    with pytest.raises(builder.BuildError, match="Go compiler version"):
+        builder._gosu(
+            {},
+            tmp_path,
+            tmp_path,
+            tmp_path,
+            {},
+            None,
+            arch,
+            go_binary=Path("/usr/local/go/bin/go"),
+        )
+    assert len(commands) == 1
+
+
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
 def test_real_two_arch_manifest_has_exact_public_inputs(builder, arch):
     recipe = builder.load_recipe(ASSETS / "manifest.json", arch)
     selected = recipe["architectures"][arch]
@@ -89,18 +125,31 @@ def test_retained_packman_cache_is_exact_complete_original_input_set():
             path = cache / item["sha256"]
             assert path.is_file() and not path.is_symlink()
             assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"]
-    retained_release = "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123"
-    assert {p.name for p in cache.iterdir() if p.name != "README.md"} == expected | {retained_release}
+    retained_release = (
+        "93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123"
+    )
+    assert {p.name for p in cache.iterdir() if p.name != "README.md"} == expected | {
+        retained_release,
+        "4b90c6c666634fe3f97b2045a6556c4ae34709a9f48b53c3c930d32c665b8833",
+        "1fb48b10a9fad6e9ce3da8571c3278ca1d53ea5e614e8a0f321061b6f39a0289",
+        "f5fc9ab689b3e5069bcc23cf19c498d90b6c0f523b60cfd6594b595d92aa6339",
+        "f42c07f564efc29fa6b7f8edbbfaa2636d00682c50bc2d3893984d211374e629",
+    }
     assert len(expected) == 14
 
 
-@pytest.mark.parametrize("repository", [
-    "https://download.opensuse.org/tumbleweed/repo/oss/",
-    "https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/",
-    "https://download.opensuse.org/history/20261023/tumbleweed/repo/oss/",
-    "http://download.opensuse.org/history/20261022/tumbleweed/repo/oss/",
-])
-def test_builder_snapshot_cannot_silently_float_or_change(builder, tmp_path, repository):
+@pytest.mark.parametrize(
+    "repository",
+    [
+        "https://download.opensuse.org/tumbleweed/repo/oss/",
+        "https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/",
+        "https://download.opensuse.org/history/20261023/tumbleweed/repo/oss/",
+        "http://download.opensuse.org/history/20261022/tumbleweed/repo/oss/",
+    ],
+)
+def test_builder_snapshot_cannot_silently_float_or_change(
+    builder, tmp_path, repository
+):
     assets = tmp_path / "native"
     shutil.copytree(ASSETS, assets)
     path = assets / "manifest.json"
@@ -858,6 +907,36 @@ def test_fetch_reset_then_partial_timeout_then_exact_verified_bytes(
     assert all(f"{attempt}/3" in text for attempt in [1, 2, 3])
 
 
+def test_recorded_abrupt_speex_tls_eof_retries_same_https_until_exact_verified_bytes(
+    builder, tmp_path, monkeypatch
+):
+    recorded = json.loads(
+        (ROOT / "backend/tests/fixtures/alpine/native-fetch-tls-eof.json").read_text()
+    )
+    data, item = _transport_input()
+    item["url"] = recorded["url"]
+    destination = tmp_path / "archive"
+    sibling = tmp_path / "operator-file"
+    sibling.write_bytes(b"untouched")
+    calls, waits = [], []
+    error = ssl.SSLEOFError(ssl.SSL_ERROR_EOF, recorded["tls_reason"])
+
+    def open_url(url, *, timeout):
+        calls.append((url, timeout))
+        assert not destination.exists()
+        if len(calls) == 1:
+            raise URLError(error)
+        if len(calls) == 2:
+            return _InterruptedTransport(url, error)
+        return _transport_response(data, url)
+
+    monkeypatch.setattr(builder, "urlopen", open_url)
+    monkeypatch.setattr("time.sleep", waits.append)
+    builder.fetch_input(item, destination, None)
+    assert calls == [(recorded["url"], 120)] * 3 and waits == [1, 2]
+    assert destination.read_bytes() == data and sibling.read_bytes() == b"untouched"
+
+
 @pytest.mark.parametrize(
     "error",
     [
@@ -865,6 +944,8 @@ def test_fetch_reset_then_partial_timeout_then_exact_verified_bytes(
         TimeoutError("timeout"),
         URLError(TimeoutError("timeout")),
         IncompleteRead(b"partial", 100),
+        ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "abrupt TLS EOF"),
+        URLError(ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "abrupt TLS EOF")),
         *[
             HTTPError(
                 "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz",
@@ -936,6 +1017,7 @@ def test_fetch_exhausted_partial_reads_remove_only_owned_destination(
             None,
         ),
         URLError(ssl.SSLCertVerificationError("untrusted certificate")),
+        URLError(ssl.SSLError(ssl.SSL_ERROR_SSL, "other TLS handshake failure")),
         URLError("permanent unknown failure"),
         PermissionError("local file permissions"),
     ],

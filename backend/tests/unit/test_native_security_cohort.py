@@ -50,7 +50,8 @@ def test_fixed_runtime_descriptors_bind_each_native_architecture(
     ]
     assert selected["builder_repository"] == (
         "https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/"
-        if arch == "amd64" else selected["official_repository"]
+        if arch == "amd64"
+        else selected["official_repository"]
     )
     assert selected["cohort"] == "20261105"
     rows = selected["security_runtime_rpms"]
@@ -71,9 +72,7 @@ def test_fixed_runtime_descriptors_bind_each_native_architecture(
     )[arch]
     assert selected["repository_metadata_sha256"] == recorded["repomd_sha256"]
     assert ca["metadata_checksum"] == recorded["package"]["checksum"]
-    assert (
-        ca["url"] == selected["builder_repository"] + recorded["package"]["location"]
-    )
+    assert ca["url"] == selected["builder_repository"] + recorded["package"]["location"]
 
 
 @pytest.mark.parametrize("name", VERSIONS)
@@ -179,8 +178,8 @@ def test_builder_install_enforces_security_packages_in_same_solver_transaction(
     )
 
 
-def test_docker_cohort_and_fresh_source_collection_are_not_old_carrier_relabelling():
-    docker = (ROOT / "Dockerfile").read_text()
+def test_historical_suse_cohort_source_collection_is_not_old_carrier_relabelling():
+    docker = (ROOT / "docker/native/Dockerfile.suse").read_text()
     assert "history/20261022" not in docker
     source_stage = docker.split(" AS source-builder\n", 1)[1].split("\nFROM ", 1)[0]
     assert "--inventory /tmp/runtime-inventory.tsv" in source_stage
@@ -219,7 +218,7 @@ def test_refreshed_repository_must_match_reviewed_signed_cohort(builder, tmp_pat
 def test_sbom_contract_accepts_fresh_all_origin_native_source_path():
     sbom = module("native_security_sbom", ROOT / "scripts/generate_sbom.py")
     native = json.loads((ROOT / "sbom/native-dependencies.json").read_text())
-    docker = (ROOT / "Dockerfile").read_text()
+    docker = (ROOT / "docker/native/Dockerfile.suse").read_text()
     sbom.validate_resdet_docker_contract(native, docker, "Dockerfile")
     with pytest.raises(sbom.SbomError):
         sbom.validate_resdet_docker_contract(
@@ -239,6 +238,15 @@ def test_final_runtime_gate_checks_fixed_native_rpm_identities(monkeypatch, arch
         ROOT / "tests/native_image/runtime_checks.py",
     )
     monkeypatch.setattr(gate.platform, "machine", lambda: arch)
+    # Select the RPM subject represented by these fixtures, not the test host.
+    real_is_file = Path.is_file
+    monkeypatch.setattr(
+        Path,
+        "is_file",
+        lambda path: (
+            False if str(path) == "/etc/alpine-release" else real_is_file(path)
+        ),
+    )
     rows = []
     for name, (version, source) in VERSIONS.items():
         rpm_arch = "noarch" if name == "ca-certificates-mozilla" else arch

@@ -42,6 +42,12 @@ python scripts/candidate_image.py verify-archive /tmp/ecm-{arch}.oci.tar --expec
 python scripts/candidate_image.py runtime-config /tmp/ecm-{arch}.oci.tar --expected '${{{{ needs.build-{arch}.outputs.digest }}}}' --architecture {arch} > native-scan/identity.json
 test "$(skopeo --version)" = "skopeo version 1.13.3"
 skopeo copy oci-archive:/tmp/ecm-{arch}.oci.tar docker-archive:/tmp/trivy-ecm-{arch}-scan.docker.tar
+docker load --input /tmp/trivy-ecm-{arch}-scan.docker.tar
+image_id=$(jq -er '.ConfigDigest' native-scan/identity.json)
+docker image inspect "$image_id" > native-scan/loaded-image.json
+python scripts/candidate_image.py verify-loaded native-scan/identity.json --inspect native-scan/loaded-image.json
+docker run --rm --pull never --read-only --network none --cap-drop ALL --security-opt no-new-privileges --user 1000:1000 --entrypoint /usr/local/bin/python "$image_id" -I -c 'import json,subprocess; from pathlib import Path; p=subprocess.run(["/sbin/apk","query","--from","installed","--format","json","--all-matches","*"],check=True,capture_output=True,text=True); print(json.dumps({{"packages":json.loads(p.stdout),"installed_database":Path("/lib/apk/db/installed").read_text()}}))' > native-scan/live-apks.json
+python -c 'import json; from pathlib import Path; p=json.loads(Path("native-scan/identity.json").read_text()); p["capture"]=json.loads(Path("native-scan/live-apks.json").read_text()); Path("native-scan/runtime-inventory.json").write_text(json.dumps(p,sort_keys=True,indent=2)+"\\n")'
 printf '%s\\n' '${{{{ github.sha }}}}' > native-scan/source-sha.txt"""
 
 
@@ -116,6 +122,7 @@ def check_contract(workflow):
         assert len(scans) == 2
         for s in scans:
             assert "if" not in s
+            assert s.get("env") == {"TRIVY_DETECTION_PRIORITY": "comprehensive"}
             settings = s["with"]
             assert settings["input"] == f"/tmp/trivy-ecm-{arch}-scan.docker.tar"
             assert settings["version"] == "v0.76.1"
@@ -152,7 +159,7 @@ def check_contract(workflow):
             _lines(evidence["run"])
             == _lines(f"""set -euo pipefail
 trivy version --cache-dir "${{{{ github.workspace }}}}/.cache/trivy" --format json > native-scan/scanner.json
-python scripts/check_native_image_scan.py --report native-scan/findings.json --identity native-scan/identity.json --scanner-identity native-scan/scanner.json --architecture {arch}""")
+python scripts/check_native_image_scan.py --report native-scan/findings.json --identity native-scan/identity.json --scanner-identity native-scan/scanner.json --architecture {arch} --runtime-inventory native-scan/runtime-inventory.json""")
         )
         assert steps.index(collect) < steps.index(evidence) < steps.index(block)
         assert steps[-1]["uses"] == UPLOAD and steps[-1]["if"] == "always()"
@@ -160,8 +167,13 @@ python scripts/check_native_image_scan.py --report native-scan/findings.json --i
         assert steps[-1]["with"]["if-no-files-found"] == "error"
         assert steps[-1]["with"]["name"] == f"native-scan-{arch}-${{{{ github.sha }}}}"
         for s in steps:
-            assert set(s) <= {"uses", "with", "name", "run", "if"}
-            assert not s.get("continue-on-error") and not s.get("env")
+            assert set(s) <= {"uses", "with", "name", "run", "if", "env"}
+            assert not s.get("continue-on-error")
+            assert s.get("env", {}) == (
+                {"TRIVY_DETECTION_PRIORITY": "comprehensive"}
+                if s.get("uses") == TRIVY
+                else {}
+            )
             assert s is steps[-1] or "if" not in s
     assert workflow.get("env") == {"REGISTRY": "ghcr.io"}
     assert "defaults" not in workflow
@@ -288,6 +300,9 @@ def test_native_contract_rejects_unsafe_runtime_mutations(workflow, arch, mutati
         "severitycollect",
         "globalenv",
         "defaultshell",
+        "livebinding",
+        "livecapture",
+        "ownedbinaryfilter",
     ],
 )
 def test_native_contract_rejects_unsafe_scan_mutations(workflow, arch, mutation):
@@ -322,6 +337,16 @@ def test_native_contract_rejects_unsafe_scan_mutations(workflow, arch, mutation)
         changed["env"]["TRIVY_VEX"] = "suppressed.json"
     elif mutation == "defaultshell":
         changed["defaults"] = {"run": {"shell": "true {0}"}}
+    elif mutation == "livebinding":
+        job["steps"][2]["run"] = job["steps"][2]["run"].replace(
+            "python scripts/candidate_image.py verify-loaded", "echo unchecked"
+        )
+    elif mutation == "livecapture":
+        job["steps"][2]["run"] = job["steps"][2]["run"].replace(
+            '"/sbin/apk","query"', '"/bin/echo","invented inventory"'
+        )
+    elif mutation == "ownedbinaryfilter":
+        collect["env"]["TRIVY_DETECTION_PRIORITY"] = "precise"
     else:
         step = next(
             s

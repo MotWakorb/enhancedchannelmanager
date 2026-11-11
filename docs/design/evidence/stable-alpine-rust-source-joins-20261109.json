@@ -1,0 +1,48 @@
+{
+  "status": "PAIRED_AUTHENTICATED_RUST_SOURCE_LOCK_AND_CONSERVATIVE_ELF_METADATA_JOINS_ONLY",
+  "source_input_helper_sha256": "0cb836f48c62a5170fe1d0ca50e1482e9a89888b3c830abb3d9ba55606a86022",
+  "auditable_helper_sha256": "7560ab410241aafb540df2c04522f009d383f7395041aab8df1499c7cc23f901",
+  "source_lock_replay": {
+    "architectures_of_data": ["amd64", "arm64"],
+    "execution_architecture": "amd64",
+    "origins": ["glycin", "libglycin", "rav1e"],
+    "steps": "Reauthenticate actual complete external index/APK/source graphs offline, read original source archive Cargo.lock bytes, replay the exact original bump-nix Cargo.lock hunks without fuzz/offset for glycin/libglycin (rav1e is unpatched), require all three previously reviewed resulting lock hashes.",
+    "receipt_sha256": "f8e9fea23e26c72d013a1f2d9d7c8a566f0acc0c6ba4409f577a80df4d6f032c"
+  },
+  "elf_metadata_source_join": {
+    "architecture_datasets": ["amd64", "arm64"],
+    "execution_architecture": "amd64",
+    "steps": "Reauthenticate actual complete external index/APK/source graphs, bind exact selected signed payload ELF bytes, decode one bounded ELF64 .dep-v0 zlib/JSON graph, validate schema/defaults/indexes/root/acyclicity, join every package to its origin-specific reviewed lock, rehash all 546 original crate archives and all 29,957 regular source members.",
+    "rav1e_libraries_per_architecture": {
+      "auditable_format": 1,
+      "registry_packages_joined": 128,
+      "local_workspace_packages_joined": 2,
+      "root": "rav1e 0.8.1",
+      "section_sha256": "f06bb7e7a17e60bd0b9acf81237e093b592d2c05ef0425dac67c880edf3987ff"
+    },
+    "missing_auditable_metadata_not_cleared_per_architecture": ["glycin-image-rs", "glycin-svg", "libglycin"],
+    "receipt_sha256": "6914d5c822ff34b328b1819c1128db1817e61bed8bc83751eb9d83e6e6f65b65",
+    "exact_compiled_features_established": false
+  },
+  "historical_compiler_recipe_patch_replay": {
+    "versions": ["1.95.0", "1.96.0"],
+    "recipe_inputs_verified_per_version": 12,
+    "original_distro_patches_replayed_per_version": 10,
+    "original_regular_target_files_per_version": 23,
+    "result_regular_target_files_per_version": 35,
+    "patch_fuzz": 0,
+    "observed_offsets": 0,
+    "receipt_sha256": "ea4fc640a0360437d42fdae7a521dfb69346e0b79ad0e102e7b55769197a65f2",
+    "scope": "Original pinned Git commit/path/tree recipe graph and every literal SHA512 input join the independently signed upstream source archives. Ten original patches per version replay on an owned exact original regular-file subset. This is applicability/source materialization, not a compiler rebuild or authenticated historical compiler-to-runtime build attestation."
+  },
+  "regression_tests": {
+    "native_alpine_modules": 42,
+    "passed": 722,
+    "log_sha256": "0a7027d448a036524f9632c78358e10b811e9738f9dba56842bbe5e1cfcb4948",
+    "dangerous_mutant": "Allowing another origin's registry package to count as a rav1e source makes the origin-specific regression fail with DID NOT RAISE InputError.",
+    "mutant_log_sha256": "751412d1162215ef4edda108fe4c56596c796c91f0645ab15513a50b3476f4f5"
+  },
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/{rust-auditable-signed-apk-replay-01.json,rust-original-project-lock-replay-01.json,rust-compiler-original-patch-replay-01/}",
+  "scope": "Read-only, nonroot, networkless paired data/consumer checks run on AMD64; no ARM target executed. Real recorded original ELF, recipe trees/Git objects, source locks and patches are committed test fixtures. Missing auditable sections remain explicit gaps. Nested source final-image delivery/consumer, missing compiler build and full linkage/attribution, aggregate source/security and MCP acceptance remain required. Original failed runtime gates are retained, not waived.",
+  "full_runtime_source_acceptance": false
+}

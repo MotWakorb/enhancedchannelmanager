@@ -1,0 +1,85 @@
+{
+  "patches": [
+    {
+      "file": "patches/0029-ash-reject-unknown-long-options.literal.patch",
+      "original_file": "0029-ash-reject-unknown-long-options.patch",
+      "original_sha256": "4ed1b9592b75abb740878804dc8cc48cffc5e6da6cd6d4319a8c35082b6b1a77",
+      "sha256": "17cdccc39d536a61d94bc812dfa424f11c39768f7f777c5365cbfdf3a6f59f35",
+      "witnesses": [
+        {
+          "after_sha256": "6a789b00d2b25c5090d0b99e473ca30f8d010d91c9bf19cf410427c887ac0256",
+          "before_sha256": "024c99ade4ef6e25c39195e1ef4805c0b4fc9e1a0b604fcef1acce0fe444ef5a",
+          "path": "shell/ash.c"
+        }
+      ]
+    },
+    {
+      "file": "patches/0001-hexdump-fix-regression-with-n4-e-u.literal.patch",
+      "original_file": "0001-hexdump-fix-regression-with-n4-e-u.patch",
+      "original_sha256": "c289b3ed7096557846069f6814e063226b2552e6d26a959c9e35116469dddf35",
+      "sha256": "24de3e1131c98c47ef4dc6adf623c812df9c219fc8700735f378d5d6db277a48",
+      "witnesses": [
+        {
+          "after_sha256": "372ca62b08723765b74605313fbfa9136c19ce32b5586c82f0d25ba753be5249",
+          "before_sha256": "a6dbc2fc1a61a0eb7b268e4e47364ecb7d00bb1ad36b4b1432b747b32ebd8125",
+          "path": "libbb/dump.c"
+        },
+        {
+          "after_sha256": "3dd6ebcdb9e474e81513df9576df9a4adc74648c61fc51e83389ab0a3fca85f2",
+          "before_sha256": "316433affb32ccc907d86bb49cb71e840e900dd46f8236a38dd0409586053612",
+          "path": "testsuite/hexdump.tests"
+        }
+      ]
+    },
+    {
+      "file": "patches/0001-awk-fix-handling-of-literal-backslashes-in-replaceme.literal.patch",
+      "original_file": "0001-awk-fix-handling-of-literal-backslashes-in-replaceme.patch",
+      "original_sha256": "522e48b25b320b854885419f3ee3a092bd58ad2ed111da87a57cafbc8420feae",
+      "sha256": "b902a84e8ea2b4158c80fa0030abf944237c6b9f861b02b00aec33314b04efca",
+      "witnesses": [
+        {
+          "after_sha256": "3b91c56d56a3326b3b9e94d33eaabc637151e403525f2fba727f4214443b9052",
+          "before_sha256": "c299d24455cd6a5881a9b4da869d658604d39732a52a4a4e7aada69efe39fcc7",
+          "path": "editors/awk.c"
+        },
+        {
+          "after_sha256": "f7714ee08fecaf1ce413169d7e5304e62e3c19020a32d4b0c3a6a41afc93f72e",
+          "before_sha256": "44a55ba99de9f3f07399dcb69c22b5972e4b928f0e92eb74a135d1a86ca78870",
+          "path": "testsuite/awk.tests"
+        }
+      ]
+    },
+    {
+      "file": "patches/0001-tar-fix-TOCTOU-symlink-race-condition.literal.patch",
+      "original_file": "0001-tar-fix-TOCTOU-symlink-race-condition.patch",
+      "original_sha256": "1a65d0870075fc83d58d75e91a2e518d1bee1898083086fb950281eb79b7d3a8",
+      "sha256": "1847f1750e683928cc3d9164578070be2258840614599e3a912dc0e5c6623424",
+      "witnesses": [
+        {
+          "after_sha256": "c7dac066de228d67e19748eddb856b2efef76b3cb1ea13d273c6bae18e0ff65e",
+          "before_sha256": "b9770bbdde551ebdce64c22cbccb1e4b073b8c678d7249c100fe510e7ba852d1",
+          "path": "archival/libarchive/data_extract_all.c"
+        }
+      ]
+    },
+    {
+      "file": "patches/CVE-2025-60876.literal.patch",
+      "original_file": "CVE-2025-60876.patch",
+      "original_sha256": "0506f13375c2425d2ff46a453616a9cb88de1a0c6878d26cd5fdc8ae9ebea51f",
+      "sha256": "42de51a68937d0284310a22fb06b736572d87fd803e0577f4008464f448a2ebd",
+      "witnesses": [
+        {
+          "after_sha256": "6a676283e89e0264fcd49b4e56f075a11a5a454f6e76910155f55f6f47a0ae92",
+          "before_sha256": "f86e80bd88a2fe78e92903d91844aed8c78dce2048a0586672e445c52f46c6b7",
+          "path": "networking/wget.c"
+        }
+      ]
+    }
+  ],
+  "patched_regular_files": 2881,
+  "patched_source_inventory_sha256": "5bb0e8b0b34b5ce0438c09fbd337cf809a7b4fbdf7fb1e715e592c43ff9fd633",
+  "policy_sha256": "fc2e13d620c9c8c339b4474ec72d27dc6943d5173986372dc53e421a7072d4ae",
+  "schema_version": 1,
+  "scope": "Source-only literal diff equivalents for four original vendor patches and one owned patch whose historical hunk positions/context do not fit the recorded full preimages. Original patch files remain intact and independently authenticated. Every equivalent replays with exact declared positions/context and identical complete before/after file hashes, producing the same complete final prepared-source witnesses and independently checked source inventory. This is not a changed runtime build recipe, application test/golden/tolerance, or claim that the original patches applied without offsets/fuzz.",
+  "upstream_archive_sha256": "3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4"
+}

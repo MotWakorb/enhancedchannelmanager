@@ -1,0 +1,6 @@
+{
+  "scope": "Recorded release/repositories from an existing immutable MCP image; not an ECM Alpine migration result or APK signature proof",
+  "image_id": "sha256:d60dd3e2b7e8a9465bed3072235fc62e516b555f5d1712bdcbe0c7eb06fecef2",
+  "alpine_release": "3.24.4\n",
+  "repositories": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main\nhttps://dl-cdn.alpinelinux.org/alpine/v3.24/community\n"
+}

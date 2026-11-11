@@ -16,6 +16,7 @@ import platform
 import re
 import shlex
 import shutil
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -429,7 +430,12 @@ def _transient_fetch_error(error: Exception) -> bool:
         return error.code in {429, 500, 502, 503, 504}
     if isinstance(error, URLError):
         error = error.reason
-    return isinstance(error, (ConnectionResetError, TimeoutError, IncompleteRead))
+    # Abrupt peer EOF is a transport interruption, not a certificate decision.
+    # Keep all other TLS/identity failures fail-fast; retries use the same HTTPS
+    # URL and still require the original pinned hash/size/publisher checks.
+    return isinstance(
+        error, (ConnectionResetError, TimeoutError, IncompleteRead, ssl.SSLEOFError)
+    )
 
 
 def fetch_input(item: dict, destination: Path, cache: Path | None) -> None:
@@ -1037,10 +1043,11 @@ def _gosu(
     cache: Path | None,
     arch: str,
     toolchain: dict | None = None,
+    go_binary: Path | None = None,
 ) -> dict:
-    go = "/usr/lib64/go/1.26/bin/go"
+    go = str(go_binary) if go_binary is not None else "/usr/lib64/go/1.26/bin/go"
     origin = None
-    if arch == "arm64":
+    if arch == "arm64" and go_binary is None:
         go, origin = prepare_arm_go(toolchain, work, sources, cache)
         env = {**env, "GOROOT": str(Path(go).parent.parent)}
     version = run([go, "version"], cwd=work, env=env)
@@ -1118,7 +1125,7 @@ def _gosu(
         run(
             ["/usr/bin/rpm", "-q", "--licensefiles", "go1.26"], cwd=work, env=env
         ).splitlines()
-        if arch == "amd64"
+        if arch == "amd64" and go_binary is None
         else []
     )
     go_notices = {

@@ -1,0 +1,42 @@
+{
+  "status": "AUTOMATED_RUST_SOURCE_DELIVERY_PAIRED_OFFLINE_DATA_CONSUMERS_PASSED_NATIVE_IMAGES_PENDING",
+  "consumer_helper_sha256": "f40463552f9e1cddfc4e1d07967c26c97994fa84b71885385a676166732f2e34",
+  "producer_receipt_sha256": "52606ad8115a6c5556b0635bf36615239857a252cd6f87cde01e139b6e3f593a",
+  "architecture_datasets": {
+    "amd64": {
+      "offline_consumer_receipt_sha256": "7bf0ec5033c66a66b0baa940e20999b9225318dda93ae8456c4c54f844ba6a39",
+      "external_package_set_sha256": "792e5fec1ef63ff1b88cb55128d8999c81b1b5dcd8af0cd1ef4acb631657b6f2"
+    },
+    "arm64": {
+      "offline_consumer_receipt_sha256": "3ef0713b0d3dae42262ec54e4a119cb986f5ed1cc063015f3ac36dfd19feb9fe",
+      "external_package_set_sha256": "f42595d7b8b226aba45810a584e333cdefad69ab9edd9b78e26418b7ac5e889e"
+    }
+  },
+  "shared_verified_inputs": {
+    "delivered_files": 562,
+    "bundle_bytes": 558968555,
+    "registry_archives": 546,
+    "registry_regular_members": 29957,
+    "registry_source_bytes": 545635396,
+    "registry_full_inventory_sha256": "355fb6f9ae0189012e287991a7ef6a313308b01dea6e5910fffd7d6ee4c0ed56",
+    "source_to_patched_lock_origin_joins": 3,
+    "complete_upstream_compiler_sources": 2,
+    "original_distro_recipe_inputs_per_compiler": 12,
+    "original_release_public_evidence_files": 3
+  },
+  "bounded_elf_results_per_architecture": {
+    "rav1e_registry_packages_joined": 128,
+    "rav1e_local_workspace_packages_joined": 2,
+    "missing_auditable_metadata_not_cleared": ["glycin-image-rs", "glycin-svg", "libglycin"]
+  },
+  "native_candidate_run": {
+    "run_id": 42692523987,
+    "head_sha": "92fe8bd4646facbeee6b6b53f858f8191439733d",
+    "status_at_recording": "in_progress",
+    "acceptance": "Pending; no result inferred from these data checks"
+  },
+  "conditions": "Both independent current-script checks run on native AMD64, as nonroot 3000:3000, without network, with read-only root and input mounts. Both actual external runtime datasets are reauthenticated; verifying ARM64 data is not native ARM execution or a final-image live-file check.",
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/rust-automated-inputs-offline-{amd64,arm64}-consumer-01.json and /home/lecaptainc/.cache/ecm-alpine-producer-20261109/rust-01-output",
+  "scope": "Complete delivered frozen Rust input bundle correspondence only. Missing auditable metadata, historical compiler build/target linkage, full attribution/advisory, aggregate source/runtime and MCP/final acceptance remain separate. Original failures retained; no suppression, merge, publication or deployment.",
+  "full_runtime_source_acceptance": false
+}

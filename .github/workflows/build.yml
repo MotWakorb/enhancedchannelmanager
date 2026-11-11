@@ -460,18 +460,16 @@ jobs:
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
       - id: version
         run: |
-          python3 scripts/recover_native_base.py --arch amd64 \
-            --output "$RUNNER_TEMP/ecm-native-base" --github-output "$GITHUB_OUTPUT"
+          test "$(uname -m)" = x86_64
+          python3 scripts/compose_alpine_dockerfile.py --check
           echo "version=$(jq -r '.version' frontend/package.json)" >> "$GITHUB_OUTPUT"
-          test "${{ github.ref }}" = refs/heads/dev && channel=dev || channel=latest
+          if test "${{ github.ref }}" = refs/heads/dev || test "${{ github.base_ref }}" = dev; then channel=dev; else channel=latest; fi
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - name: Build immutable ECM AMD64 candidate
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           platforms: linux/amd64
-          build-contexts: |
-            ${{ steps.version.outputs.context }}
           outputs: type=oci,dest=/tmp/ecm-amd64.oci.tar
           build-args: |
             GIT_COMMIT=${{ github.sha }}
@@ -503,18 +501,16 @@ jobs:
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
       - id: version
         run: |
-          python3 scripts/recover_native_base.py --arch arm64 \
-            --output "$RUNNER_TEMP/ecm-native-base" --github-output "$GITHUB_OUTPUT"
+          test "$(uname -m)" = aarch64
+          python3 scripts/compose_alpine_dockerfile.py --check
           echo "version=$(jq -r '.version' frontend/package.json)" >> "$GITHUB_OUTPUT"
-          test "${{ github.ref }}" = refs/heads/dev && channel=dev || channel=latest
+          if test "${{ github.ref }}" = refs/heads/dev || test "${{ github.base_ref }}" = dev; then channel=dev; else channel=latest; fi
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - name: Build immutable ECM ARM64 candidate
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           platforms: linux/arm64
-          build-contexts: |
-            ${{ steps.version.outputs.context }}
           outputs: type=oci,dest=/tmp/ecm-arm64.oci.tar
           build-args: |
             GIT_COMMIT=${{ github.sha }}
@@ -694,11 +690,19 @@ jobs:
           python scripts/candidate_image.py runtime-config /tmp/ecm-amd64.oci.tar --expected '${{ needs.build-amd64.outputs.digest }}' --architecture amd64 > native-scan/identity.json
           test "$(skopeo --version)" = "skopeo version 1.13.3"
           skopeo copy oci-archive:/tmp/ecm-amd64.oci.tar docker-archive:/tmp/trivy-ecm-amd64-scan.docker.tar
+          docker load --input /tmp/trivy-ecm-amd64-scan.docker.tar
+          image_id=$(jq -er '.ConfigDigest' native-scan/identity.json)
+          docker image inspect "$image_id" > native-scan/loaded-image.json
+          python scripts/candidate_image.py verify-loaded native-scan/identity.json --inspect native-scan/loaded-image.json
+          docker run --rm --pull never --read-only --network none --cap-drop ALL --security-opt no-new-privileges --user 1000:1000 --entrypoint /usr/local/bin/python "$image_id" -I -c 'import json,subprocess; from pathlib import Path; p=subprocess.run(["/sbin/apk","query","--from","installed","--format","json","--all-matches","*"],check=True,capture_output=True,text=True); print(json.dumps({"packages":json.loads(p.stdout),"installed_database":Path("/lib/apk/db/installed").read_text()}))' > native-scan/live-apks.json
+          python -c 'import json; from pathlib import Path; p=json.loads(Path("native-scan/identity.json").read_text()); p["capture"]=json.loads(Path("native-scan/live-apks.json").read_text()); Path("native-scan/runtime-inventory.json").write_text(json.dumps(p,sort_keys=True,indent=2)+"\n")'
           printf '%s\n' '${{ github.sha }}' > native-scan/source-sha.txt
       # Exit 0 collects every severity; the validator and exit-1 scan below
       # independently block HIGH/CRITICAL (including unfixed) findings.
       - name: Collect complete findings and inventory
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_DETECTION_PRIORITY: comprehensive
         with:
           version: v0.76.1
           input: /tmp/trivy-ecm-amd64-scan.docker.tar
@@ -715,9 +719,11 @@ jobs:
         run: |
           set -euo pipefail
           trivy version --cache-dir "${{ github.workspace }}/.cache/trivy" --format json > native-scan/scanner.json
-          python scripts/check_native_image_scan.py --report native-scan/findings.json --identity native-scan/identity.json --scanner-identity native-scan/scanner.json --architecture amd64
+          python scripts/check_native_image_scan.py --report native-scan/findings.json --identity native-scan/identity.json --scanner-identity native-scan/scanner.json --architecture amd64 --runtime-inventory native-scan/runtime-inventory.json
       - name: Block all HIGH and CRITICAL findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_DETECTION_PRIORITY: comprehensive
         with:
           version: v0.76.1
           input: /tmp/trivy-ecm-amd64-scan.docker.tar
@@ -756,9 +762,17 @@ jobs:
           python scripts/candidate_image.py runtime-config /tmp/ecm-arm64.oci.tar --expected '${{ needs.build-arm64.outputs.digest }}' --architecture arm64 > native-scan/identity.json
           test "$(skopeo --version)" = "skopeo version 1.13.3"
           skopeo copy oci-archive:/tmp/ecm-arm64.oci.tar docker-archive:/tmp/trivy-ecm-arm64-scan.docker.tar
+          docker load --input /tmp/trivy-ecm-arm64-scan.docker.tar
+          image_id=$(jq -er '.ConfigDigest' native-scan/identity.json)
+          docker image inspect "$image_id" > native-scan/loaded-image.json
+          python scripts/candidate_image.py verify-loaded native-scan/identity.json --inspect native-scan/loaded-image.json
+          docker run --rm --pull never --read-only --network none --cap-drop ALL --security-opt no-new-privileges --user 1000:1000 --entrypoint /usr/local/bin/python "$image_id" -I -c 'import json,subprocess; from pathlib import Path; p=subprocess.run(["/sbin/apk","query","--from","installed","--format","json","--all-matches","*"],check=True,capture_output=True,text=True); print(json.dumps({"packages":json.loads(p.stdout),"installed_database":Path("/lib/apk/db/installed").read_text()}))' > native-scan/live-apks.json
+          python -c 'import json; from pathlib import Path; p=json.loads(Path("native-scan/identity.json").read_text()); p["capture"]=json.loads(Path("native-scan/live-apks.json").read_text()); Path("native-scan/runtime-inventory.json").write_text(json.dumps(p,sort_keys=True,indent=2)+"\n")'
           printf '%s\n' '${{ github.sha }}' > native-scan/source-sha.txt
       - name: Collect complete findings and inventory
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_DETECTION_PRIORITY: comprehensive
         with:
           version: v0.76.1
           input: /tmp/trivy-ecm-arm64-scan.docker.tar
@@ -775,9 +789,11 @@ jobs:
         run: |
           set -euo pipefail
           trivy version --cache-dir "${{ github.workspace }}/.cache/trivy" --format json > native-scan/scanner.json
-          python scripts/check_native_image_scan.py --report native-scan/findings.json --identity native-scan/identity.json --scanner-identity native-scan/scanner.json --architecture arm64
+          python scripts/check_native_image_scan.py --report native-scan/findings.json --identity native-scan/identity.json --scanner-identity native-scan/scanner.json --architecture arm64 --runtime-inventory native-scan/runtime-inventory.json
       - name: Block all HIGH and CRITICAL findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_DETECTION_PRIORITY: comprehensive
         with:
           version: v0.76.1
           input: /tmp/trivy-ecm-arm64-scan.docker.tar

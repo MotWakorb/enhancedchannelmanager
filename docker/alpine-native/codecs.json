@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "alpine_release": "3.24",
+  "prefix": "/usr/local",
+  "libraries": [
+    {
+      "name": "codec2",
+      "version": "1.2.0",
+      "license": "LGPL-2.1-only",
+      "soname": "libcodec2.so.1.2",
+      "exports": {
+        "file": "codec2-exports.txt",
+        "sha256": "df951fc24bdfcc6c611e35432eec4eb72ef0d2269b6b1132bbfd1da39011b717",
+        "baseline_library_sha256": "32ef93297a3a86d81e5852c8bbf22d46f86502560c37e63624a352fbe8ef5eba",
+        "scope": "568 baseline defined symbols; musl may additionally expose only generated _init/_fini"
+      },
+      "archive": {
+        "filename": "codec2-1.2.0.tar.gz",
+        "url": "https://codeload.github.com/drowe67/codec2/tar.gz/refs/tags/1.2.0",
+        "sha256": "cbccae52b2c2ecc5d2757e407da567eb681241ff8dadce39d779a7219dbcf449",
+        "size": 7688549
+      },
+      "configure": ["-DCMAKE_BUILD_TYPE=RelWithDebInfo", "-DBUILD_SHARED_LIBS=ON", "-DUNITTEST=FALSE", "-DLPCNET=OFF"],
+      "numeric": {
+        "commit": "20859d3fd9e797dde592c489c8ef7d383f778620",
+        "file": "retained/3b79eec0abbde9b47d7a3321316c650b31a89ab752ec0c5fca4181a349753613",
+        "sha256": "3b79eec0abbde9b47d7a3321316c650b31a89ab752ec0c5fca4181a349753613",
+        "size": 12867,
+        "license_selection": "MIT",
+        "wrapper": {"file": "codec2_numeric.c", "sha256": "b26c5ed3ef94cee03b004ea6bf89e0d0cfa6af4d8df4d927f999f52de0f4ceda"},
+        "sources": [
+          {"path": "sincosf.c", "upstream_path": "math/sincosf.c", "sha256": "6fb67cac11d1408caf0d4426053c2902fcfebe490b627021f3e151d6321807e9"},
+          {"path": "sincosf.h", "upstream_path": "math/sincosf.h", "sha256": "c5d78b6cc3ebf3435bbf3ddb691c8d7bd212bdc3ec3bf59424bbe28f8924ff46"},
+          {"path": "sincosf_data.c", "upstream_path": "math/sincosf_data.c", "sha256": "449d70e671ed64ac00cfc4dade8ad98c15a42a6aa9e469f7505f68e8c885beeb"},
+          {"path": "math_config.h", "upstream_path": "math/math_config.h", "sha256": "349a7cab00e14cf51c26ada62832eeeddc0a85de302f0ab2b6ff87713db01015"},
+          {"path": "test_defs.h", "upstream_path": "math/include/test_defs.h", "sha256": "006c4acb9cb4dd604cd00c6a94004a52552d056a4bfca7f568566cbb9e83ad4d"},
+          {"path": "LICENSE", "upstream_path": "LICENSE", "sha256": "650afbf29f214451e02241adc42534e82c9d6ae2b38e2444b92b5a1ffcaf9346"}
+        ],
+        "upstream_url_template": "https://raw.githubusercontent.com/ARM-software/optimized-routines/{commit}/{upstream_path}"
+      },
+      "patches": [
+        {
+          "file": "patches/codec2-1.2.0-install-binaries.patch",
+          "sha256": "8280d1777a3313c8775019fa0e00c21c37a8e5654e09e1a682509374b35c5766",
+          "witnesses": [
+            {
+              "path": "src/CMakeLists.txt",
+              "before_sha256": "874d1678fd7640ef42cd81a94603889159e749621abb1aa3f2188becbfd7a887",
+              "after_sha256": "7c8df0f43105b0bca6f0f119057a12f7a5f0f748a7e37a1b18878a0eba8f5e86"
+            }
+          ]
+        },
+        {
+          "file": "patches/codec2-portable-numeric.patch",
+          "sha256": "46bcbf5f94ae4c8a5058d8dd421c78c40338257f8bdeabf8a1789a085261ae31",
+          "origin": "ecm",
+          "witnesses": [
+            {"path": "src/defines.h", "before_sha256": "2823ad9940f510432de44bd467231cfb47450999d13fefaf2f33960fbf685072", "after_sha256": "fa3799995e98b7fe9e86b96cd1c2885bc4a84a2efb9dd5693168111903a53a5c"},
+            {"path": "src/CMakeLists.txt", "before_sha256": "7c8df0f43105b0bca6f0f119057a12f7a5f0f748a7e37a1b18878a0eba8f5e86", "after_sha256": "33d33e7e07737b08066a7712b23f8926179769b76ea3cdcbcc2d082addbee776"}
+          ]
+        },
+        {
+          "file": "patches/codec2-initialize-quantizer-error.patch",
+          "sha256": "f415378bae706b1fe1feb3d438001b311b26d5bea7d4acaaf440830e8614e2dc",
+          "origin": "ecm",
+          "witnesses": [
+            {"path": "src/quantise.c", "before_sha256": "a9b6dbadfee5c79b5ba346e606152c735d1096c2f3552a3da3b39c024469732f", "after_sha256": "2bad7e43efb422a75ab418a0dac34c011a3b23892829a9ce7792f677aa020df7"}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "twolame",
+      "version": "0.4.0",
+      "license": "LGPL-2.1-only",
+      "soname": "libtwolame.so.0",
+      "archive": {
+        "filename": "twolame-0.4.0.tar.gz",
+        "url": "https://downloads.sourceforge.net/project/twolame/twolame/0.4.0/twolame-0.4.0.tar.gz",
+        "sha256": "cc35424f6019a88c6f52570b63e1baf50f62963a3eac52a03a800bb070d7c87d",
+        "size": 890908
+      },
+      "configure": ["--enable-shared", "--disable-static", "--disable-sndfile"],
+      "patches": []
+    },
+    {
+      "name": "shine",
+      "version": "3.1.1",
+      "license": "LGPL-2.0-only",
+      "soname": "libshine.so.3",
+      "archive": {
+        "filename": "shine-3.1.1.tar.gz",
+        "url": "https://github.com/toots/shine/releases/download/3.1.1/shine-3.1.1.tar.gz",
+        "sha256": "58e61e70128cf73f88635db495bfc17f0dde3ce9c9ac070d505a0cd75b93d384",
+        "size": 2144728
+      },
+      "configure": ["--enable-shared", "--disable-static"],
+      "patches": [
+        {
+          "file": "patches/libshine-gcc15-fixes.patch",
+          "sha256": "915554e32c2c6586cb2b1318e959e9d223384e967537ff45e1af712733a79cc1",
+          "witnesses": [
+            {
+              "path": "src/lib/l3mdct.h",
+              "before_sha256": "d85e4df2a765a419a6ceddbca6a830505fb36f32f6c801567b339f1494a9fa20",
+              "after_sha256": "3dee042691b56ecbc804ff25e87c6c8bae1c3d686e0b9e329cf02d5608086470"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

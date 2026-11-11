@@ -1,0 +1,36 @@
+{
+  "status": "REVIEWED_FOUR_POSITION_ONLY_WORKFLOW_CONTROL_FIXTURE_REPAIR",
+  "bead": "enhancedchannelmanager-td3rt",
+  "cause": "External APK, Python-base and Rust verification steps were added to alpine-native.yml without moving the four downstream locations in the closed positional workflow-control fixture. This is an actual missed regression, not an expected aggregate source failure.",
+  "observed_backend_failure": {"run_id": 42696849312, "job_id": 129430949542, "failed": 1, "passed": 17016, "original_job_log_sha256": "be0f41ea261cc783d993174582a7a06eae79909b12d20859815aa890e2f448f6"},
+  "observed_native_amd64_failure": {"run_id": 42696848901, "job_id": 129430870684, "failed": 1, "passed": 17016, "original_job_log_sha256": "0b494035c22f43474ef2a6ce38fab8a6617e325d011d6d6254b80b5e9fcd8f44"},
+  "failing_test": "test_classify_changed_paths.py::test_every_workflow_has_one_structured_changed_path_authority",
+  "semantic_review": {
+    "original_workflow_commit": "61eb5630a4697e5330775ab74c85726bf2860c08",
+    "original_active_fixture_sha256": "44f5cdd2a0e1f4699860596d482b784e883cf05db0b6289d06c17f923452c1a4",
+    "preserved_original_fixture": "backend/tests/fixtures/alpine/workflow-control-original-61eb5630.json.gz",
+    "new_active_fixture_sha256": "70438d9c438f1d26605dac906a924da00c61734bef208b8440a3d5a5daece69f",
+    "repository_if_controls": 96,
+    "repository_continue_on_error_controls": 5,
+    "all_typed_if_values_unchanged": true,
+    "all_continue_on_error_values_and_locations_unchanged": true,
+    "all_other_control_locations_unchanged": true,
+    "moved_steps_entire_contents_unchanged": true,
+    "moves": [
+      {"from": 17, "to": 20, "name": "Exercise the complete existing runtime gate and retain incompatibilities"},
+      {"from": 18, "to": 21, "name": "Preserve verified original even if current-candidate comparison fails"},
+      {"from": 19, "to": 22, "name": "Preserve file modes and symlinks in the evidence archive"},
+      {"from": 20, "to": 23, "name": "Retain native component receipts, products and matching sources"}
+    ],
+    "review_receipt_sha256": "bb318e75a117f76152834f584f1049fc83d7535483a0d8ab50cf93c5f019f2cb"
+  },
+  "verification": {
+    "native_alpine_classifier_and_control_mutation_tests": 175,
+    "result": "PASS",
+    "before_repair_red_log_sha256": "ddb728021b09ca0012322be68deabbef258701650fa2876c3e5a86e637d249d4",
+    "after_repair_green_log_sha256": "9bd811cd62c9515161973b48190cc0eb9e57b32152a1ffdac4ee45ea1ec9d761"
+  },
+  "separate_failure_not_repaired_here": "Unchanged production SUSE/RPM source collection still receives HTTP404, including AMD64 build42701394300/job129446857593 and MCP isolation build42696849312/job129430949708. Original logs retained; not relabeled as Alpine aggregate expected failure.",
+  "scope": "Only four reviewed fixture indices change. No workflow, classifier/test assertion, if/continue-on-error condition, skip, application/numeric golden, pin, production Dockerfile, source/advisory gate or publication policy changes. Original control golden retained exactly in the compressed historical fixture. Full/native CI remains required; a local targeted pass is not whole-port acceptance.",
+  "full_runtime_source_acceptance": false
+}

@@ -1,0 +1,52 @@
+{
+  "status": "PAIRED_SIX_COMPONENT_SOURCE_INPUT_AND_EXTRACTED_FILESYSTEM_JOINS_ONLY",
+  "source_native_run": 42681901847,
+  "helper_sha256": "14caadc4605a742c1e6973e6ae7c69b29be8fb2ba7ef3f77bcad69805a54e910",
+  "architecture_datasets": ["amd64", "arm64"],
+  "execution_architecture": "amd64",
+  "conditions": "Original APK/key hashes checked, native apk verify followed by native apk extract --no-chown into a fresh root-owned output under a task-owned writable parent. Read-only/cap-drop/networkless/no-new-privileges container, no dependency install or source/target execution. Independent consumer then runs as UID/GID 3000:3000 with all inputs read-only.",
+  "verified_per_dataset": {
+    "original_signed_apk": 1,
+    "regular_files": 559,
+    "symlinks": 32,
+    "installed_directories": 72,
+    "original_raw_component_receipts": 6,
+    "complete_original_source_inventory_files": 506,
+    "component_runtime_artifact_entries": 77,
+    "complete_package_entries": 591,
+    "original_upstream_or_compiler_archives": 11,
+    "ffmpeg_release_signature_input": 1
+  },
+  "component_counts": {
+    "codecs": {"source_files": 68, "runtime_entries": 13},
+    "ffmpeg": {"source_files": 16, "runtime_entries": 28},
+    "gosu": {"source_files": 363, "runtime_entries": 7},
+    "jxl": {"source_files": 17, "runtime_entries": 11},
+    "resdet": {"source_files": 5, "runtime_entries": 6},
+    "security": {"source_files": 37, "runtime_entries": 12}
+  },
+  "joins": "Original native signature/payload -> complete actual installed record -> every extracted file/link/directory UID/GID/mode/size/hash/raw link text -> exact six raw original receipt hashes -> reviewed recipe/status/architecture plus full FFmpeg component receipt equality -> original packager and rederived content-addressed version/loader -> complete 591-entry composition. Full delivered source namespace inventories and existing trusted sealed recipe/patch/configuration/equivalence/vendor/CMS validators are rechecked, plus all eleven original archive hashes and the FFmpeg signature input hash. Delivered Python/recipes are not imported or executed.",
+  "paired_consumer_receipt_sha256": "2a191d39bc12513c524a7334841ff446097da9b762e92960e149c1f521122141",
+  "negative_controls": {
+    "actual_source_byte_corruption": "Original signed APK/key/receipt/installed record unchanged. A separately root-owned, same-mode, same-size mutant of delivered resdet/native-dependencies.json replaces one extracted-source byte through a read-only bind. Original native signature/DB verification passes; live bytes check rejects. A first host-owned mutant was rejected earlier at UID/GID validation; it was not misreported as byte-check coverage.",
+    "actual_denial_receipt_sha256": "42716daaa78bf236a5e6cfa488746df6e032286899771dcc87563b1035042b81",
+    "dangerous_mutants": "Omitting the component-derived version guard makes both architecture version regressions fail; normalizing raw symlink text through pathlib makes the link-text regression fail. Three DID NOT RAISE failures.",
+    "mutant_log_sha256": "5e4e513c2990816f84d42c0b3da1ce0dd5a1a35ede75715cc7976d6facfb79b3"
+  },
+  "regression_tests": {
+    "layer": "Native AMD64 Alpine component/source/workflow/maintained-native-builder subset, not full application/final-image acceptance",
+    "modules": 48,
+    "passed": 1085,
+    "log_sha256": "58e753f54e21c4b78888bc050166e9b0500d2e0133c0187cb43b6cde89648fbb"
+  },
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/{owned-live-subject-{amd64,arm64}-01/,owned-component-source-layout-survey-paired-01.json,owned-native-component-live-replay-paired-02.json,owned-native-live-source-mutation-denial-01.json}",
+  "pending": [
+    "This probe uses extracted original payloads, not running final-image filesystem subjects or native ARM execution",
+    "Original signed owned APK evidence/public keys/check evidence still need automated delivery and native immutable-image composition",
+    "Fresh isolated FFmpeg release-signature replay, original-to-patched-source replay and language/static/compiler/notice closure remain separate",
+    "Unsigned build receipts/statuses do not prove reproduced builds, historical compiler linkage or exact compiled features",
+    "BusyBox original/static source, live files/control-script archives, aggregate source, unsuppressed advisory and MCP acceptance remain unfinished",
+    "Existing install inventory raw-link normalization follow-up is tracked in enhancedchannelmanager-om12r"
+  ],
+  "full_runtime_source_acceptance": false
+}

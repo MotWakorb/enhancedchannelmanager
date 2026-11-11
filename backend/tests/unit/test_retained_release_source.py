@@ -121,7 +121,7 @@ def test_retained_cli_does_not_accept_an_additional_source(collector, tmp_path):
     ],
 )
 def test_actual_docker_case_supplies_only_the_amd_handoff(machine, expected):
-    text = (ROOT / "Dockerfile").read_text().split(" AS source-builder\n", 1)[1]
+    text = (ROOT / "docker/native/Dockerfile.suse").read_text().split(" AS source-builder\n", 1)[1]
     prefix = text.split("RUN ", 1)[1].split("    && rpm -q", 1)[0]
     prefix = (
         prefix.replace("\\\n", " ")
@@ -150,8 +150,8 @@ def test_generator_contract_rejects_missing_or_arm_retained_handoff():
     )
     sbom = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(sbom)
-    text = (ROOT / "Dockerfile").read_text()
-    sbom.validate_native_runtime_docker_contract(text, "Dockerfile")
+    text = (ROOT / "docker/native/Dockerfile.suse").read_text()
+    sbom.validate_historical_suse_docker_contract(text, "Dockerfile.suse")
     for before, after in [
         ("set -- --retained-release-source /tmp/native-cache/" + PIN, "set --"),
         (
@@ -164,7 +164,7 @@ def test_generator_contract_rejects_missing_or_arm_retained_handoff():
         mutant = text.replace(before, after)
         assert mutant != text
         with pytest.raises(sbom.SbomError):
-            sbom.validate_native_runtime_docker_contract(mutant, "Dockerfile")
+            sbom.validate_historical_suse_docker_contract(mutant, "Dockerfile.suse")
 
 
 @pytest.mark.parametrize("signature_failure", [False, True])

@@ -747,7 +747,7 @@ def test_filesystem_name_evidence_includes_copied_providers_and_symlinks(
         "usr/share/sources/opaque.tar.gz",
         b"Archive/Tar.pm libcjson libsndfile libtiff",
     )
-    for name in ("proc", "sys", "dev", "native-image"):
+    for name in ("proc", "sys", "dev", "native-image", "native-image-scripts"):
         put(tmp_path, f"{name}/hidden/cjson", "excluded mount content")
     outside = tmp_path.parent / (tmp_path.name + "-external")
     put(outside, "cjson-must-not-be-walked", "external")
@@ -760,7 +760,13 @@ def test_filesystem_name_evidence_includes_copied_providers_and_symlinks(
         and result["exit_status"] == 0
     )
     assert result["path_count"] == 27
-    assert set(result["excluded"]) == {"/proc", "/sys", "/dev", "/native-image"}
+    assert set(result["excluded"]) == {
+        "/proc",
+        "/sys",
+        "/dev",
+        "/native-image",
+        "/native-image-scripts",
+    }
     assert set(result["observed_exclusions"]) == set(result["excluded"])
     assert set(result["patterns"]) == set(paths)
     for family, names in paths.items():
@@ -942,7 +948,9 @@ def test_self_consistent_pass_record_still_requires_producer_contract(
     elif mutation == "no_patch":
         record["ffmpeg"]["patches"] = []
     elif mutation == "builder_repository":
-        record["builder_repository"] = "https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/"
+        record["builder_repository"] = (
+            "https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/"
+        )
     else:
         record["gosu"]["modules"].append(record["gosu"]["modules"][-1])
     document(root, f"{PROOF}/native-build.json", record)

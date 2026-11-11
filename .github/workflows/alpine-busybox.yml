@@ -1,0 +1,91 @@
+name: Stable Alpine Native BusyBox Evidence
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/alpine-busybox.yml'
+      - 'docker/alpine-busybox/**'
+      - 'scripts/*busybox*'
+      - 'scripts/alpine_apk_v2.py'
+      - 'scripts/install_alpine_native.py'
+      - 'backend/tests/unit/test_*busybox*'
+      - 'backend/tests/unit/test_alpine_apk_v2.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alpine-busybox-${{ github.event.pull_request.number || github.ref }}-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  provider:
+    name: BusyBox native replacement (${{ matrix.arch }}, not final-image acceptance)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            machine: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            machine: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Verify native host and acquire the sealed upstream source
+        run: |
+          test "$(uname -m)" = '${{ matrix.machine }}'
+          mkdir "$RUNNER_TEMP/busybox-evidence"
+          git rev-parse HEAD > "$RUNNER_TEMP/busybox-evidence/source-commit.txt"
+          python3 scripts/prepare_busybox_cache.py --output-dir "$RUNNER_TEMP/busybox-cache"
+      - name: Preserve the official base negative control and five valid transfers
+        run: |
+          set +e
+          docker run --rm --platform linux/${{ matrix.arch }} --network none --read-only \
+            --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
+            --mount type=bind,src="$GITHUB_WORKSPACE/scripts/probe_busybox_runtime.py",dst=/probe.py,readonly \
+            --mount type=bind,src="$RUNNER_TEMP/busybox-evidence",dst=/evidence \
+            --entrypoint /usr/local/bin/python \
+            python:3.12-alpine3.24@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7 \
+            /probe.py --output-file /evidence/official-base-runtime.json
+          status=$?
+          set -e
+          test "$status" = 1
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = json.loads((Path(os.environ['RUNNER_TEMP'])/'busybox-evidence/official-base-runtime.json').read_text())
+          assert result['status'] == 'FAILED' and len(result['failures']) == 33
+          assert len(result['control_cases']) == 32 and len(result['ordinary_and_encoded_cases']) == 5
+          assert all(row['exit'] == 0 and not row['server_errors'] for row in result['ordinary_and_encoded_cases'])
+          assert result['applet_count'] == 304
+          PY
+      - name: Compile offline, execute unchanged upstream checks, and sign offline
+        run: |
+          docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
+            --build-context busybox-cache="$RUNNER_TEMP/busybox-cache" \
+            --file docker/alpine-busybox/Dockerfile \
+            --output type=local,dest="$RUNNER_TEMP/busybox-evidence/build" .
+      - name: Verify signatures, exact installation and bounded native runtime behavior
+        run: |
+          docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
+            --build-context busybox-packages="$RUNNER_TEMP/busybox-evidence/build" \
+            --file docker/alpine-busybox/Dockerfile.runtime \
+            --output type=local,dest="$RUNNER_TEMP/busybox-evidence/installed" .
+      - name: Preserve source modes and symlinks in the retained artifact
+        if: always()
+        run: |
+          tar -C "$RUNNER_TEMP/busybox-evidence" -czf "$RUNNER_TEMP/busybox-native-${{ matrix.arch }}.tar.gz" .
+      - name: Retain all native proof including negative controls and raw test logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: alpine-busybox-native-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/busybox-native-${{ matrix.arch }}.tar.gz
+          retention-days: 14
+          if-no-files-found: error

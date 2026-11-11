@@ -1,0 +1,62 @@
+{
+  "image": "sha256:0c5586b42b0da040b974f5e87b80c6075374216186f28ad3833eb4cab704fc2f",
+  "scope": "Actual local pinned-Alpine test environment public identity-tool survey only; not full candidate proof.",
+  "path": "/usr/bin/getent",
+  "sha256": "f225def553bce0cb435ff78686b9272c2f4dd0e34ebe3d79855e775a66d9c6ef",
+  "owner": "/usr/bin/getent is owned by musl-utils-1.2.6-r3\n",
+  "cases": [
+    {
+      "args": [
+        "passwd",
+        "appuser"
+      ],
+      "exit": 0,
+      "stdout": "appuser:x:3000:3000::/home/appuser:/bin/bash\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "passwd",
+        "3000"
+      ],
+      "exit": 0,
+      "stdout": "appuser:x:3000:3000::/home/appuser:/bin/bash\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "group",
+        "appuser"
+      ],
+      "exit": 0,
+      "stdout": "appuser:x:3000:\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "group",
+        "3000"
+      ],
+      "exit": 0,
+      "stdout": "appuser:x:3000:\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "passwd",
+        "ecm-missing-user-for-port-check"
+      ],
+      "exit": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "--version"
+      ],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "getent: Unknown database `--version': No error information\nUsage: getent database [key ...]\n\tdatabase may be one of:\n\t\tethers group hosts ahosts ahostsv4 ahostsv6 networks\n\t\tpasswd protocols services shadow shells\n"
+    }
+  ]
+}

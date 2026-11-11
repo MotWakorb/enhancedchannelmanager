@@ -1,0 +1,14 @@
+{
+  "provenance": {
+    "apk_tools": "3.0.9-r0",
+    "machine": "x86_64",
+    "execution_image": "sha256:ea072a1f479e3b5147ca62baea9badefd6f510413ed239973f382072d5f65a37",
+    "method": "Actual mkpkg ephemeral RSA3072 signing, verify and offline installation in isolated tmpfs root",
+    "raw_receipt": "/tmp/opencode/ecm-alpine-completion-20261108/apk-signing-probe-05.jsonl"
+  },
+  "default_denial": {"exit": 1, "stdout": "/work/ecm-signature-probe-1-r0.apk: UNTRUSTED signature\n"},
+  "temporary_trust_verification": {"exit": 0, "stdout": "/work/ecm-signature-probe-1-r0.apk: OK\n"},
+  "damaged_package": {"exit": 1, "stdout": "/work/tampered.apk: ADB block error\n"},
+  "ownership": "/usr/share/ecm/probe is owned by ecm-signature-probe-1-r0\n",
+  "contents": "ecm-signature-probe-1-r0 contains:\nusr/share/ecm/probe\n\n"
+}

@@ -1,0 +1,40 @@
+{
+  "scope": "Recorded signed baseline SRPM payload identities, reverified offline 2026-11-08; upstream downloads independently match these archive bytes. Not Alpine runtime or parity proof.",
+  "records": [
+    {
+      "component": "codec2",
+      "filename": "codec2-1.2.0-2.7.src.rpm",
+      "sha256": "f32c6e9d82660600028a230ef3e433b5ea381a444faf06db64bfc5e490e3d96d",
+      "fingerprint": "AD485664E901B867051AB15F35A2F86E29B700A4",
+      "payload": {
+        "files": [
+          {"name": "codec2-1.2.0.tar.gz", "sha256": "cbccae52b2c2ecc5d2757e407da567eb681241ff8dadce39d779a7219dbcf449", "size": 7688549},
+          {"name": "codec2-1.2.0-install-binaries.patch", "sha256": "8280d1777a3313c8775019fa0e00c21c37a8e5654e09e1a682509374b35c5766", "size": 1089}
+        ]
+      }
+    },
+    {
+      "component": "shine",
+      "filename": "libshine-3.1.1-2.5.src.rpm",
+      "sha256": "200c0882e168f460adbece1332db3e08b431742fb6388355403e5e70619f4a5c",
+      "fingerprint": "AD485664E901B867051AB15F35A2F86E29B700A4",
+      "payload": {
+        "files": [
+          {"name": "shine-3.1.1.tar.gz", "sha256": "58e61e70128cf73f88635db495bfc17f0dde3ce9c9ac070d505a0cd75b93d384", "size": 2144728},
+          {"name": "libshine-gcc15-fixes.patch", "sha256": "915554e32c2c6586cb2b1318e959e9d223384e967537ff45e1af712733a79cc1", "size": 358}
+        ]
+      }
+    },
+    {
+      "component": "twolame",
+      "filename": "twolame-0.4.0-1.25.src.rpm",
+      "sha256": "3e597f6f9171e79d9ab46f46f55e37001b2efc145ed1ea3c98f50fcda1718ed6",
+      "fingerprint": "AD485664E901B867051AB15F35A2F86E29B700A4",
+      "payload": {
+        "files": [
+          {"name": "twolame-0.4.0.tar.gz", "sha256": "cc35424f6019a88c6f52570b63e1baf50f62963a3eac52a03a800bb070d7c87d", "size": 890908}
+        ]
+      }
+    }
+  ]
+}

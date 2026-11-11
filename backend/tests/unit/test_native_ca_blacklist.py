@@ -28,10 +28,10 @@ def test_blacklist_contains_only_exact_compromised_public_root():
     assert hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest() == G3
 
 
-def test_reviewed_recipe_selectively_blacklists_and_regenerates_system_trust():
+def test_historical_suse_recipe_selectively_blacklists_and_regenerates_system_trust():
     sbom = load("scripts/generate_sbom.py")
-    dockerfile = (ROOT / "Dockerfile").read_text()
-    sbom.validate_native_runtime_docker_contract(dockerfile, "Dockerfile")
+    dockerfile = (ROOT / "docker/native/Dockerfile.suse").read_text()
+    sbom.validate_historical_suse_docker_contract(dockerfile, "Dockerfile.suse")
     runtime = sbom._docker_stages(dockerfile, "Dockerfile")[2]["instructions"]
     instructions = [(kind, args) for kind, args, _ in runtime]
     assert ("COPY", f"{PEM} {BLOCKLIST}") in instructions
@@ -62,10 +62,10 @@ def test_reviewed_recipe_selectively_blacklists_and_regenerates_system_trust():
 )
 def test_producer_rejects_missing_or_mutated_distrust_recipe(old, new):
     sbom = load("scripts/generate_sbom.py")
-    dockerfile = (ROOT / "Dockerfile").read_text()
-    assert old in dockerfile, "mutation must change the actual production recipe"
+    dockerfile = (ROOT / "docker/native/Dockerfile.suse").read_text()
+    assert old in dockerfile, "mutation must change the retained SUSE recipe"
     with pytest.raises(sbom.SbomError, match="exact reviewed SUSE recipe"):
-        sbom.validate_native_runtime_docker_contract(
+        sbom.validate_historical_suse_docker_contract(
             dockerfile.replace(old, new), "mutant"
         )
 

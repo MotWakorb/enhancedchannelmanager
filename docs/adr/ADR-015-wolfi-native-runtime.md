@@ -1,10 +1,15 @@
 # ADR-015: Source-closed native runtime for security fixes
 
-- **Status:** Source-closed replacement implemented; final publication gates pending
+- **Status:** Platform target superseded by [ADR-017](ADR-017-stable-alpine-runtime.md); historical security/source requirements retained
 - **Date:** 2026-10-23
 - **Bead:** `enhancedchannelmanager-x1xne`
 - **Scope:** ECM native runtime; both services receive the bundled-OpenSSL lock
   repair. MCP's image recipe remains unchanged.
+
+The Product Owner has directed migration to **stable Alpine**, without rolling
+repositories. The experiments and receipts below remain historical evidence;
+they are not approval to continue Tumbleweed or proof that the Alpine replacement
+has passed. ADR-017 preserves the media, security and source-delivery requirements.
 
 ## Context
 

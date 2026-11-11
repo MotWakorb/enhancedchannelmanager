@@ -22,16 +22,16 @@ POLICY_FILES = (
     Path("mcp-server/Dockerfile"),
 )
 
-MCP_BASE_IMAGE = "python:3.12-alpine@sha256:" + "".join(
+MCP_BASE_IMAGE = "python:3.12-alpine3.24@sha256:" + "".join(
     (
-        "d09d15e6",
-        "0962ca36",
-        "5d1cd544",
-        "a48773ba",
-        "c9d33f2f",
-        "b1b00f2a",
-        "a0deec78",
-        "ade7dc31",
+        "e064671c",
+        "a452259b",
+        "ab50e8e2",
+        "c7bd896e",
+        "39e9a343",
+        "bb06ca25",
+        "234adf6f",
+        "e18d0fc7",
     )
 )
 MCP_OPENSSL_MINIMUM = "3.5.8-r0"

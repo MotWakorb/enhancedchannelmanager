@@ -7,15 +7,17 @@ advisories also deny promotion regardless of the scanner's severity label.
 Package floors and inventory are detection sanity checks, never substitutes
 for advisory review.
 
-The supported OS report is openSUSE Tumbleweed/RPM. Custom FFmpeg 8 is not
-RPM-owned and is NOT covered by this OS scan. Its exact source/build pin and
-required-owned-artifact/source binding are separate parent runtime-gate
-conditions; accepting this report alone never authorizes publication.
+Stable Alpine/APK reports require an exact live query/database inventory bound
+to the same immutable image; historical openSUSE/RPM reports retain their own
+contract. Native FFmpeg/libxml2 and official-base CPython source/live bindings
+remain separate runtime-gate conditions, never inferred from an OS scan or owned
+pseudo-version. Accepting this report alone never authorizes publication.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import re
 import sys
@@ -75,6 +77,31 @@ REQUIRED_NATIVE_PACKAGES = set(PACKAGE_FLOORS) | {
     "libx264-165",
     "libx265-215",
 }
+# Stable Alpine detection baselines from the paired 122-row real candidates,
+# not RPM version-equivalence claims or advisory waivers. Source-built libxml2,
+# FFmpeg and CPython are verified by their independent source/live-file gates.
+ALPINE_PACKAGE_FLOORS = {
+    "aom-libs": (3, 14, 1),
+    "fontconfig": (2, 17, 1),
+    "freetype": (2, 14, 3),
+    "harfbuzz": (13, 2, 1),
+    "lame-libs": (3, 100),
+    "libass": (0, 17, 4),
+    "libcrypto3": (3, 5, 8),
+    "libssl3": (3, 5, 8),
+    "libdav1d": (1, 5, 3),
+    "libexpat": (2, 10, 0),
+    "libuuid": (2, 42, 3),
+    "libvorbis": (1, 3, 7),
+    "libvpx": (1, 15, 2),
+    "libwebp": (1, 6, 0),
+    "musl": (1, 2, 6),
+    "musl-utils": (1, 2, 6),
+    "openjpeg": (2, 5, 4),
+    "opus": (1, 6, 1),
+    "x264-libs": (0, 164, 3108),
+    "x265-libs": (4, 1),
+}
 
 
 def _timestamp(value: object) -> bool:
@@ -104,8 +131,60 @@ def _has_suppression(document: object) -> bool:
     return False
 
 
+def validate_alpine_inventory(
+    result: dict, capture: object, architecture: str
+) -> list[str]:
+    """Require every actual APK row, including the validated Python virtual row."""
+    from alpine_source_inventory import InventoryError, source_plan
+
+    if not isinstance(capture, dict) or architecture not in {"amd64", "arm64"}:
+        return ["complete live Alpine query/database inventory is required"]
+    try:
+        machine = {"amd64": "x86_64", "arm64": "aarch64"}[architecture]
+        plan = source_plan(capture, machine)
+        expected = {}
+        for row in plan["packages"]:
+            fields = row["fields"]
+            checksum = fields["C"]
+            if not checksum.startswith("Q1"):
+                return ["reviewed APK v2 package checksum required"]
+            expected[row["name"]] = {
+                "Name": row["name"],
+                "Version": row["version"],
+                "Arch": row["arch"],
+                "Digest": "sha1:" + base64.b64decode(checksum[2:], validate=True).hex(),
+                "AnalyzedBy": "apk",
+            }
+            if row["name"] != ".python-rundeps":
+                expected[row["name"]].update(
+                    SrcName=fields["o"], SrcVersion=row["version"]
+                )
+        packages = result.get("Packages")
+        if not isinstance(packages, list) or not packages:
+            return ["complete Alpine APK scan inventory is required"]
+        observed = {}
+        for row in packages:
+            if not isinstance(row, dict) or row.get("Name") not in expected:
+                return ["substituted or malformed Alpine APK scan package"]
+            name = row["Name"]
+            if name in observed:
+                return ["duplicate Alpine APK scan package"]
+            observed[name] = {field: row.get(field) for field in expected[name]}
+        if observed != expected:
+            return [
+                "complete Alpine scan/query/database identity or source/checksum mismatch"
+            ]
+    except (InventoryError, KeyError, TypeError, ValueError) as exc:
+        return [f"malformed Alpine query/database inventory: {exc}"]
+    return []
+
+
 def check_report(
-    report: object, identity: object, scanner: object, architecture: str
+    report: object,
+    identity: object,
+    scanner: object,
+    architecture: str,
+    runtime_inventory: object = None,
 ) -> list[str]:
     """Return failures for the native candidate's complete Trivy evidence."""
     failures = []
@@ -162,13 +241,18 @@ def check_report(
     if not isinstance(metadata, dict):
         return failures + ["missing image scan metadata"]
     os_info = metadata.get("OS")
+    alpine = isinstance(os_info, dict) and os_info.get("Family") == "alpine"
     if (
         not isinstance(os_info, dict)
-        or os_info.get("Family") != "opensuse-tumbleweed"
+        or os_info.get("Family") not in ("opensuse-tumbleweed", "alpine")
         or not os_info.get("Name")
+        or alpine
+        and re.fullmatch(r"3\.24\.\d+", str(os_info.get("Name"))) is None
         or os_info.get("EOSL")
     ):
-        failures.append("unsupported/missing/EOL openSUSE Tumbleweed OS detection")
+        failures.append(
+            "unsupported/missing/EOL openSUSE Tumbleweed or stable Alpine OS detection"
+        )
     config = metadata.get("ImageConfig")
     if (
         not isinstance(config, dict)
@@ -189,7 +273,70 @@ def check_report(
     ):
         return failures + ["missing/malformed scan results"]
     os_results = [r for r in results if r.get("Class") == "os-pkgs"]
-    if len(os_results) != 1 or os_results[0].get("Type") != "opensuse-tumbleweed":
+    if alpine:
+        if len(os_results) != 1 or os_results[0].get("Type") != "alpine":
+            failures.append("missing/ambiguous Alpine APK scan")
+        elif (
+            not isinstance(runtime_inventory, dict)
+            or runtime_inventory.get("ConfigDigest") != identity.get("ConfigDigest")
+            or runtime_inventory.get("RootFSDiffIDs") != diff_ids
+            or runtime_inventory.get("Architecture") != architecture
+        ):
+            failures.append(
+                "missing/substituted immutable Alpine live inventory binding"
+            )
+        else:
+            capture = runtime_inventory.get("capture")
+            failures.extend(
+                validate_alpine_inventory(os_results[0], capture, architecture)
+            )
+            apk_packages = os_results[0].get("Packages")
+            if not isinstance(apk_packages, list):
+                apk_packages = []
+            names = {
+                p["Name"]
+                for p in apk_packages
+                if isinstance(p, dict) and isinstance(p.get("Name"), str)
+            }
+            if (
+                not {
+                    "bash",
+                    "coreutils",
+                    "shadow",
+                    "ca-certificates",
+                    "musl",
+                    "libcrypto3",
+                    "libssl3",
+                    "ecm-owned-native",
+                    "busybox",
+                    "busybox-binsh",
+                    "ssl_client",
+                }
+                <= names
+            ):
+                failures.append("missing required Alpine ECM runtime providers")
+            installed = {
+                p.get("Name"): p.get("Version")
+                for p in apk_packages
+                if isinstance(p, dict) and isinstance(p.get("Name"), str)
+            }
+            for name, floor in ALPINE_PACKAGE_FLOORS.items():
+                match = re.fullmatch(
+                    r"(\d+(?:\.\d+)+)-r(\d+)", str(installed.get(name))
+                )
+                if match is None or tuple(map(int, match[1].split("."))) < floor:
+                    failures.append(f"missing/outdated expected Alpine package {name}")
+                elif (
+                    name in {"musl", "musl-utils"}
+                    and match[1] == "1.2.6"
+                    and int(match[2]) < 3
+                ):
+                    failures.append(
+                        f"missing vendor-fixed Alpine musl revision for {name}"
+                    )
+                elif name == "libuuid" and match[1] == "2.42.3" and int(match[2]) < 1:
+                    failures.append("missing vendor-fixed Alpine libuuid revision")
+    elif len(os_results) != 1 or os_results[0].get("Type") != "opensuse-tumbleweed":
         failures.append("missing/ambiguous openSUSE Tumbleweed RPM scan")
     else:
         packages = os_results[0].get("Packages")
@@ -317,6 +464,7 @@ def main() -> int:
     parser.add_argument("--identity", type=Path, required=True)
     parser.add_argument("--scanner-identity", type=Path, required=True)
     parser.add_argument("--architecture", choices=("amd64", "arm64"), required=True)
+    parser.add_argument("--runtime-inventory", type=Path)
     args = parser.parse_args()
     try:
         failures = check_report(
@@ -324,6 +472,9 @@ def main() -> int:
             json.loads(args.identity.read_text()),
             json.loads(args.scanner_identity.read_text()),
             args.architecture,
+            json.loads(args.runtime_inventory.read_text())
+            if args.runtime_inventory
+            else None,
         )
     except (OSError, ValueError) as exc:
         failures = [f"unreadable/malformed scan evidence: {exc}"]
@@ -332,7 +483,7 @@ def main() -> int:
             print(f"SCAN DENIED: {failure}", file=sys.stderr)
         return 1
     print(
-        "Complete unsuppressed RPM/Python/Go scan evidence verified; "
+        "Complete unsuppressed native OS/Python/Go scan evidence verified; "
         "no HIGH/CRITICAL or reviewed P1 findings. Custom native source/build binding "
         "requires the separate runtime gate."
     )

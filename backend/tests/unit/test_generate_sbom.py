@@ -101,7 +101,7 @@ SUSE_HEALTHCHECK = (
     "port = os.environ.get('ECM_PORT', '6100'); "
     "urllib.request.urlopen(f'http://localhost:{port}/api/health')\" || exit 1"
 )
-SUSE_DOCKERFILE = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+SUSE_DOCKERFILE = (ROOT / "docker/native/Dockerfile.suse").read_text(encoding="utf-8")
 BUILDKIT_INSTRUCTION_WHITESPACE = (" ", "\t", "\v", "\f", "\r")
 BUILDKIT_INSTRUCTION_WHITESPACE_IDS = (
     "space",
@@ -1165,7 +1165,7 @@ def test_named_source_context_accounts_for_both_pinned_carrier_images(sbom):
         "sha256:98722bea0ddb8f7c52398151751b89d4173b775f6612afc5bb75aa133d091d48",
     }
     assert {item["role"] for item in carriers} == {"build"}
-    assert next(item for item in images if item["role"] == "runtime")["image"] == "registry.opensuse.org/opensuse/tumbleweed"
+    assert next(item for item in images if item["role"] == "runtime")["image"] == "python:3.12-alpine3.24"
 
 
 def test_current_native_recovery_contract_validates(sbom):
@@ -1173,13 +1173,13 @@ def test_current_native_recovery_contract_validates(sbom):
 
 
 @pytest.mark.parametrize("before,after", [
-    (" --cache-dir /tmp/native-cache", ""),
-    ("--out /tmp/rpm-source-output", "--out /tmp/rpm-source-output --cache-dir /tmp/old-carrier"),
-    ("--inventory /tmp/runtime-inventory.tsv", "--inventory /tmp/stale-inventory.tsv"),
-    ("COPY docker/native-cache/ /tmp/native-cache/\n", ""),
-    ("https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/", "https://download.opensuse.org/history/20261022/tumbleweed/repo/oss/"),
-    ("| sha256sum --check --strict", "| cat"),
-    ("--no-refresh ", ""),
+    ("--network=none ", ""),
+    ("--require-hashes", ""),
+    ("--runtime-inventory /proof/runtime-inventory.json", "--runtime-inventory /tmp/stale.json"),
+    ("COPY --from=gnu-sources / /usr/share/ecm/sources/wheel-gnu/\n", ""),
+    ("python:3.12-alpine3.24@sha256:", "python:3.12-alpine@sha256:"),
+    ("install_alpine_native.py", "echo install_alpine_native.py"),
+    ("build_busybox_provider.py check", "build_busybox_provider.py skipped-check"),
 ])
 def test_recovery_does_not_relax_exact_native_docker_contract(sbom, before, after):
     original = (ROOT / "Dockerfile").read_text()

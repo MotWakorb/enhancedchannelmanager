@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "builder_image": "golang:1.26.10-alpine3.24@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696",
+  "gosu": {
+    "version": "1.19",
+    "commit": "6456aaa0f3c854d199d0f037f068eb97515b7513",
+    "url": "https://codeload.github.com/tianon/gosu/tar.gz/6456aaa0f3c854d199d0f037f068eb97515b7513",
+    "sha256": "33d7537d588ea49458b9509bcf4554bdf5ceacc66da71e5caa1058ea3b689c3b",
+    "modules": {
+      "github.com/moby/sys/user": "v0.4.1",
+      "golang.org/x/sys": "v0.44.0"
+    },
+    "go_version": "1.26.10"
+  },
+  "go_source": {
+    "url": "https://go.dev/dl/go1.26.10.src.tar.gz",
+    "sha256": "fd63e883ba2f2bfca93c1646b31ebef63e2b1e4d2b317c9789d976a68d81f36f",
+    "size": 34164741
+  }
+}

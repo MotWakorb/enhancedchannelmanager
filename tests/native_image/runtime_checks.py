@@ -1024,11 +1024,24 @@ def timeout_checks():
     assert time.monotonic() - started < 3
 
 
+def alpine_metadata_adapter():
+    """Read-only platform metadata adapter; behavioral/source gates stay shared."""
+    path = Path(__file__).with_name('alpine_runtime_metadata.py')
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == '4847282c74a99854978edba2373dc19094bf42fffca86eb4bf80c9ac7d728cfb', 'Alpine metadata adapter identity differs'
+    spec = importlib.util.spec_from_file_location('alpine_runtime_metadata',path)
+    assert spec is not None and spec.loader is not None, 'Alpine metadata adapter unavailable'
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def getent_checks():
     user = command("getent", "passwd", "appuser").strip().split(":")
     group = command("getent", "group", "appuser").strip().split(":")
     assert user[0] == group[0] == "appuser"
     assert int(user[2]) > 0 and int(user[3]) == int(group[2]) > 0
+    if Path('/etc/alpine-release').is_file():
+        return alpine_metadata_adapter().getent_metadata(command,user,group)
     version = command("getent", "--version").splitlines()[0]
     assert re.fullmatch(
         r"getent \((?:GNU libc|Debian GLIBC [0-9][^)]*|glibc-[0-9][^)]*)\) "
@@ -1040,6 +1053,8 @@ def getent_checks():
 
 def security_runtime_packages():
     """Check actual native RPM identities, not a scanner label or build receipt."""
+    if Path('/etc/alpine-release').is_file():
+        return alpine_metadata_adapter().security_runtime_packages(command)
     expected = {
         "librsvg-2-2": ("2.63.4-1.1", "librsvg-2.63.4-1.1.src.rpm"),
         "libspeex1": ("1.2.1-3.1", "speex-1.2.1-3.1.src.rpm"),

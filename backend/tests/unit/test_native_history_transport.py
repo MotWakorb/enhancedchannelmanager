@@ -107,8 +107,8 @@ def test_helper_accepts_only_the_reviewed_history_transport(tmp_path):
             builder.load_recipe(path, "amd64")
 
 
-def test_bootstrap_runtime_and_resdet_share_one_exact_history_cohort():
-    docker = (ROOT / "Dockerfile").read_text()
+def test_historical_suse_bootstrap_runtime_and_resdet_share_one_exact_cohort():
+    docker = (ROOT / "docker/native/Dockerfile.suse").read_text()
     assert docker.count("repository=" + HISTORY + "; metadata=" + PIN) == 2
     assert "repository=" + CANONICAL not in docker
     assert "FROM runtime-base AS resdet-builder" in docker
@@ -120,7 +120,7 @@ def test_bootstrap_runtime_and_resdet_share_one_exact_history_cohort():
         in resdet
     )
     sbom = load("history_transport_sbom", "scripts/generate_sbom.py")
-    sbom.validate_native_runtime_docker_contract(docker, "Dockerfile")
+    sbom.validate_historical_suse_docker_contract(docker, "Dockerfile.suse")
     for before, after in [
         (HISTORY, CANONICAL),
         (HISTORY, HISTORY.replace("20261105", "20261022")),
@@ -129,7 +129,7 @@ def test_bootstrap_runtime_and_resdet_share_one_exact_history_cohort():
         mutant = docker.replace(before, after)
         assert mutant != docker
         with pytest.raises(sbom.SbomError):
-            sbom.validate_native_runtime_docker_contract(mutant, "Dockerfile")
+            sbom.validate_historical_suse_docker_contract(mutant, "Dockerfile.suse")
 
 
 def test_history_binary_transport_does_not_retarget_source_collection():

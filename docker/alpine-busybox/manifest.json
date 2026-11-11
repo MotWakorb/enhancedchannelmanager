@@ -1,0 +1,1544 @@
+{
+  "aports": {
+    "commit": "c3ef5d10e6ef6528852c51f0564963e2f8c1be19",
+    "derived_recipe_sha256": "404d9231d1de5c6a3c2c771c93b8d90427802e00b19c8aab76a8866419fe7280",
+    "file": "retained/ddf60a1139d1f3c42a408c1be74ac6dadf3e6c8bf068eab2a9b922c69b4881d9",
+    "original_recipe_sha256": "98f019f62291aff63cb798f046fb59dfd43340885de63ca2f127651fc21d0450",
+    "sha256": "ddf60a1139d1f3c42a408c1be74ac6dadf3e6c8bf068eab2a9b922c69b4881d9",
+    "source_input_checksums": 75,
+    "subtree": "main/busybox",
+    "vendor_patch_witnesses": [
+      {
+        "file": "0001-wget-add-header-Accept.patch",
+        "witnesses": [
+          {
+            "after_sha256": "818e027d3a80273e566ab8ba49461be8c6fb2e1c296075eef194df9f2f2d1d5b",
+            "before_sha256": "331d555fb827e73bb6b6b0b9fa79bb054794b916f062621dc2340877a6fd746a",
+            "path": "networking/wget.c"
+          }
+        ]
+      },
+      {
+        "file": "0002-adduser-default-to-sbin-nologin-as-shell-for-system-.patch",
+        "witnesses": [
+          {
+            "after_sha256": "cf7ecaff2ff4e6575a6e27e1e81faef4d3a777691f51f11decad9fca2af7f37f",
+            "before_sha256": "ee712f9269d1ab659891ce0c0caac8d95630f84d6d9b3acaf4d71b65408adee2",
+            "path": "loginutils/adduser.c"
+          }
+        ]
+      },
+      {
+        "file": "0003-ash-add-built-in-BB_ASH_VERSION-variable.patch",
+        "witnesses": [
+          {
+            "after_sha256": "67880fc7455ebcc9b1fc394b4961b6a4532990480ec01ffa9e5d187c476a4bea",
+            "before_sha256": "e8090e5dd0f79097b6b29399a8f14572049f011f86b6c6e4de66dfb75b58cfcd",
+            "path": "shell/ash.c"
+          }
+        ]
+      },
+      {
+        "file": "0004-Avoid-redefined-warnings-when-buiding-with-utmps.patch",
+        "witnesses": [
+          {
+            "after_sha256": "6f98ab2cb8a0da1405b0e5b8f8e1b0e9dceaf6149356407d18fd583495c9e148",
+            "before_sha256": "d8c6775e664b48639de6123bf01300286494aece53d2fb862d868962be0769e0",
+            "path": "include/libbb.h"
+          },
+          {
+            "after_sha256": "895e5a602b67f69ae57eed3fc0b0adfa1769062f24722d3e8f0303dd725d3990",
+            "before_sha256": "d76e6f340e88bfd524df909789c44b8195a214abd6fdaef64add6fb10dd3b197",
+            "path": "libbb/messages.c"
+          },
+          {
+            "after_sha256": "82524a959fcdabcd147e16338fc50489bdce241bd7fb1aee2a3d945e236655cc",
+            "before_sha256": "95f5516950624c50feca7c831b91ef977299a8b5f32c1218d7a1d4e6b5f6e72c",
+            "path": "libbb/utmp.c"
+          },
+          {
+            "after_sha256": "bafc896c87e8f7be33a8488902a8e6ff2474414bd3144c3c2a81b473cb24d646",
+            "before_sha256": "334b5f3c6f45073dba696f203a9a6637d3b0cff1c08f494cce5f21ba39b29062",
+            "path": "util-linux/last_fancy.c"
+          }
+        ]
+      },
+      {
+        "file": "0005-libbb-sockaddr2str-ensure-only-printable-characters-.patch",
+        "witnesses": [
+          {
+            "after_sha256": "61cd932f792841c7c5316fd2574c27d246d6763313130b79b3e2b4926de89917",
+            "before_sha256": "52cfe16e41fcbb346e053b1d018a540c0065933ca1d9b7ed193211796f73332c",
+            "path": "libbb/xconnect.c"
+          }
+        ]
+      },
+      {
+        "file": "0006-modinfo-add-k-option-for-kernel-version.patch",
+        "witnesses": [
+          {
+            "after_sha256": "fe4888eb7fa59f99dfb04977efd4b705930c535ba2994ced1284912612f4feac",
+            "before_sha256": "5f6d0f4500802dd36a78711df44aa7274ffcb5ac429ad0c9a4f1e492b935b97c",
+            "path": "modutils/modinfo.c"
+          }
+        ]
+      },
+      {
+        "file": "0007-nologin-Install-applet-to-sbin-instead-of-usr-sbin.patch",
+        "witnesses": [
+          {
+            "after_sha256": "717d354c193e6ca6accc62af47fdab271c15fac95f591d7803c805fe02142a97",
+            "before_sha256": "3df894a625d05f5e1cd0dda1f3353bc47b32416a55d2bc157f4d5828063f0ada",
+            "path": "util-linux/nologin.c"
+          }
+        ]
+      },
+      {
+        "file": "0008-pgrep-add-support-for-matching-against-UID-and-RUID.patch",
+        "witnesses": [
+          {
+            "after_sha256": "59955019655be176c7bf4a70506bd3d659ed9b0cbf6c74736eaa78ee5efcff32",
+            "before_sha256": "ba3cd86875e3f44e289ba0e7211604a844e68e9add78a292f9f94727dec3c609",
+            "path": "procps/pgrep.c"
+          }
+        ]
+      },
+      {
+        "file": "0009-properly-fix-wget-https-support.patch",
+        "witnesses": [
+          {
+            "after_sha256": "f86e80bd88a2fe78e92903d91844aed8c78dce2048a0586672e445c52f46c6b7",
+            "before_sha256": "818e027d3a80273e566ab8ba49461be8c6fb2e1c296075eef194df9f2f2d1d5b",
+            "path": "networking/wget.c"
+          }
+        ]
+      },
+      {
+        "file": "0010-fsck-resolve-LABEL-.-UUID-.-spec-to-device.patch",
+        "witnesses": [
+          {
+            "after_sha256": "d7bc7f4c54c1e994cc7877806fe550038f8a41aa13d7a8d83df4d3b9366d3ef1",
+            "before_sha256": "866c5eedb639f501ccee0add349ee341f00b8d45b0296fbd822f05f1e5be69be",
+            "path": "e2fsprogs/fsck.c"
+          }
+        ]
+      },
+      {
+        "file": "0011-nslookup-sanitize-all-printed-strings-with-printable.patch",
+        "witnesses": [
+          {
+            "after_sha256": "f84bcc9059f5de3a4fe37c485ec863170accd4dbcd9b19bd8d7d10c4b325e340",
+            "before_sha256": "42e230de6741c8d66625f47a0cd7dc561f705737932a18a287d6dd7eb32ff1f9",
+            "path": "networking/nslookup.c"
+          }
+        ]
+      },
+      {
+        "file": "0012-ash-exec-busybox.static.patch",
+        "witnesses": [
+          {
+            "after_sha256": "024c99ade4ef6e25c39195e1ef4805c0b4fc9e1a0b604fcef1acce0fe444ef5a",
+            "before_sha256": "67880fc7455ebcc9b1fc394b4961b6a4532990480ec01ffa9e5d187c476a4bea",
+            "path": "shell/ash.c"
+          }
+        ]
+      },
+      {
+        "file": "0013-app-location-for-cpio-vi-and-lspci.patch",
+        "witnesses": [
+          {
+            "after_sha256": "e1a3f941dff92422ee94941c9b99d855657ee7c80a850ff6136b38ee57ea72d2",
+            "before_sha256": "dbba4a6aba690d0244fa2c3a881c79b50d562d5adef60ad1552c66f7340db95a",
+            "path": "archival/cpio.c"
+          },
+          {
+            "after_sha256": "f2cc4daf88a1e7784f286be0e5923e19ee9e5c1d944d343d09e368c9d7079b48",
+            "before_sha256": "3bd97f49572a3815ca85801495d98dca61caa66816ee7418724641699c5a577e",
+            "path": "editors/vi.c"
+          },
+          {
+            "after_sha256": "00753080c124d008778edfd371dbe6df684646f57ac81b2bb28774f02e648112",
+            "before_sha256": "594f68045852cf9b5390623de6910920207b51581d82db66d9c59abdf8273e5d",
+            "path": "util-linux/lspci.c"
+          }
+        ]
+      },
+      {
+        "file": "0014-udhcpc-set-default-discover-retries-to-5.patch",
+        "witnesses": [
+          {
+            "after_sha256": "9bb04c061b367533aa91d1ac63d44b7f4bd9993a840f7ac17d4121c6f06018d0",
+            "before_sha256": "3283a270f517625daba21ae1ff28b060eb0a0358cadc501774d1e74b065c7bb7",
+            "path": "networking/udhcp/d6_dhcpc.c"
+          },
+          {
+            "after_sha256": "f391800a9451f7bbed845636d908f5edd3a6028462760aae65733168ea473c66",
+            "before_sha256": "0f14b3fbdebd24b4611d5308b0b6f70a006773b75d46c827fe5927336f81c78a",
+            "path": "networking/udhcp/dhcpc.c"
+          }
+        ]
+      },
+      {
+        "file": "0015-ping-make-ping-work-without-root-privileges.patch",
+        "witnesses": [
+          {
+            "after_sha256": "e3edd3ce3171c1c05213c5d42d63d3365c32a8bc050ee144193a1900de3d22a3",
+            "before_sha256": "e0f0641b1cc92f22143906ba63635b650d596d616f760cd397ec32710f905a2d",
+            "path": "networking/ping.c"
+          }
+        ]
+      },
+      {
+        "file": "0016-fbsplash-support-console-switching.patch",
+        "witnesses": [
+          {
+            "after_sha256": "7cd791d543212f78389798430f4a69cb5037f3b99fcc42fc1a40448277ed2cb9",
+            "before_sha256": "5cdcf9be5dccc0cb5eeb5246fa6716218908ddf3d5b61e942c4ef67704e17803",
+            "path": "miscutils/fbsplash.c"
+          }
+        ]
+      },
+      {
+        "file": "0017-fbsplash-support-image-and-bar-alignment-and-positio.patch",
+        "witnesses": [
+          {
+            "after_sha256": "1d557aeb065f235d74a4c0dc4cdfe72320f3a83a9dcd870059956a22bb3565b8",
+            "before_sha256": "7cd791d543212f78389798430f4a69cb5037f3b99fcc42fc1a40448277ed2cb9",
+            "path": "miscutils/fbsplash.c"
+          }
+        ]
+      },
+      {
+        "file": "0018-depmod-support-generating-kmod-binary-index-files.patch",
+        "witnesses": [
+          {
+            "after_sha256": "aadf50add2af8dbd8377340b834e8c626d80d02d900e13fb3a94adbe2d4c6a73",
+            "before_sha256": "1956e6027b015afd193fd336b13576c241ac916791b54f6bd043350ac875c816",
+            "path": "modutils/Config.src"
+          },
+          {
+            "after_sha256": "2ea5cdfd08d95d051c47f5be16cfd43a2963c8148c6161e60882a83b04c892f8",
+            "before_sha256": "f6232f27467ec8e01bfcb849ec87c5a22298dec4f7eb79f10b2e80a8e025b315",
+            "path": "modutils/depmod.c"
+          },
+          {
+            "after_sha256": "b8b17ea962268bf5b5e0a42ddfe342aecfa62be1cb454ac018572b2da7cc5e28",
+            "before_sha256": "729fed8c4441139c7636c3e7ffac6ad0448278f1553be6ae3f3422acb30392dd",
+            "path": "modutils/modprobe.c"
+          },
+          {
+            "after_sha256": "6732b54f8b4df5db67e681a3ccaaae96f0747cb1fcb714fed60dc3d08be0e78c",
+            "before_sha256": "85edb2a6187b5eaa0c6a058c199ada553d6b25a312002f95b55543623b61f5de",
+            "path": "modutils/modutils.c"
+          },
+          {
+            "after_sha256": "547f5588116bc7086479cb885de2a46063031b8005c32ce9426286ea25b52e7f",
+            "before_sha256": "8734941d7ed656234fdbc6982604ad3332b5e457149da46bd3f87ffbc668b74b",
+            "path": "modutils/modutils.h"
+          }
+        ]
+      },
+      {
+        "file": "0019-Add-flag-for-not-following-symlinks-when-recursing.patch",
+        "witnesses": [
+          {
+            "after_sha256": "aa25fb04635a8e8effe21d901edd2ceccc6649e81bca7d9f18e5853f7995b3b6",
+            "before_sha256": "8d29360abb8d8332193ffb89cd9655c61b98efbfe823fb8b8bb625f92b1c14b5",
+            "path": "editors/diff.c"
+          }
+        ]
+      },
+      {
+        "file": "0020-udhcpc-Don-t-background-if-n-is-given.patch",
+        "witnesses": [
+          {
+            "after_sha256": "3e146ef030914cef106aff0a7fe20c05f90ac600dadb92305b5df3f9916796ec",
+            "before_sha256": "9bb04c061b367533aa91d1ac63d44b7f4bd9993a840f7ac17d4121c6f06018d0",
+            "path": "networking/udhcp/d6_dhcpc.c"
+          },
+          {
+            "after_sha256": "c817d5d1bc2df550eb83144d5852a7ea1c58718898d18410897b1607dae45d45",
+            "before_sha256": "f391800a9451f7bbed845636d908f5edd3a6028462760aae65733168ea473c66",
+            "path": "networking/udhcp/dhcpc.c"
+          }
+        ]
+      },
+      {
+        "file": "0021-tests-fix-tarball-creation.patch",
+        "witnesses": [
+          {
+            "after_sha256": "986bd2a5bfdd380ac4d1a18417529a4735393268d104639ea4e6a40de5ce42f1",
+            "before_sha256": "39eb7b6e79a3d9865af1a7fdc93cffad5f3e77fad663a56a02f1ccd6e902aeed",
+            "path": "testsuite/tar.tests"
+          }
+        ]
+      },
+      {
+        "file": "0022-tests-musl-doesn-t-seem-to-recognize-UTC0-as-a-timez.patch",
+        "witnesses": [
+          {
+            "after_sha256": "f1ad7bc467b8ba57c34bfa8816e68d773e4e66d8952103a9197c8bd5c3d91fa9",
+            "before_sha256": "3fa31a703f5289936f5696d32c336d461f86e98c4613fae5af6718239b78f6e6",
+            "path": "testsuite/date/date-timezone"
+          }
+        ]
+      },
+      {
+        "file": "0023-Hackfix-to-disable-HW-acceleration-for-MD5-SHA1-on-x.patch",
+        "witnesses": [
+          {
+            "after_sha256": "bcaa1c55d78297ec669d58461d90ce96d40dec49425a57784e12cda8fa7cf7ca",
+            "before_sha256": "554c5bbba28d7b04510b810ead32d20c917741c9304d210e3faf456cb07259a9",
+            "path": "libbb/hash_md5_sha.c"
+          }
+        ]
+      },
+      {
+        "file": "0024-umount-Implement-O-option-to-unmount-by-mount-option.patch",
+        "witnesses": [
+          {
+            "after_sha256": "ce66be712b583db790829fe65e5465a69045f66996ae39f09bccd65cdccbe52a",
+            "before_sha256": "6f98ab2cb8a0da1405b0e5b8f8e1b0e9dceaf6149356407d18fd583495c9e148",
+            "path": "include/libbb.h"
+          },
+          {
+            "after_sha256": "548624d09bfc5155d6155a4c71f2f30dff9a69becf7b70c24b57b7abd70bad67",
+            "before_sha256": "967c3c1d34191b8315ab29c8b1c39b9b145adb3e3787262385ab9a183b2c8bad",
+            "path": "libbb/Kbuild.src"
+          },
+          {
+            "after_sha256": "7810ab8c76e95daf8378d76525912293fe46acada7e83e61ff4bd7887dd4f44d",
+            "before_sha256": null,
+            "path": "libbb/match_fsopts.c"
+          },
+          {
+            "after_sha256": "72035d035f80c2deb5454b986990afc8d3b47587549e49d5c6d0fdc39e2c54a7",
+            "before_sha256": "8a9569d9477402494d25fd2bf798c84d6271be5f3c179a6a6787a8d353888566",
+            "path": "util-linux/umount.c"
+          }
+        ]
+      },
+      {
+        "file": "0025-find-fix-xdev-depth-and-delete.patch",
+        "witnesses": [
+          {
+            "after_sha256": "46f9e76e69d753369a615de8426b6ed9790bcece318f02320158e7fc4eb05491",
+            "before_sha256": "9d8288cf10c8ddb6bda3a5e1d9b80a55f7f6c4eaebb17c6fe425376f1f5a2f76",
+            "path": "findutils/find.c"
+          },
+          {
+            "after_sha256": "beef4acbc0808aea219876026f2d5795c0ddc8e24e148aaf0a0d6212f829741e",
+            "before_sha256": "ce66be712b583db790829fe65e5465a69045f66996ae39f09bccd65cdccbe52a",
+            "path": "include/libbb.h"
+          },
+          {
+            "after_sha256": "228b64a79751ea10d18aae258eeaa131fc610e239ffd629b36d007436d30740e",
+            "before_sha256": "22c927081b061ff6874fb0fc7f9fcd161c9e56a44d625c990aa6eff1b1325020",
+            "path": "libbb/recursive_action.c"
+          }
+        ]
+      },
+      {
+        "file": "0026-awk.c-fix-CVE-2023-42366-bug-15874.patch",
+        "witnesses": [
+          {
+            "after_sha256": "c299d24455cd6a5881a9b4da869d658604d39732a52a4a4e7aada69efe39fcc7",
+            "before_sha256": "82b8473de1900c8e394cc88361f4db969421e40de06f1a30047b98c8e8fcc6e5",
+            "path": "editors/awk.c"
+          }
+        ]
+      },
+      {
+        "file": "0027-awk-Mark-test-for-handling-of-start-of-word-pattern-.patch",
+        "witnesses": [
+          {
+            "after_sha256": "44a55ba99de9f3f07399dcb69c22b5972e4b928f0e92eb74a135d1a86ca78870",
+            "before_sha256": "6aedcf37d9668c5eb70bc7b31b8c1aaf0382c2f8a746056818747a2cba1a34c6",
+            "path": "testsuite/awk.tests"
+          }
+        ]
+      },
+      {
+        "file": "0028-od-Skip-od-B-on-big-endian.patch",
+        "witnesses": [
+          {
+            "after_sha256": "8e421555c1ed1a79d557019bd60c5bbaffc5a8cf37677bcdf8b9ab922b523bef",
+            "before_sha256": "272d026ca9caf0b7889d37c1f1cce73acb25932d1e096d2bfa08183c789c347b",
+            "path": "testsuite/od.tests"
+          }
+        ]
+      },
+      {
+        "file": "0029-ash-reject-unknown-long-options.patch",
+        "witnesses": [
+          {
+            "after_sha256": "6a789b00d2b25c5090d0b99e473ca30f8d010d91c9bf19cf410427c887ac0256",
+            "before_sha256": "024c99ade4ef6e25c39195e1ef4805c0b4fc9e1a0b604fcef1acce0fe444ef5a",
+            "path": "shell/ash.c"
+          }
+        ]
+      },
+      {
+        "file": "0030-hexdump-Skip-a-single-test-on-big-endian-systems.patch",
+        "witnesses": [
+          {
+            "after_sha256": "316433affb32ccc907d86bb49cb71e840e900dd46f8236a38dd0409586053612",
+            "before_sha256": "991090ae7f6c0de8787915697c670abb728b1b2dd643ed36d3ef0d7c55578be4",
+            "path": "testsuite/hexdump.tests"
+          }
+        ]
+      },
+      {
+        "file": "0031-syslogd-fix-wrong-OPT_locallog-flag-detection.patch",
+        "witnesses": [
+          {
+            "after_sha256": "b9434d10a03f942b647b2d0df545e0b2ffffe27fb873fd89cd477d5569e23bad",
+            "before_sha256": "9cb8626c777f577056407acebb95fb2529dbe040b970401879eaaf621f37ec1e",
+            "path": "sysklogd/syslogd.c"
+          }
+        ]
+      },
+      {
+        "file": "0032-lineedit-fix-some-tab-completions-written-to-stdout.patch",
+        "witnesses": [
+          {
+            "after_sha256": "53e63949724690aa9a7218138e4bcea4455210f38db78d8bccad6540e527c29d",
+            "before_sha256": "db9c0969787af3995f96bdde53527d5aca5c5f8b0397c3be8045b46a2631ff93",
+            "path": "libbb/lineedit.c"
+          }
+        ]
+      },
+      {
+        "file": "0033-lineedit-use-stdout-for-shell-history-builtin.patch",
+        "witnesses": [
+          {
+            "after_sha256": "0194b975c116115cc4fe799fa458d68f4d0ae04ecf245a34f73250e8cfe490f2",
+            "before_sha256": "53e63949724690aa9a7218138e4bcea4455210f38db78d8bccad6540e527c29d",
+            "path": "libbb/lineedit.c"
+          }
+        ]
+      },
+      {
+        "file": "0034-adduser-remove-preconfigured-GECOS-full-name-field.patch",
+        "witnesses": [
+          {
+            "after_sha256": "22cdcf791e416265dfa1d905e234a6bab746cad3931ae44af39896c48453ce78",
+            "before_sha256": "cf7ecaff2ff4e6575a6e27e1e81faef4d3a777691f51f11decad9fca2af7f37f",
+            "path": "loginutils/adduser.c"
+          }
+        ]
+      },
+      {
+        "file": "0035-cpio-map-F-to-file-long-option.patch",
+        "witnesses": [
+          {
+            "after_sha256": "bdce8b278e8e9237efff8377dc784582add2617e2ca96dd893cceab8455861bc",
+            "before_sha256": "e1a3f941dff92422ee94941c9b99d855657ee7c80a850ff6136b38ee57ea72d2",
+            "path": "archival/cpio.c"
+          }
+        ]
+      },
+      {
+        "file": "0001-hexdump-fix-regression-with-n4-e-u.patch",
+        "witnesses": [
+          {
+            "after_sha256": "372ca62b08723765b74605313fbfa9136c19ce32b5586c82f0d25ba753be5249",
+            "before_sha256": "a6dbc2fc1a61a0eb7b268e4e47364ecb7d00bb1ad36b4b1432b747b32ebd8125",
+            "path": "libbb/dump.c"
+          },
+          {
+            "after_sha256": "3dd6ebcdb9e474e81513df9576df9a4adc74648c61fc51e83389ab0a3fca85f2",
+            "before_sha256": "316433affb32ccc907d86bb49cb71e840e900dd46f8236a38dd0409586053612",
+            "path": "testsuite/hexdump.tests"
+          }
+        ]
+      },
+      {
+        "file": "0001-awk-fix-handling-of-literal-backslashes-in-replaceme.patch",
+        "witnesses": [
+          {
+            "after_sha256": "3b91c56d56a3326b3b9e94d33eaabc637151e403525f2fba727f4214443b9052",
+            "before_sha256": "c299d24455cd6a5881a9b4da869d658604d39732a52a4a4e7aada69efe39fcc7",
+            "path": "editors/awk.c"
+          },
+          {
+            "after_sha256": "f7714ee08fecaf1ce413169d7e5304e62e3c19020a32d4b0c3a6a41afc93f72e",
+            "before_sha256": "44a55ba99de9f3f07399dcb69c22b5972e4b928f0e92eb74a135d1a86ca78870",
+            "path": "testsuite/awk.tests"
+          }
+        ]
+      },
+      {
+        "file": "0001-tunctl-fix-segfault-on-ioctl-failure.patch",
+        "witnesses": [
+          {
+            "after_sha256": "db1b9fc0afd9078c9aba48d893dabf8b93fad1de54e6cb6a1aef95eb82613fda",
+            "before_sha256": "ea058c756d818ec5972805ad817e1e0c924905fb482f10919a059cb04385b71a",
+            "path": "networking/tunctl.c"
+          }
+        ]
+      },
+      {
+        "file": "0001-init-add-support-for-separate-reboot-action.patch",
+        "witnesses": [
+          {
+            "after_sha256": "d9f76e94994c02be3ef75e6e268bd9939bd06e7ce586ebb8a88342a46b2a0384",
+            "before_sha256": "2157236b3b3d0c59a128ae55f3cc3a78185e2c637536086bf6f08e5419cb0b26",
+            "path": "init/init.c"
+          }
+        ]
+      },
+      {
+        "file": "0001-blkdiscard-ship-link-to-sbin-instead-of-usr-bin.patch",
+        "witnesses": [
+          {
+            "after_sha256": "70d5e281a8be317498aaac879faa280916444c07441dd807a7f2ca6d021db3ab",
+            "before_sha256": "cc00d92cc81908a66dc47303e49698d932a4a0eb452a9f1ed7a1bf935a60a649",
+            "path": "util-linux/blkdiscard.c"
+          }
+        ]
+      },
+      {
+        "file": "0001-tar-fix-TOCTOU-symlink-race-condition.patch",
+        "witnesses": [
+          {
+            "after_sha256": "c7dac066de228d67e19748eddb856b2efef76b3cb1ea13d273c6bae18e0ff65e",
+            "before_sha256": "b9770bbdde551ebdce64c22cbccb1e4b073b8c678d7249c100fe510e7ba852d1",
+            "path": "archival/libarchive/data_extract_all.c"
+          }
+        ]
+      },
+      {
+        "file": "0001-netstat-sanitize-process-names.patch",
+        "witnesses": [
+          {
+            "after_sha256": "1c3f7109d4d823656689d8b212b8857a0454d413a2cbf279146b002d77e71af9",
+            "before_sha256": "8f6f0945cae07fc1dbba051a365785a9023d3a2ca9f18e40177c684fde10c338",
+            "path": "networking/netstat.c"
+          }
+        ]
+      },
+      {
+        "file": "0001-tar-fix-16018-masking-of-potentially-malicious-tar-cpio-content.patch",
+        "witnesses": [
+          {
+            "after_sha256": "59f390314fa697d65b3eb75af6eba803baecfd2509314d7e51da9b1e946decce",
+            "before_sha256": "2eee8ffe21e4a7b7a5d756ab40b4fa61f6b15e62662a2dc7e9cc713122023ee4",
+            "path": "archival/libarchive/header_list.c"
+          },
+          {
+            "after_sha256": "bcbafcfbc4b88ef24afa6d882f8eaf5868157d16965e2e09b34f4418bef0bd4e",
+            "before_sha256": "7ede849da2634efcdab09eed39ee5254e77a1bcc0579eb825829866b8adc96b6",
+            "path": "archival/libarchive/header_verbose_list.c"
+          },
+          {
+            "after_sha256": "1b9eb600dff7afb365b068e529fd7252318ae1a6640e8531352c58a6267df33a",
+            "before_sha256": "beef4acbc0808aea219876026f2d5795c0ddc8e24e148aaf0a0d6212f829741e",
+            "path": "include/libbb.h"
+          }
+        ]
+      },
+      {
+        "file": "0001-mount-fix-parsing-proc-mounts-with-long-lines.patch",
+        "witnesses": [
+          {
+            "after_sha256": "05f5faa2971f544623113dd014b54f58b81c9bd57388e61b0b8418a3f136212a",
+            "before_sha256": "025b894d694d2cff7efaa530784391e8502ff71e72d61702cd7852b3698e832f",
+            "path": "util-linux/mount.c"
+          }
+        ]
+      }
+    ]
+  },
+  "applet_count": 304,
+  "applet_paths_sha256": "ad43f2888aa6679930812faef33672c45e98021d3be0d0ed08d257c1d957a968",
+  "architecture_inputs": {
+    "aarch64": {
+      "index": {
+        "file": "provenance-inputs/aarch64/APKINDEX.tar.gz",
+        "headers": {
+          "Accept-Ranges": "bytes",
+          "Age": "2",
+          "Connection": "close",
+          "Content-Length": "529572",
+          "Content-Security-Policy": "script-src 'self'",
+          "Content-Type": "application/octet-stream",
+          "Date": "Mon, 09 Nov 2026 00:59:19 GMT",
+          "Etag": "\"6aef6487-814a4\"",
+          "Last-Modified": "Sat, 07 Nov 2026 17:48:55 GMT",
+          "Referrer-Policy": "origin-when-cross-origin",
+          "Server": "nginx/1.27.5",
+          "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "Via": "1.1 varnish, 1.1 varnish",
+          "X-Cache": "HIT, HIT",
+          "X-Cache-Hits": "6, 1",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "DENY",
+          "X-Served-By": "cache-ams-eham8680096-AMS, cache-chi-kigq8000155-CHI",
+          "X-Timer": "S1794185960.907122,VS0,VE25"
+        },
+        "sha256": "0caf1f8a4ea09b56c6198969261b5269011d2ce0f74df62efa897387a456037c",
+        "status": 200,
+        "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/APKINDEX.tar.gz"
+      },
+      "signed_packages": [
+        {
+          "artifact": {
+            "file": "provenance-inputs/aarch64/busybox-1.37.0-r31.apk",
+            "headers": {
+              "Accept-Ranges": "bytes",
+              "Age": "1169139",
+              "Connection": "close",
+              "Content-Length": "521974",
+              "Content-Security-Policy": "script-src 'self'",
+              "Content-Type": "application/octet-stream",
+              "Date": "Mon, 09 Nov 2026 00:59:19 GMT",
+              "Etag": "\"69e746d1-7f6f6\"",
+              "Last-Modified": "Tue, 21 Apr 2026 09:43:45 GMT",
+              "Referrer-Policy": "origin-when-cross-origin",
+              "Server": "nginx/1.29.0",
+              "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+              "Vary": "Origin",
+              "Via": "1.1 varnish, 1.1 varnish",
+              "X-Cache": "HIT, HIT",
+              "X-Cache-Hits": "10, 0",
+              "X-Content-Type-Options": "nosniff",
+              "X-Frame-Options": "DENY",
+              "X-Served-By": "cache-ams2100129-AMS, cache-chi-kigq8000084-CHI",
+              "X-Timer": "S1794185960.995813,VS0,VE3"
+            },
+            "sha256": "18e3490a6f024004b2b13dd4b54bd50ccd82894938023b2d4eab389a4edcba70",
+            "status": 200,
+            "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/busybox-1.37.0-r31.apk"
+          },
+          "control_architecture": "aarch64",
+          "index_record": {
+            "A": "aarch64",
+            "C": "Q1cc/8KYHy1Us5N8Jb4vUWmz+wRTI=",
+            "D": "so:libc.musl-aarch64.so.1",
+            "I": "928168",
+            "L": "GPL-2.0-only",
+            "P": "busybox",
+            "S": "521974",
+            "T": "Size optimized toolbox of many common UNIX utilities",
+            "U": "https://busybox.net/",
+            "V": "1.37.0-r31",
+            "c": "c3ef5d10e6ef6528852c51f0564963e2f8c1be19",
+            "m": "S\u00f6ren Tempel <soeren+alpine@soeren-tempel.net>",
+            "o": "busybox",
+            "p": "cmd:busybox=1.37.0-r31",
+            "t": "1768059508"
+          },
+          "original_control_scripts": [
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": ".post-install",
+              "sha256": "13c120a1c714ecafa7fe1fc748406a89dfffc549118ebce324b53d4bbb4ba75f",
+              "size": 335,
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": ".post-upgrade",
+              "sha256": "3cf0a22d2d6c6ed34be6b77ed3973b7c0b7434525744026c0159f5a76f827f49",
+              "size": 1640,
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": ".trigger",
+              "sha256": "c7840b111dd82669de2074ea3c7e345c063928db2bbff650a81289777b3ff98f",
+              "size": 576,
+              "uid": 0
+            }
+          ],
+          "original_payload": [
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "bin",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "bin/busybox",
+              "sha256": "97d52efa149563c8d886e3670e2496d4140d3c54138017afd3a105e0397fae2e",
+              "size": 919304,
+              "type": "file",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/busybox-paths.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 420,
+              "path": "etc/busybox-paths.d/busybox",
+              "sha256": "ad43f2888aa6679930812faef33672c45e98021d3be0d0ed08d257c1d957a968",
+              "size": 3986,
+              "type": "file",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/logrotate.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 420,
+              "path": "etc/logrotate.d/acpid",
+              "sha256": "d608a3b7715886b5735def0cc50a6359fd364fac2e0e0a459c588c04be471031",
+              "size": 140,
+              "type": "file",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/network",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/network/if-down.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/network/if-post-down.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/network/if-post-up.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/network/if-pre-down.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/network/if-pre-up.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/network/if-up.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 509,
+              "path": "etc/network/if-up.d/dad",
+              "sha256": "2fd20d1bc67d9ee711990002b24f156635a73f56b8935b2f76592938817fa4e7",
+              "size": 285,
+              "type": "file",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 420,
+              "path": "etc/securetty",
+              "sha256": "713fcea5109728883b9147e822429133fcc8b5e253afd3c2a197b10cd0bc3b4d",
+              "size": 156,
+              "type": "file",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/udhcpc",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 420,
+              "path": "etc/udhcpc/udhcpc.conf",
+              "sha256": "5b372209e01cda07c87b8afa6d1ab3d7e8daf18a1f2332d744203a6dc289eb1a",
+              "size": 287,
+              "type": "file",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "sbin",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr/sbin",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr/share",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr/share/udhcpc",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr/share/udhcpc/default.script",
+              "sha256": "c7b39bba4d7f1ce05dbdeba7d2fd97b96a8c3c0c1ebc0259f641fb8e1c3827d2",
+              "size": 4010,
+              "type": "file",
+              "uid": 0
+            }
+          ],
+          "original_triggers": [
+            "/bin /usr/bin /sbin /usr/sbin /lib/modules/* /usr/lib/modules/*"
+          ]
+        },
+        {
+          "artifact": {
+            "file": "provenance-inputs/aarch64/busybox-binsh-1.37.0-r31.apk",
+            "headers": {
+              "Accept-Ranges": "bytes",
+              "Age": "1592199",
+              "Connection": "close",
+              "Content-Length": "1547",
+              "Content-Security-Policy": "script-src 'self'",
+              "Content-Type": "application/octet-stream",
+              "Date": "Mon, 09 Nov 2026 00:59:20 GMT",
+              "Etag": "\"69e746d1-60b\"",
+              "Last-Modified": "Tue, 21 Apr 2026 09:43:45 GMT",
+              "Referrer-Policy": "origin-when-cross-origin",
+              "Server": "nginx/1.29.0",
+              "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+              "Vary": "Origin",
+              "Via": "1.1 varnish, 1.1 varnish, 1.1 varnish",
+              "X-Cache": "HIT, HIT, HIT",
+              "X-Cache-Hits": "133, 35, 0",
+              "X-Content-Type-Options": "nosniff",
+              "X-Frame-Options": "DENY",
+              "X-Served-By": "cache-ams2100092-AMS, cache-ams-eham8680032-AMS, cache-chi-kigq8000116-CHI",
+              "X-Timer": "S1794185960.093443,VS0,VE1"
+            },
+            "sha256": "f3a1b2257cfa114ff20de05c665f380695385d589908bfc9af5768f39fef9ef5",
+            "status": 200,
+            "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/busybox-binsh-1.37.0-r31.apk"
+          },
+          "control_architecture": "noarch",
+          "index_record": {
+            "A": "aarch64",
+            "C": "Q1ax93IqPnu5fQTo75Bv1ywGZ7pdA=",
+            "D": "busybox=1.37.0-r31",
+            "I": "1",
+            "L": "GPL-2.0-only",
+            "P": "busybox-binsh",
+            "S": "1547",
+            "T": "busybox ash /bin/sh",
+            "U": "https://busybox.net/",
+            "V": "1.37.0-r31",
+            "c": "c3ef5d10e6ef6528852c51f0564963e2f8c1be19",
+            "k": "100",
+            "m": "S\u00f6ren Tempel <soeren+alpine@soeren-tempel.net>",
+            "o": "busybox",
+            "p": "/bin/sh cmd:sh=1.37.0-r31",
+            "t": "1768059508"
+          },
+          "original_control_scripts": [],
+          "original_payload": [
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "bin",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 511,
+              "path": "bin/sh",
+              "target": "/bin/busybox",
+              "type": "symlink",
+              "uid": 0
+            }
+          ],
+          "original_triggers": []
+        },
+        {
+          "artifact": {
+            "file": "provenance-inputs/aarch64/ssl_client-1.37.0-r31.apk",
+            "headers": {
+              "Accept-Ranges": "bytes",
+              "Age": "354127",
+              "Connection": "close",
+              "Content-Length": "5078",
+              "Content-Security-Policy": "script-src 'self'",
+              "Content-Type": "application/octet-stream",
+              "Date": "Mon, 09 Nov 2026 00:59:20 GMT",
+              "Etag": "\"69e74757-13d6\"",
+              "Last-Modified": "Tue, 21 Apr 2026 09:45:59 GMT",
+              "Referrer-Policy": "origin-when-cross-origin",
+              "Server": "nginx/1.27.5",
+              "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+              "Vary": "Origin",
+              "Via": "1.1 varnish, 1.1 varnish",
+              "X-Cache": "HIT, HIT",
+              "X-Cache-Hits": "12, 0",
+              "X-Content-Type-Options": "nosniff",
+              "X-Frame-Options": "DENY",
+              "X-Served-By": "cache-ams2100141-AMS, cache-chi-kigq8000090-CHI",
+              "X-Timer": "S1794185960.128559,VS0,VE2"
+            },
+            "sha256": "fa2911d412b7922b17a07829914ee630c2cd7091ef558abd4329ffb6020f879d",
+            "status": 200,
+            "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/ssl_client-1.37.0-r31.apk"
+          },
+          "control_architecture": "aarch64",
+          "index_record": {
+            "A": "aarch64",
+            "C": "Q1QQfD9w3aMC4MPtRimUGSRaiigLQ=",
+            "D": "so:libc.musl-aarch64.so.1 so:libcrypto.so.3 so:libssl.so.3",
+            "I": "67472",
+            "L": "GPL-2.0-only",
+            "P": "ssl_client",
+            "S": "5078",
+            "T": "External ssl_client for busybox wget",
+            "U": "https://busybox.net/",
+            "V": "1.37.0-r31",
+            "c": "c3ef5d10e6ef6528852c51f0564963e2f8c1be19",
+            "i": "busybox=1.37.0-r31 libssl3",
+            "m": "S\u00f6ren Tempel <soeren+alpine@soeren-tempel.net>",
+            "o": "busybox",
+            "p": "cmd:ssl_client=1.37.0-r31",
+            "t": "1768059508"
+          },
+          "original_control_scripts": [],
+          "original_payload": [
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr/bin",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr/bin/ssl_client",
+              "sha256": "171f6cea11a9dc95f1b7f1c911358a58c8f5cd81ae4ea3bd283d8649b7891701",
+              "size": 67472,
+              "type": "file",
+              "uid": 0
+            }
+          ],
+          "original_triggers": []
+        }
+      ],
+      "signer_key_sha256": "d11f6b21c61b4274e182eb888883a8ba8acdbf820dcc7a6d82a7d9fc2fd2836d"
+    },
+    "x86_64": {
+      "index": {
+        "file": "provenance-inputs/x86_64/APKINDEX.tar.gz",
+        "headers": {
+          "Accept-Ranges": "bytes",
+          "Age": "4",
+          "Connection": "close",
+          "Content-Length": "528490",
+          "Content-Security-Policy": "script-src 'self'",
+          "Content-Type": "application/octet-stream",
+          "Date": "Mon, 09 Nov 2026 00:59:19 GMT",
+          "Etag": "\"6aef6867-8106a\"",
+          "Last-Modified": "Sat, 07 Nov 2026 18:05:27 GMT",
+          "Referrer-Policy": "origin-when-cross-origin",
+          "Server": "nginx/1.27.5",
+          "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "Via": "1.1 varnish, 1.1 varnish",
+          "X-Cache": "HIT, HIT",
+          "X-Cache-Hits": "25, 1",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "DENY",
+          "X-Served-By": "cache-ams-eham8680087-AMS, cache-chi-kigq8000070-CHI",
+          "X-Timer": "S1794185960.696220,VS0,VE2"
+        },
+        "sha256": "e43a5514fbef0c34f74c68992a8d110fd4e525cf1eb7e114f8d93b800407c9d4",
+        "status": 200,
+        "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/APKINDEX.tar.gz"
+      },
+      "signed_packages": [
+        {
+          "artifact": {
+            "file": "provenance-inputs/x86_64/busybox-1.37.0-r31.apk",
+            "headers": {
+              "Accept-Ranges": "bytes",
+              "Age": "966700",
+              "Connection": "close",
+              "Content-Length": "504769",
+              "Content-Security-Policy": "script-src 'self'",
+              "Content-Type": "application/octet-stream",
+              "Date": "Mon, 09 Nov 2026 00:59:19 GMT",
+              "Etag": "\"69e7473e-7b3c1\"",
+              "Last-Modified": "Tue, 21 Apr 2026 09:45:34 GMT",
+              "Referrer-Policy": "origin-when-cross-origin",
+              "Server": "nginx/1.27.5",
+              "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+              "Vary": "Origin",
+              "Via": "1.1 varnish, 1.1 varnish, 1.1 varnish",
+              "X-Cache": "HIT, HIT, HIT",
+              "X-Cache-Hits": "161, 112, 1",
+              "X-Content-Type-Options": "nosniff",
+              "X-Frame-Options": "DENY",
+              "X-Served-By": "cache-ams2100105-AMS, cache-ams-eham8680081-AMS, cache-chi-kigq8000052-CHI",
+              "X-Timer": "S1794185960.762246,VS0,VE2"
+            },
+            "sha256": "0e626fa97cf937fda7bba4ed4dde8e2f2dbb5083ac34e02180cec0c4eba9351b",
+            "status": 200,
+            "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/busybox-1.37.0-r31.apk"
+          },
+          "control_architecture": "x86_64",
+          "index_record": {
+            "A": "x86_64",
+            "C": "Q1tUBevAL33YvpW2JlxUskPVRWq48=",
+            "D": "so:libc.musl-x86_64.so.1",
+            "I": "813480",
+            "L": "GPL-2.0-only",
+            "P": "busybox",
+            "S": "504769",
+            "T": "Size optimized toolbox of many common UNIX utilities",
+            "U": "https://busybox.net/",
+            "V": "1.37.0-r31",
+            "c": "c3ef5d10e6ef6528852c51f0564963e2f8c1be19",
+            "m": "S\u00f6ren Tempel <soeren+alpine@soeren-tempel.net>",
+            "o": "busybox",
+            "p": "cmd:busybox=1.37.0-r31",
+            "t": "1768059508"
+          },
+          "original_control_scripts": [
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": ".post-install",
+              "sha256": "13c120a1c714ecafa7fe1fc748406a89dfffc549118ebce324b53d4bbb4ba75f",
+              "size": 335,
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": ".post-upgrade",
+              "sha256": "3cf0a22d2d6c6ed34be6b77ed3973b7c0b7434525744026c0159f5a76f827f49",
+              "size": 1640,
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": ".trigger",
+              "sha256": "c7840b111dd82669de2074ea3c7e345c063928db2bbff650a81289777b3ff98f",
+              "size": 576,
+              "uid": 0
+            }
+          ],
+          "original_payload": [
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "bin",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "bin/busybox",
+              "sha256": "01a989eb4d1d04b0d146c790ac536abd88f374ec74a2e110c58910b840d42045",
+              "size": 804616,
+              "type": "file",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/busybox-paths.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 420,
+              "path": "etc/busybox-paths.d/busybox",
+              "sha256": "ad43f2888aa6679930812faef33672c45e98021d3be0d0ed08d257c1d957a968",
+              "size": 3986,
+              "type": "file",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/logrotate.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 420,
+              "path": "etc/logrotate.d/acpid",
+              "sha256": "d608a3b7715886b5735def0cc50a6359fd364fac2e0e0a459c588c04be471031",
+              "size": 140,
+              "type": "file",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/network",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/network/if-down.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/network/if-post-down.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/network/if-post-up.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/network/if-pre-down.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/network/if-pre-up.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/network/if-up.d",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 509,
+              "path": "etc/network/if-up.d/dad",
+              "sha256": "2fd20d1bc67d9ee711990002b24f156635a73f56b8935b2f76592938817fa4e7",
+              "size": 285,
+              "type": "file",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 420,
+              "path": "etc/securetty",
+              "sha256": "713fcea5109728883b9147e822429133fcc8b5e253afd3c2a197b10cd0bc3b4d",
+              "size": 156,
+              "type": "file",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "etc/udhcpc",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 420,
+              "path": "etc/udhcpc/udhcpc.conf",
+              "sha256": "5b372209e01cda07c87b8afa6d1ab3d7e8daf18a1f2332d744203a6dc289eb1a",
+              "size": 287,
+              "type": "file",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "sbin",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr/sbin",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr/share",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr/share/udhcpc",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr/share/udhcpc/default.script",
+              "sha256": "c7b39bba4d7f1ce05dbdeba7d2fd97b96a8c3c0c1ebc0259f641fb8e1c3827d2",
+              "size": 4010,
+              "type": "file",
+              "uid": 0
+            }
+          ],
+          "original_triggers": [
+            "/bin /usr/bin /sbin /usr/sbin /lib/modules/* /usr/lib/modules/*"
+          ]
+        },
+        {
+          "artifact": {
+            "file": "provenance-inputs/x86_64/busybox-binsh-1.37.0-r31.apk",
+            "headers": {
+              "Accept-Ranges": "bytes",
+              "Age": "946758",
+              "Connection": "close",
+              "Content-Length": "1571",
+              "Content-Security-Policy": "script-src 'self'",
+              "Content-Type": "application/octet-stream",
+              "Date": "Mon, 09 Nov 2026 00:59:19 GMT",
+              "Etag": "\"69e7473e-623\"",
+              "Last-Modified": "Tue, 21 Apr 2026 09:45:34 GMT",
+              "Referrer-Policy": "origin-when-cross-origin",
+              "Server": "nginx/1.29.0",
+              "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+              "Vary": "Origin",
+              "Via": "1.1 varnish, 1.1 varnish",
+              "X-Cache": "HIT, HIT",
+              "X-Cache-Hits": "21, 1",
+              "X-Content-Type-Options": "nosniff",
+              "X-Frame-Options": "DENY",
+              "X-Served-By": "cache-ams21023-AMS, cache-chi-kigq8000039-CHI",
+              "X-Timer": "S1794185960.826528,VS0,VE1"
+            },
+            "sha256": "93f803ae5db6b729c0f66f4afba6e907ccc17d7d5f8b8c3d25bdb4636de2c48a",
+            "status": 200,
+            "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/busybox-binsh-1.37.0-r31.apk"
+          },
+          "control_architecture": "noarch",
+          "index_record": {
+            "A": "x86_64",
+            "C": "Q1XL0UrMbxgExbrGx33CxJLwELD8c=",
+            "D": "busybox=1.37.0-r31",
+            "I": "1",
+            "L": "GPL-2.0-only",
+            "P": "busybox-binsh",
+            "S": "1571",
+            "T": "busybox ash /bin/sh",
+            "U": "https://busybox.net/",
+            "V": "1.37.0-r31",
+            "c": "c3ef5d10e6ef6528852c51f0564963e2f8c1be19",
+            "k": "100",
+            "m": "S\u00f6ren Tempel <soeren+alpine@soeren-tempel.net>",
+            "o": "busybox",
+            "p": "/bin/sh cmd:sh=1.37.0-r31",
+            "t": "1768059508"
+          },
+          "original_control_scripts": [],
+          "original_payload": [
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "bin",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 511,
+              "path": "bin/sh",
+              "target": "/bin/busybox",
+              "type": "symlink",
+              "uid": 0
+            }
+          ],
+          "original_triggers": []
+        },
+        {
+          "artifact": {
+            "file": "provenance-inputs/x86_64/ssl_client-1.37.0-r31.apk",
+            "headers": {
+              "Accept-Ranges": "bytes",
+              "Age": "1593437",
+              "Connection": "close",
+              "Content-Length": "4686",
+              "Content-Security-Policy": "script-src 'self'",
+              "Content-Type": "application/octet-stream",
+              "Date": "Mon, 09 Nov 2026 00:59:19 GMT",
+              "Etag": "\"69e747c4-124e\"",
+              "Last-Modified": "Tue, 21 Apr 2026 09:47:48 GMT",
+              "Referrer-Policy": "origin-when-cross-origin",
+              "Server": "nginx/1.29.0",
+              "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+              "Vary": "Origin",
+              "Via": "1.1 varnish, 1.1 varnish",
+              "X-Cache": "HIT, HIT",
+              "X-Cache-Hits": "63, 0",
+              "X-Content-Type-Options": "nosniff",
+              "X-Frame-Options": "DENY",
+              "X-Served-By": "cache-ams2100123-AMS, cache-chi-kigq8000026-CHI",
+              "X-Timer": "S1794185960.865362,VS0,VE5"
+            },
+            "sha256": "e578a140670e4cf9816117b0c2063632bf3754ecbe8fa593a7fd2b4039372bf0",
+            "status": 200,
+            "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/main/x86_64/ssl_client-1.37.0-r31.apk"
+          },
+          "control_architecture": "x86_64",
+          "index_record": {
+            "A": "x86_64",
+            "C": "Q1wiD0pRJaMTr3M+mN75QTK7Hp1A0=",
+            "D": "so:libc.musl-x86_64.so.1 so:libcrypto.so.3 so:libssl.so.3",
+            "I": "14384",
+            "L": "GPL-2.0-only",
+            "P": "ssl_client",
+            "S": "4686",
+            "T": "External ssl_client for busybox wget",
+            "U": "https://busybox.net/",
+            "V": "1.37.0-r31",
+            "c": "c3ef5d10e6ef6528852c51f0564963e2f8c1be19",
+            "i": "busybox=1.37.0-r31 libssl3",
+            "m": "S\u00f6ren Tempel <soeren+alpine@soeren-tempel.net>",
+            "o": "busybox",
+            "p": "cmd:ssl_client=1.37.0-r31",
+            "t": "1768059508"
+          },
+          "original_control_scripts": [],
+          "original_payload": [
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr/bin",
+              "type": "directory",
+              "uid": 0
+            },
+            {
+              "gid": 0,
+              "mode": 493,
+              "path": "usr/bin/ssl_client",
+              "sha256": "8b23a9dbfea3da8c6da65b93c0fc6d979a82245c17c40d8fbf94d531263b98b4",
+              "size": 14384,
+              "type": "file",
+              "uid": 0
+            }
+          ],
+          "original_triggers": []
+        }
+      ],
+      "signer_key_sha256": "207e4696d3c05f7cb05966aee557307151f1f00217af4143c1bcaf33b8df733f"
+    }
+  },
+  "configuration_settings": 1084,
+  "package_version": "1.37.0_p20261109-r0",
+  "patches": [
+    {
+      "file": "CVE-2025-60876.patch",
+      "sha256": "0506f13375c2425d2ff46a453616a9cb88de1a0c6878d26cd5fdc8ae9ebea51f",
+      "sha512": "c9b189aadd539488dc80269743f475bd53a3e45a21962ec4c09597eafe8fd0053f1d5cc7cb1f36cc5e3c0886ee19804c3b2d315355e8b666a03fb69d40cf1a72",
+      "witnesses": [
+        {
+          "after_sha256": "6a676283e89e0264fcd49b4e56f075a11a5a454f6e76910155f55f6f47a0ae92",
+          "before_sha256": "f86e80bd88a2fe78e92903d91844aed8c78dce2048a0586672e445c52f46c6b7",
+          "path": "networking/wget.c"
+        }
+      ]
+    },
+    {
+      "file": "ecm-date-numeric-timezone.patch",
+      "sha256": "be474b8649fea5eed191d2606f3d4c9c0e3492e6ee62398be73ecfe9d880c95c",
+      "sha512": "e419c4c7f1d2b26e3ab6a2af48f14c16dd20ed7b922b720b2e92bf8581c5b1d15f5169894f6c947b9e7c418c7a805c73241f4184fa9212241d205cce6133fb98",
+      "witnesses": [
+        {
+          "after_sha256": "01263236afe06ee6063479a7bf99d27f3695a98393e61c8a41945f01478d6e4e",
+          "before_sha256": "6ca12d151fe0d9bd3cdf5b4ccf6cd5047ac9b57ce6b3ccd7c4a2c98eec05e231",
+          "path": "libbb/time.c"
+        }
+      ]
+    }
+  ],
+  "prepared_source_sha256": {
+    "archival/cpio.c": "bdce8b278e8e9237efff8377dc784582add2617e2ca96dd893cceab8455861bc",
+    "archival/libarchive/data_extract_all.c": "c7dac066de228d67e19748eddb856b2efef76b3cb1ea13d273c6bae18e0ff65e",
+    "archival/libarchive/header_list.c": "59f390314fa697d65b3eb75af6eba803baecfd2509314d7e51da9b1e946decce",
+    "archival/libarchive/header_verbose_list.c": "bcbafcfbc4b88ef24afa6d882f8eaf5868157d16965e2e09b34f4418bef0bd4e",
+    "e2fsprogs/fsck.c": "d7bc7f4c54c1e994cc7877806fe550038f8a41aa13d7a8d83df4d3b9366d3ef1",
+    "editors/awk.c": "3b91c56d56a3326b3b9e94d33eaabc637151e403525f2fba727f4214443b9052",
+    "editors/diff.c": "aa25fb04635a8e8effe21d901edd2ceccc6649e81bca7d9f18e5853f7995b3b6",
+    "editors/vi.c": "f2cc4daf88a1e7784f286be0e5923e19ee9e5c1d944d343d09e368c9d7079b48",
+    "findutils/find.c": "46f9e76e69d753369a615de8426b6ed9790bcece318f02320158e7fc4eb05491",
+    "include/libbb.h": "1b9eb600dff7afb365b068e529fd7252318ae1a6640e8531352c58a6267df33a",
+    "init/init.c": "d9f76e94994c02be3ef75e6e268bd9939bd06e7ce586ebb8a88342a46b2a0384",
+    "libbb/Kbuild.src": "548624d09bfc5155d6155a4c71f2f30dff9a69becf7b70c24b57b7abd70bad67",
+    "libbb/dump.c": "372ca62b08723765b74605313fbfa9136c19ce32b5586c82f0d25ba753be5249",
+    "libbb/hash_md5_sha.c": "bcaa1c55d78297ec669d58461d90ce96d40dec49425a57784e12cda8fa7cf7ca",
+    "libbb/lineedit.c": "0194b975c116115cc4fe799fa458d68f4d0ae04ecf245a34f73250e8cfe490f2",
+    "libbb/match_fsopts.c": "7810ab8c76e95daf8378d76525912293fe46acada7e83e61ff4bd7887dd4f44d",
+    "libbb/messages.c": "895e5a602b67f69ae57eed3fc0b0adfa1769062f24722d3e8f0303dd725d3990",
+    "libbb/recursive_action.c": "228b64a79751ea10d18aae258eeaa131fc610e239ffd629b36d007436d30740e",
+    "libbb/time.c": "01263236afe06ee6063479a7bf99d27f3695a98393e61c8a41945f01478d6e4e",
+    "libbb/utmp.c": "82524a959fcdabcd147e16338fc50489bdce241bd7fb1aee2a3d945e236655cc",
+    "libbb/xconnect.c": "61cd932f792841c7c5316fd2574c27d246d6763313130b79b3e2b4926de89917",
+    "loginutils/adduser.c": "22cdcf791e416265dfa1d905e234a6bab746cad3931ae44af39896c48453ce78",
+    "miscutils/fbsplash.c": "1d557aeb065f235d74a4c0dc4cdfe72320f3a83a9dcd870059956a22bb3565b8",
+    "modutils/Config.src": "aadf50add2af8dbd8377340b834e8c626d80d02d900e13fb3a94adbe2d4c6a73",
+    "modutils/depmod.c": "2ea5cdfd08d95d051c47f5be16cfd43a2963c8148c6161e60882a83b04c892f8",
+    "modutils/modinfo.c": "fe4888eb7fa59f99dfb04977efd4b705930c535ba2994ced1284912612f4feac",
+    "modutils/modprobe.c": "b8b17ea962268bf5b5e0a42ddfe342aecfa62be1cb454ac018572b2da7cc5e28",
+    "modutils/modutils.c": "6732b54f8b4df5db67e681a3ccaaae96f0747cb1fcb714fed60dc3d08be0e78c",
+    "modutils/modutils.h": "547f5588116bc7086479cb885de2a46063031b8005c32ce9426286ea25b52e7f",
+    "networking/netstat.c": "1c3f7109d4d823656689d8b212b8857a0454d413a2cbf279146b002d77e71af9",
+    "networking/nslookup.c": "f84bcc9059f5de3a4fe37c485ec863170accd4dbcd9b19bd8d7d10c4b325e340",
+    "networking/ping.c": "e3edd3ce3171c1c05213c5d42d63d3365c32a8bc050ee144193a1900de3d22a3",
+    "networking/tunctl.c": "db1b9fc0afd9078c9aba48d893dabf8b93fad1de54e6cb6a1aef95eb82613fda",
+    "networking/udhcp/d6_dhcpc.c": "3e146ef030914cef106aff0a7fe20c05f90ac600dadb92305b5df3f9916796ec",
+    "networking/udhcp/dhcpc.c": "c817d5d1bc2df550eb83144d5852a7ea1c58718898d18410897b1607dae45d45",
+    "networking/wget.c": "6a676283e89e0264fcd49b4e56f075a11a5a454f6e76910155f55f6f47a0ae92",
+    "procps/pgrep.c": "59955019655be176c7bf4a70506bd3d659ed9b0cbf6c74736eaa78ee5efcff32",
+    "shell/ash.c": "6a789b00d2b25c5090d0b99e473ca30f8d010d91c9bf19cf410427c887ac0256",
+    "sysklogd/syslogd.c": "b9434d10a03f942b647b2d0df545e0b2ffffe27fb873fd89cd477d5569e23bad",
+    "testsuite/awk.tests": "f7714ee08fecaf1ce413169d7e5304e62e3c19020a32d4b0c3a6a41afc93f72e",
+    "testsuite/date/date-timezone": "f1ad7bc467b8ba57c34bfa8816e68d773e4e66d8952103a9197c8bd5c3d91fa9",
+    "testsuite/hexdump.tests": "3dd6ebcdb9e474e81513df9576df9a4adc74648c61fc51e83389ab0a3fca85f2",
+    "testsuite/od.tests": "8e421555c1ed1a79d557019bd60c5bbaffc5a8cf37677bcdf8b9ab922b523bef",
+    "testsuite/tar.tests": "986bd2a5bfdd380ac4d1a18417529a4735393268d104639ea4e6a40de5ce42f1",
+    "util-linux/blkdiscard.c": "70d5e281a8be317498aaac879faa280916444c07441dd807a7f2ca6d021db3ab",
+    "util-linux/last_fancy.c": "bafc896c87e8f7be33a8488902a8e6ff2474414bd3144c3c2a81b473cb24d646",
+    "util-linux/lspci.c": "00753080c124d008778edfd371dbe6df684646f57ac81b2bb28774f02e648112",
+    "util-linux/mount.c": "05f5faa2971f544623113dd014b54f58b81c9bd57388e61b0b8418a3f136212a",
+    "util-linux/nologin.c": "717d354c193e6ca6accc62af47fdab271c15fac95f591d7803c805fe02142a97",
+    "util-linux/umount.c": "72035d035f80c2deb5454b986990afc8d3b47587549e49d5c6d0fdc39e2c54a7"
+  },
+  "runtime_package_names": [
+    "busybox",
+    "busybox-binsh",
+    "ssl_client"
+  ],
+  "schema_version": 1,
+  "scope": "PO-approved additional owned BusyBox provider. Original applet/configuration surface and signed package ownership required. Not advisory or final-image clearance.",
+  "source": {
+    "filename": "busybox-1.37.0.tar.bz2",
+    "headers": {
+      "Accept-Ranges": "bytes",
+      "Connection": "close",
+      "Content-Length": "2565764",
+      "Content-Type": "application/x-bzip2",
+      "Date": "Mon, 09 Nov 2026 01:06:29 GMT",
+      "ETag": "\"272684-6230c77ca6f90\"",
+      "Last-Modified": "Thu, 26 Sep 2024 21:31:56 GMT",
+      "Server": "Apache",
+      "Strict-Transport-Security": "max-age=63072000",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY",
+      "X-XSS-Protection": "1"
+    },
+    "sha256": "3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4",
+    "sha512": "ad8fd06f082699774f990a53d7a73b189ed404fe0a2166aff13eae4d9d8ee5c9239493befe949c98801fe7897520dbff3ed0224faa7205854ce4fa975e18467e",
+    "size": 2565764,
+    "status": 200,
+    "url": "https://busybox.net/downloads/busybox-1.37.0.tar.bz2"
+  },
+  "source_date_epoch": 1768059508,
+  "upstream_version": "1.37.0"
+}

@@ -237,7 +237,54 @@ architecture/URL-bound `--expected-sha256` index. Older canonical-URL indexes do
 not get silently relabeled, and supplied expected hashes must still cover every
 selected origin, including the retained one. The original 14 Packman cache
 objects, two-source handoff and all seven no-refresh transactions are unchanged;
-only this one SUSE source object is added (15 objects / 12,911,729 bytes total).
+the original branding retention added one SUSE source object (15 objects /
+12,911,729 bytes). The exact companion below brings that to 16 / 20,668,972 bytes.
+
+### Exact recovered e2fsprogs companion (2026-11-09)
+
+CI subsequently lost the canonical AMD source URL for
+`e2fsprogs-1.47.4-1.1.src.rpm`. The identical 7,757,243-byte archive was recovered
+from the previously sealed original OCI source layer, matched to its original
+source index, and freshly authenticated with the pinned SUSE key and the unchanged
+native RPM signature/header/complete-payload checker. All 13 regular members,
+including the SPEC, five Source inputs and seven Patch inputs, remain delivered.
+
+The existing explicit AMD branding handoff also selects this **one** adjacent
+hash-addressed object, only for the exact installed openSUSE/x86_64 origin:
+`4b90c6c666634fe3f97b2045a6556c4ae34709a9f48b53c3c930d32c665b8833`.
+`RETAINED_RELEASE_COMPANIONS` is a fixed tuple/hash/size policy, not a directory
+scan or partial generic cache. No explicit handoff means no retained companion;
+missing/corrupt/noncanonical/aliased selected inputs fail without network
+fallback. Copied bytes are rehashed before key import, then normally authenticated.
+The canonical URL remains unchanged, `final_url` remains null and retrieval is
+truthfully recorded as `reverified-retained-source`. The independent RPM consumer
+adds only that exact URL/hash tuple; it keeps all inventory/origin/payload/live-DB
+checks and aggregate dispatch. No Alpine source obligation is removed.
+
+The production Dockerfile, runtime graph, package versions, ARM handoff and
+generic full-cache contract are unchanged. `test_retained_e2fs_source.py` uses
+the real SRPM plus recorded native collector output to exercise selection,
+corruption/alias denial, mandatory reauthentication and the independent delivery
+consumer (mocking only its live RPM inventory query in unit tests). A separate
+networkless native collector integration reauthenticates both actual SRPMs from
+three unchanged original inventory rows. That bounded subset is not whole-image
+source/security/MCP acceptance. See the retained-source evidence document.
+
+The remaining-source survey subsequently found the exact GCC 16 and SQLite
+origins expired too. Both matching originals were recovered and freshly
+authenticated from the same sealed baseline. They join the explicit AMD companion
+policy with their unchanged canonical URLs and whole archive hashes, not a
+general archive fallback. GCC's 108,898,703-byte original exceeds GitHub's 100MiB
+blob limit, so two fixed ordered/hash/size-pinned transport parts are concatenated
+to the **identical** SRPM. The whole SRPM hash is mandatory before trust import;
+ordinary native RPM/header/complete payload verification remains mandatory after
+reassembly. No SPEC or source executes. Details and all object identities are in
+`docker/native-cache/README.md` and the additional-retention evidence. The current
+cache is 19 storage objects / 156,197,839 bytes for the unchanged 14 Packman
+objects and four exact SUSE source archives. The earlier two-source subset proof
+remains historical; the new networkless integration authenticates all four
+sources from their unmodified original inventory rows. Whole fresh image/MCP CI
+and Alpine aggregate/security acceptance remain separate requirements.
 
 A bounded actual-collector proof under BuildKit `RUN --network=none` reverified
 this retained source with native RPM tools and complete payload checks. Adding

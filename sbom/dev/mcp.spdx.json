@@ -2,8 +2,8 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "mcp-0.18.2-0065",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0065/mcp-c2fd0bbc755a560394cdd9794259290bc7248eb17c4da372dc428b5d0f3ae845",
+  "name": "mcp-0.18.2-0066",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0066/mcp-18af80542f1000cdecd461a073e12492cd20ff8be5b42372f9a4dd61d909c975",
   "creationInfo": {
     "created": "2026-11-08T01:53:48Z",
     "creators": [
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-mcp",
       "name": "enhanced-channel-manager-mcp",
-      "versionInfo": "0.18.2-0065",
+      "versionInfo": "0.18.2-0066",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -28,9 +28,9 @@
       "primaryPackagePurpose": "CONTAINER"
     },
     {
-      "SPDXID": "SPDXRef-Package-oci-python.3.12-alpine-d09d15e60962",
-      "name": "python:3.12-alpine",
-      "versionInfo": "sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31",
+      "SPDXID": "SPDXRef-Package-oci-python.3.12-alpine3.24-e064671ca452",
+      "name": "python:3.12-alpine3.24",
+      "versionInfo": "sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -40,7 +40,7 @@
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31"
+          "checksumValue": "e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7"
         }
       ],
       "comment": "Final base image of the published container. Its own OS package set is NOT enumerated by this document, and the Dockerfile applies OS security upgrades on top of it at build time.",
@@ -48,7 +48,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:oci/python@sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31?repository_url=docker.io%2Flibrary%2Fpython&tag=3.12-alpine"
+          "referenceLocator": "pkg:oci/python@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7?repository_url=docker.io%2Flibrary%2Fpython&tag=3.12-alpine3.24"
         }
       ]
     },
@@ -800,7 +800,7 @@
     {
       "spdxElementId": "SPDXRef-Package-mcp",
       "relationshipType": "CONTAINS",
-      "relatedSpdxElement": "SPDXRef-Package-oci-python.3.12-alpine-d09d15e60962"
+      "relatedSpdxElement": "SPDXRef-Package-oci-python.3.12-alpine3.24-e064671ca452"
     },
     {
       "spdxElementId": "SPDXRef-Package-pypi-annotated-doc-0.0.5",

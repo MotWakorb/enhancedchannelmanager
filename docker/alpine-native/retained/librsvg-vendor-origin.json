@@ -1,0 +1,54 @@
+{
+  "source_rpm_sha256": "68124db68446d02829f1fa5dc933395f2b17840375587f46fc65fb96402a306b",
+  "signature_output": "/source.rpm:\n    Header V3 RSA/SHA512 Signature, key ID 29b700a4: OK\n    Header SHA256 digest: OK\n    Header SHA1 digest: OK\n    Payload SHA256 digest: OK\n    V3 RSA/SHA512 Signature, key ID 29b700a4: OK\n    MD5 digest: OK\n",
+  "verifier_image": "sha256:904aaf96a17a11c8d9c90e833df6dc6ea65d8bcc90c39507090a400791401c8a",
+  "files": [
+    {
+      "name": "baselibs.conf",
+      "sha256": "36673112d0218db278d89c440aa1061c95e14ba1dd66e9ab54fb39758b028323",
+      "size": 58
+    },
+    {
+      "name": "librsvg-2.63.4.tar.xz",
+      "sha256": "5e6b8f8c4e488697b1711956fd0f97ca855fb059cdfeed904e9e7eb9961f3639",
+      "size": 6812028
+    },
+    {
+      "name": "librsvg.spec",
+      "sha256": "72019905a68e6d4fb7dabf234e76c0e1a05fd5b8045d10c703e1f3589b10bce2",
+      "size": 118370
+    },
+    {
+      "name": "vendor.tar.xz",
+      "sha256": "d5fd9570af2fa9c586f2f34bd4163ee3a3869a5942be70897bfb4aa8270cfc50",
+      "size": 21790164
+    }
+  ],
+  "scope": "Approved retained Cargo vendor/lock input; exact payload hashes match independently signed source RPMs on both architectures. Each build rehashes retained bytes; this is selection-time authentication, not a new signature verification claim.",
+  "arm64_source": {
+    "input_sha256": "0d430d5e4280091dc3f2848151877332d00cb90b3232352735f6e13adf884fa3",
+    "signature": "/source.rpm:\n    Header V3 RSA/SHA512 Signature, key ID 29b700a4: OK\n    Header SHA256 digest: OK\n    Header SHA1 digest: OK\n    Payload SHA256 digest: OK\n    V3 RSA/SHA512 Signature, key ID 29b700a4: OK\n    MD5 digest: OK\n",
+    "files": [
+      {
+        "name": "baselibs.conf",
+        "sha256": "36673112d0218db278d89c440aa1061c95e14ba1dd66e9ab54fb39758b028323",
+        "size": 58
+      },
+      {
+        "name": "librsvg-2.63.4.tar.xz",
+        "sha256": "5e6b8f8c4e488697b1711956fd0f97ca855fb059cdfeed904e9e7eb9961f3639",
+        "size": 6812028
+      },
+      {
+        "name": "librsvg.spec",
+        "sha256": "72019905a68e6d4fb7dabf234e76c0e1a05fd5b8045d10c703e1f3589b10bce2",
+        "size": 118370
+      },
+      {
+        "name": "vendor.tar.xz",
+        "sha256": "d5fd9570af2fa9c586f2f34bd4163ee3a3869a5942be70897bfb4aa8270cfc50",
+        "size": 21790164
+      }
+    ]
+  }
+}

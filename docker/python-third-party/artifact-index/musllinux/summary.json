@@ -1,0 +1,15 @@
+{
+  "architectures": {
+    "amd64": {
+      "distributions": 74,
+      "native_ELFs": 48
+    },
+    "arm64": {
+      "distributions": 74,
+      "native_ELFs": 45
+    }
+  },
+  "status": "WHEEL_ARTIFACT_BINDINGS_ONLY",
+  "unique_payload_files": 100,
+  "whole_wheels": 96
+}

@@ -1,0 +1,12 @@
+{
+  "source": "Actual pinned Python/Alpine AMD64 runtime build, busybox-runtime-canonical-02.log; package key scoped to a temporary trust directory",
+  "original": {
+    "exit": 0,
+    "stdout": "/proof/packages/runtime-packages/busybox-1.37.0_p20261109-r0.apk: OK\n/proof/packages/runtime-packages/busybox-binsh-1.37.0_p20261109-r0.apk: OK\n/proof/packages/runtime-packages/ssl_client-1.37.0_p20261109-r0.apk: OK\n"
+  },
+  "changed_authenticated_control": {
+    "exit": 1,
+    "stdout": "/tmp/ecm-install-trust-w78n0naq/damaged.apk: BAD signature\n",
+    "stderr": ""
+  }
+}

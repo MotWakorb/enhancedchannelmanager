@@ -1,0 +1,51 @@
+{
+  "status": "BOUNDED_ADVISORY_SNAPSHOT_TRANSPORT_FRESHNESS_AND_REJECTION_BOUNDARY_ONLY",
+  "bead": "enhancedchannelmanager-4izbc",
+  "helper": {"path": "scripts/alpine_advisory_snapshot.py", "sha256": "870c78f6f16b2f79a9a6d676dff99e71410b13051e75ce064c84368a095a8bed"},
+  "contract": {
+    "sources": ["https://security.alpinelinux.org/branch/3.24-main", "https://security.alpinelinux.org/branch/3.24-community", "https://secdb.alpinelinux.org/v3.24/main.json", "https://secdb.alpinelinux.org/v3.24/community.json"],
+    "transport": "Ordinary default-validated HTTPS, exact endpoint/final URL/status/content type, explicit JSON-LD Accept for tracker. No HTTP fallback, per-package query flood, missing-input cache fallback or runtime key/repository changes.",
+    "scope_of_authentication": "HTTPS source acquisition, not cryptographically signed advisory databases. Publisher-internal completeness/freshness and immutable-image delivery binding are not proved by an unsigned timestamp/index.",
+    "maximum_body_bytes": 134217728,
+    "maximum_snapshot_age_seconds": 21600,
+    "age_origin": "UTC capture time recorded before first request; future timestamps are rejected with no clock-skew exception",
+    "layout": "Four unique gzip data files, exact trusted helper source and index; canonical regular mode0644 files, no aliases/unknown directories/files, bounded single-stream decompression, exact raw/compressed hashes/sizes, duplicate-free JSON and pending scope flags",
+    "failure_retention": "Optional fresh disjoint acquisition evidence directory; CLI defaults beside output. Complete raw responses and HTTP metadata are retained before semantic validation as RAW_RESPONSE_RECEIVED_NOT_VALIDATED. No snapshot/index is published if any response fails validation.",
+    "execution": "No delivered source or JSON-LD external context is executed; no package install, provider substitution or trust change"
+  },
+  "fixed_secdb_real_shape": {
+    "recorded_fixtures": ["backend/tests/fixtures/alpine/secdb-main-20261109.json.gz", "backend/tests/fixtures/alpine/secdb-community-20261109.json.gz"],
+    "package_counts": {"main": 290, "community": 489},
+    "version_zero_rows": {"main": 31, "community": 19},
+    "aliases": "Preserve all opaque primary entries, including ALPINE-13661, CVE/GHSL composites, CVE/GNUTLS-SA composites, GHSA-only and CVE/GHSA composites. Do not filter them as malformed CVE IDs. Version-zero metadata is retained, not treated as a source-fix exemption.",
+    "not_yet_done": "Native APK-version fixed-state reconciliation and source/owned correction applicability; this reader alone clears no finding"
+  },
+  "actual_upstream_failure": {
+    "url": "https://security.alpinelinux.org/branch/3.24-community",
+    "http_status": 200,
+    "content_type": "application/json",
+    "body_bytes": 163,
+    "body_sha256": "0a2d905605f6a57b7d323ce9795bb18b29e2f3bc0c90fec4469d8570d26e9338",
+    "body_observation": "Exact expected Collection/context/branch ID but items:[], after the earlier complete 1996-item body. Completeness cause is unestablished; do not infer that all advisories disappeared or treat the empty response as clearance.",
+    "final_helper_replay": "Actual final helper on native AMD64 Alpine, nonroot3000, read-only original code/response mounts and network none, rejected that exact captured HTTP200 body. Acquisition evidence preserved byte-for-byte outside the unpublished snapshot.",
+    "replay_receipt_sha256": "2233d41eae0f49b690d131d4e3fa203dcc57cef03991982bf155ed86e91de0db",
+    "exit_code": 1,
+    "snapshot_published": false,
+    "new_live_acquisition_performed_by_replay": false,
+    "live_complete_four_source_snapshot_success": "NOT ESTABLISHED; live preparation stopped at the invalid community collection",
+    "scope": "Original failed live acquisition/probe and final-helper offline rejection are separate retained facts, not a relabeled successful production collector run"
+  },
+  "regressions": {
+    "snapshot_unit_cases": 22,
+    "unit_layer": "Real recorded fixed-secdb documents; deliberately small unsigned transport stand-ins for snapshot assembly, not new TLS acquisition or current full dataset proof",
+    "broad_modules": 61,
+    "passed": 1865,
+    "unchanged_existing_skip": 1,
+    "log_sha256": "61edbd66323d4a3aff3e2d5005acc256db7cbecaa59f0be99be28bc7188e24da",
+    "guard_mutants": "Disabling age, exact response identity or trusted helper checks makes six negative cases fail DID NOT RAISE; stale, future, aliases, corrupted or re-sealed multi-stream/underdeclared data, invalid HTTP200 empty body and operator-output preservation remain covered",
+    "mutant_log_sha256": "09b5e9071384361c88428a2f7b83a9d812b6f2d10a821efcbc44beaf54e8f2d1"
+  },
+  "retention": ["/home/lecaptainc/.cache/ecm-alpine-retained-20261109/advisory-snapshot-boundary-01", "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/advisory-snapshot-probe-01", "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/advisory-snapshot-empty-response-replay-01"],
+  "remaining": "Complete live acquisition and exact immutable-image CI binding/enforcement; maintain known advisory holds across incomplete publisher data; native APK-version/fixed-secdb/CPE reconciliation; primary assessment/fixes for19 potential normal-APK records and owned sources including CVE-2026-11979. No complete source/advisory/compiled-feature/compiler/frontend/MCP or aggregate approval. This boundary has not been wired into production/native CI as a supposedly passing advisory gate. Existing gates/controls, pins, providers and production Dockerfiles are unchanged. No merge, image publication or deployment.",
+  "full_runtime_advisory_acceptance": false
+}

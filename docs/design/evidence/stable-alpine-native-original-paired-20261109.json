@@ -1,0 +1,89 @@
+{
+  "architectures": {
+    "amd64": {
+      "actual_source_commit": "fa59832cc706ac66aa2d5e4cdc25883550002044",
+      "artifact": {
+        "id": 13641562463,
+        "sha256": "09d9cae9ea6c4f9936d52f4bd1d93f43f32201c8a90fb8f0551eca4710fe85fb"
+      },
+      "codec_matrix": {
+        "architecture": "amd64",
+        "executions": 70,
+        "failures": [],
+        "image": "sha256:0073eb857479f4aa00b538deec0aa61c53ac584686e57f14e5f405a991a103fa",
+        "probe_sha256": "047f881bac698437ab7b9eac2b62ea9c075939097cc13d059d3f3f29a24c10f7",
+        "reference_sha256": "6aca56b6f3d03ca0f092116cb9b4d56a1e496a014654230322bbe36785dfeccf",
+        "scope": "Native 35-case encode/decode and 35-case original-native baseline-stream decoding only. Not full-runtime/source/security proof; live old-image pairing remains a separate gate.",
+        "status": "MATCHED_RECORDED_AMD64_CORPUS"
+      },
+      "ffmpeg_status": "MATCHED_RECORDED_AMD64_FFMPEG_CORPUS",
+      "installation_status": "SIGNED_APK_INSTALLED_ONLY",
+      "live_pair": {
+        "architecture": "amd64",
+        "baseline_descriptor_sha256": "a2c5e9971c28afb31c9df3ec1e4ea187e4b67279dbc9d84d660d19849d65476c",
+        "baseline_image": "sha256:dc2b914ad20dc396e4a730552f2e697c5b49da8d4ecff16b0d08f98dc241be5f",
+        "candidate_image": "sha256:b9d845f3fa50b3d088dafa7878e1d0f5491e342e95238db930e2e2a568d5b359",
+        "codec_case_count": 35,
+        "executions": 142,
+        "failures": [],
+        "probe_sha256": {
+          "alpine_codec_matrix.py": "047f881bac698437ab7b9eac2b62ea9c075939097cc13d059d3f3f29a24c10f7",
+          "alpine_media_probe.py": "f2a80e007d588c4041193ea26b379e206ad87188452d45a507619b01388faaa8"
+        },
+        "scope": "Actual same-native-architecture old-image/candidate bounded codec and complete media comparison. Not full application/source/security approval.",
+        "status": "EXACT_NATIVE_ORIGINAL_BASELINE_MATCH"
+      },
+      "owned_file_count": 568,
+      "package": {
+        "file": "ecm-owned-native-1.0~261890def037885f6021cda157335ad05a264003b9b2bfb784baf293571686f0-r0.apk",
+        "name": "ecm-owned-native",
+        "sha256": "52705693b8814c8800b5b5ce1643e0084610f6ba38e94389624b0f40c81bf26f",
+        "version": "1.0~261890def037885f6021cda157335ad05a264003b9b2bfb784baf293571686f0-r0"
+      }
+    },
+    "arm64": {
+      "actual_source_commit": "fa59832cc706ac66aa2d5e4cdc25883550002044",
+      "artifact": {
+        "id": 13641587324,
+        "sha256": "2f7d8e3385a8694d2d4840d4499174096ca9177068865a1d03dd7b7973673487"
+      },
+      "codec_matrix": {
+        "architecture": "arm64",
+        "executions": 70,
+        "failures": [],
+        "image": "sha256:47c0d32b1ac2b69503bf78e4d1720653728ba1dd99ad25983a0ae07cddca44e5",
+        "probe_sha256": "047f881bac698437ab7b9eac2b62ea9c075939097cc13d059d3f3f29a24c10f7",
+        "reference_sha256": "1f78673968199bf91cbf3ad06ddcea30a9babef19669606bd5e1e5b3d190dda3",
+        "scope": "Native 35-case encode/decode and 35-case original-native baseline-stream decoding only. Not full-runtime/source/security proof; live old-image pairing remains a separate gate.",
+        "status": "MATCHED_RECORDED_ORIGINAL_ARM64_CORPUS"
+      },
+      "ffmpeg_status": "MATCHED_RECORDED_ORIGINAL_ARM64_FFMPEG_CORPUS",
+      "installation_status": "SIGNED_APK_INSTALLED_ONLY",
+      "live_pair": {
+        "architecture": "arm64",
+        "baseline_descriptor_sha256": "a2c5e9971c28afb31c9df3ec1e4ea187e4b67279dbc9d84d660d19849d65476c",
+        "baseline_image": "sha256:33db988ca62173209458e8df077081380e7d23b7da1188469a0899da803f1f2c",
+        "candidate_image": "sha256:2f00a0e55514ec7dec220d10b2f265cb2ce7bb647e0d1d4e19169d88b2ef1bd7",
+        "codec_case_count": 35,
+        "executions": 142,
+        "failures": [],
+        "probe_sha256": {
+          "alpine_codec_matrix.py": "047f881bac698437ab7b9eac2b62ea9c075939097cc13d059d3f3f29a24c10f7",
+          "alpine_media_probe.py": "f2a80e007d588c4041193ea26b379e206ad87188452d45a507619b01388faaa8"
+        },
+        "scope": "Actual same-native-architecture old-image/candidate bounded codec and complete media comparison. Not full application/source/security approval.",
+        "status": "EXACT_NATIVE_ORIGINAL_BASELINE_MATCH"
+      },
+      "owned_file_count": 568,
+      "package": {
+        "file": "ecm-owned-native-1.0~cd61ca9ec164888c4b8d70a8a3e76cda66ba099d79bcd6e9b5c77a8a69b028bb-r0.apk",
+        "name": "ecm-owned-native",
+        "sha256": "6a37800730612589ebc1921df851802dd721c34b2821243ff6e0d129cceeaded",
+        "version": "1.0~cd61ca9ec164888c4b8d70a8a3e76cda66ba099d79bcd6e9b5c77a8a69b028bb-r0"
+      }
+    }
+  },
+  "run_id": 42539263198,
+  "scope": "Native current signed-package codec/media and original-image parity only. No full ECM/MCP, external APK/source or advisory approval. Resdet was added in a subsequent commit and is not included in this run.",
+  "source_head": "755b15a27b7804f5fa47e7631e54d67ea63e8822"
+}

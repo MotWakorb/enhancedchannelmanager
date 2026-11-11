@@ -1,0 +1,34 @@
+# Test-only musl application gate, NOT the ECM media/bootstrap runtime.
+FROM python:3.12-alpine3.24@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7
+COPY scripts/alpine_repository_policy.py /proof/alpine_repository_policy.py
+RUN python /proof/alpine_repository_policy.py \
+    && apk upgrade --no-cache \
+    && apk add --no-cache bash coreutils shadow git jq patch binutils gnupg ca-certificates tzdata \
+    && apk info -v > /proof/testing-apks.txt
+COPY --from=proof-wheels / /proof/wheels/
+COPY backend/requirements.txt /proof/requirements.txt
+# Missing-default-venv tests must actually exercise an absent /opt/venv, not
+# accidentally use the test runner's own installed interpreter and launcher.
+RUN test ! -e /opt/venv \
+    && python -m venv /proof/venv \
+    && /proof/venv/bin/python -m pip install --no-index --only-binary=:all: --require-hashes --find-links=/proof/wheels -r /proof/wheels/requirements.txt \
+    && /proof/venv/bin/python -m pip check
+COPY . /proof/source/
+RUN --network=none case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \
+    && /proof/venv/bin/python /proof/source/scripts/inventory_musllinux_wheels.py --verify --arch "$arch" \
+        --wheels-dir /proof/wheels --site-packages /proof/venv/lib/python3.12/site-packages \
+        --installed-python /proof/venv/bin/python > /proof/installed-wheel-bindings.json
+ARG TEST_UID=3000
+ARG TEST_GID=3000
+RUN groupadd --gid "$TEST_GID" appuser \
+    && useradd --uid "$TEST_UID" --gid appuser --create-home --shell /bin/bash appuser \
+    && mkdir /proof/config /proof/results \
+    && chown -R appuser:appuser /proof/source /proof/config /proof/results
+WORKDIR /proof/source
+ENV PATH=/proof/venv/bin:$PATH \
+    PYTHONDONTWRITEBYTECODE=1 \
+    ECM_PYTHON=/proof/venv/bin/python \
+    ECM_TEST_CONFIG_ROOT=/proof/config \
+    TMPDIR=/tmp
+USER appuser:appuser
+CMD ["bash", "scripts/backend-gate.sh"]

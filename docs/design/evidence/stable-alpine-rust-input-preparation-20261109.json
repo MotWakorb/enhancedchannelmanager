@@ -1,0 +1,68 @@
+{
+  "status": "RUST_REGISTRY_AND_UPSTREAM_COMPILER_SOURCE_INPUTS_ONLY",
+  "helper_sha256": "cb3a109ff578c4be4f28ca0cc92350aee6ebc2f9c557628bfce26e4598aeef67",
+  "registry": {
+    "archives": 546,
+    "archive_bytes": 78069395,
+    "regular_source_files": 29957,
+    "source_bytes": 545635396,
+    "license_values_retained_verbatim": 32,
+    "legacy_slash_license_expressions": 36,
+    "lock_sha256": {
+      "glycin": "1400935c4a3517d464aa99778eb49c39dae71e604743abec0212c3a3b6b30793",
+      "libglycin": "1400935c4a3517d464aa99778eb49c39dae71e604743abec0212c3a3b6b30793",
+      "rav1e": "861482385bdef579e207bb371937dd49cb9ff47d9406c40660b760fa672d0589"
+    },
+    "actual_offline_consumer_receipt_sha256": "9da66c117b6fb1f93fc37e011df5ff97505c915d84b712a13a57d2bda3e2c027"
+  },
+  "upstream_compiler_sources": {
+    "1.95.0": {
+      "commit": "59807616e1fa2540724bfbac14d7976d7e4a3860",
+      "archive_sha256": "62b67230754da642a264ca0cb9fc08820c54e2ed7b3baba0289876d4cdb48c08",
+      "archive_bytes": 238952004,
+      "source_members": 312705,
+      "observed_in_arm64_elf": "rav1e-libs"
+    },
+    "1.96.0": {
+      "commit": "ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96",
+      "archive_sha256": "b99ce16cdf0ecfc761b585ac84d131b46733465a02f8ecd0ff2de9713c62ee09",
+      "archive_bytes": 241429160,
+      "source_members": 322375,
+      "observed_in_arm64_elf": ["glycin-image-rs", "glycin-svg", "libglycin"]
+    },
+    "release_key_fingerprint": "108F66205EAEB0AAA8DD5E1C85AB96E6FA1BE5FE",
+    "public_key_sha256": "e54b09a439647e006b4831eec9785cbaaf3e07ab371c3a6ee6a68e1bdb9fbc6b",
+    "key_identity": "Official Rust Forge signing-key link and independent Keybase Rust key returned the same public bytes/fingerprint. Both original archives passed isolated GPG verification and exact embedded git-commit-hash/version witnesses.",
+    "signature_receipt_sha256": "ad6c1cd732117f36a282c8776dc858bef04ebe7780b37732f24cd5d547190866",
+    "actual_offline_consumer_receipt_sha256": "7acc1f30d0d0f601398a6bdab42547830e34076637195ea82dacbd7e613c15ab"
+  },
+  "metadata_probe": {
+    "tool_image_id": "sha256:d0a6b5720a2bb94c342c5f85c95b64a760c4b31b9c25491a71cfb586077511d5",
+    "tool_rustc": "1.96.1-r0 (not the original compilers)",
+    "targets": ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"],
+    "conditions": "Native AMD64 Cargo metadata --offline --locked with original patched workspaces mounted read-only and checksum-derived vendor tree. No build script, compilation or target execution. Both origins/targets passed; locks unchanged.",
+    "glycin_registry_packages": 248,
+    "glycin_workspace_packages": 17,
+    "rav1e_registry_packages": 169,
+    "rav1e_workspace_packages": 2,
+    "receipt_sha256": "913f13b5c037e014fade7b05fcf9044abd48e4c8bd03e2728716369ef985f639"
+  },
+  "signed_arm64_elf_embedded_registry_root_observations": {
+    "glycin-image-rs": 66,
+    "glycin-svg": 29,
+    "libglycin": 54,
+    "rav1e-libs": 10,
+    "unresolved_observed_roots": 0,
+    "scope": "Observed paths all match collected crate archives. Absence of a string is not absence of code; this does not prove complete static linkage or exact compiled features."
+  },
+  "regression_tests": {
+    "native_alpine_modules": 39,
+    "passed": 666,
+    "log_sha256": "24eff271fc31238960126c85df809d4d33930c5049c3af23888904f996d367bf",
+    "dangerous_mutant": "Bypassing the archive SHA256 check makes the real changed-archive regression fail with DID NOT RAISE InputError.",
+    "mutant_log_sha256": "09b8bd0ca1e423f676b988c07ad2b0a6d2b9210bb84d96044fd00d1393ed3ea1"
+  },
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/{alpine-runtime-arm64-rust-source-closure-02,rust-compiler-sources-01,rust-vendor-diagnostic-01,rust-official-arm64-elf-source-path-survey-01}/",
+  "scope": "Exact registry archive/member inputs and independently release-signed upstream compiler/standard-library sources only, verified on AMD64 without ARM execution. Conservative Cargo metadata and observed ELF strings are not complete target-linkage proofs. Supplemental original Alpine build logs were retrieved, but are not signed build attestations and are not used as an authentication bypass. Distro compiler patch/build provenance, complete nested-source attribution, final image delivery/consumer, aggregate source gate and advisory/MCP acceptance remain required.",
+  "full_runtime_source_acceptance": false
+}

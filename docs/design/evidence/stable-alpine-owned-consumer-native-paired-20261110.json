@@ -1,0 +1,56 @@
+{
+  "status": "PAIRED_NATIVE_FULL_APPLICATION_OWNED_CONSUMER_PASSED_AGGREGATE_STILL_FAILED",
+  "bead": "enhancedchannelmanager-g3vd3",
+  "run": 42741403746,
+  "head_sha": "34c2c74fe5950aa0c8447ef4557d0bff484c82e2",
+  "actual_checkout_merge_commit": "527581b5f52b2a3d3f6928d97b9dbee2e6c847c6",
+  "merge_binding": "GitHub immutable commit object independently confirms PR head among merge parents; exact checked-out trusted verifier bytes match the reviewed helper, not a head-SHA inference.",
+  "actual_checked_out_verifier_sha256": "37928de2b948dfd6e1c1c5744cedbded14fa7c5ea2ffce4404a2cd77a88085b4",
+  "architectures": {
+    "amd64": {
+      "job": 129583071608,
+      "image_id": "sha256:1d9b0ee8481bd1e497db8cf8206830228ae8e34904fef3d03a1c3c27fc5c6875",
+      "artifact_id": 13732525029,
+      "original_zip_sha256": "2c493d8a5e52ce8dd3c3a23e727661c6b974e26ca2700d25ad0d3b99ea383fab",
+      "owned_consumer_receipt_sha256": "ed7aa23cc7a7877898dd4fb1e9f43720835fe36ef6edf7a78e16a311a5191859",
+      "native_apk_sha256": "0215d094ab74003e495be4f8baf39c47af1fc952ad9efa683627ba5805aaa2d8"
+    },
+    "arm64": {
+      "job": 129583071749,
+      "image_id": "sha256:0ab809e1cd30db3c0163df701ddad08e6bfe9497bd20d4cd4d2dd09bc8ca05ed",
+      "artifact_id": 13731547746,
+      "original_zip_sha256": "d9ed1fb10aa11091863e4978a48e7d8fb850a52ace4b75d4be8dc460f112ca46",
+      "owned_consumer_receipt_sha256": "7f31a7bf2882dec5aa34c479cf84fe73717bfe2e141064e4c41b98d1dcf30c41",
+      "native_apk_sha256": "0f5248ccfa78820f4365e1f2b1920c68bac0ce5f1d22c93000af1217e9096bf8"
+    }
+  },
+  "each_actual_full_candidate": {
+    "installed_query_database_rows": 122,
+    "native_apk_signature_and_full_database_verified": true,
+    "native_database_regular_and_link_records": 591,
+    "native_live_regular_files": 559,
+    "native_live_raw_symlinks": 32,
+    "native_live_directories": 72,
+    "busybox_packages_signature_and_full_database_verified": 3,
+    "busybox_live_regular_files": 8,
+    "busybox_live_raw_absolute_symlinks": 1,
+    "installed_busybox_control_scripts": 3,
+    "native_components": 6,
+    "native_component_source_files": 506,
+    "busybox_original_source_inputs": 75,
+    "busybox_original_aports_files": 80,
+    "busybox_corresponding_patch_stages": 66,
+    "busybox_corresponding_final_witnesses": 50,
+    "busybox_patched_source_inventory_sha256": "5bb0e8b0b34b5ce0438c09fbd337cf809a7b4fbdf7fb1e715e592c43ff9fd633",
+    "default_runtime_untrusted_signature_denials": 4,
+    "runtime_keys_and_repositories_unchanged": true,
+    "original_check_log_pass_lines_joined_not_rerun_by_consumer": 913,
+    "whole_runtime_status": "FAIL",
+    "sole_whole_runtime_failure": {"native_source_and_artifact_integrity": "AssertionError: missing regular file: index.json"}
+  },
+  "independent_retention": "Original complete artifact ZIPs rehashed against GitHub artifact metadata; only bounded exact-name regular JSON/text members selected through streaming TAR reads without extracting or executing provider code. Full ZIPs and selected image/runtime/owned/source-commit captures retained in owned-consumer-integration-01.",
+  "paired_summary_sha256": "cffcc8ac344d0293b54f98da0aa84451447916f7627152d7dd4747cb6eed94f6",
+  "scope": "Actual complete application candidates on both real native hosts using trusted read-only checkout code against immutable image IDs, not ARM data replay on AMD64 or the earlier runtime-base fixture. All bounded owned composition obligations above passed; the full runtime source gate still fails on the unchanged RPM index path. Native-source hash joins are not fresh GPG/reproduced-build/compiler/static/feature or advisory proof. Do not change OWNED_PENDING or aggregate dispatch based solely on this receipt. GNU final-image consumer added later at b52f4b08 is a separate pending native run, not inferred here. Nothing merged, published or deployed.",
+  "full_runtime_source_acceptance": false,
+  "historical_compiler_linkage_established": false
+}
