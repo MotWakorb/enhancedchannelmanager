@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "assessment_date": "2026-11-11",
+  "status": "UNRESOLVED_P1_MATCHING_CAIRO_FIX_AND_TAR_NATIVE_PROVIDER_ACCEPTANCE_BLOCKED",
+  "beads": [
+    "enhancedchannelmanager-eeh2i",
+    "enhancedchannelmanager-4yxbm",
+    "enhancedchannelmanager-uv80n.1"
+  ],
+  "base_commit": "95fc8e4e88c22744327de0ed75767ce5e8b28af9",
+  "branch": "work/p1-cairo-tar-20261111",
+  "report": "docs/design/cairo_tar_remediation_20261111.md",
+  "http_receipts": 58,
+  "http_status_distribution": {
+    "200": 49,
+    "418": 2,
+    "404": 2,
+    "ERROR": 4,
+    "401": 1
+  },
+  "capsule": {
+    "path": "docs/design/evidence/cairo_tar_remediation_20261111.receipts.json.gz",
+    "sha256": "bb2587b16a9de6a51cfe88317db95969ab735d700b4894063aaa6d91413aeff2",
+    "bytes": 259968,
+    "raw_sha256": "8107d857608d218ad66ee94d02f37c61500bd0ed13fce8acd4f52c5a9210bdbc",
+    "raw_bytes": 1895968
+  },
+  "native_contract": {
+    "path": "docs/design/evidence/cairo_tar_native_contract_20261111.json",
+    "sha256": "7598073d4416a4ec1bcfd705f0447276bc9312c7d307784cf39e0889061bf4c9",
+    "image_id": "sha256:ca2fb0b9c99667df56641eaf0427535079f2b8dd66bfbde2e951603a4d4958a8",
+    "scope": "Native AMD64 controlled witnesses only; no actual Poppler payload or patched tar binary executed",
+    "exit_code": 1,
+    "reason": "Installed tar known-bad narrow boundary; no installed remediation"
+  },
+  "source_prototype": {
+    "capsule_record": "bounded-source-prototype.json",
+    "sha256": "f706a890ae1aced6d7a889476622fbe55fe81c49dd40c4f9429513c132420f13",
+    "status": "12 complete patch files apply with fuzz zero; 1 existing Alpine patch and11 original vendor files; no compilation/runtime proof",
+    "changed_regular_files": 44,
+    "archive_sha256": "4d62ff37342ec7aed748535323930c7cf94acf71c3591882b26a7ea50f3edc16",
+    "blockers": [
+      "Explicit approval for one new maintained GNU tar provider or maintained official stable update",
+      "Available isolated native build environment with Autotools; no toolchain installed in this task",
+      "Full musl/ARM64/kernel-fallback/upstream-regression/feature/scanner acceptance not executed"
+    ],
+    "receipt": {
+      "path": "docs/design/evidence/cairo_tar_source_prototype_20261111.json",
+      "sha256": "cf4d75b482ede106dbca1043efad07269183e2c07f47bd3f49c3dd5aee254c13"
+    }
+  },
+  "cairo": {
+    "matching_correction_established": false,
+    "mr621_state": "opened",
+    "mr632_state": "opened",
+    "diagnostic": "exact assertion observed only with intentionally invalid live-object debug cleanup; destroy-first control exits0",
+    "actual_poppler_input_trigger": "NOT_TESTED",
+    "cna_cvss3": {
+      "baseScore": 2.9,
+      "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+    },
+    "contradictory_vendor_tessellation_fix_not_substituted": true
+  },
+  "tar": {
+    "upstream_vendor_repair_exists": true,
+    "fixed_native_binary_tested": false,
+    "old_boundary_failure_observed": true,
+    "old_repeated_extract_hazard_observed": true,
+    "incremental_rename_race": "NOT_TESTED",
+    "redhat_cvss3": {
+      "CVE-2025-45582": 5.6,
+      "CVE-2026-18477": 4.4,
+      "CVE-2026-18508": 4.4
+    },
+    "effective_ecm_risk": "Unresolved P1; no unsupported automatic likelihood reduction"
+  },
+  "tests": {
+    "instrument_unit": "11passed0skips; native74pins verified; subsetNOTfullgate; includes recorded original primary/source receipts",
+    "red_before_implementation": "7missing-module errors retained after correcting one initial relative test-path invocation error",
+    "dangerous_mutant": "Ignore outside inode aliasing:1failed8passed; restored nine instrument cases passed, then11passed including two recorded source/primary cases",
+    "native": "Cairo invalid/valid cleanup contrasts; ordinary relative/absolute top-level controls succeed; tar top-level and repeated-extract witnesses fail confinement",
+    "ruff_check": "PASS",
+    "ruff_format_check": "PASS"
+  },
+  "runtime_remediation": false,
+  "new_owned_provider_authorized": false,
+  "recipe_or_gate_changed": false,
+  "release_authorized": false
+}

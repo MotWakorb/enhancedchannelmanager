@@ -1,0 +1,516 @@
+{
+  "schema_version": 1,
+  "scope": "Offline capsule-to-source application only; NO patched executable/provider or native fix acceptance",
+  "prototype": {
+    "schema_version": 1,
+    "status": "COMPLETE_ORIGINAL_PATCH_REPLAY_ONLY_NOT_COMPILED",
+    "source": {
+      "url": "https://ftp.gnu.org/gnu/tar/tar-1.35.tar.xz",
+      "sha256": "4d62ff37342ec7aed748535323930c7cf94acf71c3591882b26a7ea50f3edc16",
+      "sha512": "8b84ed661e6c878fa33eb5c1808d20351e6f40551ac63f96014fb0d0b9c72d5d94d8865d39e36bcb184fd250f84778a3b271bbd8bd2ceb69eece0c3568577510",
+      "sha512_matches_pinned_alpine_recipe": true
+    },
+    "ordered_patches": [
+      {
+        "file": "tar-alpine-checksums.patch",
+        "sha256": "30b2e060e2a6f0152450a07928f3c0c27a7759cb87dae0db45f1c49a83b1b6a7",
+        "bytes": 522,
+        "receipt": "tar-alpine-checksums.patch.receipt.json"
+      },
+      {
+        "file": "tar-vendor-prereq-3.patch",
+        "sha256": "2cc27ab7d9893d865239c9cb4e0501421ac2ac769bb0dd4decf4e65a0e0b1343",
+        "bytes": 3689,
+        "receipt": "tar-vendor-prereq-3.patch.receipt.json"
+      },
+      {
+        "file": "tar-vendor-prereq-4.patch",
+        "sha256": "a26682f3b64c3051cbdaa1bfb56d88ae8ffba83aabc174a0e4251f9249454e71",
+        "bytes": 994,
+        "receipt": "tar-vendor-prereq-4.patch.receipt.json"
+      },
+      {
+        "file": "tar-vendor-prereq-11.patch",
+        "sha256": "1eb2192145aaf4270ce955cedce917336cc9177bb0429a7580445530321443e7",
+        "bytes": 7137,
+        "receipt": "tar-vendor-prereq-11.patch.receipt.json"
+      },
+      {
+        "file": "tar-vendor-prereq-12.patch",
+        "sha256": "2194be6a3b685f547d59d8d9b2223b857adfffd12184a3b44a09fb35fa9517de",
+        "bytes": 1590,
+        "receipt": "tar-vendor-prereq-12.patch.receipt.json"
+      },
+      {
+        "file": "tar-vendor-prereq-13.patch",
+        "sha256": "736f519ee2d364233d9927d59e8ff3459f9b756b4f19620bddecd63b180d1d30",
+        "bytes": 4904,
+        "receipt": "tar-vendor-prereq-13.patch.receipt.json"
+      },
+      {
+        "file": "tar-alma-nooverwrite.patch",
+        "sha256": "c5da27c6a6efa94c5cc2e218ace62847662b1618c95a4002914ec18857129873",
+        "bytes": 6307,
+        "receipt": "tar-alma-nooverwrite.patch.receipt.json"
+      },
+      {
+        "file": "tar-alma-jail.patch",
+        "sha256": "79b49f03171ebba08c2f631d53fdea234e39a440825cd28f175b4e91d1588215",
+        "bytes": 87640,
+        "receipt": "tar-alma-jail.patch.receipt.json"
+      },
+      {
+        "file": "tar-alma-relative.patch",
+        "sha256": "53f7a308c1944bf6b4cdfa48fe86d6fdaa56384cc1aefe2b831eb6411f9568a4",
+        "bytes": 2552,
+        "receipt": "tar-alma-relative.patch.receipt.json"
+      },
+      {
+        "file": "tar-alma5704.patch",
+        "sha256": "702db041689b8bfc45133ca3432ebab93101302f8823a79ce616d6c122c39a66",
+        "bytes": 15048,
+        "receipt": "tar-alma5704.patch.receipt.json"
+      },
+      {
+        "file": "tar-alma-top.patch",
+        "sha256": "951416e789e3bdae381df377b76597002b532f9a85f6c2221e283deaa0c42229",
+        "bytes": 25233,
+        "receipt": "tar-alma-top.patch.receipt.json"
+      },
+      {
+        "file": "tar-alma-incremental.patch",
+        "sha256": "aea389d8ca495bc0474c00a339f137c00e159ffc28caed65b02823be4f5046af",
+        "bytes": 11055,
+        "receipt": "tar-alma-incremental.patch.receipt.json"
+      }
+    ],
+    "patch_command": [
+      "patch",
+      "--batch",
+      "--fuzz=0",
+      "-p1",
+      "-i",
+      "<absolute-file>"
+    ],
+    "changed_regular_files": [
+      {
+        "path": "NEWS",
+        "pre_sha256": "2b5a6bfa0db15367d9d27265c208e129904784f7aaac545da0c2bad870afca51",
+        "post_sha256": "bd8486a083e09f816ce5b1429e3ffaa71baf1f24b7bdedd22855b5ec412b2173"
+      },
+      {
+        "path": "THANKS",
+        "pre_sha256": "eb561a374bfd9698366e4d55e6853d5816e306259ded7c4d2a3c352179fc6dfd",
+        "post_sha256": "efaa8b7d1b36698cfc5e5d070305b6df63fa62e984f05d8bd92b995b9e94e702"
+      },
+      {
+        "path": "aclocal.m4",
+        "pre_sha256": "62b59fccaa7f9554928b43fb488c17e26b7d7a7f57062b915e5443a598f2bd61",
+        "post_sha256": "d716607f7aac7ff0f7970581ae0773d6227e36041c3506d5c6aa77daa8b1ee25"
+      },
+      {
+        "path": "configure",
+        "pre_sha256": "c01446d5f9e51df7754dbd9ea8a4b14f93ed876d27a319fe429633db3d7de7e5",
+        "post_sha256": "7ec6618db858789fcdf81774de5d0ac3fd7ef9d5c6f505d9fee04bd10d543582"
+      },
+      {
+        "path": "doc/tar.texi",
+        "pre_sha256": "221e9ac4f5b9e0465b5766308cbd948c4cb370cfe85d58072476f47c18ce843b",
+        "post_sha256": "37214f63822c65eddde871a35f3b43213b762536f9370ce5be76b2aef6ab8fef"
+      },
+      {
+        "path": "gnu/Makefile.am",
+        "pre_sha256": "0da7cc64304acf252ad2da92af62e6cceca2157e55f56f847171cb53c936a431",
+        "post_sha256": "4c7ccd997974f31fb270974b62a4d7bb761e2510e60cb720624bc706f39c3f89"
+      },
+      {
+        "path": "gnu/fcntl.in.h",
+        "pre_sha256": "ad4b134ffcb483352c52007d0640d789711bb6ebd8cbb6bd1ab45d3278fcca23",
+        "post_sha256": "1f38308cda7523d6b49e47ed1c70fd468c4a3d7616ed6744114dd7637279a0f9"
+      },
+      {
+        "path": "gnu/openat2.c",
+        "pre_sha256": null,
+        "post_sha256": "d7252615999e438c8ff4358f9c6d4304e609ef72b5eb0f7144c164c9a494e413"
+      },
+      {
+        "path": "lib/Makefile.am",
+        "pre_sha256": "4bed9bf65e2eb453cdc0dade993b9e630f71f2015240d9074742f1f60db11aef",
+        "post_sha256": "0e652fa024b047f6281aac30602d710e55951e643de3fef34c6af5ce650b75ff"
+      },
+      {
+        "path": "lib/mkdtempat.c",
+        "pre_sha256": null,
+        "post_sha256": "d55595c1c5d64f1f4820efd46bdc0813927833b27581ee8ece98af1703d17973"
+      },
+      {
+        "path": "lib/mkdtempat.h",
+        "pre_sha256": null,
+        "post_sha256": "e660013c2fc5d483f637d33fdfb60c7c10c52fd6407623daf56a00d5deacf4e3"
+      },
+      {
+        "path": "lib/paxerror.c",
+        "pre_sha256": "67a28f749e9235d1d1ae7237f46311cca4ee7d3edb7b2183cbbfed1d0da1fd65",
+        "post_sha256": "db3483024212db64e2aea11a1243456e458756bee044ae5acd62787004e5416d"
+      },
+      {
+        "path": "lib/paxlib.h",
+        "pre_sha256": "4f05ae15d2beeb9b99d645833bfab06ff8400af1e2a6ab89c12d6bbf2806a313",
+        "post_sha256": "370817d58d7dc6adfb19b4b21f3561301713e0aec1d3bed1fc267315c900f658"
+      },
+      {
+        "path": "m4/fcntl_h.m4",
+        "pre_sha256": "a45bd43a4f998f8cdff5fae3a8c16acedcfb71fd5bece20f7376a79cfabf36cd",
+        "post_sha256": "b37007d82a7481d42fa8fd431682548ca183efd5b407579cb3f4d3c6aaa08868"
+      },
+      {
+        "path": "m4/gnulib-comp.m4",
+        "pre_sha256": "1ec13f6a30c3e7134df597cc3fd311655e0c9ed7dd3127578b50143669c34925",
+        "post_sha256": "ec5a94118d82d1f0cfb8ca68230506467b0200d15784e4de4eb5d4357c1957f8"
+      },
+      {
+        "path": "m4/openat2.m4",
+        "pre_sha256": null,
+        "post_sha256": "b0f38d748300e2d512cf4f3c43ac60c33d7ef5151f7422964f322bd5dc1709b0"
+      },
+      {
+        "path": "src/common.h",
+        "pre_sha256": "4c35b3862a318cb239b56e0cf98acfe88775956bfb41fd2270b31ce009b101e5",
+        "post_sha256": "e4ce2f0a9880478d40ec7d90fbb32030b783f503ecea9660f678f77ed2ec489c"
+      },
+      {
+        "path": "src/compare.c",
+        "pre_sha256": "e65a377c0903c6583f105da573949331610043edc20082e0aad48700536ffd93",
+        "post_sha256": "5954ef5e3e74fb5fd7759ae2538c4dda511c40c63ab7c013b3409001734aab66"
+      },
+      {
+        "path": "src/create.c",
+        "pre_sha256": "652c1666b33443e6ad5bd93594f1940a579e9c8d7dc14b44492f6fd59ef24a63",
+        "post_sha256": "7914e9504b076cdad1b13b114b9685a0728e17adde6828dee87ff3f54ec22d78"
+      },
+      {
+        "path": "src/exclist.c",
+        "pre_sha256": "34e10df6b84ea8d914ab5282b9bc5cc87cc85d17df7c4ae57be22133f19c29e9",
+        "post_sha256": "a4357012a61134b954a117eee98d9294387d94983f27b3dcea14d2a243ebdd11"
+      },
+      {
+        "path": "src/extract.c",
+        "pre_sha256": "8311ba8f48e12668c40d7ebd45cb571e12381bce8a88aafed5988ef7e1ea9e6f",
+        "post_sha256": "5577d235b1148807225459b320c6ecfaeabe4964732a3268cad53396968350e7"
+      },
+      {
+        "path": "src/incremen.c",
+        "pre_sha256": "fede03220e6f566a15fa83731abd731d4403a870dd8275e9638e6b62852069ff",
+        "post_sha256": "03984c0d771b5b145a2e1515ef063ef2666f5a19050ed9af8e76954d8670b324"
+      },
+      {
+        "path": "src/list.c",
+        "pre_sha256": "1504085e079ffe77c20df87f877e76d098fdfeb2c3c9df9ccdf5a59ce7226ed3",
+        "post_sha256": "b9eaa29fd16f071dddc79d4182342184aee55c504a66352f81dab1481f829758"
+      },
+      {
+        "path": "src/misc.c",
+        "pre_sha256": "e364fb62f84501f50d574d985277018fec793a8177890ff98118b19b5302f236",
+        "post_sha256": "cada200cbf271f8adc10eb3de31095fd88d34ef70cbcbfd473c8e2186551b619"
+      },
+      {
+        "path": "src/names.c",
+        "pre_sha256": "b1b4ebf14cdc82f27aa7265ca59ae5c7df2d54fe311a350484b175921396fb96",
+        "post_sha256": "9be641d34c9cdf09ee632a36ff2697b6af16fa51c1266aad496e209f03d77257"
+      },
+      {
+        "path": "src/sparse.c",
+        "pre_sha256": "04a2ad8813d3e72f3ea16ecb02440c65de85a7e4041268b2c4dd09c672ac76b4",
+        "post_sha256": "8d2849d7ebd3c1dbdf8878dc9412ee7fcf4ea176e69b04e478585e3153269bc4"
+      },
+      {
+        "path": "src/tar.c",
+        "pre_sha256": "cc5fad63d3ae5b7610cb3a30a670edb2e27baacd2d7668703e464a69577c86d5",
+        "post_sha256": "922e2ebeb40f9a22d3092002c1176ceb4c07a70b72dad5d1c6e6c487a9657db7"
+      },
+      {
+        "path": "src/unlink.c",
+        "pre_sha256": "fb9097bbb6271572193540542157de36fa19f1d5fccbb79d94b698ce202d2659",
+        "post_sha256": "e21da331add81d9a3a2b66c93150884c522a75062cad6740c0d1e6cce034014c"
+      },
+      {
+        "path": "src/update.c",
+        "pre_sha256": "d0d9b40d4a31aeca20e26f5244f59a7cc0dfd0d1e0ef36fd785c536d00a32e5c",
+        "post_sha256": "db9a113e30e5ae16f13ac22bc564e28d2709fa3ccd1408bc62653e98d408b20c"
+      },
+      {
+        "path": "src/xattrs.c",
+        "pre_sha256": "8598a61c46ece2530cde835d3bf8ae99f5a7999207da593ccbbccdb767d521d6",
+        "post_sha256": "db3dc5c7c3bac3632abfc431a50ad2a0e66dbab05fa793a9210c27914add2e02"
+      },
+      {
+        "path": "src/xheader.c",
+        "pre_sha256": "2a0bc1a8b13da63cf723f1f4bb146416a1ec2b7a4860462f70d62307be99a45a",
+        "post_sha256": "d5469897c842376784e909bc640c6739e9e025c74760261ad52c114511097dfc"
+      },
+      {
+        "path": "tests/Makefile.am",
+        "pre_sha256": "076d52cd54f5d946cd54756b68362eb429d2d61befd2ef5c69ed24e3b5cdb02d",
+        "post_sha256": "186c7e2e0892d0496bef70a2b5bb0bf25817a55770558eb019f219494d0d9b43"
+      },
+      {
+        "path": "tests/Makefile.in",
+        "pre_sha256": "bcb838e75c7cbfeb71f8569cb8aa5b328ea26bf2568ccd4d9e1ffe2a592bd2fc",
+        "post_sha256": "c913918c89f9053f88f6a54a63372788800cd142e0be0cb96ab97a467981ce85"
+      },
+      {
+        "path": "tests/exclude01.at",
+        "pre_sha256": "8de1fc0a68edfe7c2d71bc4990776f54cfac9ee51e8a444a3ceca56b2ec9ee1a",
+        "post_sha256": "2101019d7af372888d43f81419f9e797761954e839b0ab6ae015c87c51642f12"
+      },
+      {
+        "path": "tests/extrac23.at",
+        "pre_sha256": "dd907cbc20c3b550eb80bcfa75e994ef717a477f4885c60c4375d97b6307ff9c",
+        "post_sha256": "238d1ff339a900240dc16edeb40bcc22248b875a0a774c770572f4a410893a18"
+      },
+      {
+        "path": "tests/extrac27.at",
+        "pre_sha256": null,
+        "post_sha256": "e658cdda7370d0dfa520f502847a60138e5452b6eba18daeb39bd71631bd007a"
+      },
+      {
+        "path": "tests/extrac30.at",
+        "pre_sha256": null,
+        "post_sha256": "647c3d50f67c89324f876c20c4cb63e06864408263cb3be148385d655e2851f3"
+      },
+      {
+        "path": "tests/extrac31.at",
+        "pre_sha256": null,
+        "post_sha256": "67087488c1ac732ea9cefb8108dbfcc70d6883161939ba90af37fd74c040f9b8"
+      },
+      {
+        "path": "tests/extrac32.at",
+        "pre_sha256": null,
+        "post_sha256": "328c764aa2422e71ae7062f4ee8d9a458ecda9724c337356e46c7da348ecb86e"
+      },
+      {
+        "path": "tests/extrac34.at",
+        "pre_sha256": null,
+        "post_sha256": "3cf9060b93eef7940193f6cdb3821e0a6d6e06b930d344a1fec234ef6f514716"
+      },
+      {
+        "path": "tests/rename08.at",
+        "pre_sha256": null,
+        "post_sha256": "da3b6e0ed0ea29d1e58017df21393de2b443908b510725afe20ffbaaef0980b3"
+      },
+      {
+        "path": "tests/rename09.at",
+        "pre_sha256": null,
+        "post_sha256": "a3924a039f6f158a1b7075bcc78dea25eede1e03483ef9af0601926abdba28e0"
+      },
+      {
+        "path": "tests/skipdir.at",
+        "pre_sha256": null,
+        "post_sha256": "8ddfaf9788df95249c192c9b22f807a19b5a6dc29a6ac6133939807ba1ad9a22"
+      },
+      {
+        "path": "tests/testsuite.at",
+        "pre_sha256": "9d21de7d9f2c5872939735ed2c08d186aa2ddee28926a32dd8d4d33ed07f9ad7",
+        "post_sha256": "94208f51b72ccc055c136e7bc6f4705b93d95c4bc878fee58779602de17718da"
+      }
+    ],
+    "registration_files": [
+      "tests/Makefile.am",
+      "tests/testsuite.at"
+    ],
+    "preserved_upstream_tests": [
+      "extrac27.at",
+      "extrac30.at",
+      "extrac31.at",
+      "extrac32.at",
+      "extrac34.at",
+      "skipdir.at",
+      "rename08.at",
+      "rename09.at"
+    ],
+    "failures_retained": [
+      "source-probe.json",
+      "source-probe-02.json",
+      "source-probe-minimal.json"
+    ],
+    "build_blocker": {
+      "command": [
+        "autoreconf",
+        "-v"
+      ],
+      "exit_code": 127,
+      "stderr": "zsh:1: command not found: autoreconf",
+      "tooling_image": "sha256:0c5586b42b0da040b974f5e87b80c6075374216186f28ad3833eb4cab704fc2f",
+      "tooling_image_has_cc_make_autoconf_meson": false,
+      "scope": "No toolchain installed, no configure/compiler/upstream tests executed; no tar provider built or installed"
+    },
+    "maintenance_authorized": false,
+    "runtime_remediated": false
+  },
+  "offline_consumer": {
+    "status": "PASS_SOURCE_APPLICATION_ONLY_NO_COMPILER_OR_SOURCE_EXECUTION",
+    "capsule_sha256": "bb2587b16a9de6a51cfe88317db95969ab735d700b4894063aaa6d91413aeff2",
+    "prototype_sha256": "f706a890ae1aced6d7a889476622fbe55fe81c49dd40c4f9429513c132420f13",
+    "archive_sha256": "4d62ff37342ec7aed748535323930c7cf94acf71c3591882b26a7ea50f3edc16",
+    "patches": 12,
+    "full_changed_file_hashes_verified": 44,
+    "logs": [
+      {
+        "command": [
+          "/usr/bin/patch",
+          "--batch",
+          "--fuzz=0",
+          "-p1",
+          "-i",
+          "/tmp/opencode/ecm-p1-cairo-tar-proof-20261111/capsule-source-replay-final/tar-alpine-checksums.patch"
+        ],
+        "exit_code": 0,
+        "stdout": "patching file src/xheader.c\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/usr/bin/patch",
+          "--batch",
+          "--fuzz=0",
+          "-p1",
+          "-i",
+          "/tmp/opencode/ecm-p1-cairo-tar-proof-20261111/capsule-source-replay-final/tar-vendor-prereq-3.patch"
+        ],
+        "exit_code": 0,
+        "stdout": "patching file doc/tar.texi\nHunk #1 succeeded at 8583 (offset 144 lines).\nHunk #2 succeeded at 13093 (offset 178 lines).\npatching file src/names.c\nHunk #2 succeeded at 225 (offset 30 lines).\nHunk #3 succeeded at 243 (offset 30 lines).\nHunk #4 succeeded at 1403 (offset 170 lines).\nHunk #5 succeeded at 1777 (offset 161 lines).\npatching file tests/exclude01.at\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/usr/bin/patch",
+          "--batch",
+          "--fuzz=0",
+          "-p1",
+          "-i",
+          "/tmp/opencode/ecm-p1-cairo-tar-proof-20261111/capsule-source-replay-final/tar-vendor-prereq-4.patch"
+        ],
+        "exit_code": 0,
+        "stdout": "patching file src/create.c\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/usr/bin/patch",
+          "--batch",
+          "--fuzz=0",
+          "-p1",
+          "-i",
+          "/tmp/opencode/ecm-p1-cairo-tar-proof-20261111/capsule-source-replay-final/tar-vendor-prereq-11.patch"
+        ],
+        "exit_code": 0,
+        "stdout": "patching file lib/paxerror.c\npatching file lib/paxlib.h\npatching file src/common.h\npatching file src/create.c\npatching file src/misc.c\npatching file src/sparse.c\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/usr/bin/patch",
+          "--batch",
+          "--fuzz=0",
+          "-p1",
+          "-i",
+          "/tmp/opencode/ecm-p1-cairo-tar-proof-20261111/capsule-source-replay-final/tar-vendor-prereq-12.patch"
+        ],
+        "exit_code": 0,
+        "stdout": "patching file src/create.c\nHunk #1 succeeded at 1086 (offset -11 lines).\npatching file tests/Makefile.am\nHunk #1 succeeded at 249 (offset 2 lines).\npatching file tests/Makefile.in\nHunk #1 succeeded at 1970 (offset 348 lines).\npatching file tests/testsuite.at\nHunk #1 succeeded at 469 (offset 45 lines).\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/usr/bin/patch",
+          "--batch",
+          "--fuzz=0",
+          "-p1",
+          "-i",
+          "/tmp/opencode/ecm-p1-cairo-tar-proof-20261111/capsule-source-replay-final/tar-vendor-prereq-13.patch"
+        ],
+        "exit_code": 0,
+        "stdout": "patching file src/extract.c\nHunk #1 succeeded at 684 (offset -25 lines).\nHunk #2 succeeded at 728 (offset -25 lines).\nHunk #3 succeeded at 769 (offset -25 lines).\nHunk #4 succeeded at 889 (offset -25 lines).\nHunk #5 succeeded at 1977 (offset -35 lines).\npatching file tests/Makefile.am\nHunk #1 succeeded at 125 (offset -11 lines).\npatching file tests/extrac27.at\npatching file tests/testsuite.at\nHunk #1 succeeded at 349 (offset -4 lines).\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/usr/bin/patch",
+          "--batch",
+          "--fuzz=0",
+          "-p1",
+          "-i",
+          "/tmp/opencode/ecm-p1-cairo-tar-proof-20261111/capsule-source-replay-final/tar-alma-nooverwrite.patch"
+        ],
+        "exit_code": 0,
+        "stdout": "patching file NEWS\npatching file src/extract.c\npatching file tests/Makefile.am\npatching file tests/extrac23.at\npatching file tests/extrac30.at\npatching file tests/testsuite.at\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/usr/bin/patch",
+          "--batch",
+          "--fuzz=0",
+          "-p1",
+          "-i",
+          "/tmp/opencode/ecm-p1-cairo-tar-proof-20261111/capsule-source-replay-final/tar-alma-jail.patch"
+        ],
+        "exit_code": 0,
+        "stdout": "patching file aclocal.m4\npatching file configure\npatching file doc/tar.texi\npatching file gnu/fcntl.in.h\npatching file gnu/Makefile.am\npatching file gnu/openat2.c\npatching file m4/fcntl_h.m4\npatching file m4/gnulib-comp.m4\npatching file m4/openat2.m4\npatching file NEWS\npatching file src/common.h\npatching file src/compare.c\npatching file src/create.c\npatching file src/exclist.c\npatching file src/extract.c\npatching file src/misc.c\npatching file src/names.c\nHunk #1 succeeded at 1792 (offset -5 lines).\npatching file src/tar.c\npatching file src/unlink.c\npatching file src/update.c\npatching file src/xattrs.c\npatching file tests/extrac31.at\npatching file tests/Makefile.am\npatching file tests/testsuite.at\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/usr/bin/patch",
+          "--batch",
+          "--fuzz=0",
+          "-p1",
+          "-i",
+          "/tmp/opencode/ecm-p1-cairo-tar-proof-20261111/capsule-source-replay-final/tar-alma-relative.patch"
+        ],
+        "exit_code": 0,
+        "stdout": "patching file NEWS\npatching file doc/tar.texi\npatching file src/tar.c\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/usr/bin/patch",
+          "--batch",
+          "--fuzz=0",
+          "-p1",
+          "-i",
+          "/tmp/opencode/ecm-p1-cairo-tar-proof-20261111/capsule-source-replay-final/tar-alma5704.patch"
+        ],
+        "exit_code": 0,
+        "stdout": "patching file NEWS\npatching file THANKS\npatching file src/extract.c\npatching file src/incremen.c\npatching file src/list.c\npatching file tests/Makefile.am\npatching file tests/extrac32.at\npatching file tests/extrac34.at\npatching file tests/skipdir.at\npatching file tests/testsuite.at\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/usr/bin/patch",
+          "--batch",
+          "--fuzz=0",
+          "-p1",
+          "-i",
+          "/tmp/opencode/ecm-p1-cairo-tar-proof-20261111/capsule-source-replay-final/tar-alma-top.patch"
+        ],
+        "exit_code": 0,
+        "stdout": "patching file NEWS\npatching file doc/tar.texi\npatching file src/common.h\npatching file src/create.c\npatching file src/extract.c\npatching file src/list.c\npatching file src/misc.c\npatching file src/names.c\npatching file src/tar.c\npatching file src/unlink.c\npatching file src/update.c\n",
+        "stderr": ""
+      },
+      {
+        "command": [
+          "/usr/bin/patch",
+          "--batch",
+          "--fuzz=0",
+          "-p1",
+          "-i",
+          "/tmp/opencode/ecm-p1-cairo-tar-proof-20261111/capsule-source-replay-final/tar-alma-incremental.patch"
+        ],
+        "exit_code": 0,
+        "stdout": "patching file NEWS\npatching file THANKS\npatching file lib/Makefile.am\npatching file lib/mkdtempat.c\npatching file lib/mkdtempat.h\npatching file src/incremen.c\npatching file tests/Makefile.am\npatching file tests/rename08.at\npatching file tests/rename09.at\npatching file tests/testsuite.at\n",
+        "stderr": ""
+      }
+    ]
+  }
+}

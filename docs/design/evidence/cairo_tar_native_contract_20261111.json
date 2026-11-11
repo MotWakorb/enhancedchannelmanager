@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "scope": "Native AMD64 controlled witnesses only; no actual Poppler payload or patched tar binary executed",
+  "captured_at": "2026-11-11T16:14:59.393755+00:00",
+  "base_commit": "95fc8e4e88c22744327de0ed75767ce5e8b28af9",
+  "image": {
+    "Id": "sha256:ca2fb0b9c99667df56641eaf0427535079f2b8dd66bfbde2e951603a4d4958a8",
+    "RepoDigests": [
+      "ghcr.io/motwakorb/enhancedchannelmanager@sha256:ae116b252f421e20c588edf19a1c214bbb3fa0bea127b64d2bd42619b727c4f2"
+    ],
+    "Architecture": "amd64",
+    "Created": "2026-11-11T02:41:34.849681663Z"
+  },
+  "image_version": [
+    "ECM_VERSION=0.18.2-0066"
+  ],
+  "identity": {
+    "architecture": "x86_64",
+    "files": {
+      "/bin/tar": "2d3e170780a649c3a4cd8dd3e86960644b8a66ee7a76d39d9ecabe157bf98617",
+      "/usr/lib/libcairo.so.2": "62a60dc2f21341d91d60b7728a8e235c23d64456988014259ac7997ac4f13c7f",
+      "/usr/lib/libfreetype.so.6": "f1cce198cf29160495728b27a69ecaf6d8c3f10c1881775e66529995a4f2d086"
+    },
+    "packages": [
+      "C:Q1mRbEfXW9K+sC2wp7w3my62N2aSo=\nP:cairo\nV:1.18.4-r1\nA:x86_64\nS:514692\nI:1082208\nT:A vector graphics library\nU:https://cairographics.org/\nL:LGPL-2.1-or-later OR MPL-1.1\no:cairo\nm:Natanael Copa <ncopa@alpinelinux.org>\nt:1769625899\nc:e54632f6ef658146c2393a8cbd0368a3707d4991\nD:so:libX11.so.6 so:libXext.so.6 so:libXrender.so.1 so:libc.musl-x86_64.so.1 so:libfontconfig.so.1 so:libfreetype.so.6 so:libpixman-1.so.0 so:libpng16.so.16 so:libxcb-render.so.0 so:libxcb-shm.so.0 so:libxcb.so.1 so:libz.so.1\np:so:libcairo-script-interpreter.so.2=2.11804.4 so:libcairo.so.2=2.11804.4\nF:usr\nF:usr/lib\nR:libcairo-script-interpreter.so.2\na:0:0:777\nZ:Q1e53BaFy6hDGZk5xHpAVq08upRF4=\nR:libcairo-script-interpreter.so.2.11804.4\na:0:0:755\nZ:Q1UjhJpLhABDH3tRPtmXmVdaLnanI=\nR:libcairo.so.2\na:0:0:777\nZ:Q1yHvPUGgZR/mxCEAXMLM+h6B0ejo=\nR:libcairo.so.2.11804.4\na:0:0:755\nZ:Q1b0w8brDzxKhlOPIvo+19uXU2wjQ=\nF:usr/lib/cairo\nR:libcairo-fdr.so\na:0:0:755\nZ:Q1aQZWo9F/fZ4mI6QiXFatt07u03U=",
+      "C:Q1inTeCTllWaiIzsEB0gXPSI2KScY=\nP:freetype\nV:2.14.3-r0\nA:x86_64\nS:354367\nI:673920\nT:TrueType font rendering library\nU:https://www.freetype.org/\nL:FTL OR GPL-2.0-or-later\no:freetype\nm:Achill Gilgenast <achill@achill.org>\nt:1777471633\nc:ad16b0afc1a315c4095a75ff72ebbe3cfa29b671\nD:so:libbrotlidec.so.1 so:libbz2.so.1 so:libc.musl-x86_64.so.1 so:libpng16.so.16 so:libz.so.1\np:so:libfreetype.so.6=6.20.6\nF:usr\nF:usr/lib\nR:libfreetype.so.6\na:0:0:777\nZ:Q1UgMcM3sHzYvS/rM+Vdk74zfXClA=\nR:libfreetype.so.6.20.6\na:0:0:755\nZ:Q12cKIFVmWWDOJWi38IYGKFGlOm7s=",
+      "C:Q1slBpt2wTqI60LmIdYL8GN/FYXtY=\nP:tar\nV:1.35-r5\nA:x86_64\nS:209614\nI:409432\nT:Utility used to store, backup, and transport files\nU:https://www.gnu.org/software/tar/\nL:GPL-3.0-or-later\no:tar\nm:qaqland <qaq@qaq.land>\nt:1771160091\nc:a9e2a2dc46f377eb25884f7fea9834492de7f518\nD:so:libacl.so.1 so:libc.musl-x86_64.so.1\np:cmd:tar=1.35-r5\nF:bin\nR:tar\na:0:0:755\nZ:Q1YvfptBnxi6DR+W7wmI6YSMUMcFM=\nF:usr\nF:usr/libexec\nR:rmt\na:0:0:755\nZ:Q19zb9fjMKiawJmPxothIeEVT7azk="
+    ]
+  },
+  "native": {
+    "status": "OBSERVATIONS_ONLY_NOT_ADVISORY_CLEARANCE",
+    "font_sha256": "b4c632e3cdf9acc7f28758fb5a323c8524d7fc6660d46904d9b6cbe2809c419c",
+    "tar_sha256": "2d3e170780a649c3a4cd8dd3e86960644b8a66ee7a76d39d9ecabe157bf98617",
+    "cairo": {
+      "live": {
+        "returncode": -6,
+        "stdout": "",
+        "stderr": "Assertion failed: unscaled->face == NULL (../src/cairo-ft-font.c: _cairo_ft_unscaled_font_fini: 516)\n"
+      },
+      "released": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "documented_cleanup_contract_observed": true
+    },
+    "tar": {
+      "compatibility": [
+        {
+          "argv": [
+            "/bin/tar",
+            "-xf",
+            "/tmp/cairo-tar-contract-w0jyvsty/ordinary.tar",
+            "--one-top-level=top"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": "",
+          "contents_ok": true
+        },
+        {
+          "argv": [
+            "/bin/tar",
+            "-xf",
+            "/tmp/cairo-tar-contract-w0jyvsty/ordinary.tar",
+            "--one-top-level=/tmp/cairo-tar-contract-w0jyvsty/compatible-absolute/top"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": "",
+          "contents_ok": true
+        }
+      ],
+      "compatibility_ok": true,
+      "boundaries": [
+        {
+          "argv": [
+            "/bin/tar",
+            "-xf",
+            "/tmp/cairo-tar-contract-w0jyvsty/boundary-False.tar",
+            "--one-top-level=top"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": "",
+          "write_member": false,
+          "sentinel_unchanged": true,
+          "outside_hardlink": true
+        },
+        {
+          "argv": [
+            "/bin/tar",
+            "-xf",
+            "/tmp/cairo-tar-contract-w0jyvsty/boundary-True.tar",
+            "--one-top-level=top",
+            "--overwrite"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": "",
+          "write_member": true,
+          "sentinel_unchanged": false,
+          "outside_hardlink": true
+        }
+      ],
+      "repeated_extraction": {
+        "first": {
+          "argv": [
+            "/bin/tar",
+            "-xf",
+            "/tmp/cairo-tar-contract-w0jyvsty/repeated/first.tar"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "second": {
+          "argv": [
+            "/bin/tar",
+            "-xf",
+            "/tmp/cairo-tar-contract-w0jyvsty/repeated/second.tar"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "sentinel_unchanged": false,
+        "independent_second": {
+          "argv": [
+            "/bin/tar",
+            "-xf",
+            "/tmp/cairo-tar-contract-w0jyvsty/repeated/second.tar"
+          ],
+          "returncode": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "independent_contents_ok": true,
+        "scope": "No concurrent attacker or incremental rename race tested"
+      },
+      "incremental_rename_race": "NOT_TESTED"
+    },
+    "narrow_tar_boundary_satisfied": false,
+    "poppler_input_trigger": "NOT_TESTED"
+  },
+  "command_exit_code": 1,
+  "command_exit_reason": "--require-tar-confinement detects observed top-level boundary failure, NOT unit-suite failure",
+  "isolation": {
+    "network": "none",
+    "rootfs": "read-only",
+    "user": "3000:3000",
+    "capabilities": "ALL dropped",
+    "no_new_privileges": true,
+    "cpus": 2,
+    "memory": "3g",
+    "pids": 64,
+    "scratch": "private 32MiB /tmp tmpfs; no operator host mount writable",
+    "source": "read-only bind of own worktree",
+    "input": "ordinary host-packaged DejaVuSans.ttf, read-only copy; locally generated USTAR records only",
+    "core_dumps": false
+  },
+  "probe_sha256": "fd91aec11e621ddb8a3ce164b743d309ccadda2e2c6f363b3ba46ab003e87cc9",
+  "clearance": false
+}
