@@ -11,6 +11,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
 
+from channel_group_delete import hide_associated_group
 from channel_group_reparent import (
     UNGROUPED_TARGET_GROUP_NAME,
     UngroupedTargetUnavailable,
@@ -948,31 +949,12 @@ async def delete_channel_group(group_id: int):
     logger.debug("[GROUPS] DELETE /channel-groups/%s", group_id)
     client = get_client()
     try:
-        # Check if this group has M3U sync settings
         start = time.time()
-        m3u_settings = await client.get_all_m3u_group_settings()
-        has_m3u_sync = group_id in m3u_settings
-
-        if has_m3u_sync:
-            # Hide the group instead of deleting to preserve M3U sync
-            from models import HiddenChannelGroup
-
-            # Get the group name before hiding
-            groups = await client.get_channel_groups()
-            group_name = next((g.get("name") for g in groups if g.get("id") == group_id), f"Group {group_id}")
-
-            with get_session() as db:
-                # Check if already hidden
-                existing = db.query(HiddenChannelGroup).filter_by(group_id=group_id).first()
-                if not existing:
-                    hidden_group = HiddenChannelGroup(group_id=group_id, group_name=group_name)
-                    db.add(hidden_group)
-                    db.commit()
-                    logger.info("[GROUPS] Hidden channel group id=%s name=%s due to M3U sync settings", group_id, group_name)
-
+        hidden = await hide_associated_group(client, group_id)
+        if hidden is not None:
             elapsed_ms = (time.time() - start) * 1000
             logger.debug("[GROUPS] Hid channel group %s in %.1fms", group_id, elapsed_ms)
-            return {"status": "hidden", "message": "Group hidden (M3U sync active)"}
+            return {"status": "hidden", "message": "Group hidden (M3U account association)"}
         else:
             # No M3U sync, safe to delete — once the group is EMPTY. Dispatcharr
             # refuses to delete a group that still has channels, and refuses a

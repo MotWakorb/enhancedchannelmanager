@@ -1,0 +1,9 @@
+{
+  "source": "ecm-debug-bundle-20261108-161135.tar.gz:m3u_group_settings.json:per_account",
+  "capture_date": "2026-11-08",
+  "redaction": "Allowlisted numeric/boolean settings only. Account names, credentials, URLs and custom_properties omitted. These are recorded producer rows, not a raw accounts HTTP envelope.",
+  "rows": [
+    {"channel_group": 599, "enabled": true, "auto_channel_sync": true, "auto_sync_channel_start": 2000.0, "auto_sync_channel_end": null, "is_stale": false, "stream_count": 50, "m3u_account_id": 11},
+    {"channel_group": 207, "enabled": true, "auto_channel_sync": true, "auto_sync_channel_start": 1500.0, "auto_sync_channel_end": null, "is_stale": false, "stream_count": 32, "m3u_account_id": 11}
+  ]
+}
