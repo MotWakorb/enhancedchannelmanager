@@ -25,6 +25,7 @@ from pathlib import Path
 
 from alpine_advisories import match_installed
 from alpine_advisory_snapshot import MAXIMUM_AGE_SECONDS, read_snapshot
+from alpine_language_inventory import check_catalogue, validate_capture
 from alpine_source_inputs import InputError, require
 from alpine_source_inventory import InventoryError, canonical_sha256, source_plan
 from check_native_image_scan import DIGEST, check_report
@@ -39,13 +40,6 @@ IDENTITY_FIELDS = {
     "Architecture",
     "RootFSDiffIDs",
 }
-HELPERS = (
-    "check_alpine_advisories.py",
-    "alpine_advisories.py",
-    "alpine_advisory_snapshot.py",
-    "alpine_source_inventory.py",
-    "check_native_image_scan.py",
-)
 # Historical 19-record assessment, not a version exclusion list. These remain
 # pending even if the publisher omits them or an installed version/name changes.
 # test_nonempty_resealed_publisher_truncation_cannot_drop_known19_or_owned_holds
@@ -103,7 +97,14 @@ def read_json(path: Path) -> dict:
 
 
 def helper_digests() -> dict:
-    return {name: raw_sha256(Path(__file__).with_name(name)) for name in HELPERS}
+    # Deliberate superset of the import closure: bind ALL local Python modules,
+    # including future imports. Trusted read-only checkout, NEVER input-directory
+    # execution. This seal does not make modifiable consumer code trustworthy.
+    root = Path(__file__).resolve().parent
+    return {
+        path.relative_to(root).as_posix(): raw_sha256(path)
+        for path in sorted(root.rglob("*.py"))
+    }
 
 
 def subject(files: dict[str, Path], architecture: str) -> tuple[dict, dict]:
@@ -150,10 +151,17 @@ def subject(files: dict[str, Path], architecture: str) -> tuple[dict, dict]:
     return documents, plan
 
 
-def bind_evidence(files: dict[str, Path], snapshot: Path, architecture: str) -> dict:
+def bind_evidence(
+    files: dict[str, Path],
+    snapshot: Path,
+    architecture: str,
+    language_capture: Path | None = None,
+    language_capture_sha256: str | None = None,
+) -> dict:
     """Trusted acquisition-side byte seal, not a signed attestation or clearance."""
     documents, plan = subject(files, architecture)
     read_snapshot(snapshot)
+    language = language_evidence(documents, language_capture, language_capture_sha256)
     return {
         "schema_version": 1,
         "status": "BOUND_ADVISORY_DENIAL_INPUTS_ONLY",
@@ -164,6 +172,7 @@ def bind_evidence(files: dict[str, Path], snapshot: Path, architecture: str) -> 
         "helpers": helper_digests(),
         "database_sha256": plan["database_sha256"],
         "package_set_sha256": plan["package_set_sha256"],
+        "language_capture": language,
         "full_runtime_advisory_acceptance": False,
     }
 
@@ -174,6 +183,8 @@ def evaluate(
     binding: dict,
     expected_binding_sha256: str,
     architecture: str,
+    language_capture: Path | None = None,
+    language_capture_sha256: str | None = None,
 ) -> dict:
     """Consume exact bound inputs and retain known/new/owned pending findings."""
     require(
@@ -194,6 +205,7 @@ def evaluate(
             "helpers",
             "database_sha256",
             "package_set_sha256",
+            "language_capture",
             "full_runtime_advisory_acceptance",
         }
         and type(binding["schema_version"]) is int
@@ -220,6 +232,11 @@ def evaluate(
         "bound original scan/scanner/live inventory/snapshot bytes differ",
     )
     documents, plan = subject(files, architecture)
+    language = language_evidence(documents, language_capture, language_capture_sha256)
+    require(
+        binding["language_capture"] == language,
+        "bound physical language capture differs",
+    )
     require(
         binding["identity"] == documents["identity"]
         and binding["database_sha256"] == plan["database_sha256"]
@@ -289,6 +306,13 @@ def evaluate(
         "installed_packages": len(plan["packages"]),
         "package_set_sha256": plan["package_set_sha256"],
         "scan_failures": scan_failures,
+        "language_inventory": {
+            "status": "SCOPED_PHYSICAL_CATALOGUE_JOINED"
+            if language
+            else "MINIMUM_COVERAGE_ONLY",
+            "complete_image_catalogue": False,
+            "capture": language,
+        },
         "unfixed_matches": matched["unfixed_matches"],
         "known_advisory_holds": holds,
         "owned_subject_holds": owned,
@@ -297,6 +321,7 @@ def evaluate(
         ],
         "fixed_secdb_records_not_clearance": fixed_records,
         "remaining_acceptance": [
+            "Whole-image language discovery beyond reviewed Python roots and gosu; paired native physical capture",
             "Exact native APK version/fixed-secdb and CPE applicability reconciliation",
             "Reviewed per-advisory source/patch/recipe/feature/live-byte proof for owned components",
             "Explicit bounded nonapplicability controls, not blanket operator workflow waivers",
@@ -305,6 +330,20 @@ def evaluate(
         "full_runtime_advisory_acceptance": False,
         "scope": "Independent denial only. All exact fixed:false matches block regardless of score or scanner label. Historical nineteen holds and four owned subjects persist across publisher omission, package renaming/removal and synthetic version changes. Fixed-only omissions, opaque aliases/version-zero metadata and build receipts are not fix proof. No discharge, waiver, suppression, publication or deployment authorization is accepted.",
     }
+
+
+def language_evidence(
+    documents: dict, path: Path | None, anchor: str | None
+) -> dict | None:
+    require(
+        (path is None) == (anchor is None),
+        "physical language capture and independent digest required together",
+    )
+    if path is None:
+        return None
+    capture = validate_capture(read_json(path), anchor, documents["identity"])
+    check_catalogue(documents["report"], capture)
+    return {"sha256": raw_sha256(path), "trusted_capture_sha256": anchor}
 
 
 def write_fresh(path: Path, value: dict) -> None:
@@ -324,6 +363,8 @@ def main() -> int:
     parser.add_argument("--architecture", choices=["amd64", "arm64"], required=True)
     parser.add_argument("--binding", type=Path)
     parser.add_argument("--binding-sha256")
+    parser.add_argument("--language-capture", type=Path)
+    parser.add_argument("--language-capture-sha256")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
@@ -333,7 +374,13 @@ def main() -> int:
                 args.binding is None and args.binding_sha256 is None,
                 "bind does not consume an untrusted prior binding",
             )
-            result = bind_evidence(files, args.snapshot, args.architecture)
+            result = bind_evidence(
+                files,
+                args.snapshot,
+                args.architecture,
+                args.language_capture,
+                args.language_capture_sha256,
+            )
             write_fresh(args.output, result)
             print(canonical_sha256(result))
             return 0
@@ -346,6 +393,8 @@ def main() -> int:
             read_json(args.binding),
             args.binding_sha256,
             args.architecture,
+            args.language_capture,
+            args.language_capture_sha256,
         )
         write_fresh(args.output, result)
         print(

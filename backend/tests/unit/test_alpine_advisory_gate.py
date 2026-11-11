@@ -362,3 +362,163 @@ def test_cli_emits_blocked_report_and_nonzero_against_complete_recorded0066(
     result = json.loads(output.read_text())
     assert result["status"] == "BLOCKED" and len(result["unfixed_matches"]) == 19
     assert "BLOCKED" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "helper",
+    [
+        "alpine_source_inputs.py",
+        "verify_alpine_external_sources.py",
+        "alpine_apk_v2.py",
+        "verify_musllinux_gnu.py",
+    ],
+)
+def test_actual_enforcement_dependency_drift_rejected_after_binding(
+    gate, evidence, tmp_path, monkeypatch, helper
+):
+    # Copy trusted checkout, not artifacts. Do not execute artifact-directory code.
+    checkout = tmp_path / "consumer"
+    shutil.copytree(ROOT / "scripts", checkout)
+    monkeypatch.setattr(gate, "__file__", str(checkout / "check_alpine_advisories.py"))
+    binding, anchor = bind(gate, evidence)
+    path = checkout / helper
+    original = path.read_text()
+    if helper == "verify_alpine_external_sources.py":
+        # Semantic drift: last duplicate wins instead of unique-key rejection.
+        path.write_text(original + "\ndef unique(pairs):\n    return dict(pairs)\n")
+    elif helper == "alpine_source_inputs.py":
+        path.write_text(
+            original
+            + "\ndef require(value, message):\n    if not value: raise InputError('drift: ' + message)\n"
+        )
+    else:
+        path.write_text(
+            original + "\ndef require(value, message):\n    raise ValueError('drift')\n"
+        )
+    with pytest.raises(gate.InputError, match="helpers"):
+        gate.evaluate(*evidence, binding, anchor, "amd64")
+
+
+def test_no_physical_language_capture_is_explicitly_minimum_coverage_only(
+    gate, evidence
+):
+    binding, anchor = bind(gate, evidence)
+    result = gate.evaluate(*evidence, binding, anchor, "amd64")
+    assert result["language_inventory"]["status"] == "MINIMUM_COVERAGE_ONLY"
+    assert result["language_inventory"]["complete_image_catalogue"] is False
+
+
+def physical_capture_path(tmp_path):
+    path = tmp_path / "physical-language.json"
+    path.write_bytes(
+        gzip.decompress(
+            (FIXTURES / "published-0066-amd64-physical-language.json.gz").read_bytes()
+        )
+    )
+    return path
+
+
+@pytest.mark.parametrize(
+    "kind,retained",
+    [("python-pkg", 1), ("python-pkg", 76), ("gobinary", 1), ("gobinary", 3)],
+)
+def test_actual_physical_catalogue_rejects_rebound_language_truncation(
+    gate, evidence, tmp_path, kind, retained
+):
+    files, snapshot = evidence
+    path = physical_capture_path(tmp_path)
+    anchor = gate.canonical_sha256(gate.read_json(path))
+    gate.bind_evidence(files, snapshot, "amd64", path, anchor)
+    report = gate.read_json(files["report"])
+    row = next(row for row in report["Results"] if row["Type"] == kind)
+    row["Packages"] = row["Packages"][:retained]
+    files["report"].write_text(json.dumps(report))
+    with pytest.raises(gate.InputError, match="catalogue"):
+        gate.bind_evidence(files, snapshot, "amd64", path, anchor)
+
+
+@pytest.mark.parametrize("defect", ["source-inode", "rootfs", "extra", "version"])
+def test_actual_physical_capture_anchor_and_exact_image_join(
+    gate, evidence, tmp_path, defect
+):
+    files, snapshot = evidence
+    path = physical_capture_path(tmp_path)
+    document = gate.read_json(path)
+    anchor = gate.canonical_sha256(document)
+    if defect == "source-inode":
+        document["physical_witnesses"]["gosu"]["inode"] += 1
+    elif defect == "rootfs":
+        document["identity"]["RootFSDiffIDs"] = ["sha256:" + "0" * 64]
+    else:
+        report = gate.read_json(files["report"])
+        packages = next(
+            row for row in report["Results"] if row["Type"] == "python-pkg"
+        )["Packages"]
+        if defect == "extra":
+            packages.append(
+                {"Name": "false-extra", "Version": "1.0", "FilePath": "false/METADATA"}
+            )
+        else:
+            packages[0]["Version"] = "false"
+        files["report"].write_text(json.dumps(report))
+    path.write_text(json.dumps(document))
+    with pytest.raises(gate.InputError, match="independent|catalogue"):
+        gate.bind_evidence(files, snapshot, "amd64", path, anchor)
+    if defect == "rootfs":
+        with pytest.raises(gate.InputError, match="identity"):
+            gate.bind_evidence(
+                files, snapshot, "amd64", path, gate.canonical_sha256(document)
+            )
+
+
+def test_real_physical_capture_through_producer_bind_and_cli_consumer(
+    gate, evidence, tmp_path
+):
+    files, snapshot = evidence
+    path = physical_capture_path(tmp_path)
+    anchor = gate.canonical_sha256(gate.read_json(path))
+    base = [sys.executable, str(ROOT / "scripts/check_alpine_advisories.py")]
+    common = [
+        "--snapshot",
+        str(snapshot),
+        "--architecture",
+        "amd64",
+        "--language-capture",
+        str(path),
+        "--language-capture-sha256",
+        anchor,
+    ]
+    for key, value in files.items():
+        common += ["--" + key.replace("_", "-"), str(value)]
+    binding = tmp_path / "physical-binding.json"
+    producer = subprocess.run(
+        base + ["bind", *common, "--output", str(binding)],
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    assert producer.returncode == 0, producer.stderr
+    output = tmp_path / "physical-result.json"
+    consumer = subprocess.run(
+        base
+        + [
+            "verify",
+            *common,
+            "--binding",
+            str(binding),
+            "--binding-sha256",
+            producer.stdout.strip(),
+            "--output",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    assert consumer.returncode == 1, consumer.stderr
+    result = gate.read_json(output)
+    assert result["language_inventory"]["status"] == "SCOPED_PHYSICAL_CATALOGUE_JOINED"
+    assert result["language_inventory"]["complete_image_catalogue"] is False
+    assert result["status"] == "BLOCKED" and result["scan_failures"] == []
+    assert len(result["known_advisory_holds"]) == 19
+    assert len(result["owned_subject_holds"]) == 4
