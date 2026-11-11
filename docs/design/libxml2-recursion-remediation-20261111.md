@@ -2,6 +2,10 @@
 
 **Native AMD64 component proof passes; parent integration and ARM/full-image
 acceptance remain pending. This is not a release or advisory clearance.**
+The native results below belong to source-port commit `8dc6d683`; the later
+[proof-contract correction](libxml2-upstream-proof-contract-20261111.md) changes
+the helper identity and has fixture-based contract tests, **not a new native
+execution claim**. Fresh native CI must exercise that new helper on both arches.
 Worker branch `fix/p1-libxml2-20261111` starts at published dev
 `95fc8e4e88c22744327de0ed75767ce5e8b28af9`; its merge-base matches that commit.
 Only the manifest's libxml2 section changed: four appended patches (SGML depth
@@ -37,7 +41,8 @@ leaves exponential work. The shell patch's three regression cases enter the old
 The exact original archive was freshly downloaded from its unchanged manifest
 URL, checking size **2,426,164** and SHA256
 `a2c9ae7b770da34860050c309f903221c67830c86e4a7e760692b803df95143a`.
-All nine current patches replayed with full existing before/after witnesses.
+All nine original reviewed patches replayed in the baseline with full existing
+before/after witnesses.
 Receipt: `baseline-patch-proof/source.json`, SHA256
 `39c130ae22efb61d029768457fe7443d09a3a5b42cdc8645859b2aa8b71fcbde`.
 This is source replay, not compiled validation.
@@ -68,10 +73,10 @@ were checked again after mutation restoration.
 | Patched behavior | All 14 cases pass: 13 C mode/environment cases, each with 32 lifecycles, plus all three shell cases |
 | Resource cleanup | Tracked libxml allocations return to zero after each lifecycle; RelaxNG input opens/closes balance, including 32 default-1,000-include-limit cycles |
 | Dangerous mutants | Seven separately rebuilt mutants fail: combined SGML depth checks, SGML dedup, RNG limit, RNG error propagation, and each shell guard; restored source is GREEN again |
-| Upstream | `runtest`: **3,809 tests, no errors**; `testparser` and `make Catatests` pass |
+| Selected upstream targets | `runtest` reports a **3,809 harness counter**, 0 errors and 0 leaks (not 3,809 unique inputs); `testparser` and `make Catatests` pass |
 | Old catalog harness | Seven actual script/catalog pairs independently equal their existing golden bytes, avoiding the old Makefile's ignored-loop-exit behavior |
 | ABI/features | All 1,627 original exported symbol/type/object-size records retained; one additive upstream setter; same SONAME/NEEDED, identical generated feature configuration; old-header consumer loads the new library |
-| Python helper | Nine aligned backend subset tests pass; Ruff passes; recorded real native output is parsed, empty/incomplete PASS output and nonbehavioral tool failures are rejected |
+| Python helper at `8dc6d683` | Nine aligned backend subset tests passed; Ruff passed; the later upstream-output/catalog-coverage warning and its separate correction are documented in the follow-up |
 
 The baseline and patched C smoke executables are byte-identical; the changed
 shared library, not a different smoke binary, determines RED versus GREEN.
@@ -123,3 +128,7 @@ done. The existing recipe test's expected libxml2 patch set was extended, not
 weakened. Full source delivery/SBOM/advisory binding, native ARM execution and
 fresh both-architecture final-image CI remain mandatory. No new provider,
 waiver, publication, merge or deployment is authorized; the bead stays open.
+Production wiring must also explicitly call `Catatests` and the trusted seven
+golden comparisons: old `make check-local` does **not** invoke `Catatests`.
+The follow-up gives a bounded integration proposal without editing the shared
+builder, its pins, or historical source receipts.

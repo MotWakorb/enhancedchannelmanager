@@ -8,6 +8,7 @@ hash consumers and run both native architectures and full-image/source checks.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -19,6 +20,10 @@ from pathlib import Path
 from build_alpine_codecs import apply_patch
 from build_alpine_security_libraries import extract_source
 from build_native_runtime import BuildError, _require, sha256
+
+UPSTREAM_CONTRACT_SHA256 = (
+    "cb440eb5aee1ec5d679a543a391dff82c99b0c3bd231705173bd9a9cb7e83a6b"
+)
 
 
 def prepare(repo: Path, archive: Path, source: Path, *, baseline: bool = False) -> dict:
@@ -343,9 +348,147 @@ def native_mutants(repo: Path, source: Path) -> list[dict]:
     return results
 
 
-def native_upstream(source: Path) -> dict:
+def load_upstream_contract(assets: Path | None = None) -> dict:
+    if assets is None:
+        assets = Path(__file__).resolve().parents[1] / "docker/alpine-native"
+    path = assets / "libxml2-upstream-test-contract.json"
+    _require(
+        path.is_file()
+        and not path.is_symlink()
+        and sha256(path) == UPSTREAM_CONTRACT_SHA256,
+        "upstream test contract identity mismatch",
+    )
+    contract = json.loads(path.read_text())
+    item = next(
+        item
+        for item in json.loads((assets / "security-libraries.json").read_text())[
+            "libraries"
+        ]
+        if item["name"] == "libxml2"
+    )
+    _require(
+        item["archive"]["sha256"] == contract["source_archive_sha256"]
+        and [{"id": p["id"], "sha256": p["sha256"]} for p in item["patches"]]
+        == contract["applied_patches"],
+        "upstream test contract/source recipe mismatch",
+    )
+    return contract
+
+
+def verify_upstream_inputs(source: Path, contract: dict) -> dict[str, bytes]:
+    """Pin expected inputs before running commands; never learn coverage from a glob."""
+    directory = source / "test/catalogs"
+    _require(
+        directory.is_dir() and not directory.is_symlink(),
+        "catalog fixture directory missing",
+    )
+    observed = {str(path.relative_to(source)) for path in directory.iterdir()}
+    expected = {name for name in contract["files"] if name.startswith("test/catalogs/")}
+    _require(observed == expected, "catalog fixture inventory mismatch")
+    files = {}
+    for name, digest in contract["files"].items():
+        path = source / name
+        _require(
+            path.is_file()
+            and not path.is_symlink()
+            and path.resolve().is_relative_to(source.resolve()),
+            f"upstream fixture missing or unsafe: {name}",
+        )
+        data = path.read_bytes()
+        _require(
+            hashlib.sha256(data).hexdigest() == digest,
+            f"upstream fixture identity mismatch: {name}",
+        )
+        files[name] = data
+    return files
+
+
+def validate_upstream_output(name: str, output: bytes, contract: dict) -> dict | None:
+    _require(
+        bool(output) and output.endswith(b"\n"), f"incomplete upstream output: {name}"
+    )
+    try:
+        lines = output.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise BuildError(f"invalid upstream output: {name}") from exc
+    if name == "runtest":
+        _require(
+            lines[:-1] == ["## " + section for section in contract["runtest_sections"]],
+            "incomplete runtest suite coverage",
+        )
+        summary = re.fullmatch(
+            r"Total ([0-9]+) tests, (?:no errors|([0-9]+) errors, ([0-9]+) leaks)",
+            lines[-1],
+        )
+        _require(summary is not None, "missing completed runtest summary")
+        # The SHA-bound runtest.c emits 'no errors' only when BOTH nb_errors and
+        # nb_leaks are zero. Its executed value is a harness counter, not unique inputs.
+        counters = {
+            "executed": int(summary[1]),
+            "errors": int(summary[2] or 0),
+            "leaks": int(summary[3] or 0),
+        }
+        _require(
+            counters["executed"] > 0 and counters["errors"] == counters["leaks"] == 0,
+            "runtest reported zero execution, errors or leaks",
+        )
+        return counters
+    if name == "testparser":
+        # This program has no terminal summary. Its successful complete capture
+        # contains the negative schema-case diagnostic; process status is checked too.
+        _require(
+            hashlib.sha256(output).hexdigest() == contract["testparser_stdout_sha256"],
+            "testparser capture differs from the reviewed source/configuration",
+        )
+    else:
+        _require(name == "Catatests", "unknown upstream command")
+        markers = [
+            "## Catalog regression tests",
+            "shell-command PASS",
+            "shell-argument PASS",
+            "shell-argv PASS",
+            "## Add and del operations on XML Catalogs",
+        ]
+        _require(
+            [line for line in lines if line in markers] == markers
+            and b" FAIL" not in output,
+            "incomplete Catatests/shell execution",
+        )
+    return None
+
+
+def _catalog_goldens(
+    source: Path, contract: dict, files: dict[str, bytes]
+) -> list[str]:
+    fixtures = []
+    for pair in contract["catalog_golden_pairs"]:
+        command = ["./xmlcatalog", "--shell", pair["catalog"]]
+        result = subprocess.run(
+            command,
+            cwd=source,
+            input=files[pair["script"]],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            check=False,
+        )
+        _require(
+            result.returncode == 0 and result.stdout == files[pair["golden"]],
+            f"catalog golden mismatch: {pair['catalog']}",
+        )
+        fixtures.append(pair["catalog"])
+    return fixtures
+
+
+def native_upstream(source: Path, *, assets: Path | None = None) -> dict:
     require_native()
+    receipt = {"status": "RUNNING", "upstream": [], "catalog_golden_pairs": []}
+    receipt_path = source / "proof-upstream.json"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    contract = load_upstream_contract(assets)
+    files = verify_upstream_inputs(source, contract)
     results = []
+    summary = None
     for command, name in [
         (["./runtest"], "runtest"),
         (["./testparser"], "testparser"),
@@ -362,35 +505,22 @@ def native_upstream(source: Path) -> dict:
         log = source / f"proof-upstream-{name}.log"
         log.write_bytes(result.stdout)
         _require(result.returncode == 0, f"upstream test failed: {name}")
+        counters = validate_upstream_output(name, result.stdout, contract)
+        if name == "runtest":
+            summary = counters
         results.append({"command": command, "log": log.name, "sha256": sha256(log)})
-    # Old Makefile loops ignore golden-test failures. Check every available pair
-    # independently without auto-creating/updating expected results.
-    fixtures = []
-    for script in sorted((source / "test/catalogs").glob("*.script")):
-        for suffix in [".xml", ".sgml"]:
-            catalog = script.with_suffix(suffix)
-            if not catalog.exists():
-                continue
-            expected = source / "result/catalogs" / script.stem
-            command = ["./xmlcatalog", "--shell", str(catalog.relative_to(source))]
-            result = subprocess.run(
-                command,
-                cwd=source,
-                input=script.read_bytes(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=30,
-                check=False,
-            )
-            _require(
-                expected.is_file()
-                and result.returncode == 0
-                and result.stdout == expected.read_bytes(),
-                f"catalog golden mismatch: {catalog.name}",
-            )
-            fixtures.append(str(catalog.relative_to(source)))
-    receipt = {"upstream": results, "catalog_golden_pairs": fixtures}
-    (source / "proof-upstream.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    # Old Makefile loops ignore failures. Execute the trusted exact seven pairs,
+    # using prechecked golden bytes, not mutable expected files learned after execution.
+    fixtures = _catalog_goldens(source, contract, files)
+    verify_upstream_inputs(source, contract)
+    receipt = {
+        "status": "PASS",
+        "upstream": results,
+        "runtest_summary": summary,
+        "catalog_golden_pairs": fixtures,
+        "contract_sha256": UPSTREAM_CONTRACT_SHA256,
+    }
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     return receipt
 
 
@@ -477,6 +607,11 @@ def main() -> None:
     parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--expect-red", action="store_true")
     parser.add_argument("--baseline-source", type=Path)
+    parser.add_argument(
+        "--assets",
+        type=Path,
+        help="Explicit recipe/contract directory for upstream checks",
+    )
     args = parser.parse_args()
     if args.action == "prepare":
         _require(args.archive is not None, "archive required")
@@ -494,7 +629,14 @@ def main() -> None:
     elif args.action == "mutants":
         print(json.dumps(native_mutants(args.repo, args.source)))
     elif args.action == "upstream":
-        print(json.dumps(native_upstream(args.source)))
+        print(
+            json.dumps(
+                native_upstream(
+                    args.source,
+                    assets=args.assets or args.repo / "docker/alpine-native",
+                )
+            )
+        )
     else:
         _require(args.baseline_source is not None, "baseline source required")
         print(json.dumps(native_abi(args.source, args.baseline_source)))

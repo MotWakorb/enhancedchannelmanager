@@ -1,0 +1,122 @@
+{
+  "kind": "OFFLINE_IDENTITY_AND_CONTRACT_REVALIDATION_NOT_NATIVE_EXECUTION",
+  "prior_source_port_commit": "8dc6d683b767003730537177d3f1d1635ba054ac",
+  "native_execution_rerun": false,
+  "source_compilation": false,
+  "prior_native_bundle_sha256": "1bedd27e2f322a38f0c5826e32e2a7c8273fad327161a4f56dd7bf350291fdb5",
+  "prior_native_raw_entries_verified": 323,
+  "six_physical_binary_hashes_verified": {
+    "baseline/.libs/libxml2.so.2": "9162b1c8da75c58a733bbd81728cb7560b08227fd1fcde436e7fbfcaafd63553",
+    "baseline/recursion-smoke": "db88ad3f6531d65ff1117bd519fd6dfe3e06d9519c32257087ec2dbe84712645",
+    "patched/.libs/libxml2.so.2": "803d6a96d4b715e3bd00049595433512d331e3f7a8b7b6de6d4da65d1b32127d",
+    "patched/recursion-smoke": "db88ad3f6531d65ff1117bd519fd6dfe3e06d9519c32257087ec2dbe84712645",
+    "production/.libs/libxml2.so.2": "553b8f13b1a46e21d612ead8315bfd319e8ef55f0fd0ee6ac0cd63b7863a11b5",
+    "production/recursion-smoke": "db88ad3f6531d65ff1117bd519fd6dfe3e06d9519c32257087ec2dbe84712645"
+  },
+  "recipe_sha256_unchanged": "48e2ed4fbd287889eb3b6edaef1974208b47965bd7a18f10e109ad9fc46c7d59",
+  "applied_patch_assets_verified": 13,
+  "retained_upstream_patch_assets_verified": 14,
+  "source_files_verified": {
+    "parser.c": "307d9b2c717f9511462ffb34f11c04db4abe81669457eeb8f56a272706d397d0",
+    "testparser.c": "639377e7ffb7f697f7bc47c810963359f78b600d86a891e97d248ed7270d5406",
+    "dict.c": "7a4497931edf8ea6c69dd492748047a0c88a7a4e37215fa984f21ced4f2d3ce0",
+    "uri.c": "f9514bce4902824b5f12c756efa3f03d5a4f382f482a16fc82f47c9d6fb510e4",
+    "valid.c": "f3e1e845441670751c183cc626ede221cb2011f442d6e3d13c70cc302d109182",
+    "xpointer.c": "6a30cea61fd0c34fa5eb7e5dc4b3caf625a43a1392b60808ed7c24cb8f57cae5",
+    "xmlIO.c": "1d124722583bd2a2808f82d45f8a338e2098e2a1a4309292db5e3133f0ce388e",
+    "xinclude.c": "a0e49fb17d3e5b126bcc0cb14ab03198dda23b27add72579553959923cc16965",
+    "xmlregexp.c": "5c0a2eba4af5e00049d4f07f5f04aabf29ddc28f2a51784dd1a5c343c77940a7",
+    "catalog.c": "97dc5ed8f68f5b472c37ef21bb7a81706035343bdf315e3179142a12ae0c3a80",
+    "include/libxml/relaxng.h": "f13b69e8f7c4d9557c8110134c3fef1eb2b6fcef9cb736cfb118e5e0cbff69b0",
+    "relaxng.c": "a724f40f238743bc2e3da4d11629f8a0b79455e537564a47bf45905d1bec27e1",
+    "runtest.c": "450cf9a1f60aceab28fa1825d00b7b0f75d36f1cba7dc82ab4aaf05c3885b436",
+    "xmlcatalog.c": "6898480baaeb4dff433b582ac60db169c61e5f86a93301e7bc14f4758c8b15b3",
+    "Makefile.am": "13f75c50478849d1225e38c20112230df08c00dd310d4eb0f3b8e6dbe893d7ab",
+    "Makefile.in": "856678c37057dff00ddcc58745b15d247d150548915b845693a4ec3ad11cf920",
+    "result/catalogs/recursive": "ec4f8e3d1f7cafbdb86e908b6ad83e407ac36a9b3efabd8e24b56d80228be429",
+    "test/catalogs/recursive.script": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test/catalogs/recursive.sgml": "722cb0201539f0bfdf27fdee5f8accce7c6023532116553c058ba96afa6f4d4d",
+    "result/catalogs/recursive-duplicate": "ec4f8e3d1f7cafbdb86e908b6ad83e407ac36a9b3efabd8e24b56d80228be429",
+    "test/catalogs/recursive-duplicate.script": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test/catalogs/recursive-duplicate.sgml": "d6460bf8410a681d95236ecd405e01010bda2705e42a24cc853a14326b79e8ef",
+    "test/relaxng/include/include-limit.rng": "99cbac2ea289312e294341e62b1644ba7e3ccb63fd6262192af263b67bef5c17",
+    "test/relaxng/include/include-limit_1.rng": "aa0026d4b8b4c39b6a93dfe9c595077f444fdfb97f0f3e2abe9de9462d9da349",
+    "test/relaxng/include/include-limit_2.rng": "187792bfd06aa834ef13a9d87b041f1f7f95ec0a6cd43037c963976fd17dbb27",
+    "test/relaxng/include/include-limit_3.rng": "c00926c39b6f521c1a445ea1f13c003b6bbfd2c07f9a5d208ce58690e01b75a2",
+    "test/catalogs/shell-bounds.sh": "c4cd65dcf83405110c8ff20c80c4a2ccd3d235002b93d4696dda7beb66123e96"
+  },
+  "offline_export_baseline_records": 1627,
+  "offline_export_added": [
+    "xmlRelaxParserSetIncLImit"
+  ],
+  "offline_dynamic": [
+    [
+      "NEEDED",
+      "libc.musl-x86_64.so.1"
+    ],
+    [
+      "NEEDED",
+      "liblzma.so.5"
+    ],
+    [
+      "NEEDED",
+      "libz.so.1"
+    ],
+    [
+      "SONAME",
+      "libxml2.so.2"
+    ]
+  ],
+  "offline_identical_feature_files": {
+    "config.h": "3d843594e3d8dbd88cbe7fc32c9d2046505887cd4bb5a7113d75f853814e89cd",
+    "include/libxml/xmlversion.h": "432126c396699cd265b392b8c18b8063614b69e8ba4ec0a38c55529cf08d402c",
+    "configure": "acbbf0036ae987e99529b75346352c077f7276bc7906057596984b1d34884624"
+  },
+  "recorded_build_flags": {
+    "patched": "-O2 -g -fstack-protector-all -D_FORTIFY_SOURCE=2",
+    "production": "-O2 -fPIC"
+  },
+  "source_contract_sha256": "cb440eb5aee1ec5d679a543a391dff82c99b0c3bd231705173bd9a9cb7e83a6b",
+  "source_fixture_sha256": "f3905362fe6a25791e93a5298247d526350969c71e89002bca301e913fa04f7c",
+  "helper_sha256": "b0b731c8855bfd7966b8bf23179818b4c6c387865955e6ec5f5f1dbce5063846",
+  "helper_tests_sha256": "f70102b4a5219cd3c3f292347f8c599f845ead86002eba622759726b34149dac",
+  "tdd_red": {
+    "failed": 22,
+    "passed": 9
+  },
+  "targeted_green": {
+    "passed": 35
+  },
+  "recorded_runtest_harness_counter": 3809,
+  "expected_suite_headings": 53,
+  "expected_catalog_pairs": 7,
+  "preserved_native_matrix_c_cases": 13,
+  "preserved_native_lifecycles_per_c_case": 32,
+  "preserved_shell_cases": 3,
+  "preserved_matrix_entries": 14,
+  "production_wiring": "PROPOSAL_ONLY; shared builder still needs explicit upstream/Catatests+goldens before install; new helper native AMD/ARM CI and full source/advisory acceptance pending",
+  "bead": "enhancedchannelmanager-m8m42",
+  "priority": "P2",
+  "status": "CONTRACT_FIXED_PRODUCTION_WIRING_AND_FRESH_NATIVE_CI_PENDING",
+  "logs": {
+    "red.log": "526ecf58fa640ceb2e0289be314cd7d0e74a00d33bb6f944320e74c4a3f9314f",
+    "green-final-03.log": "f57f349af627936b6e28b8e432efd6aa3026d4f57c951bf0425bede801990f53",
+    "ruff-final.log": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+    "ruff-format-final.log": "3bc53bf3e981a98a34a852e175bf9b77af841edea74fca595d9aedcbaf9a4938"
+  },
+  "receipts": {
+    "file": "docs/design/evidence/libxml2-proof-contract-followup-20261111.receipts.json.gz",
+    "bytes": 63953,
+    "sha256": "d8ab778ed5fec2e521fd79c58fa5fdefe680fab313891390b97eab66cfbb30b0"
+  },
+  "offline_tools": [
+    [
+      "/usr/bin/nm",
+      "GNU nm (GNU Binutils for Ubuntu) 2.46"
+    ],
+    [
+      "/usr/bin/readelf",
+      "GNU readelf (GNU Binutils for Ubuntu) 2.46"
+    ]
+  ]
+}

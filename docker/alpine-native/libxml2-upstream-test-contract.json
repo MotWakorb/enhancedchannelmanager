@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "source_archive_sha256": "a2c9ae7b770da34860050c309f903221c67830c86e4a7e760692b803df95143a",
+  "applied_patches": [
+    {
+      "id": "CVE-2026-6732",
+      "sha256": "8cd12e6532379bb50e7c4ded45e391de399053b7a788598587115ba4bf707664"
+    },
+    {
+      "id": "CVE-2026-86138",
+      "sha256": "aa8e17247c7ac61155af6d8c818fcd89ef545d563e622be37c54a2a82b69e75a"
+    },
+    {
+      "id": "CVE-2026-86139",
+      "sha256": "907bb3ee91cb100fd73f51143a1dd4c6c2d7909126b2e60b94873f127b7c67ec"
+    },
+    {
+      "id": "CVE-2026-86140",
+      "sha256": "16230c58f1fcc158509ba7d517425ff10dd23fffd8856ac2b90fe222ad516cd8"
+    },
+    {
+      "id": "CVE-2026-86142",
+      "sha256": "058e1a808ce9c60481ca05b02d28ff91402fac74a93e366e695639cec883fe4c"
+    },
+    {
+      "id": "CVE-2026-86143",
+      "sha256": "de544be89a0cb40655bfa4da01b05a660b3fea666c24cee3c05795b40f1fc07b"
+    },
+    {
+      "id": "CVE-2026-86144",
+      "sha256": "845cd245162b5fdf2d6a9dc3aca69f88639accd5603322f4d191305b2607971d"
+    },
+    {
+      "id": "CVE-2026-86137",
+      "sha256": "e7747a70762040dee3ede34f407102717b643b1180d13da9a4ce704a0749ab7b"
+    },
+    {
+      "id": "CVE-2026-86141",
+      "sha256": "88cd6d601c99333d4df079e6852b8f8ace2e8c1b6c0e2a237f77b9c4af7c9cb7"
+    },
+    {
+      "id": "CVE-2025-8732-depth",
+      "sha256": "5858468824d8a96300c45aa0b975ec5aab727f1df1b0ce436af6f51454abb203"
+    },
+    {
+      "id": "CVE-2025-8732",
+      "sha256": "509c2af8c80fb63884748895ecaeddfb3a4a5bbda8440e0ea019c7b0443502fd"
+    },
+    {
+      "id": "CVE-2026-0989",
+      "sha256": "b9bac9a710c9fe6f0c90b8f098a14cba32b178528d472bfa79057bc0863b175a"
+    },
+    {
+      "id": "CVE-2026-11979",
+      "sha256": "3d9df59efdf88546ce437f89aa4746c537e0eb4e89d9a97ed52b1db7640f5c4f"
+    }
+  ],
+  "runtest_sections": [
+    "XML regression tests",
+    "XML regression tests on memory",
+    "XML entity subst regression tests",
+    "XML Namespaces regression tests",
+    "Error cases regression tests",
+    "Error cases regression tests from file descriptor",
+    "Error cases regression tests with entity substitution",
+    "Error cases regression tests (old 1.0)",
+    "Error cases stream regression tests",
+    "Reader regression tests",
+    "Reader entities substitution regression tests",
+    "Reader on memory regression tests",
+    "Walker regression tests",
+    "SAX1 callbacks regression tests",
+    "SAX2 callbacks regression tests",
+    "SAX2 callbacks regression tests with entity substitution",
+    "XML push regression tests",
+    "XML push boundary tests",
+    "HTML regression tests",
+    "HTML regression tests from file descriptor",
+    "Push HTML regression tests",
+    "Push HTML boundary tests",
+    "HTML SAX regression tests",
+    "Valid documents regression tests",
+    "Validity checking regression tests",
+    "Streaming validity checking regression tests",
+    "Streaming validity error checking regression tests",
+    "General documents valid regression tests",
+    "XInclude regression tests",
+    "XInclude xmlReader regression tests",
+    "XInclude regression tests stripping include nodes",
+    "XInclude xmlReader regression tests stripping include nodes",
+    "XInclude regression tests without reader",
+    "XPath expressions regression tests",
+    "XPath document queries regression tests",
+    "XPointer document queries regression tests",
+    "xml:id regression tests",
+    "URI parsing tests",
+    "URI base composition tests",
+    "Path URI conversion tests",
+    "Schemas regression tests",
+    "Relax-NG regression tests",
+    "Relax-NG include limit tests",
+    "Relax-NG streaming regression tests",
+    "Pattern regression tests",
+    "C14N with comments regression tests",
+    "C14N without comments regression tests",
+    "C14N exclusive without comments regression tests",
+    "C14N 1.1 without comments regression tests",
+    "Catalog and Threads regression tests",
+    "SVG parsing regression tests",
+    "Regexp regression tests",
+    "Automata regression tests"
+  ],
+  "testparser_stdout_sha256": "a4a4d462c5ee3cbf556de90bf1098007861a12956778c1d729f99c3b4f709f91",
+  "catalog_golden_pairs": [
+    {
+      "script": "test/catalogs/catal.script",
+      "catalog": "test/catalogs/catal.sgml",
+      "golden": "result/catalogs/catal"
+    },
+    {
+      "script": "test/catalogs/docbook.script",
+      "catalog": "test/catalogs/docbook.xml",
+      "golden": "result/catalogs/docbook"
+    },
+    {
+      "script": "test/catalogs/recursive-duplicate.script",
+      "catalog": "test/catalogs/recursive-duplicate.sgml",
+      "golden": "result/catalogs/recursive-duplicate"
+    },
+    {
+      "script": "test/catalogs/recursive.script",
+      "catalog": "test/catalogs/recursive.sgml",
+      "golden": "result/catalogs/recursive"
+    },
+    {
+      "script": "test/catalogs/registry.script",
+      "catalog": "test/catalogs/registry.xml",
+      "golden": "result/catalogs/registry"
+    },
+    {
+      "script": "test/catalogs/whites.script",
+      "catalog": "test/catalogs/whites.sgml",
+      "golden": "result/catalogs/whites"
+    },
+    {
+      "script": "test/catalogs/whitex.script",
+      "catalog": "test/catalogs/whitex.xml",
+      "golden": "result/catalogs/whitex"
+    }
+  ],
+  "files": {
+    "result/catalogs/catal": "e1ad44f453d9ac024a94c5b6269d5de390cfbfe55c3250200d1c51d8976b0fb9",
+    "result/catalogs/docbook": "732787d76e37aaa9d49f039b0998feafff8511023a6daf01f0185d76220edf50",
+    "result/catalogs/recursive": "ec4f8e3d1f7cafbdb86e908b6ad83e407ac36a9b3efabd8e24b56d80228be429",
+    "result/catalogs/recursive-duplicate": "ec4f8e3d1f7cafbdb86e908b6ad83e407ac36a9b3efabd8e24b56d80228be429",
+    "result/catalogs/registry": "8b55b4eae79f7dbc86696dd01266c4446c21d4d2e2f3c8b53faa665116585ba6",
+    "result/catalogs/whites": "e1ad44f453d9ac024a94c5b6269d5de390cfbfe55c3250200d1c51d8976b0fb9",
+    "result/catalogs/whitex": "686770284739881cf3eb6a56c9d1527c8952bb7486ba57c0736893127a75ec7a",
+    "runtest.c": "450cf9a1f60aceab28fa1825d00b7b0f75d36f1cba7dc82ab4aaf05c3885b436",
+    "test/catalogs/catal.script": "f095d3400ec8ac2b7eda233c4234bf26599179c9a4c07a7b3a39895d6b8d7a5a",
+    "test/catalogs/catal.sgml": "f49a9b39d4394e574baa25bd3df22409813f74d31b243005dc45350d542b47d1",
+    "test/catalogs/catal1.sgml": "4425f8c1cd7c4f0a537c51dcff60550b7247517d5dd2732cd0dbfacc2bad30dd",
+    "test/catalogs/catal2.sgml": "95e77d0e063a3d09376e35e89dfb72328f73ffb29ce6552c5e7658c9d6e0e0b0",
+    "test/catalogs/catal3.sgml": "48c4c99307afbad185ce20689cc448e2289526c098daf716c2fecec1eb7ffae9",
+    "test/catalogs/docbook.script": "e17f1a4922414e7bd197025a1e9a27e03a656f1f77ecf915f4d77bd0ca8a05d8",
+    "test/catalogs/docbook.xml": "59d0d11315dd00985bf383529f8d3488556c61b0b4c8959b67e4dc550ef5ee46",
+    "test/catalogs/recursive-duplicate.script": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test/catalogs/recursive-duplicate.sgml": "d6460bf8410a681d95236ecd405e01010bda2705e42a24cc853a14326b79e8ef",
+    "test/catalogs/recursive.script": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test/catalogs/recursive.sgml": "722cb0201539f0bfdf27fdee5f8accce7c6023532116553c058ba96afa6f4d4d",
+    "test/catalogs/registry.script": "17f04dba4f0b2d0b9ce6e9dcfacdef94f0326cfae7f64c6bb106c1e73f039a33",
+    "test/catalogs/registry.xml": "6b41e7a737a2525a1140bc39011bced83c1a1a434685656f778c8c7cb2e40794",
+    "test/catalogs/shell-bounds.sh": "c4cd65dcf83405110c8ff20c80c4a2ccd3d235002b93d4696dda7beb66123e96",
+    "test/catalogs/stylesheet.xml": "dfe14957d06c61f1971dd645fd032d2d17e56dc2183f4bbc6ee169a72b6ba787",
+    "test/catalogs/whites.script": "4e71235a2c7d21e36cfa2590b9514dde98e4803b5eef85097e76968e27eb2b59",
+    "test/catalogs/whites.sgml": "85e4790f0334b4b8978e2a21e1d92e0ed4ea12995b3ea2002a231f66bea9a844",
+    "test/catalogs/whitex.script": "2171631a22b6e8dbc89b97c198958c344d0a9fe719285bf81a82b6cb965f459e",
+    "test/catalogs/whitex.xml": "466a16835ade1db5e50a7cecb9322d47d2ef5da5357e07c492da5e2dfd53a518",
+    "testparser.c": "639377e7ffb7f697f7bc47c810963359f78b600d86a891e97d248ed7270d5406"
+  }
+}
