@@ -27,6 +27,7 @@ from bulk_commit_accounting import (
     finalize_bulk_commit_result,
     nothing_to_journal,
 )
+from channel_group_delete import group_delete_failure_detail, hide_associated_group
 from channel_number import (
     CHANNEL_NUMBER_RULE_MESSAGE,
     ChannelNumber,
@@ -3617,6 +3618,7 @@ async def _run_bulk_commit(
             # numbering change as un-made when the PATCH went through and only
             # ECM's bookkeeping after it did not.
             numbering_landed = False
+            group_channels_moved = 0
             # Exactly one outcome per operation, recorded by this loop rather
             # than by the branches. See bulk_commit_accounting.OperationLedger:
             # branches used to increment `operationsApplied` themselves, at
@@ -4039,6 +4041,21 @@ async def _run_bulk_commit(
 
                 elif op.type == "deleteChannelGroup":
                     logger.debug("[CHANNELS-BULK] [%s/%s] deleteChannelGroup: groupId=%s", idx+1, len(request.operations), op.groupId)
+                    # Apply the immediate route's association policy BEFORE any
+                    # reparent write. A disabled sync flag is still an association.
+                    hidden = await hide_associated_group(client, op.groupId)
+                    if hidden is not None:
+                        ledger.record_persisted(journal_row=journal_row(
+                            action_type="group_hide",
+                            entity_id=op.groupId,
+                            entity_name=hidden.name,
+                            description=f"Hid channel group '{hidden.name}' (M3U account association)",
+                            after_value={"group_id": op.groupId, "hidden": True},
+                        ) if hidden.created else nothing_to_journal(
+                            f"channel group {op.groupId} was already hidden"
+                        ))
+                        ledger.record_applied()
+                        continue
                     # Each reparent is an independent write that can be the last
                     # one this operation lands, so each is journalled as it
                     # happens rather than summarised after the delete succeeds
@@ -4052,6 +4069,8 @@ async def _run_bulk_commit(
                         channel_id: int, channel_name: str, target_group: dict,
                         _group_id: int = deleted_group_id,
                     ) -> None:
+                        nonlocal group_channels_moved
+                        group_channels_moved += 1
                         target_name = target_group.get("name") or UNGROUPED_TARGET_GROUP_NAME
                         ledger.record_write(journal_row=journal_row(
                             action_type="update",
@@ -4184,6 +4203,11 @@ async def _run_bulk_commit(
                     "operationType": op.type,
                     "error": str(e),
                 }
+                if op.type == "deleteChannelGroup":
+                    error_details["groupId"] = op.groupId
+                    error_details["error"] = group_delete_failure_detail(
+                        e, op.groupId, channels_moved=group_channels_moved,
+                    )
 
                 # Add context based on operation type
                 if hasattr(op, 'channelId'):

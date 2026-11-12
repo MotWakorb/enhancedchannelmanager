@@ -1,4 +1,22 @@
 {
+  "approved_application_update": {
+    "added_files": [
+      "backend/channel_group_delete.py"
+    ],
+    "application_commit": "4dc2601d578235c3111c81447ce2c00b05c2ebcb",
+    "base_commit": "95fc8e4e88c22744327de0ed75767ce5e8b28af9",
+    "bead": "enhancedchannelmanager-jtrlf",
+    "changed_files": {
+      "backend/main.py": "ed841cb30749e6eec7d88171f77ded278f45b277ca0dbf40da7a91e21fce1e7b",
+      "backend/routers/backup.py": "158543bbf83c7f29d5e60e20ea5b1f539be9ec1c9cc94a46a93f114477019bbc",
+      "backend/routers/channel_groups.py": "3891184a2a3f4642557209523e436f62660e5501c54145a3ab2236dbb086b695",
+      "backend/routers/channels.py": "7a3bb5c7aa552692d39d8419f2d1923a0fe00a274c3664ff2a2e2e798587687d",
+      "frontend/package.json": "f5e62eef1a1d2bb945c3378242a823d4665f34f5279faa936aa6e45322f7c5fe"
+    },
+    "previous_manifest_sha256": "a3520f9549250c896d90c5d8477fb5cdf24bc56f9829e83ce9eff4ba2c9e2156",
+    "scope": "Independently reviewed jtrlf association-based group-deletion protection and safe bulk outcomes, plus 0067 version-only touchpoints. Not native compatibility, advisory, publication or deployed approval.",
+    "version": "0.18.2-0067"
+  },
   "baseline_application_commit": "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531",
   "files": [
     {
@@ -495,6 +513,12 @@
     },
     {
       "executable": false,
+      "path": "backend/channel_group_delete.py",
+      "sha256": "8ec9b4cc83c75fccc2adc202358e32e2bbb102144944bb013f9ef58c31d07d60",
+      "type": "file"
+    },
+    {
+      "executable": false,
       "path": "backend/channel_group_reparent.py",
       "sha256": "a5d1bad41d650b372a19c928a2d0532ead492ca49ff0f7df9adca9e528911976",
       "type": "file"
@@ -895,7 +919,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "ed841cb30749e6eec7d88171f77ded278f45b277ca0dbf40da7a91e21fce1e7b",
+      "sha256": "d03c4148638b98981cacedca8170416393c046184a15cc2997e69963b79d2aa6",
       "type": "file"
     },
     {
@@ -1009,13 +1033,13 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "158543bbf83c7f29d5e60e20ea5b1f539be9ec1c9cc94a46a93f114477019bbc",
+      "sha256": "d2878fb974111880aa0bd5d823da38520477c5e32856e2ef7f80c4b123854c91",
       "type": "file"
     },
     {
       "executable": false,
       "path": "backend/routers/channel_groups.py",
-      "sha256": "3891184a2a3f4642557209523e436f62660e5501c54145a3ab2236dbb086b695",
+      "sha256": "6ae3ed162f6f9de78f686bcf7663eeb5969a26cad168180cfb046dec7a964932",
       "type": "file"
     },
     {
@@ -1033,7 +1057,7 @@
     {
       "executable": false,
       "path": "backend/routers/channels.py",
-      "sha256": "7a3bb5c7aa552692d39d8419f2d1923a0fe00a274c3664ff2a2e2e798587687d",
+      "sha256": "cc212b81bc9f0045e740cd2a5df98ac72c5e6b62dc0c7c9f384a17570d1495e1",
       "type": "file"
     },
     {
@@ -1711,7 +1735,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "f5e62eef1a1d2bb945c3378242a823d4665f34f5279faa936aa6e45322f7c5fe",
+      "sha256": "2b0b3ebfb50ef78135bfdc0f9fcbc90e81423e502676d0871d7bad5cb8999802",
       "type": "file"
     },
     {
@@ -6488,5 +6512,5 @@
     }
   ],
   "schema_version": 1,
-  "scope": "Exact application source, excluding backend tests and allowing only the previously committed GNU date-format compatibility adaptation. No application behavior or final-image approval from hashes alone."
+  "scope": "Exact reviewed application snapshot, excluding backend tests, with the recorded jtrlf application update and version-only touchpoints. Retains the original GNU date-format and container-base compatibility history. No native compatibility, advisory, publication or deployed approval from hashes alone."
 }

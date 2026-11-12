@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the pinned application source plus the recorded GNU date adaptation."""
+"""Verify the exact reviewed application snapshot and recorded compatibility history."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import stat
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_SHA256 = "a3520f9549250c896d90c5d8477fb5cdf24bc56f9829e83ce9eff4ba2c9e2156"
+MANIFEST_SHA256 = "9f0d5feb0b17137b168ef3c4d67b773f5084726ad67df4a7acc43311ae90c57a"
 IGNORED_DIRECTORIES = frozenset(
     {
         "node_modules",
@@ -131,12 +131,13 @@ def verify(root: Path, manifest: dict) -> dict:
         "file_count": len(rows),
         "manifest_sha256": MANIFEST_SHA256,
         "baseline_application_commit": manifest.get("baseline_application_commit"),
+        "approved_application_update": manifest.get("approved_application_update"),
         "adaptations": [
             row
             for row in rows
             if "adaptation_commit" in row or "adaptation_reason" in row
         ],
-        "scope": "Exact tracked application input content plus the recorded date and container-base compatibility adaptations, excluding backend tests and Docker-excluded build/cache artifacts. Not runtime or advisory approval.",
+        "scope": "Exact reviewed application snapshot, including the recorded group-deletion fix and version touchpoints, retaining date and container-base compatibility history. Excludes backend tests and Docker-excluded build/cache artifacts. Not runtime, advisory, publication or deployed approval.",
     }
 
 
