@@ -37,6 +37,9 @@ certifi>=2026.10.19
 multidict>=6.9.1,<7
 pydantic>=2.10.0
 email-validator>=2.1.0
+# Existing email-validator dependency: bound WKS bitmap/service parsing
+# (CVE-2026-128089 / GHSA-vvf4-9x63-8xvv); keep the compatible 2.x line.
+dnspython>=2.9.2,<3
 python-multipart>=0.0.31
 
 # Authentication

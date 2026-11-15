@@ -18,6 +18,42 @@
     "version": "0.18.2-0067"
   },
   "baseline_application_commit": "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531",
+  "dependency_security_update": {
+    "base_commit": "a6fcdce407f5be9ed97b82eb6b5f9f9d01c8144f",
+    "bead": "enhancedchannelmanager-w8h34",
+    "changed_files": {
+      "backend/main.py": "6716166cbf10c35bf3580db3ede77e2f8c83aee8cc680e39fa51f38219642a2b",
+      "backend/requirements.in": "b04d139237bb29290be6fc0317bbaa76b8b4b659cb47d1c1a794965a81b1778c",
+      "backend/requirements.txt": "c4ff84ae271e902235e2d4024066b0d3e679fce8ccc403ce3b6e9e544518bf0e",
+      "backend/routers/backup.py": "59b8b97d1be7ab68dee03aa83ba299cbe527f07f60f17f0aa9fbf0131e62281f",
+      "frontend/package.json": "2c54308dc646d347167c5da496cb5b39b5d9e427beec6e3f6964b31d7d86bec0"
+    },
+    "previous_manifest_sha256": "7b29e924266874eb6bd2a456f5e7861ef0f602b5172e482e4a53400a7b2260e8",
+    "scope": "Existing backend dnspython 2.9.0 to 2.9.2 for CVE-2026-128089 plus an explicit compatible security floor and 0069 version touchpoints. No other dependency version change. Retains all prior application/native history; not runtime, advisory clearance, publication or deployed approval.",
+    "version": "0.18.2-0069"
+  },
+  "best_effort_probe_update": {
+    "base_commit": "349122b7a03de400a28c3354bdfd9b3e0383ce77",
+    "bead": "enhancedchannelmanager-88yso",
+    "changed_files": {
+      "backend/channel_pipeline_engine.py": "af9496d3a21ddbcf6055c138f1b808af4031c639c62bf9e5e34d7db508bca38a",
+      "backend/config.py": "d811509a1f346b1f7a78bc9066760f83d46db13a489ea7c125b07ac1fcc6d691",
+      "backend/main.py": "d03c4148638b98981cacedca8170416393c046184a15cc2997e69963b79d2aa6",
+      "backend/routers/backup.py": "d2878fb974111880aa0bd5d823da38520477c5e32856e2ef7f80c4b123854c91",
+      "backend/routers/settings.py": "0be5edbfa6fc2ebdef0c29b93b47cf44cf01566a2060481754d4a6136360df8e",
+      "backend/stream_prober.py": "f296eceb8c50cdf3d3ca708ee82f4615c950f85fc0b72f6686d4af0b7be943fa",
+      "backend/tasks/black_screen_scan.py": "7b2caf391d890847fb6b71ec3338d0670a0029d0af3ff0a73993a8011b95f75f",
+      "frontend/package.json": "2b0b3ebfb50ef78135bfdc0f9fcbc90e81423e502676d0871d7bad5cb8999802",
+      "frontend/src/components/ChannelsPane.tsx": "6582f9eb1f87bfc803aed85eba31818efa7803cb4e4b3afa1e25be8c84246a8d",
+      "frontend/src/components/tabs/SettingsTab.probeDeferred.test.tsx": "9c8e2712dca446f68465f111a0f575d30c142d17a3275778222b67ff10993b33",
+      "frontend/src/components/tabs/SettingsTab.tsx": "dc0de52107f03ef54eef3be98ff96c9672506c6c10488f24ce4b4c4a981ffeaf",
+      "frontend/src/services/api.ts": "786a7458bc46c587d4bcaa62ba6161b86c848212db4e161519544fd3ff140016"
+    },
+    "policy_decision": "2026-11-15: restore capacity-aware direct probes with independent profiles, bounded waiting and 30-second status fallback; accept the last-slot viewer race.",
+    "previous_manifest_sha256": "9f0d5feb0b17137b168ef3c4d67b773f5084726ad67df4a7acc43311ae90c57a",
+    "scope": "Source candidate for the PO-approved best-effort probe policy and 0068 version touchpoints. Retains prior application and native compatibility history. Not native runtime, advisory, publication, independent review or deployed approval.",
+    "version": "0.18.2-0068"
+  },
   "files": [
     {
       "executable": false,
@@ -544,7 +580,7 @@
     {
       "executable": false,
       "path": "backend/channel_pipeline_engine.py",
-      "sha256": "af9496d3a21ddbcf6055c138f1b808af4031c639c62bf9e5e34d7db508bca38a",
+      "sha256": "0f14829faa2dbcad09a4e3f9e7f09b0d33e6090fa93e79e5766d41ba2a1ad9d3",
       "type": "file"
     },
     {
@@ -658,7 +694,7 @@
     {
       "executable": false,
       "path": "backend/config.py",
-      "sha256": "d811509a1f346b1f7a78bc9066760f83d46db13a489ea7c125b07ac1fcc6d691",
+      "sha256": "9b1c43f28c10ddd37c252b035b162550e6abccf8361993216b5825cb14423324",
       "type": "file"
     },
     {
@@ -919,7 +955,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "d03c4148638b98981cacedca8170416393c046184a15cc2997e69963b79d2aa6",
+      "sha256": "6b01157a16dceb5e36cfbbc9f24b792f8a164f396cfbf95a92710253fbab3631",
       "type": "file"
     },
     {
@@ -997,13 +1033,13 @@
     {
       "executable": false,
       "path": "backend/requirements.in",
-      "sha256": "b04d139237bb29290be6fc0317bbaa76b8b4b659cb47d1c1a794965a81b1778c",
+      "sha256": "91abb659b0e61c43bcc3c20c503ef99ec37ec735ebce5f1426319ed81e66dc87",
       "type": "file"
     },
     {
       "executable": false,
       "path": "backend/requirements.txt",
-      "sha256": "c4ff84ae271e902235e2d4024066b0d3e679fce8ccc403ce3b6e9e544518bf0e",
+      "sha256": "c4d19336909ae669f3577fc8da5afd15c265b50b73227c08d7b34eb177151804",
       "type": "file"
     },
     {
@@ -1033,7 +1069,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "d2878fb974111880aa0bd5d823da38520477c5e32856e2ef7f80c4b123854c91",
+      "sha256": "a20510461d9d486ed95398ae6122d7b38a898cc6fad8638d968f4364f4cdd3ef",
       "type": "file"
     },
     {
@@ -1165,7 +1201,7 @@
     {
       "executable": false,
       "path": "backend/routers/settings.py",
-      "sha256": "0be5edbfa6fc2ebdef0c29b93b47cf44cf01566a2060481754d4a6136360df8e",
+      "sha256": "5cfee5b3e373f5d215d5916be4795eaec885b5b3072d9addbd89a1135e6d3ae9",
       "type": "file"
     },
     {
@@ -1441,7 +1477,7 @@
     {
       "executable": false,
       "path": "backend/stream_prober.py",
-      "sha256": "f296eceb8c50cdf3d3ca708ee82f4615c950f85fc0b72f6686d4af0b7be943fa",
+      "sha256": "3845b917f9b311c271f2c3d39c44b4d2ece6d9a7b4fe0bb26f217394d17ebfca",
       "type": "file"
     },
     {
@@ -1477,7 +1513,7 @@
     {
       "executable": false,
       "path": "backend/tasks/black_screen_scan.py",
-      "sha256": "7b2caf391d890847fb6b71ec3338d0670a0029d0af3ff0a73993a8011b95f75f",
+      "sha256": "348f2fc43b21e3c585922fb581dd6fccc84219e15413bc6c1b4a95b554152371",
       "type": "file"
     },
     {
@@ -1735,7 +1771,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "2b0b3ebfb50ef78135bfdc0f9fcbc90e81423e502676d0871d7bad5cb8999802",
+      "sha256": "8c021731ffd54e6385b67e782d7286d8170ed1b12b7ba995e28e4d6bf8ceb8f8",
       "type": "file"
     },
     {
@@ -2101,7 +2137,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/ChannelsPane.tsx",
-      "sha256": "6582f9eb1f87bfc803aed85eba31818efa7803cb4e4b3afa1e25be8c84246a8d",
+      "sha256": "90c8d6286698231aaee32177542598429a73005dee00895c33971afa73790918",
       "type": "file"
     },
     {
@@ -4717,7 +4753,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/tabs/SettingsTab.probeDeferred.test.tsx",
-      "sha256": "9c8e2712dca446f68465f111a0f575d30c142d17a3275778222b67ff10993b33",
+      "sha256": "649724fa93a0077795d9cdcaa8bf098293188a9768a717fca37d90a068e90c39",
       "type": "file"
     },
     {
@@ -4747,7 +4783,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/tabs/SettingsTab.tsx",
-      "sha256": "dc0de52107f03ef54eef3be98ff96c9672506c6c10488f24ce4b4c4a981ffeaf",
+      "sha256": "cd7dc6f577f1f17c670d17ff5610413d9f8612516126df65b6424cfd1c9d9e60",
       "type": "file"
     },
     {
@@ -5287,7 +5323,7 @@
     {
       "executable": false,
       "path": "frontend/src/services/api.ts",
-      "sha256": "786a7458bc46c587d4bcaa62ba6161b86c848212db4e161519544fd3ff140016",
+      "sha256": "13def32335303479d245006a61463f8a755a050ba9bc3450efa142680626b542",
       "type": "file"
     },
     {

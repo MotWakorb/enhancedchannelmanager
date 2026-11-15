@@ -2193,21 +2193,19 @@ class ChannelPipelineEngine:
             })
             return
 
-        # Probe with concurrency limit
-        semaphore = asyncio.Semaphore(3)
+        # Shared prober admission bounds media, not capacity waiters.
         probed = skipped = 0
 
         async def probe_one(stream_id, url, name):
             nonlocal probed, skipped
-            async with semaphore:
-                try:
-                    result = await prober.probe_stream(stream_id, url, name)
-                    if result.get("probe_status") == "skipped":
-                        skipped += 1
-                    else:
-                        probed += 1
-                except Exception as e:
-                    logger.warning("[AUTO-CREATE-ENGINE] Failed to probe stream %s (%s): %s", stream_id, name, e)
+            try:
+                result = await prober.probe_stream(stream_id, url, name)
+                if result.get("probe_status") == "skipped":
+                    skipped += 1
+                else:
+                    probed += 1
+            except Exception as e:
+                logger.warning("[AUTO-CREATE-ENGINE] Failed to probe stream %s (%s): %s", stream_id, name, e)
 
         tasks = [
             probe_one(sid, url, name)
@@ -5654,21 +5652,20 @@ class ChannelPipelineEngine:
             })
             return
 
-        semaphore = asyncio.Semaphore(3)
+        # Shared admission applies the configured global media ceiling.
         probed = 0
         skipped = 0
 
         async def probe_one(stream_id, url, name):
             nonlocal probed, skipped
-            async with semaphore:
-                try:
-                    result = await prober.probe_stream(stream_id, url, name)
-                    if result.get("probe_status") == "skipped":
-                        skipped += 1
-                    else:
-                        probed += 1
-                except Exception as e:
-                    logger.warning("[AUTO-CREATE-ENGINE] Pass 6: failed to probe stream %s (%s): %s", stream_id, name, e)
+            try:
+                result = await prober.probe_stream(stream_id, url, name)
+                if result.get("probe_status") == "skipped":
+                    skipped += 1
+                else:
+                    probed += 1
+            except Exception as e:
+                logger.warning("[AUTO-CREATE-ENGINE] Pass 6: failed to probe stream %s (%s): %s", stream_id, name, e)
 
         tasks = [
             probe_one(sid, url, name)

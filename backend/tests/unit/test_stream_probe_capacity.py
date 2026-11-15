@@ -33,7 +33,7 @@ def unlimited_probe():
     client.get_stream.return_value = stream
     client.get_m3u_accounts.return_value = [account]
     client.get_channel_stats.return_value = {"channels": [], "count": 0}
-    prober = StreamProber(client, max_concurrent_probes=4)
+    prober = StreamProber(client, max_concurrent_probes=4, probe_capacity_wait_timeout=0)
     prober._run_ffprobe = AsyncMock(return_value={"streams": []})
     prober._measure_stream_bitrate = AsyncMock(return_value=1234)
     prober._push_stats_to_dispatcharr = AsyncMock()
@@ -60,18 +60,10 @@ def unlimited_probe():
 
 
 @pytest.fixture
-def capacity_probe(unlimited_probe, monkeypatch):
-    """Isolate inner finite accounting below the new restrictive policy.
-
-    This unit-only mock keeps the original admission/route/concurrency matrix
-    meaningful. Policy/integration/lifecycle tests use unlimited_probe and the
-    real restriction instead. There is no production opt-out or test flag.
-    """
+def capacity_probe(unlimited_probe):
+    """Finite limits are synthetic variations; admission is the real policy."""
     prober, account, stream = unlimited_probe
     account["max_streams"] = account["profiles"][0]["max_streams"] = 2
-    monkeypatch.setattr(
-        prober, "_require_unlimited_direct_route", lambda _account: None
-    )
     return prober, account, stream
 
 
@@ -338,12 +330,12 @@ async def test_recorded_unlimited_account_preserves_direct_measurement(capacity_
     )
 
 
-async def test_null_account_custom_stream_does_not_need_account_status(capacity_probe):
+async def test_null_account_custom_stream_has_unverified_capacity(capacity_probe):
     prober, _, stream = capacity_probe
     stream["m3u_account"] = None
     assert (await prober.probe_stream(7, URL, stream=stream))[
         "probe_status"
-    ] == "success"
+    ] == "skipped"
     prober.client.get_m3u_accounts.assert_not_awaited()
     prober.client.get_channel_stats.assert_not_awaited()
 
@@ -384,7 +376,7 @@ async def test_one_unlimited_limit_does_not_disable_the_other_cap(
     assert_skipped(prober, await prober.probe_stream(7, URL, stream=stream))
 
 
-async def test_account_limit_sums_current_connections_across_profiles(capacity_probe):
+async def test_identity_alias_cannot_create_headroom_for_same_media_route(capacity_probe):
     prober, account, stream = capacity_probe
     other = deepcopy(account["profiles"][0])
     other.update(id=13, is_default=False)
@@ -620,9 +612,7 @@ async def test_scheduler_rewrite_fallback_cannot_charge_spare_profile(
             3,
         )
     assert result["status"] == "deferred"
-    assert stream["_selected_profile"]["id"] == 13, (
-        "the real scheduler must select the spare profile"
-    )
+    assert "_selected_profile" not in stream, "failed admission must not publish a route hint"
     assert rewrite_call.call_count >= 1
     assert prober.get_probe_progress()["skipped_count"] == 1
     assert prober.get_probe_progress()["failed_count"] == 0
@@ -665,7 +655,7 @@ async def test_scheduler_successful_rewrite_reserves_actual_media_route(
         3,
     )
     assert result["status"] == "completed"
-    assert stream["_selected_profile"]["id"] == 13
+    assert "_selected_profile" not in stream, "selection is private to fresh shared admission"
     expected_url = (
         URL.replace("/user/password/", "/other/login/") if rewrite == "changed" else URL
     )
@@ -954,7 +944,7 @@ async def test_shared_route_identity_matrix(capacity_probe, source, route, fault
     result = await prober.probe_stream(
         7, supplied_url, stream=cached if source == "cached" else None
     )
-    if fault == "none":
+    if fault == "none" and route != "accountless":
         assert result["probe_status"] == "success"
         prober._run_ffprobe.assert_awaited_once_with(
             supplied_url, user_agent="VLC/3.0.20 LibVLC/3.0.20"

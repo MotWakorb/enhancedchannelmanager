@@ -8,7 +8,7 @@ Actual ARM notice text bytes match the shared x86 notice files. Exact ARM SBOM/s
 
 **Still unproved:** final ARM native execution/CI, final whole-image artifact selection/content, and recipient source delivery. Match actual final wheels/native files to these expected indexes and run final native ARM checks. No MCP, musllinux, new advisory clearance or architecture-runtime equivalence claim is made. Compiler archives and ARM wheel binaries are not shipped in this notice tree.
 
-**Targeted dnspython update:** build 0064 uses 2.9.0. Its pure-Python artifact,
+**Historical dnspython update:** build 0064 used 2.9.0. Its pure-Python artifact,
 metadata and upstream ISC notice are recorded in `artifact-index/dnspython-2.9.0.json`
 and the refreshed shared index. The published wheel and sdist omit LICENSE;
 the exact release-commit notice was independently retrieved and Git-blob/hash
@@ -16,16 +16,30 @@ checked, and its text matches the retained 2.8.0 notice. The old 2.8.0 entry in
 the historical x86 snapshot is not evidence for the new package. No native
 architecture evidence or final-image verification is silently refreshed.
 
+**Current security update (0069, w8h34):** dnspython 2.9.2 fixes
+CVE-2026-128089. `artifact-index/dnspython-2.9.2.json` records the actual
+PyPI download and its bundled ISC notice (identical to the retained notice).
+The recorded PyPI response is `dnspython-2.9.2.pypi.json`. Both musllinux
+inventories bind the new wheel's whole hash and every RECORD member; they retain
+all other 73 distribution rows byte-for-byte. Their `dependency_security_update`
+records the preceding inventory/lock/wheel identities. The GNU selection manifest
+remains historical provenance for the unchanged native payloads, not evidence
+for the new pure-Python wheel. The installed GNU consumer recognizes only the
+exact hash-bound, ELF-free DNS replacement; changed hashes, native payloads,
+or other unreviewed pure wheels still fail. The manylinux attribution indexes
+also bind the updated lock with explicit history, retaining all 22 native
+distribution rows per architecture unchanged. No native runtime acceptance is inferred.
+
 The proposed accompanying-image source path is `/usr/share/ecm/sources/python/`; integration and recipient access remain **not implemented or verified here**. Keep the source/notice files for components actually shipped and preserve ECM's separate CC0 root license.
 
 Details: `../../arm64-current/REPORT.md`; new tree integrity: `SHA256SUMS`.
 
 ## Stable-Alpine GNU correspondence (bounded source proof)
 
-The separate `artifact-index/musllinux/` inventories now bind the unchanged
+The separate `artifact-index/musllinux/` inventories bind the current
 74-package selection on each architecture: 96 distinct whole wheels, 48 AMD64
 and 45 ARM64 ELF members, every wheel RECORD member, notices and 16 raw embedded
-SBOM payloads. The 100 unique retained notice/SBOM files are content-addressed
+SBOM payloads. The 101 unique retained notice/SBOM files are content-addressed
 under `payloads/`. Raw producer PURLs are preserved, not normalized.
 `scripts/inventory_musllinux_wheels.py --verify --arch ... --wheels-dir ...`
 rehashes actual wheel archives, every RECORD entry, delivered payloads and
@@ -36,7 +50,8 @@ relocations. This installed consumer passed against the actual AMD64 Alpine
 Unit tests include payload/RECORD/notice/script-tampering denials.
 
 These indexes do **not** establish corresponding sources or advisory clearance
-from SBOM names/versions. The historical manylinux indexes remain unchanged.
+from SBOM names/versions. Historical native artifact records remain unchanged;
+the current lock bindings record the pure-Python security update separately.
 
 `artifact-index/musllinux-gnu.json` is a separate, hash-pinned map for the
 unchanged musllinux selection. It does not replace or relabel the historical

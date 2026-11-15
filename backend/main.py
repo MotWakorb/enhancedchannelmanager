@@ -161,7 +161,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.2-0067",
+    version="0.18.2-0069",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -1579,6 +1579,7 @@ async def startup_event():
                 bitrate_sample_duration=settings.bitrate_sample_duration,
                 parallel_probing_enabled=settings.parallel_probing_enabled,
                 max_concurrent_probes=settings.max_concurrent_probes,
+                probe_capacity_wait_timeout=settings.probe_capacity_wait_timeout,
                 profile_distribution_strategy=settings.profile_distribution_strategy,
                 skip_recently_probed_hours=settings.skip_recently_probed_hours,
                 refresh_m3us_before_probe=settings.refresh_m3us_before_probe,

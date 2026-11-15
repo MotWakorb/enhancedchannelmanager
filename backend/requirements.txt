@@ -48,8 +48,10 @@ cryptography==50.0.2
     #   josepy
 deprecated==1.3.1
     # via limits
-dnspython==2.9.0
-    # via email-validator
+dnspython==2.9.2
+    # via
+    #   -r backend/requirements.in
+    #   email-validator
 email-validator==2.3.0
     # via -r backend/requirements.in
 fastapi==0.136.1

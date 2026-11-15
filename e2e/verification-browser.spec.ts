@@ -52,6 +52,38 @@ test('real app navigation enters Settings, leaves its alternate rail, and return
   await expect(page.locator('.operator-dashboard')).toBeVisible()
 })
 
+test('capacity wait setting saves and reloads through the real browser form', async ({ privateTask }) => {
+  const { page } = privateTask
+  let capacityWait: number | undefined
+  await page.route('**/api/settings', async route => {
+    if (route.request().method() === 'POST') {
+      capacityWait = route.request().postDataJSON().probe_capacity_wait_timeout
+      return route.fulfill({ json: { status: 'success', configured: true, server_changed: false } })
+    }
+    return route.fulfill({ json: {
+      configured: true, url: 'https://fixture.invalid', username: 'synthetic-admin', theme: 'dark',
+      probe_capacity_wait_timeout: capacityWait,
+    } })
+  })
+  await navigateToTab(page, 'settings')
+  await page.locator('.settings-nav-item').filter({ hasText: 'Maintenance' }).click()
+  const input = page.getByRole('spinbutton', { name: 'Capacity wait timeout (seconds)' })
+  await expect(input).toHaveValue('300')
+  await expect(page.getByText(/last verified connection counts for up to 30 seconds/)).toBeVisible()
+  await input.fill('120')
+  const [saved] = await Promise.all([
+    page.waitForResponse(response =>
+      response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/settings'),
+    page.getByRole('button', { name: /Save Settings/ }).click(),
+  ])
+  expect(saved.status()).toBe(200)
+  expect(capacityWait).toBe(120)
+  await page.reload()
+  await navigateToTab(page, 'settings')
+  await page.locator('.settings-nav-item').filter({ hasText: 'Maintenance' }).click()
+  await expect(input).toHaveValue('120')
+})
+
 for (const result of ['success', 'refused']) {
   test(`synthetic login ${result} uses the real form and preserves refusal`, async ({ page }) => {
     await page.setContent(`<form><input name="username"><input name="password" type="password"><button type="submit">Login</button></form>

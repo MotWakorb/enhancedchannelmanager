@@ -127,6 +127,69 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     }
 
 
+def _before_dependency_security_rows(manifest):
+    update = manifest["dependency_security_update"]
+    assert update["base_commit"] == "a6fcdce407f5be9ed97b82eb6b5f9f9d01c8144f"
+    assert update["bead"] == "enhancedchannelmanager-w8h34"
+    assert update["version"] == "0.18.2-0069"
+    assert update["previous_manifest_sha256"] == "7b29e924266874eb6bd2a456f5e7861ef0f602b5172e482e4a53400a7b2260e8"
+    assert set(update["changed_files"]) == {
+        "backend/main.py", "backend/routers/backup.py", "frontend/package.json",
+        "backend/requirements.in", "backend/requirements.txt",
+    }
+    previous = []
+    for row in manifest["files"]:
+        restored = dict(row)
+        if row["path"] in update["changed_files"]:
+            assert row["sha256"] != update["changed_files"][row["path"]]
+            restored["sha256"] = update["changed_files"][row["path"]]
+        previous.append(restored)
+    assert len(previous) == 1081
+    assert hashlib.sha256(json.dumps(previous, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == "8f36b586e209f2ada7c273a4014223c12ebfd888325dc22bcb102f95ddfc1912"
+    return previous
+
+
+def test_dependency_security_snapshot_preserves_previous_complete_inventory(verifier):
+    manifest = verifier.load_manifest(ROOT / "docker/alpine-native/application-source.json")
+    _before_dependency_security_rows(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["dependency_security_update"] == manifest["dependency_security_update"]
+
+
+def _before_best_effort_probe_rows(manifest):
+    update = manifest["best_effort_probe_update"]
+    assert update["base_commit"] == "349122b7a03de400a28c3354bdfd9b3e0383ce77"
+    assert update["bead"] == "enhancedchannelmanager-88yso"
+    assert update["version"] == "0.18.2-0068"
+    assert update["previous_manifest_sha256"] == "9f0d5feb0b17137b168ef3c4d67b773f5084726ad67df4a7acc43311ae90c57a"
+    assert set(update["changed_files"]) == {
+        "backend/channel_pipeline_engine.py", "backend/config.py", "backend/main.py",
+        "backend/routers/backup.py", "backend/routers/settings.py", "backend/stream_prober.py",
+        "backend/tasks/black_screen_scan.py", "frontend/package.json",
+        "frontend/src/components/ChannelsPane.tsx", "frontend/src/components/tabs/SettingsTab.tsx",
+        "frontend/src/components/tabs/SettingsTab.probeDeferred.test.tsx", "frontend/src/services/api.ts",
+    }
+    previous = []
+    for row in _before_dependency_security_rows(manifest):
+        restored = dict(row)
+        if row["path"] in update["changed_files"]:
+            assert row["sha256"] != update["changed_files"][row["path"]]
+            restored["sha256"] = update["changed_files"][row["path"]]
+        previous.append(restored)
+    assert len(previous) == 1081
+    # Pin the COMPLETE old map independently, retaining modes, types, unrelated
+    # source and earlier native adaptation records rather than blessing changes.
+    assert hashlib.sha256(json.dumps(previous, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == "5b232a3732c3397cbe22915000670884195e5f91d96110f1be8ea5da29653be0"
+    return previous
+
+
+def test_best_effort_probe_snapshot_preserves_the_complete_previous_inventory(verifier):
+    manifest = verifier.load_manifest(ROOT / "docker/alpine-native/application-source.json")
+    _before_best_effort_probe_rows(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["best_effort_probe_update"] == manifest["best_effort_probe_update"]
+
+
 def test_reviewed_group_delete_snapshot_extends_the_complete_previous_inventory(
     verifier,
 ):
@@ -155,7 +218,7 @@ def test_reviewed_group_delete_snapshot_extends_the_complete_previous_inventory(
     assert rows["backend/channel_group_delete.py"]["type"] == "file"
     assert rows["backend/channel_group_delete.py"]["executable"] is False
     previous = []
-    for row in manifest["files"]:
+    for row in _before_best_effort_probe_rows(manifest):
         if row["path"] in update["added_files"]:
             continue
         restored = dict(row)

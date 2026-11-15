@@ -1,5 +1,12 @@
 {
   "architecture": "amd64",
+  "dependency_security_update": {
+    "bead": "enhancedchannelmanager-w8h34",
+    "previous_inventory_sha256": "415442890522d9c70f4137a04261f3f198d646febc5a8368602d653fda98825d",
+    "previous_requirements_sha256": "c4ff84ae271e902235e2d4024066b0d3e679fce8ccc403ce3b6e9e544518bf0e",
+    "previous_wheel_sha256": "9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9",
+    "scope": "Pure-Python dnspython 2.9.0 to 2.9.2 only, CVE-2026-128089. All other 73 distribution rows and all native payloads unchanged. selection_manifest_sha256 retains historical GNU/native selection provenance; this overlay supersedes only its dnspython wheel. Not native execution, corresponding-source or image acceptance."
+  },
   "distribution_count": 74,
   "distributions": [
     {
@@ -15222,7 +15229,7 @@
       "version": "1.3.1"
     },
     {
-      "filename": "dnspython-2.9.0-py3-none-any.whl",
+      "filename": "dnspython-2.9.2-py3-none-any.whl",
       "members": [
         {
           "bytes": 1722,
@@ -15290,14 +15297,14 @@
           "sha256": "9c377236e351c023b6e9e2a22c34e839ac63bbed0a0094e59d4ab28c2c34966e"
         },
         {
-          "bytes": 33121,
+          "bytes": 33246,
           "path": "dns/asyncquery.py",
-          "sha256": "a9bc06e03a56ddeaf30e609ac786569e33022d2a77a02f0b87c4c8d078e597d7"
+          "sha256": "0acb0fb0ff9d71e4769a83848912705ad0645789cd7689ce6ead4030d1d04f35"
         },
         {
-          "bytes": 19367,
+          "bytes": 19407,
           "path": "dns/asyncresolver.py",
-          "sha256": "8459b0c795219f0ce4f014d5658abd4106edbc688b72e4f73dd2bd0ba46d83ce"
+          "sha256": "f1ae8e42eeaa387d620419d73d0322541bfc97d981eb21404d7f2010e00d12cf"
         },
         {
           "bytes": 30807,
@@ -15305,14 +15312,14 @@
           "sha256": "b545e82f91e0805ec0a1c02256731643bd7fc783ab83628f71d0b60c79a946b9"
         },
         {
-          "bytes": 19371,
+          "bytes": 20374,
           "path": "dns/btreezone.py",
-          "sha256": "95001eb1e308e979a5c727bf3dba2d0c1f0f66102c9405ddf3f4e17f64550283"
+          "sha256": "4632da2100e3414a965e1a06d43efea34dc60d83690c58adee910369278513dc"
         },
         {
-          "bytes": 41100,
+          "bytes": 41387,
           "path": "dns/dnssec.py",
-          "sha256": "eda71cc540f12f784f1b2fff66ea9b09c8f83fcb04b113d1751984d55cf1b6bf"
+          "sha256": "2eb239b6414a08a7ed9b5143e86c3255ba4cf7e11e107ed6db8e2229c1d467f9"
         },
         {
           "bytes": 4632,
@@ -15325,29 +15332,29 @@
           "sha256": "f1a09ac188c61d1a541443e983dd9b8c4992bda1cd118027f660616fe3ec5b29"
         },
         {
-          "bytes": 2422,
+          "bytes": 2415,
           "path": "dns/dnssecalgs/cryptography.py",
-          "sha256": "c71602a716d195cd19d915764433d3dd8fee43f3678d8a7da9b4636a77258d2b"
+          "sha256": "b71a6c481bd314e8bb8b062dd6d6f2fc59b02aa60921d57646c13b16103772f6"
         },
         {
-          "bytes": 3766,
+          "bytes": 4081,
           "path": "dns/dnssecalgs/dsa.py",
-          "sha256": "95c6e8c3738569d395ccbfc617ef7add54bc619c8830f5196f51bfabf564a155"
+          "sha256": "0890744918fcb3648821648223bcca083bf267a57441ef24bc676a33f6c1a8fa"
         },
         {
-          "bytes": 3374,
+          "bytes": 3605,
           "path": "dns/dnssecalgs/ecdsa.py",
-          "sha256": "7dccb08ccec3319a58b7e149805fc29a7b938b312cd8e7ca62425e6e8f00e9e1"
+          "sha256": "b02ff0279238d229b0f94b2ac681ebfc9408ec5255fe4eb6cddec1d3aeb5030f"
         },
         {
-          "bytes": 1975,
+          "bytes": 1972,
           "path": "dns/dnssecalgs/eddsa.py",
-          "sha256": "48e97ee6d3f097ed2d614c28d82274873047e17a30ddef67cb4155a79431a34f"
+          "sha256": "200970b24d63068b9d8ec79d9efa0447fa9214a0a93adfc5be3f5fdfef6dc7cf"
         },
         {
-          "bytes": 1762,
+          "bytes": 1759,
           "path": "dns/dnssecalgs/mldsa.py",
-          "sha256": "3bf183c3e72c4d4ab3b4633b24cea2d460af2843ec4264d07ea90acd4c365459"
+          "sha256": "f0876697d6fddddccbcf0aa69e4e650e5c57722466c2f13789a4c5ed93386c31"
         },
         {
           "bytes": 3935,
@@ -15365,14 +15372,14 @@
           "sha256": "80124ce8289dc552be72b31d75d5a171f7cec8d12789683ab1449197862cae5b"
         },
         {
-          "bytes": 23358,
+          "bytes": 23896,
           "path": "dns/edns.py",
-          "sha256": "d20d50d3044215823b7c6c34a0470d3a4bc6cd9b81a66d812b478f8e161c4a7d"
+          "sha256": "3616a542900c63ba68d5182bf2364b3df26bbfb0a48b9e156dd9671e33c3e44f"
         },
         {
-          "bytes": 4247,
+          "bytes": 4787,
           "path": "dns/entropy.py",
-          "sha256": "7526ec368355a32a5446f3aef9c96a3220fe74543e7ec28e3d8487c284e369e7"
+          "sha256": "aaeea583840dc1f310e7864bfd9c73c7c668bce927364f491484a15344291bfb"
         },
         {
           "bytes": 3670,
@@ -15415,19 +15422,19 @@
           "sha256": "9cb170b01f2cbf22a3a3f3f44275acad361b6edc59d2093d03ebdee95c2e211a"
         },
         {
-          "bytes": 68691,
+          "bytes": 71275,
           "path": "dns/message.py",
-          "sha256": "d238654486b3b0f96fee5593c8bf7e81d4e61fa59d381b94ef4c487298a4cf03"
+          "sha256": "2874a85eba4292351b5abf6f8925d464f38584b8b07a9df38d40ea6b4c79feed"
         },
         {
-          "bytes": 46664,
+          "bytes": 49171,
           "path": "dns/name.py",
-          "sha256": "747fb6cee70306a89955fd8651d6712e0803aa463593f4e8c30ed27d0a9d5902"
+          "sha256": "b2c688d16963cf21e7579d58a165d99a235e9abf0c1a6706e7bbf20d45035512"
         },
         {
-          "bytes": 4010,
+          "bytes": 4050,
           "path": "dns/namedict.py",
-          "sha256": "a8b275c509132f65ce503c575af30013e278e3c62147bc05dd04b389f1e2a9f3"
+          "sha256": "3739d0a7589e4d79194a23b7aeac7fb871266743893a3138e113d7dfc760335e"
         },
         {
           "bytes": 10219,
@@ -15450,9 +15457,9 @@
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         },
         {
-          "bytes": 62196,
+          "bytes": 62328,
           "path": "dns/query.py",
-          "sha256": "fab950c3b5ae218768c4130f930310b0c0e50034ddc6350ede5db98049c6b47d"
+          "sha256": "fff3ff7fbd62dce27a46a55d019cb725b0886ac57e94aec84e5f0dc9af1e98a5"
         },
         {
           "bytes": 2568,
@@ -15485,9 +15492,9 @@
           "sha256": "0eb70e15f96a92478464873ed22d6da6ed7403bd086969cbc7b3f2644526fb6e"
         },
         {
-          "bytes": 37053,
+          "bytes": 37263,
           "path": "dns/rdata.py",
-          "sha256": "d747a51622bd2ab9d2c90838fe7eb011c428c8b25bcbbdc8986047ed0cb33eea"
+          "sha256": "a3886235c1e8bd759c8bc599bfa5644ae240f4a10bb9c16f52589ce4d57b388c"
         },
         {
           "bytes": 3027,
@@ -15505,9 +15512,9 @@
           "sha256": "c2e5b4d8063208b8e24ba270df7eeba5cdff90cf8bef026547189465f12d233e"
         },
         {
-          "bytes": 1701,
+          "bytes": 1721,
           "path": "dns/rdtypes/ANY/AFSDB.py",
-          "sha256": "6647e02a9945ebd13862621338b55aac77ed14a223ea688086366f5ebab2c585"
+          "sha256": "105a4f00e4c7b18de50f0b336e7c70e994684b8e09432e7e3540e02f132abea5"
         },
         {
           "bytes": 3472,
@@ -15525,9 +15532,9 @@
           "sha256": "7bfe23e5b6daf71ffc7b132395bd8ca0b08f02333cb6e40fbb43837e498d2ced"
         },
         {
-          "bytes": 2494,
+          "bytes": 2499,
           "path": "dns/rdtypes/ANY/CAA.py",
-          "sha256": "952fe31e0ebe096a644214f55f93b98c9a25cdad4816b0d52a7abdb82fbfc87e"
+          "sha256": "a2f20939bf89e99759754c537234d4b184810d2fc4526f00090d6c8ae4eb237f"
         },
         {
           "bytes": 1225,
@@ -15540,9 +15547,9 @@
           "sha256": "63d9c845408069bced54b6f19b649701d61aa457a608e52e1a1e49aaba020d4b"
         },
         {
-          "bytes": 3587,
+          "bytes": 3602,
           "path": "dns/rdtypes/ANY/CERT.py",
-          "sha256": "4ca575824d9c5f730adc4d2797ed69c4ac02b467a014e2e2c450c775b9ae4ca9"
+          "sha256": "69894c82fdc3d17582629c5e67fac9f22ad75d3e04b3704e1316ef737541fe7f"
         },
         {
           "bytes": 1206,
@@ -15605,9 +15612,9 @@
           "sha256": "3bb8b144c0ce73c1d1cadb9012e64fba9e59ae2320271817a7e6d45f7b10ce33"
         },
         {
-          "bytes": 3337,
+          "bytes": 3352,
           "path": "dns/rdtypes/ANY/HIP.py",
-          "sha256": "f1d3017a4ca45c49732fb300762d49b4747ecf006a31cba9f0dc8844a1aa8a35"
+          "sha256": "1932feaf5f98e6c7f59f56f3ee047d1eefde40f73b2ffe338ccfa463e150748c"
         },
         {
           "bytes": 2767,
@@ -15615,9 +15622,9 @@
           "sha256": "d4a8ace71468132c67732a878c0b6002728adb6a89fb397b601f170a34cbc3d6"
         },
         {
-          "bytes": 3333,
+          "bytes": 3348,
           "path": "dns/rdtypes/ANY/KEY.py",
-          "sha256": "c7b5a5251f6e83af576b3c3b69ff3813a40b9196591cbc60f871442ee0254c63"
+          "sha256": "65ccb3b73df98dd5bf4b137693f5c9e3b3e739032a113c6f2192124d94c28628"
         },
         {
           "bytes": 1319,
@@ -15630,9 +15637,9 @@
           "sha256": "7957de904995ea5087596850804857c3fa431c17007c86ab251289483f62b777"
         },
         {
-          "bytes": 12377,
+          "bytes": 12823,
           "path": "dns/rdtypes/ANY/LOC.py",
-          "sha256": "c0dbb8df3403cb476eceebe3a513aee6280d53d12492e7a8f83f12ccbc344cd4"
+          "sha256": "f6724a0262cdb3e6b9f4d5e784672b0c4d355ba3184cfad8a46482110c8c4402"
         },
         {
           "bytes": 1328,
@@ -15665,9 +15672,9 @@
           "sha256": "2f999dc299fd071600b356868d755d66f4653696f23ff5dd4543c2a3b7b95f18"
         },
         {
-          "bytes": 3953,
+          "bytes": 4920,
           "path": "dns/rdtypes/ANY/NSEC3.py",
-          "sha256": "40dc2c02b260bc9a3703c79dfa8ffa3e998e634f4e324473b60b8c9cbdf482c5"
+          "sha256": "42fcc3f8c82426c5f5e5153bcfb1d417b3f00c115f0c347763ca34ebab1ff2d1"
         },
         {
           "bytes": 2655,
@@ -15675,9 +15682,9 @@
           "sha256": "4302bdffd7d2df6b586f241b2af8053b775ff1331da469725aa1cceea503a519"
         },
         {
-          "bytes": 1929,
+          "bytes": 1944,
           "path": "dns/rdtypes/ANY/OPENPGPKEY.py",
-          "sha256": "8fcaa06203e7cc738e62d1380bb39ab8c8229c392258d7a2dacfe166dccb592c"
+          "sha256": "96225341a5086e838231910739e8ba7483df3e4f240358aa5510fe0f4c66ea8c"
         },
         {
           "bytes": 2665,
@@ -15695,9 +15702,9 @@
           "sha256": "29fd8d70a6e4788e60144d5b25f40da9009a8ad6325df57ff6741897596e519d"
         },
         {
-          "bytes": 2139,
+          "bytes": 2151,
           "path": "dns/rdtypes/ANY/RP.py",
-          "sha256": "d0f719dc9160eec03f5c393e0b8aa3f3d040af3bd7c667f7aee59ab77faa9212"
+          "sha256": "c638f94f385b8e5bc1eec162ed9c6e53671299afafc945de5b2779cf1309bfa1"
         },
         {
           "bytes": 1254,
@@ -15705,14 +15712,14 @@
           "sha256": "c4790247d57cb1ab25bc81dd59a4f7b26ffa083b7a26ff5cac6e530f86914513"
         },
         {
-          "bytes": 1013,
+          "bytes": 1018,
           "path": "dns/rdtypes/ANY/RT.py",
-          "sha256": "dadf6adc5650dbc884c9c79e536e4a53652bd13e49c442c0bbc053c1f394815c"
+          "sha256": "619eadd40a6b44a7ae4bd0972ddd50b502e1589f6ec13d08858cd3c46f69ddd8"
         },
         {
-          "bytes": 1250,
+          "bytes": 1589,
           "path": "dns/rdtypes/ANY/SIG.py",
-          "sha256": "327697709c03b399c70a95f3b091c4af2c9917f8d28d45d3d3c11be8218c5247"
+          "sha256": "d3bdf38f0697ff165f41218c618084974eae85c3d2b9eb01d448cbd881ffbe8f"
         },
         {
           "bytes": 222,
@@ -15720,9 +15727,9 @@
           "sha256": "eb28c7b950df204a1d054f70c5b086083679716630c98e850a4f9aab654d534b"
         },
         {
-          "bytes": 3082,
+          "bytes": 3094,
           "path": "dns/rdtypes/ANY/SOA.py",
-          "sha256": "bee8177afbb74a505681532053ac2fccaf19154f41fe1f0e790acd52d87c4d44"
+          "sha256": "8dd415ed0603087fefa8af9d0ea8a63d41100a59878e157f360b0358b0a7f0b0"
         },
         {
           "bytes": 1022,
@@ -15730,14 +15737,14 @@
           "sha256": "ac0dd2aecf44090c7edfb96a9bb65feda626329a7f6acbf8b464bcfdf490f825"
         },
         {
-          "bytes": 2435,
+          "bytes": 2927,
           "path": "dns/rdtypes/ANY/SSHFP.py",
-          "sha256": "a02341376ecbb39096d6c56ea7f1abe44c79c21879792fcd13f4f8b72ea42ce5"
+          "sha256": "3c2c6578a920cc0397c4ffb498689d360206f336b27d844fcb486398d960643a"
         },
         {
-          "bytes": 4879,
+          "bytes": 4917,
           "path": "dns/rdtypes/ANY/TKEY.py",
-          "sha256": "394a77b471f1aa5fd85d91495f773fd5f64914bcfb001a6ab62a6c752cf868e5"
+          "sha256": "354759407225b2ed9fc746825095b7290e80115e5dae42bcde8b7e93f2f4655a"
         },
         {
           "bytes": 218,
@@ -15745,9 +15752,9 @@
           "sha256": "732b7379b4b75bb145afda9e27d805487abf6cec1493d6915655d61df9d5ad1b"
         },
         {
-          "bytes": 5154,
+          "bytes": 5210,
           "path": "dns/rdtypes/ANY/TSIG.py",
-          "sha256": "68986688a7a2d72370d2c5a07ebf9af6eef739d127b0c0569414545a0dd6bda6"
+          "sha256": "1d567adc1941da3af5b52e98d04ac0f8cbc43b6318bbd655fa9db8846b548efe"
         },
         {
           "bytes": 1000,
@@ -15800,14 +15807,14 @@
           "sha256": "481cbb890118e8c04ca980e810a8fd714cf34c91d9bb1ce5d9c570312708def3"
         },
         {
-          "bytes": 5781,
+          "bytes": 5803,
           "path": "dns/rdtypes/IN/APL.py",
-          "sha256": "b05804f6aaaddd53d3b49795f7560ea2bc8f9af7eda8bcbd96a15b9f72901ef4"
+          "sha256": "433a715d20494ad562465d63be767ce97925e76ea7f4c0d98976ed7809a93886"
         },
         {
-          "bytes": 1871,
+          "bytes": 1886,
           "path": "dns/rdtypes/IN/DHCID.py",
-          "sha256": "8f291e6dbcdb66d06c2ac8639a83320eeb121d9c372f1cd4a04e96003c8d1bc1"
+          "sha256": "dc477d5e0b6e264ba35877a35d3f3b319c5c23fcef9e81e81d73ef31a9834227"
         },
         {
           "bytes": 220,
@@ -15815,9 +15822,9 @@
           "sha256": "3fe223c1cbc340c9ada0182c0c78255c5eca80b5fbdc6ea3103a822ac9da1a94"
         },
         {
-          "bytes": 3257,
+          "bytes": 3272,
           "path": "dns/rdtypes/IN/IPSECKEY.py",
-          "sha256": "87e6bd32182c82be19ca7c2a79742afb6e8a3a37af1f805aca85043dd837aced"
+          "sha256": "37307c49d46b9bb2ad60b5a088a1340adbf4d57955d601ef299bad1b040fed7e"
         },
         {
           "bytes": 1013,
@@ -15825,9 +15832,9 @@
           "sha256": "2b527022d2f49f91be6061428d67a1d02f43c830fc1bc57389cb0179088d02fd"
         },
         {
-          "bytes": 3765,
+          "bytes": 3771,
           "path": "dns/rdtypes/IN/NAPTR.py",
-          "sha256": "a15afca4dcac6397e8b23257d7e9a93253e86a13acc45c41398717fcd2ebe8ae"
+          "sha256": "a0e36979bacc388b2d6a688eaa9f26e4978489333e399905486c4386978af2e8"
         },
         {
           "bytes": 2191,
@@ -15840,14 +15847,14 @@
           "sha256": "893c6557a7ebfd8f65aa2bcb2e77121f1121985ab3e541049435b71cc06db825"
         },
         {
-          "bytes": 2723,
+          "bytes": 2735,
           "path": "dns/rdtypes/IN/PX.py",
-          "sha256": "6d43c02bc48fca53da8d385b74f838ca4283e6ffbdffc77f09d8190e3dad59d4"
+          "sha256": "c8748b0e2b7ba41096fac35c80f14f13d07f787a56256a24ef78c26cbbeb684b"
         },
         {
-          "bytes": 2744,
+          "bytes": 2750,
           "path": "dns/rdtypes/IN/SRV.py",
-          "sha256": "fbc849c2f9dea89f82497390ae88fab93c11df57c7309545f3198f962ca87181"
+          "sha256": "d9609870dcd669083fb7711c9991bd2deecc1dd0dd22172b02460c10e13e2408"
         },
         {
           "bytes": 218,
@@ -15855,9 +15862,9 @@
           "sha256": "1de1668b6bf4d45d341e8b6df0596f43847b68fc45993ed117e82de394792bf3"
         },
         {
-          "bytes": 3717,
+          "bytes": 3965,
           "path": "dns/rdtypes/IN/WKS.py",
-          "sha256": "cf772983644b35186d4aa9863440a2d7ab9828ca0261f99ff3dd92ada18966e5"
+          "sha256": "2f35d304573761be51a71e8f29b5ace080ec26f2dcbd8ebea278c33c6ce34b17"
         },
         {
           "bytes": 1083,
@@ -15870,14 +15877,14 @@
           "sha256": "bd74ff3f37973a2073eb5845259ed769455b9eda7cc42c8eac0a1ad5d84d5bfa"
         },
         {
-          "bytes": 1977,
+          "bytes": 1992,
           "path": "dns/rdtypes/base64base.py",
-          "sha256": "869202d81afccca2985e6cefce0d96f34bd4b045c21aac35b6c4d6da3ea75fc0"
+          "sha256": "218c63748caadfde223a17158602e60cf557fefc9ff3d2fedef052ee7b69b70b"
         },
         {
-          "bytes": 3751,
+          "bytes": 3766,
           "path": "dns/rdtypes/dnskeybase.py",
-          "sha256": "7d6573357eccaa0a51f4e5de3fec9fd0f9d326254d1ada77d0cf0f3151ccb46b"
+          "sha256": "07ec0c5c624cb36ae2ccd6dd672ddab0d82d5f3455787b8ffe8249695b4aef80"
         },
         {
           "bytes": 3452,
@@ -15890,29 +15897,29 @@
           "sha256": "1936bd8c34be801dd76f142b82c46fb6142e050b9bb4c17a49c838a11a9dff52"
         },
         {
-          "bytes": 3311,
+          "bytes": 4521,
           "path": "dns/rdtypes/mxbase.py",
-          "sha256": "738da2bc88a64c769ac24edb3594db234a682cd553ce9440af677e2afe6ff28b"
+          "sha256": "b90608d4a876f31892fc519e26ce11a17d0aef4ec68377229df3c73d593565bc"
         },
         {
-          "bytes": 2439,
+          "bytes": 2658,
           "path": "dns/rdtypes/nsbase.py",
-          "sha256": "2af3a799c16a7c6d32be104322f2c181f416622b25acfffc6cba140f9d652ad2"
+          "sha256": "8f88d9a1b1f09c3b54d24336bf465200150a0b09dd8881e610b37e38c817c048"
         },
         {
-          "bytes": 5368,
+          "bytes": 5516,
           "path": "dns/rdtypes/rrsigbase.py",
-          "sha256": "40e3cae9062b3fe2b116f4d623c2a0081660ab02116ecf25077be7b76bfbc405"
+          "sha256": "e0fc5c50c22ccac8bacc54e4ed9e3bf39d2e5c0905766d3c6a4130e15a32fffe"
         },
         {
-          "bytes": 20697,
+          "bytes": 20757,
           "path": "dns/rdtypes/svcbbase.py",
-          "sha256": "c8a91c5047ce4d679954f97c3bf995e64f04028bfa6d79070d8d9650ea39eadc"
+          "sha256": "717e4573e2a0aa8f8f23de42793a491b8d7effb579bb91d40775a6f3e4cfe70a"
         },
         {
-          "bytes": 2641,
+          "bytes": 3201,
           "path": "dns/rdtypes/tlsabase.py",
-          "sha256": "a51a951ae8efa822e03ecc92a4865b88090346f396bfcbf51a8c9d53ae3f5786"
+          "sha256": "fce045b68574eb7b2783bc5d37eee3db4bc26467a1b679dc888d2a247cf251e2"
         },
         {
           "bytes": 4080,
@@ -15920,24 +15927,24 @@
           "sha256": "e7f5d8d27693424d58a33ef68507b94652bcba67c504a31a8849cfd3de6a3e0f"
         },
         {
-          "bytes": 10449,
+          "bytes": 10542,
           "path": "dns/rdtypes/util.py",
-          "sha256": "2cb05a79f402ef497a7b2f473da7952db97f9c2c01a449d7d4b90f606b50ac6a"
+          "sha256": "bc8258066649f8e34767c4c84c9a4c2809e6dfc2790644a547d6f89a00e33301"
         },
         {
-          "bytes": 11586,
+          "bytes": 11590,
           "path": "dns/renderer.py",
-          "sha256": "77052aea13766a5c3fd0da015f4a4b38aa9f3012c7960390def304389ee82e11"
+          "sha256": "bab76d60095b49de81a45b2171b0f9387a8123c1302c990b9dda8259adb3ad3b"
         },
         {
-          "bytes": 74309,
+          "bytes": 74287,
           "path": "dns/resolver.py",
-          "sha256": "561eda0cfca59703be40d639e8eaf75c694115a2e820544f3fa9bac200a26993"
+          "sha256": "cbabc3e0d37efef32a71e96ca2e28bf25034faee6bc326e825d0922ee43bee28"
         },
         {
-          "bytes": 3988,
+          "bytes": 4099,
           "path": "dns/reversename.py",
-          "sha256": "c35fabd69e64a87d4e377184a0b682bf8e909261f454fe67a71e0390e4c87b0e"
+          "sha256": "8c02b1f3850a0fd7bdcc01ac9f339888dce8d0481ddbfb747bedc07a5480cb63"
         },
         {
           "bytes": 10324,
@@ -15950,9 +15957,9 @@
           "sha256": "7e5191bdb607c68bd8b740210c41a4c5747018533139a9894f4f85374e61188e"
         },
         {
-          "bytes": 9216,
+          "bytes": 9380,
           "path": "dns/set.py",
-          "sha256": "378909f1878588a3f02b148e91fb7aeab44516593ef4e22f8e8e974acacfa017"
+          "sha256": "f16c27f70dcac47ae70750cf74ac0deb00a1a416e1fcf5798ae2c3de8e726477"
         },
         {
           "bytes": 830,
@@ -15960,9 +15967,9 @@
           "sha256": "17d75040855991f384d1986c3426ef7b11b6b5e0bf5cd07d650750b91a756b53"
         },
         {
-          "bytes": 27231,
+          "bytes": 27842,
           "path": "dns/tokenizer.py",
-          "sha256": "b2733144e5ce6bf36f3cc303c2c9400d991a48f6ea616cc1568d4f31d79328de"
+          "sha256": "cd1607bbd7390d92da4c4ddfbd562a1b41c049ac9f3581c284c8209259be21df"
         },
         {
           "bytes": 25069,
@@ -15980,9 +15987,9 @@
           "sha256": "eed70ad39168b4474d0e2b933252bec213c588bd7bebc5f33941637938a3d5ee"
         },
         {
-          "bytes": 3004,
+          "bytes": 3002,
           "path": "dns/ttl.py",
-          "sha256": "6f7d9cedd01ed9aebbdfbad737e4144da660001eb324adb80b937bde7d88cdf9"
+          "sha256": "3e28c782ecd4e373e5d325c7b35b3cbb94a9850eab1c08a5a985dc6b8dcf54a9"
         },
         {
           "bytes": 12279,
@@ -15992,12 +15999,12 @@
         {
           "bytes": 1763,
           "path": "dns/version.py",
-          "sha256": "d1d4247e954ff9eb687d026e865054c4fb7d97e76d891609c383192c3d1e3e76"
+          "sha256": "31548caa26fe083c5fbfc9df9069dbb26bd5bfb6ce8bbe326be814ea67746b85"
         },
         {
-          "bytes": 12478,
+          "bytes": 12645,
           "path": "dns/versioned.py",
-          "sha256": "26963d64a828c038a0666ce279f16a4bd7e02768079059fba00620184d5e2cd0"
+          "sha256": "7af806c05de492fba2bfe515073384b7e5e479cd18edf407f079a47660d24638"
         },
         {
           "bytes": 16752,
@@ -16005,14 +16012,14 @@
           "sha256": "8117df8c5616db6c48b396dfa26c486791070efeb222277a06e673692acebcea"
         },
         {
-          "bytes": 358,
+          "bytes": 410,
           "path": "dns/wire.py",
-          "sha256": "da604444b079297f934d40ab911266de3c7708ed6dbd87163f7af0981e424e50"
+          "sha256": "14801baaaf287eb22e7dcc3a9fd3b30e50a679f53e67a7bb382644f96c2ef643"
         },
         {
-          "bytes": 2989,
+          "bytes": 3182,
           "path": "dns/wirebase.py",
-          "sha256": "89b78af17b06bf501b6e389fbaf750f8db0fbe219abe270010f91e9b5de99c1c"
+          "sha256": "106effae402489c09a1e17614be43759741743f361aed1e127a70d95d80911e6"
         },
         {
           "bytes": 15897,
@@ -16020,14 +16027,14 @@
           "sha256": "bd4626fafa601d833ef19115a6f46726b5c6752b764e26da31da8da6b1c07b3b"
         },
         {
-          "bytes": 61200,
+          "bytes": 61948,
           "path": "dns/zone.py",
-          "sha256": "5139d333ccbf8f4dc4d4792fef15fade2019001626ea5909c5decc664322589a"
+          "sha256": "5c35e436afd2208799eb5219feee611ea8ab070b0203d72e46ef7fa9a511f098"
         },
         {
-          "bytes": 31025,
+          "bytes": 31050,
           "path": "dns/zonefile.py",
-          "sha256": "c7f011d09b30a481612c2175ef464081017cabbcbf1f4d11570abfaca8dcdd02"
+          "sha256": "68c40ebada3ed482ead4434d2746e54d4be10a99a226a15242f3b08b336c7c0f"
         },
         {
           "bytes": 690,
@@ -16035,40 +16042,55 @@
           "sha256": "1eb40d67167f8162d623d76c922c7bd66b22f709182b9a60ac105b3dbd53ef86"
         },
         {
-          "bytes": 5713,
-          "path": "dnspython-2.9.0.dist-info/METADATA",
-          "sha256": "d25dbd09b39758cd5cebe518701012a6278731986cd384fc4a7f25e78f7de929"
+          "bytes": 5786,
+          "path": "dnspython-2.9.2.dist-info/METADATA",
+          "sha256": "dffafe5b3b88a9637d04b3f399b5b8efec3be6c771e65bc80cde97d90c6e8f7d"
         },
         {
-          "bytes": 12610,
-          "path": "dnspython-2.9.0.dist-info/RECORD",
-          "sha256": "799d25adf58608fbfe8d7b65e8d7173734c8c63743516a6f6a348cf69f938569"
+          "bytes": 12709,
+          "path": "dnspython-2.9.2.dist-info/RECORD",
+          "sha256": "047a1190cd4f13adc26b31b2476991c3b777d1893a0c578312539e0619027a43"
         },
         {
-          "bytes": 81,
-          "path": "dnspython-2.9.0.dist-info/WHEEL",
-          "sha256": "de2431d790b25f01a2e1d6f281e7730383394f57aa3bf4a3c1d3df526aadd82c"
+          "bytes": 80,
+          "path": "dnspython-2.9.2.dist-info/WHEEL",
+          "sha256": "316c7ba6ca05eca3524fd1bbda91ad88162e697457417064f69c3947a173624a"
+        },
+        {
+          "bytes": 1526,
+          "path": "dnspython-2.9.2.dist-info/licenses/LICENSE",
+          "sha256": "c3ea3ff5654b329c19d3bc5f7481af623c3dded4a6145585499f843ad3d741cd"
         }
       ],
-      "metadata_sha256": "d25dbd09b39758cd5cebe518701012a6278731986cd384fc4a7f25e78f7de929",
+      "metadata_sha256": "dffafe5b3b88a9637d04b3f399b5b8efec3be6c771e65bc80cde97d90c6e8f7d",
       "name": "dnspython",
       "native_files": [],
-      "notices": [],
+      "notices": [
+        {
+          "bytes": 1526,
+          "path": "dnspython-2.9.2.dist-info/licenses/LICENSE",
+          "retained_identical_notices": [
+            "upstream/dnspython-2.9.0/LICENSE",
+            "wheels/dnspython-2.8.0.dist-info/licenses/LICENSE"
+          ],
+          "sha256": "c3ea3ff5654b329c19d3bc5f7481af623c3dded4a6145585499f843ad3d741cd"
+        }
+      ],
       "purelib": true,
       "pypi_artifact": {
-        "metadata_file": "dnspython-2.9.0.json",
-        "metadata_sha256": "538bf69e3dffc0b9f0011ed2d1846b7b9370584d74e484b2f9e70706e94e2df3",
-        "sha256": "9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9",
-        "url": "https://files.pythonhosted.org/packages/10/02/cdcc9b7c051786a103c3b09e1003a82fa0c66bcb91ffbdabcfbf7b4163b9/dnspython-2.9.0-py3-none-any.whl",
+        "metadata_file": "dnspython-2.9.2.pypi.json",
+        "metadata_sha256": "ebfd66c52097ea571595fd686e8bf123e65b3e408575f727357dae7dd8c10aa1",
+        "sha256": "af15f7d385a6ae2fb35a796fde2138004c8c42c7389090e2addc83e3b3340fd8",
+        "url": "https://files.pythonhosted.org/packages/1e/0c/5346358b3a20275d256978c35203ddc2c8617f78c1b23795b79ba22ced6d/dnspython-2.9.2-py3-none-any.whl",
         "yanked": false
       },
       "sboms": [],
-      "sha256": "9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9",
+      "sha256": "af15f7d385a6ae2fb35a796fde2138004c8c42c7389090e2addc83e3b3340fd8",
       "source_status": "NOT_ESTABLISHED_BY_WHEEL_METADATA",
       "tags": [
         "py3-none-any"
       ],
-      "version": "2.9.0"
+      "version": "2.9.2"
     },
     {
       "filename": "email_validator-2.3.0-py3-none-any.whl",
@@ -36296,7 +36318,7 @@
     }
   ],
   "native_ELF_count": 48,
-  "requirements_sha256": "c4ff84ae271e902235e2d4024066b0d3e679fce8ccc403ce3b6e9e544518bf0e",
+  "requirements_sha256": "c4d19336909ae669f3577fc8da5afd15c265b50b73227c08d7b34eb177151804",
   "schema_version": 1,
   "scope": "Whole-wheel/RECORD/native-byte/notice/raw-SBOM attribution. Not corresponding-source, advisory, installed-image or native-execution approval.",
   "selection_manifest_sha256": "609dac61e58e81d074d7996bcc13dff6620cfa2592f35cd97c6e659fbebdf615"

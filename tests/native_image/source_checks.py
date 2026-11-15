@@ -26,8 +26,8 @@ RESDET_SCRIPTS = {
     "build_resdet.py": "1c73568784cd1821d513cbb155437d9699dbedb9c4a78d02e62dfa76a0628355",
 }
 PYTHON_INDEXES = {
-    "x86_64": "08ed75d9a94dae5cb10fa8353dfc01ea27a9a531d199c786b29eaecacc4ca1f0",
-    "aarch64": "2d24f53e8aeec9f3e96aeb188c26941a2270206995a365788fd50ef6fe42f094",
+    "x86_64": "dc502820155aafb65e71f0613c90ef33c96dbd6aee1953ab14f078de67e779e5",
+    "aarch64": "079d2a9cdb7623870bed4c1434ac1580e1138433dbc5f91edd42e75d84a02cd8",
 }
 FIELDS = ("name", "version", "release", "arch", "vendor", "sourcerpm", "license")
 QUERY = "\\t".join("%{" + field.upper() + "}" for field in FIELDS) + "\\n"

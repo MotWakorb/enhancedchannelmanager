@@ -66,6 +66,17 @@ def canonical(value):
     return digest(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
 
 
+@pytest.mark.parametrize("arch,native_sha256", [
+    ("amd64", "31125cd9d8edad09e4bb10d6b752e93144e0f73ce185d64d242d9fd593058d4f"),
+    ("arm64", "662eaa920099927d04bc855dce78eb5e52601ccfc1bd2f918f06b066090dde56"),
+])
+def test_dns_only_lock_rebinding_preserves_complete_native_attribution(arch, native_sha256):
+    index = json.loads((ROOT / f"docker/python-third-party/artifact-index/linux-{arch}.json").read_text())
+    assert index["lock_sha256"] == digest((ROOT / "backend/requirements.txt").read_bytes())
+    assert canonical(index["native_distributions"]) == native_sha256
+    assert index["dependency_security_update"]["bead"] == "enhancedchannelmanager-w8h34"
+
+
 def put(root, name, data):
     path = root / name
     path.parent.mkdir(parents=True, exist_ok=True)

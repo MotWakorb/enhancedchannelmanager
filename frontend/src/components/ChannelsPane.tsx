@@ -2162,7 +2162,7 @@ export function ChannelsPane({
               return next;
             });
             if (progress.status === 'deferred') {
-              notifications.warning(progress.deferred_reason || 'Probe deferred to protect viewers; provider capacity is limited or unverified.', 'Stream Probe Deferred');
+              notifications.warning(progress.deferred_reason || 'Probe deferred: provider capacity was unavailable or could not be verified; see skipped stream reasons', 'Stream Probe Deferred');
             }
             logger.info(`[ChannelsPane] Probe stopped for group '${groupName}': ${progress.status}`);
           }

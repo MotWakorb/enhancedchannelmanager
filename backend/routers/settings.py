@@ -462,6 +462,7 @@ class SettingsRequest(BaseModel):
     bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
     parallel_probing_enabled: bool = True  # Probe multiple streams from different M3Us simultaneously
     max_concurrent_probes: int = 8  # Max simultaneous probes when parallel probing is enabled (1-16)
+    probe_capacity_wait_timeout: int = Field(default=300, ge=0, le=3600)
     profile_distribution_strategy: str = "fill_first"  # How to distribute probes across M3U profiles: fill_first, round_robin, least_loaded
     skip_recently_probed_hours: int = 0  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool = True  # Refresh all M3U accounts before starting probe
@@ -617,6 +618,7 @@ class SettingsResponse(BaseModel):
     bitrate_sample_duration: int
     parallel_probing_enabled: bool  # Probe multiple streams from different M3Us simultaneously
     max_concurrent_probes: int  # Max simultaneous probes when parallel probing is enabled (1-16)
+    probe_capacity_wait_timeout: int
     profile_distribution_strategy: str  # How to distribute probes across M3U profiles: fill_first, round_robin, least_loaded
     skip_recently_probed_hours: int  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool  # Refresh all M3U accounts before starting probe
@@ -887,6 +889,7 @@ async def get_current_settings(
         bitrate_sample_duration=settings.bitrate_sample_duration,
         parallel_probing_enabled=settings.parallel_probing_enabled,
         max_concurrent_probes=settings.max_concurrent_probes,
+        probe_capacity_wait_timeout=settings.probe_capacity_wait_timeout,
         profile_distribution_strategy=settings.profile_distribution_strategy,
         skip_recently_probed_hours=settings.skip_recently_probed_hours,
         refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
@@ -1218,6 +1221,7 @@ async def update_settings(
         bitrate_sample_duration=request.bitrate_sample_duration,
         parallel_probing_enabled=request.parallel_probing_enabled,
         max_concurrent_probes=request.max_concurrent_probes,
+        probe_capacity_wait_timeout=request.probe_capacity_wait_timeout,
         profile_distribution_strategy=request.profile_distribution_strategy,
         skip_recently_probed_hours=request.skip_recently_probed_hours,
         refresh_m3us_before_probe=request.refresh_m3us_before_probe,
@@ -1471,13 +1475,15 @@ async def update_settings(
     # Update prober's parallel probing settings without requiring restart
     if (new_settings.parallel_probing_enabled != current_settings.parallel_probing_enabled or
             new_settings.max_concurrent_probes != current_settings.max_concurrent_probes or
-            new_settings.profile_distribution_strategy != current_settings.profile_distribution_strategy):
+            new_settings.profile_distribution_strategy != current_settings.profile_distribution_strategy or
+            new_settings.probe_capacity_wait_timeout != current_settings.probe_capacity_wait_timeout):
         prober = get_prober()
         if prober:
             prober.update_probing_settings(
                 new_settings.parallel_probing_enabled,
                 new_settings.max_concurrent_probes,
-                new_settings.profile_distribution_strategy
+                new_settings.profile_distribution_strategy,
+                new_settings.probe_capacity_wait_timeout,
             )
             logger.info("[SETTINGS] Updated prober parallel probing settings from settings")
 
@@ -2393,6 +2399,7 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
                 bitrate_sample_duration=settings.bitrate_sample_duration,
                 parallel_probing_enabled=settings.parallel_probing_enabled,
                 max_concurrent_probes=settings.max_concurrent_probes,
+                probe_capacity_wait_timeout=settings.probe_capacity_wait_timeout,
                 profile_distribution_strategy=settings.profile_distribution_strategy,
                 skip_recently_probed_hours=settings.skip_recently_probed_hours,
                 refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
