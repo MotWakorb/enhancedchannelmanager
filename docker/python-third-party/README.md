@@ -24,7 +24,11 @@ inventories bind the new wheel's whole hash and every RECORD member; they retain
 all other 73 distribution rows byte-for-byte. Their `dependency_security_update`
 records the preceding inventory/lock/wheel identities. The GNU selection manifest
 remains historical provenance for the unchanged native payloads, not evidence
-for the new pure-Python wheel. No native runtime acceptance is inferred.
+for the new pure-Python wheel. The installed GNU consumer recognizes only the
+exact hash-bound, ELF-free DNS replacement; changed hashes, native payloads,
+or other unreviewed pure wheels still fail. The manylinux attribution indexes
+also bind the updated lock with explicit history, retaining all 22 native
+distribution rows per architecture unchanged. No native runtime acceptance is inferred.
 
 The proposed accompanying-image source path is `/usr/share/ecm/sources/python/`; integration and recipient access remain **not implemented or verified here**. Keep the source/notice files for components actually shipped and preserve ECM's separate CC0 root license.
 
@@ -46,7 +50,8 @@ relocations. This installed consumer passed against the actual AMD64 Alpine
 Unit tests include payload/RECORD/notice/script-tampering denials.
 
 These indexes do **not** establish corresponding sources or advisory clearance
-from SBOM names/versions. The historical manylinux indexes remain unchanged.
+from SBOM names/versions. Historical native artifact records remain unchanged;
+the current lock bindings record the pure-Python security update separately.
 
 `artifact-index/musllinux-gnu.json` is a separate, hash-pinned map for the
 unchanged musllinux selection. It does not replace or relabel the historical

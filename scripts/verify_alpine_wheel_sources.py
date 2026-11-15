@@ -49,9 +49,24 @@ def gnu_members(inventory: dict, manifest: dict, architecture: str) -> list[dict
         "complete native wheel selection required",
     )
     selected = {row["filename"]: row["sha256"] for row in rows}
+    # The GNU proof remains historical for unchanged native wheels. This exact
+    # reviewed purelib security update contains no ELF and does not inherit GNU
+    # source clearance. Never exempt arbitrary pure wheels or native payloads.
+    # Whole archives/RECORDs are independently pinned by INVENTORY_SHA256 and
+    # rehashed by the installed-wheel consumer below.
+    pure_dns_update = {
+        row["filename"] for row in rows
+        if row["name"] == "dnspython" and row["version"] == "2.9.2"
+        and row["filename"] == "dnspython-2.9.2-py3-none-any.whl"
+        and row["sha256"] == "af15f7d385a6ae2fb35a796fde2138004c8c42c7389090e2addc83e3b3340fd8"
+        and row["purelib"] is True and row["native_files"] == []
+        and row["tags"] == ["py3-none-any"]
+        and manifest["wheel_selection"].get("dnspython-2.9.0-py3-none-any.whl")
+        == "9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9"
+    }
     require(
         all(
-            manifest["wheel_selection"].get(name) == digest
+            manifest["wheel_selection"].get(name) == digest or name in pure_dns_update
             for name, digest in selected.items()
         ),
         "GNU whole-wheel selection binding differs",

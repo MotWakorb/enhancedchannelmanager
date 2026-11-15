@@ -49,6 +49,23 @@ def test_recorded_native_maps_join_all9_gnu_copies_to6_objects_and2_source_famil
     assert len(inventory["distributions"]) == 74
 
 
+@pytest.mark.parametrize("mutation", ["changed-dns-hash", "native-dns", "not-pure", "unreviewed-pure-wheel"])
+def test_pure_dns_security_overlay_cannot_rebind_other_or_native_artifacts(consumer, maps, mutation):
+    arch, inventory, manifest = maps
+    dns = next(row for row in inventory["distributions"] if row["name"] == "dnspython")
+    if mutation == "changed-dns-hash":
+        dns["sha256"] = "0" * 64
+    elif mutation == "native-dns":
+        dns["native_files"] = [{"path": "dns/hidden.so", "sha256": "0" * 64}]
+    elif mutation == "not-pure":
+        dns["purelib"] = False
+    else:
+        other = next(row for row in inventory["distributions"] if row["name"] == "email-validator")
+        other["sha256"] = "0" * 64
+    with pytest.raises(consumer.AttributionError):
+        consumer.gnu_members(inventory, manifest, arch)
+
+
 @pytest.mark.parametrize(
     "mutation",
     ["extra-gnu", "missing-gnu", "changed-gnu", "wheel-rebinding", "wrong-arch"],
