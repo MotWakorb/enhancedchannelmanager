@@ -184,7 +184,7 @@
     "scripts/image_publish_policy.py": "sha256:9b4546e911e677b1b220f3afaf17bb853cdb69ddd9eff667825ccbd1c7f4be8d",
     "scripts/install_alpine_native.py": "sha256:313a87a75125a38b863494f957d5f02ccd45bfbdf3ab8f1758cbd2347964c25a",
     "scripts/install_busybox_provider.py": "sha256:758e1a520e074b9bfb4acf74af44c911ff12e354a14ba1cee5c1cf463b4a174b",
-    "scripts/inventory_musllinux_wheels.py": "sha256:a2540c97eaa0b1beb0c9811d7872f99ee1e6ae4784dc69faf2d0530e7366aa59",
+    "scripts/inventory_musllinux_wheels.py": "sha256:7032ce7ea4a63a9ed8e60a17ca95b71e1f031bf3ae2c36d729f6cae9c7be51ce",
     "scripts/native_image_gate.py": "sha256:17849a417aba888f132a4e38fd23a9fc43c8e75673e410dd6c00bfca4c4f79d0",
     "scripts/package_alpine_native.py": "sha256:c29b85fde97e02ac05ae0d2888d86ab69714c3d6bd52f8c3fb43ba0913be27d5",
     "scripts/prepare_alpine_baseline.py": "sha256:87655bfe7f646f68d0bc24e113c6382f9556a2e6bcda1fc3d296985b858f5be9",
