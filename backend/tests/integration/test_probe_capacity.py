@@ -58,8 +58,9 @@ def upstream():
                 body = state.stream
             elif path == "/api/channels/streams/":
                 body = {"results": [state.stream], "next": None, "count": 1}
-            elif path == "/media.ts":
+            elif path in ("/media.ts", "/secondary/media.ts"):
                 state.media_requests += 1
+                state.last_media_path = path
                 data = b"\x47" + b"\0" * 65535
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(data)))
@@ -103,7 +104,7 @@ async def integrated_probe(upstream, async_client, tmp_path, monkeypatch):
             dispatcharr_api_key="disposable-test-key",
         )
     )
-    prober = StreamProber(client, bitrate_sample_duration=0.01)
+    prober = StreamProber(client, bitrate_sample_duration=0.01, probe_capacity_wait_timeout=0)
     monkeypatch.setattr("stream_prober.PROBE_HISTORY_FILE", tmp_path / "history.json")
     monkeypatch.setattr("routers.stream_stats.ensure_prober", lambda: prober)
     monkeypatch.setattr("stream_prober.get_prober", lambda: prober)
@@ -273,6 +274,60 @@ async def test_real_http_explicit_unlimited_still_measures_and_serializes_health
     assert saved["probe_status"] == "success"
 
 
+@pytest.mark.parametrize("spare", [False, True])
+async def test_finite_http_capacity_and_secondary_route_measure_and_persist(
+    upstream, integrated_probe, async_client, monkeypatch, spare
+):
+    prober = integrated_probe
+    upstream.active = 1 if not spare else 2
+    if spare:
+        profile = deepcopy(upstream.account["profiles"][0])
+        profile.update(id=13, is_default=False, max_streams=1,
+                       search_pattern="/media.ts$", replace_pattern="/secondary/media.ts")
+        upstream.account["profiles"].append(profile)
+    metadata = json.loads((FIXTURES / "gh980_generated_local_ffprobe.json").read_text())
+
+    async def decode_substitute(url, **_kwargs):
+        async with stream_request(url) as response:
+            response.raise_for_status()
+            await response.aread()
+        return metadata
+
+    monkeypatch.setattr(prober, "_run_ffprobe", decode_substitute)
+    response = await async_client.post("/api/stream-stats/probe/7")
+    assert response.json()["probe_status"] == "success"
+    assert upstream.media_requests == 2
+    assert upstream.last_media_path == ("/secondary/media.ts" if spare else "/media.ts")
+    saved = (await async_client.get("/api/stream-stats/7")).json()
+    assert saved["resolution"] == "640x480"
+    assert saved["probe_status"] == "success"
+
+
+async def test_late_viewer_after_local_admission_is_an_explicitly_accepted_race(
+    upstream, integrated_probe, async_client, monkeypatch
+):
+    prober = integrated_probe
+    upstream.active = 1
+    metadata = json.loads((FIXTURES / "gh980_generated_local_ffprobe.json").read_text())
+
+    async def decode_substitute(url, **_kwargs):
+        # Admission already observed one free slot. Dispatcharr does not know
+        # about our local reservation: this later viewer can fill the last slot.
+        upstream.active = 2
+        assert prober._probe_profile_connections == {12: 1}
+        async with stream_request(url) as response:
+            response.raise_for_status()
+            await response.aread()
+        return metadata
+
+    monkeypatch.setattr(prober, "_run_ffprobe", decode_substitute)
+    response = await async_client.post("/api/stream-stats/probe/7")
+    assert response.json()["probe_status"] == "success"
+    assert upstream.active == 2
+    assert upstream.media_requests == 2
+    assert not prober._probe_profile_connections
+
+
 async def test_actual_http_deferred_progress_and_per_stream_reason_are_operator_visible(
     upstream, integrated_probe, async_client
 ):
@@ -281,7 +336,8 @@ async def test_actual_http_deferred_progress_and_per_stream_reason_are_operator_
     response = await async_client.post("/api/stream-stats/probe/7")
     single = response.json()
     assert single["probe_status"] == "skipped"
-    assert single["error_message"] == single["deferred_reason"] == PROBE_DEFERRED_REASON
+    assert single["error_message"] == single["deferred_reason"]
+    assert "full" in single["deferred_reason"]
     response = await async_client.post(
         "/api/stream-stats/probe/bulk", json={"stream_ids": [7]}
     )

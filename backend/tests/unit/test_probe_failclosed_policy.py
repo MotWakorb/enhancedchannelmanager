@@ -1,4 +1,4 @@
-"""PO-selected restriction: no media on finite or unverifiable providers.
+"""Capacity admission: full/unverifiable providers defer without health changes.
 
 The baseline parses the recorded 0.27.2 account. Finite/group/malformed cases
 are explicit synthetic variations, not new live API captures. No policy mocks.
@@ -20,7 +20,7 @@ from tests.unit.test_stream_probe_capacity import (
 )
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("vlc_stream_user_agent")]
-REASON = "Probe deferred: provider capacity is limited or unverified; shared viewer coordination is unavailable"
+REASON = stream_prober.PROBE_DEFERRED_REASON
 
 
 @pytest.fixture
@@ -132,11 +132,12 @@ def assert_no_media_or_health_write(prober, sessions):
 @pytest.mark.parametrize(
     "limit", ["account", "default", "alternate", "inactive_alternate"]
 )
-@pytest.mark.parametrize("viewers", [0, 1])
-async def test_limited_provider_free_slot_never_admits_any_media(
+@pytest.mark.parametrize("viewers", [2, 3])
+async def test_saturated_provider_never_admits_any_media(
     policy_probe, lane, limit, viewers
 ):
     prober, account, stream, sessions = policy_probe
+    account["max_streams"] = account["profiles"][0]["max_streams"] = 2
     if limit == "account":
         account["max_streams"] = 2
     elif limit == "default":
@@ -157,14 +158,15 @@ async def test_limited_provider_free_slot_never_admits_any_media(
     assert_no_media_or_health_write(prober, sessions)
     if lane == "single":
         assert result["probe_status"] == "skipped"
-        assert result["error_message"] == result["deferred_reason"] == REASON
+        assert result["error_message"] == result["deferred_reason"]
+        assert "capacity" in result["deferred_reason"]
     elif lane in ("scheduled", "black_scan"):
         assert not result.success
         assert result.error == "PROBE_DEFERRED"
         assert result.skipped_count == 1
         assert REASON in result.message
     elif lane in ("quality", "queued"):
-        assert REASON in str(result["execution_log"])
+        assert "capacity" in str(result["execution_log"])
     else:
         assert result["status"] == "deferred"
         assert result["deferred_reason"] == REASON
@@ -223,7 +225,7 @@ async def test_unknown_or_shared_capacity_never_becomes_unlimited(policy_probe, 
         )
     result = await prober.probe_stream(7, stream["url"])
     assert result["probe_status"] == "skipped"
-    assert result["deferred_reason"] == REASON
+    assert result["deferred_reason"] == result["error_message"]
     assert_no_media_or_health_write(prober, sessions)
 
 
@@ -246,7 +248,28 @@ async def test_recorded_explicit_zero_is_unlimited_not_unknown(policy_probe):
     assert not prober._probe_account_connections
 
 
-async def test_spare_unlimited_profile_cannot_evade_declared_account_route_limit(
+@pytest.mark.parametrize("lane", ["single", "bulk", "all_parallel", "all_sequential", "quality", "queued", "scheduled", "black_scan"])
+async def test_every_consumer_can_measure_finite_spare_login(policy_probe, lane):
+    prober, account, stream, _ = policy_probe
+    account["max_streams"] = account["profiles"][0]["max_streams"] = 1
+    spare = deepcopy(account["profiles"][0])
+    spare.update(id=13, is_default=False, search_pattern="/user/password/", replace_pattern="/alternate/login/")
+    account["profiles"].append(spare)
+    prober.client.get_channel_stats.return_value = {"channels": [{"m3u_profile_id": 12}]}
+    result = await run_lane(prober, stream, lane)
+    measurement = prober._detect_black_screen if lane == "black_scan" else prober._run_ffprobe
+    assert measurement.await_count == 1
+    assert measurement.await_args.args[0] == stream["url"].replace("/user/password/", "/alternate/login/")
+    if lane == "single":
+        assert result["probe_status"] == "success"
+    elif lane in ("bulk", "all_parallel", "all_sequential"):
+        assert result["status"] == "completed"
+    elif lane in ("scheduled", "black_scan"):
+        assert result.success
+    assert not prober._probe_profile_connections
+
+
+async def test_spare_login_is_not_subject_to_default_login_limit(
     policy_probe,
 ):
     prober, account, stream, sessions = policy_probe
@@ -264,9 +287,11 @@ async def test_spare_unlimited_profile_cannot_evade_declared_account_route_limit
     result = await prober.probe_stream(
         7, stream["url"].replace("/user/password/", "/alternate/login/"), stream=stream
     )
-    assert result["probe_status"] == "skipped"
-    assert result["deferred_reason"] == REASON
-    assert_no_media_or_health_write(prober, sessions)
+    assert result["probe_status"] == "success"
+    prober._run_ffprobe.assert_awaited_once_with(
+        stream["url"].replace("/user/password/", "/alternate/login/"),
+        user_agent="VLC/3.0.20 LibVLC/3.0.20",
+    )
 
 
 async def test_concurrent_start_and_restart_edges_do_not_open_limited_media(
@@ -274,6 +299,7 @@ async def test_concurrent_start_and_restart_edges_do_not_open_limited_media(
 ):
     prober, account, stream, sessions = policy_probe
     account["max_streams"] = 2
+    prober.client.get_channel_stats.return_value = {"channels": [{"m3u_profile_id": 12}] * 2}
     prepare_probe_all(prober, True)
     assert prober.schedule_probe(skip_m3u_refresh=True)["status"] == "started"
     owner = prober._probe_run_task
@@ -315,6 +341,7 @@ async def test_failed_stream_reprobe_reports_real_policy_deferral(
 
     prober, account, _, sessions = policy_probe
     account["max_streams"] = 2
+    prober.client.get_channel_stats.return_value = {"channels": [{"m3u_profile_id": 12}] * 2}
     prepare_probe_all(prober, True)
     prober._last_probe_channel_stream_ids = {7}
     monkeypatch.setattr("tasks.failed_stream_reprobe.get_session", sessions)
@@ -343,6 +370,7 @@ async def test_epg_event_probe_reports_real_policy_deferral(policy_probe):
 
     prober, account, _, sessions = policy_probe
     account["max_streams"] = 2
+    prober.client.get_channel_stats.return_value = {"channels": [{"m3u_profile_id": 12}] * 2}
     task, _, client = _task(
         events=[_event()],
         channels=[{"id": 42, "tvg_id": "sports.example", "streams": [7]}],
@@ -373,6 +401,7 @@ async def test_deferral_preserves_cancel_then_aborting_failure_precedence(
 async def test_deferred_notification_is_warning_not_success(policy_probe):
     prober, account, stream, sessions = policy_probe
     account["max_streams"] = 2
+    prober.client.get_channel_stats.return_value = {"channels": [{"m3u_profile_id": 12}] * 2}
     prepare_probe_all(prober, True)
     prober._probe_notification_id = 1
     prober._notification_update_callback = AsyncMock()
@@ -391,6 +420,7 @@ async def test_cancelled_standalone_scan_retains_deferred_skip_count(policy_prob
 
     prober, account, _, sessions = policy_probe
     account["max_streams"] = 2
+    prober.client.get_channel_stats.return_value = {"channels": [{"m3u_profile_id": 12}] * 2}
     prepare_probe_all(prober, True)
     task = BlackScreenScanTask()
     task.set_prober(prober)
@@ -414,6 +444,7 @@ async def test_mixed_run_measures_only_unlimited_without_reorder_or_scope_wideni
     finite = deepcopy(account)
     finite.update(id=21, max_streams=2)
     finite["profiles"][0]["id"] = 22
+    prober.client.get_channel_stats.return_value = {"channels": [{"m3u_profile_id": 22}] * 2}
     limited_stream = {**stream, "id": 8, "m3u_account": 21}
     prober.client.get_m3u_accounts.return_value = [account, finite]
     prober._fetch_all_streams.return_value = [stream, limited_stream]

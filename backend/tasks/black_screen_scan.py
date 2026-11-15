@@ -196,11 +196,13 @@ class BlackScreenScanTask(TaskScheduler):
 
         async def scan_one(stream_id: int, name: str, url: str):
             nonlocal black_count, clear_count, error_count, completed, deferred_count
-            async with semaphore:
-                if self._cancel_requested:
-                    return
+            if not self._cancel_requested:
                 try:
-                    result = await self._prober.probe_stream(stream_id, url, name, black_screen_only=True)
+                    result = await self._prober.probe_stream(
+                        stream_id, url, name, black_screen_only=True,
+                        _media_semaphore=semaphore,
+                        _cancel_check=lambda: self._cancel_requested,
+                    )
                     if result.get("probe_status") == "skipped":
                         deferred_count += 1
                         return

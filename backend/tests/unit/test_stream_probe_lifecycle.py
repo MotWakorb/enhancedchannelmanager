@@ -5,6 +5,7 @@ notifications and persistence are substituted, not admission or lifecycle code.
 """
 
 import asyncio
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -348,12 +349,13 @@ async def test_sequential_cancel_during_account_hold_cannot_start_media(
 ):
     prober, _, _ = capacity_probe
     prepare_probe_all(prober, False)
-    prober._get_account_hold_remaining = MagicMock(return_value=1)
+    prober._is_account_held = MagicMock(return_value=True)
+    prober.probe_capacity_wait_timeout = 300
     sleeping, release = asyncio.Event(), asyncio.Event()
     real_sleep = asyncio.sleep
 
     async def hold(seconds):
-        if seconds == 1:
+        if seconds == 0.5:
             sleeping.set()
             await release.wait()
         else:
@@ -375,7 +377,7 @@ async def test_sequential_cancel_during_account_hold_cannot_start_media(
         await asyncio.wait_for(asyncio.gather(runner, return_exceptions=True), 3)
 
 
-async def test_parallel_cancel_during_scheduler_status_read_cannot_start_media(
+async def test_parallel_cancel_during_shared_status_read_cannot_start_media(
     capacity_probe,
 ):
     prober, _, _ = capacity_probe
@@ -383,9 +385,9 @@ async def test_parallel_cancel_during_scheduler_status_read_cannot_start_media(
 
     async def status():
         prober.cancel_probe()
-        return {}
+        return {"channels": []}
 
-    prober._get_profile_active_connections = AsyncMock(side_effect=status)
+    prober.client.get_channel_stats = AsyncMock(side_effect=status)
     result = await prober.probe_all_streams(skip_m3u_refresh=True)
     assert result["status"] == "cancelled"
     prober._run_ffprobe.assert_not_awaited()
@@ -397,8 +399,17 @@ async def test_parallel_cancel_during_scheduler_status_read_cannot_start_media(
 async def test_probe_all_cancel_does_not_cancel_unrelated_single(
     capacity_probe, parallel
 ):
-    prober, _, _ = capacity_probe
+    prober, account, stream = capacity_probe
     prepare_probe_all(prober, parallel)
+    prober.probe_capacity_wait_timeout = 300
+    # Separate independent providers let parallel mode exercise cancellation of
+    # active batch media, rather than the per-provider ramp limit. Sequential
+    # mode deliberately queues behind the unrelated singleton's global slot.
+    other = deepcopy(account)
+    other["id"] = 20
+    other["profiles"][0]["id"] = 21
+    prober.client.get_m3u_accounts.return_value.append(other)
+    prober._fetch_all_streams.return_value.append({**stream, "id": 8, "m3u_account": 20})
     started = [asyncio.Event(), asyncio.Event()]
     release = asyncio.Event()
     children = []
@@ -420,12 +431,17 @@ async def test_probe_all_cancel_does_not_cancel_unrelated_single(
                 skip_m3u_refresh=True, allow_reorder_after_probe=False
             )
         )
-        await asyncio.wait_for(started[1].wait(), 3)
+        if parallel:
+            await asyncio.wait_for(started[1].wait(), 3)
+        else:
+            await asyncio.sleep(0.05)
+            assert len(children) == 1
+            assert prober._probing_in_progress
         prober.cancel_probe()
         assert (await asyncio.wait_for(batch, 3))["status"] == "cancelled"
         assert not single.done()
         assert not children[0].done()
-        assert prober._probe_account_connections == {11: 1}
+        assert prober._probe_account_connections == {20: 1}
         release.set()
         assert (await asyncio.wait_for(single, 3))["probe_status"] == "success"
     finally:

@@ -7,7 +7,7 @@ vi.mock('../../services/api', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../services/api')>(),
   getSettings: vi.fn(), getChannelProfiles: vi.fn(), listAlertMethods: vi.fn(),
   getM3UAccounts: vi.fn(), getStreams: vi.fn(), getProbeHistory: vi.fn(), getProbeProgress: vi.fn(),
-  getStaleStreams: vi.fn(), probeBulkStreams: vi.fn(),
+  getStaleStreams: vi.fn(), probeBulkStreams: vi.fn(), saveSettings: vi.fn(),
 }));
 const notifications = vi.hoisted(() => ({
   success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(),
@@ -16,7 +16,7 @@ const notifications = vi.hoisted(() => ({
 vi.mock('../../contexts/NotificationContext', () => ({ useNotifications: () => notifications }));
 vi.mock('../../hooks/useAuth', () => ({ useAuth: () => ({ user: { is_admin: true, username: 'admin' } }) }));
 
-const reason = 'Probe deferred: provider capacity is limited or unverified; shared viewer coordination is unavailable';
+const reason = 'Probe deferred: provider capacity was unavailable or could not be verified; see skipped stream reasons';
 const progress = {
   in_progress: false, total: 1, current: 1, status: 'deferred', current_stream: '',
   success_count: 0, failed_count: 0, skipped_count: 1, black_screen_count: 0,
@@ -30,7 +30,7 @@ const history: api.ProbeHistoryEntry = {
   skipped_streams: [{ id: 7, name: 'Limited provider', reason }],
 };
 
-describe('fail-closed probe feedback', () => {
+describe('capacity-aware probe feedback', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getSettings).mockResolvedValue({ url: 'http://dispatcharr:8000', username: 'admin' } as Awaited<ReturnType<typeof api.getSettings>>);
@@ -40,8 +40,21 @@ describe('fail-closed probe feedback', () => {
     vi.mocked(api.getStreams).mockResolvedValue({ count: 0, next: null, previous: null, results: [] });
     vi.mocked(api.getProbeHistory).mockResolvedValue([history]);
     vi.mocked(api.getProbeProgress).mockResolvedValue(progress);
+    vi.mocked(api.saveSettings).mockResolvedValue({ status: 'success', configured: true, server_changed: false });
   });
   afterEach(() => { vi.useRealTimers(); });
+
+  it('defaults capacity waiting to five minutes and saves changes', async () => {
+    render(<SettingsTab onSaved={vi.fn()} initialSettingsPage="maintenance" />);
+    const input = await screen.findByRole('spinbutton', { name: 'Capacity wait timeout (seconds)' });
+    await waitFor(() => expect(input).toHaveValue(300));
+    expect(screen.getByText(/last verified connection counts for up to 30 seconds/)).toBeVisible();
+    fireEvent.change(input, { target: { value: '120' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save Settings/ }));
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ probe_capacity_wait_timeout: 120 }),
+    ));
+  });
 
   it('shows the deferred history reason and preserves skipped details', async () => {
     render(<SettingsTab onSaved={vi.fn()} initialSettingsPage="maintenance" />);

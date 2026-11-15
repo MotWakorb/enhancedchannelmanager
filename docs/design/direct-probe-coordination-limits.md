@@ -1,16 +1,18 @@
 # Direct probes and later Dispatcharr viewers
 
-Coordination boundary and selected restriction for #1032 / `enhancedchannelmanager-0m06f.6.2`.
+Coordination boundary for #1032 / `enhancedchannelmanager-0m06f.6.2` and the
+best-effort restoration in `enhancedchannelmanager-88yso`.
 
 ECM can serialize its own direct-probe reservations against freshly observed
 Dispatcharr occupancy. It cannot atomically reserve a provider connection on
 behalf of a direct probe against a viewer admitted later by another process.
-The PO has now explicitly selected a temporary **fail-closed restriction**:
-limited/unverified providers receive no direct probe connection even with free
-slots. This resolves the late-viewer safety reproduction by restriction, not by
-implementing leases. Explicit-unlimited, ungrouped routes retain direct
-measurement and all existing SSRF/ownership controls. No unsafe override, proxy,
-preemption or reserved-slot setting is introduced.
+On 2026-11-08 the PO selected a temporary **fail-closed restriction** for limited
+providers. On 2026-11-15 the PO superseded it with **best-effort capacity checks**,
+explicitly accepting the last-slot viewer-arrival race. Finite ungrouped profiles
+can now be probed with verified headroom, bounded waiting and a bounded status
+snapshot fallback. Unknown shared capacity still defers. This does not implement
+leases or guaranteed viewer priority. Direct measurement and SSRF/ownership
+controls remain in place; no proxy, preemption or reserved-slot setting is added.
 
 ## Inspected upstream contracts
 
@@ -43,15 +45,16 @@ provider connection has closed before capacity becomes reusable.
 ## Product boundary
 
 The selected current policy is documented in [the operator contract](../probe-capacity.md).
-All account/profile limits must be explicit integer zero, with explicit absence
-of shared grouping. Grouped or missing capacity declarations cannot be blessed
-from an unrecorded/guessed grouping schema. A finite sibling profile cannot be
-evaded by selecting an unlimited alternate. Null-account routes are unverified.
+Finite profile limits are checked against live occupancy plus local probes;
+account Max Streams mirrors the default login rather than limiting independent
+secondary logins in aggregate. Grouped or missing capacity declarations cannot
+be blessed from an unrecorded/guessed grouping schema. Null-account routes remain
+unverified. Identical-URL profile aliases are not extra capacity.
 
-Future `enhancedchannelmanager-88yso` tracks restoring limited-provider probing
-with a supported shared lease/revocation/provider-close-ack contract and an
-explicit expiry/partition policy. That future functionality is not a dependency
-of the PO-selected current P1 safety restriction.
+`enhancedchannelmanager-88yso` implements the PO-selected best-effort behavior,
+not shared leases. Guaranteed viewer priority would still require a supported
+shared lease/revocation/provider-close-ack contract and an explicit expiry/partition
+policy; it is not a prerequisite for the accepted best-effort behavior.
 
 Proxying changes the measured network leg, buffering/output processing, profile
 selection and potentially source IP/VPN/reachability. It also needs a reviewed

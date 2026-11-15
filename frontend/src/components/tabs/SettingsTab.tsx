@@ -56,7 +56,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import './SettingsTab.css';
 
-const PROBE_DEFERRED_MESSAGE = 'Probe deferred: provider capacity is limited or unverified; shared viewer coordination is unavailable';
+const PROBE_DEFERRED_MESSAGE = 'Probe deferred: provider capacity was unavailable or could not be verified; see skipped stream reasons';
 
 // Sort priority item configuration
 const SORT_CRITERION_CONFIG: Record<SortCriterion, { icon: string; label: string; description: string }> = {
@@ -812,6 +812,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
   const [parallelProbingEnabled, setParallelProbingEnabled] = useState(true);
   const [maxConcurrentProbes, setMaxConcurrentProbes] = useState(8);
+  const [probeCapacityWaitTimeout, setProbeCapacityWaitTimeout] = useState(300);
   const [profileDistributionStrategy, setProfileDistributionStrategy] = useState('fill_first');
   const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
   const [refreshM3usBeforeProbe, setRefreshM3usBeforeProbe] = useState(true);
@@ -945,7 +946,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     channelPipelineExcludedGroups, channelPipelineExcludeAutoSyncGroups,
     maxAutoCreatedChannelsPerRun, maxChannelPipelineLogEntries, linkedM3UAccounts,
     streamProbeTimeout, useResdetForResolution, bitrateSampleDuration, parallelProbingEnabled,
-    maxConcurrentProbes, profileDistributionStrategy, skipRecentlyProbedHours,
+    maxConcurrentProbes, probeCapacityWaitTimeout, profileDistributionStrategy, skipRecentlyProbedHours,
     refreshM3usBeforeProbe, autoReorderAfterProbe, pushStreamStatsToDispatcharr,
     probeRetryCount, probeRetryDelay, blackScreenDetectionEnabled,
     blackScreenSampleDuration, lowFpsThreshold, streamFetchPageLimit,
@@ -1283,6 +1284,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
       setMaxConcurrentProbes(settings.max_concurrent_probes ?? 8);
+      setProbeCapacityWaitTimeout(settings.probe_capacity_wait_timeout ?? 300);
       setProfileDistributionStrategy(settings.profile_distribution_strategy ?? 'fill_first');
       setSkipRecentlyProbedHours(settings.skip_recently_probed_hours ?? 0);
       setRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
@@ -1777,6 +1779,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         bitrate_sample_duration: bitrateSampleDuration,
         parallel_probing_enabled: parallelProbingEnabled,
         max_concurrent_probes: maxConcurrentProbes,
+        probe_capacity_wait_timeout: probeCapacityWaitTimeout,
         profile_distribution_strategy: profileDistributionStrategy,
         skip_recently_probed_hours: skipRecentlyProbedHours,
         refresh_m3us_before_probe: refreshM3usBeforeProbe,
@@ -5432,7 +5435,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                           <strong>{a.name}</strong>: {a.max_streams} streams
                         </span>
                       ))}
-                      . Set this to the lowest max_streams value to avoid rate limiting.
+                      . Probing automatically adjusts to each eligible profile's available capacity.
                     </>
                   )}
                 </span>
@@ -5456,11 +5459,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                     setMaxConcurrentProbes(isNaN(val) ? 8 : Math.max(1, Math.min(16, val)));
                   }}
                 />
-                {m3uAccountsMaxStreams.length > 0 && (
-                  <span className="form-hint">
-                    Recommended: {Math.min(...m3uAccountsMaxStreams.map(a => a.max_streams), 8)} (lowest provider limit)
-                  </span>
-                )}
               </div>
 
               {hasMultipleProfiles && (
@@ -5485,6 +5483,25 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </div>
               )}
             </>)}
+
+            <div className="form-group-vertical">
+              <label htmlFor="probeCapacityWaitTimeout">Capacity wait timeout (seconds)</label>
+              <span className="form-description">
+                Wait up to this long for an eligible profile, then defer without marking the stream failed.
+                Other providers can continue. Default 300 seconds; 0 skips waiting. This is separate from the probe timeout.
+                Checks are best effort, not viewer reservations: a new viewer can compete for the last slot.
+                If live status is unavailable, ECM uses last verified connection counts for up to 30 seconds, then waits or defers.
+              </span>
+              <input
+                id="probeCapacityWaitTimeout"
+                type="number"
+                min="0"
+                max="3600"
+                value={probeCapacityWaitTimeout}
+                onChange={(e) => setProbeCapacityWaitTimeout(e.target.value === '' ? 0 : parseInt(e.target.value, 10))}
+                onBlur={() => setProbeCapacityWaitTimeout(Math.max(0, Math.min(3600, probeCapacityWaitTimeout || 0)))}
+              />
+            </div>
 
             <div className="form-group-vertical">
               <label htmlFor="skipRecentlyProbedHours">Skip recently probed streams (hours)</label>

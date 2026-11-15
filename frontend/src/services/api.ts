@@ -1173,6 +1173,7 @@ export interface SettingsResponse {
   bitrate_sample_duration: number;  // Duration in seconds to sample stream for bitrate (10, 20, or 30)
   parallel_probing_enabled: boolean;  // Probe streams from different M3Us simultaneously
   max_concurrent_probes: number;  // Max simultaneous probes when parallel probing is enabled (1-16)
+  probe_capacity_wait_timeout?: number;  // Seconds to wait for capacity; older servers omit this (default 300)
   profile_distribution_strategy: string;  // How to distribute probes across M3U profiles: fill_first, round_robin, least_loaded
   skip_recently_probed_hours: number;  // Skip streams probed within last N hours (0 = always probe)
   refresh_m3us_before_probe: boolean;  // Refresh all M3U accounts before starting probe
@@ -1352,6 +1353,7 @@ export async function saveSettings(settings: {
   bitrate_sample_duration?: number;  // Optional - duration in seconds to sample stream for bitrate (10, 20, or 30), defaults to 10
   parallel_probing_enabled?: boolean;  // Optional - probe streams from different M3Us simultaneously, defaults to true
   max_concurrent_probes?: number;  // Optional - max simultaneous probes when parallel probing is enabled (1-16), defaults to 8
+  probe_capacity_wait_timeout?: number;  // Capacity waiting, distinct from media timeout (0-3600, default 300)
   profile_distribution_strategy?: string;  // Optional - how to distribute probes across profiles: fill_first, round_robin, least_loaded
   skip_recently_probed_hours?: number;  // Optional - skip streams probed within last N hours, defaults to 0 (always probe)
   refresh_m3us_before_probe?: boolean;  // Optional - refresh all M3U accounts before starting probe, defaults to true
