@@ -25,6 +25,7 @@ def runtime_commands(arch):
 mkdir -p native-evidence
 python scripts/candidate_image.py verify-archive /tmp/ecm-{arch}.oci.tar --expected '${{{{ needs.build-{arch}.outputs.digest }}}}'
 python scripts/candidate_image.py runtime-config /tmp/ecm-{arch}.oci.tar --expected '${{{{ needs.build-{arch}.outputs.digest }}}}' --architecture {arch} > native-evidence/identity.json
+skopeo --version
 test "$(skopeo --version)" = "skopeo version 1.13.3"
 skopeo copy oci-archive:/tmp/ecm-{arch}.oci.tar docker-archive:/tmp/ecm-{arch}.runtime.docker.tar:ecm-native-{arch}:candidate
 docker load --input /tmp/ecm-{arch}.runtime.docker.tar
@@ -75,7 +76,7 @@ def check_contract(workflow):
     ]
     assert " ".join(attest["if"].split()) == " ".join(expected_conditions)
     for arch, runner, scan_runner, scan_id in (
-        ("amd64", "ubuntu-latest", "ubuntu-24.04", "trivy-scan"),
+        ("amd64", "ubuntu-24.04", "ubuntu-24.04", "trivy-scan"),
         ("arm64", "ubuntu-24.04-arm", "ubuntu-24.04-arm", "trivy-scan-arm64"),
     ):
         job_id = f"native-runtime-{arch}"
@@ -83,7 +84,13 @@ def check_contract(workflow):
         assert set(job) == {"name", "runs-on", "needs", "permissions", "steps"}
         assert job_id in attest["needs"]
         assert f"needs.{job_id}.result == 'success'" in attest["if"]
-        assert job["runs-on"] == runner == jobs[f"build-{arch}"]["runs-on"]
+        assert job["runs-on"] == runner
+        # The verified OCI/config/rootfs identity, not identical build-host
+        # labels, binds execution to the candidate. Runtime needs the reviewed
+        # transport tool version supplied by the pinned Ubuntu 24.04 family.
+        assert jobs[f"build-{arch}"]["runs-on"] == (
+            "ubuntu-latest" if arch == "amd64" else "ubuntu-24.04-arm"
+        )
         assert job["needs"] == [f"build-{arch}"]
         assert job["permissions"] == {"contents": "read"}
         assert "if" not in job
@@ -199,6 +206,8 @@ def test_actual_build_workflow_enforces_native_candidate_contract(workflow):
         "needs",
         "success",
         "runner",
+        "moving-runner",
+        "missing-tool-diagnostic",
         "archive",
         "digest",
         "verify",
@@ -231,6 +240,10 @@ def test_native_contract_rejects_unsafe_runtime_mutations(workflow, arch, mutati
         ].replace(f"&& needs.{job_id}.result == 'success'", "")
     elif mutation == "runner":
         job["runs-on"] = "ubuntu-24.04" if arch == "arm64" else "ubuntu-24.04-arm"
+    elif mutation == "moving-runner":
+        job["runs-on"] = "ubuntu-latest"
+    elif mutation == "missing-tool-diagnostic":
+        step["run"] = step["run"].replace("\nskopeo --version\n", "\n")
     elif mutation == "archive":
         job["steps"][1]["with"]["name"] = "ecm-wrong-candidate"
     elif mutation == "continue":
