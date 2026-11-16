@@ -127,6 +127,32 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     }
 
 
+def _before_ci_runner_repair_rows(manifest):
+    update = manifest["ci_runner_repair_update"]
+    assert update["base_commit"] == "bffdde2e4f2e660b3cadfd945afb9932711a6b52"
+    assert update["bead"] == "enhancedchannelmanager-vn6jt"
+    assert update["version"] == "0.18.2-0070"
+    assert update["previous_manifest_sha256"] == "29a1e09f0850d98c31ae8bad4b8a0895a912895949821a1808fabf2ffd3dfa10"
+    assert set(update["changed_files"]) == {"backend/main.py", "backend/routers/backup.py", "frontend/package.json"}
+    previous = []
+    for row in manifest["files"]:
+        restored = dict(row)
+        if row["path"] in update["changed_files"]:
+            assert row["sha256"] != update["changed_files"][row["path"]]
+            restored["sha256"] = update["changed_files"][row["path"]]
+        previous.append(restored)
+    assert len(previous) == 1081
+    assert hashlib.sha256(json.dumps(previous, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == "b52c7200a76c11b5b5543a3afc80a26c02518a0cc74814218cfb03fd2d7755f4"
+    return previous
+
+
+def test_ci_runner_version_snapshot_preserves_complete_application_inventory(verifier):
+    manifest = verifier.load_manifest(ROOT / "docker/alpine-native/application-source.json")
+    _before_ci_runner_repair_rows(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["ci_runner_repair_update"] == manifest["ci_runner_repair_update"]
+
+
 def _before_dependency_security_rows(manifest):
     update = manifest["dependency_security_update"]
     assert update["base_commit"] == "a6fcdce407f5be9ed97b82eb6b5f9f9d01c8144f"
@@ -138,7 +164,7 @@ def _before_dependency_security_rows(manifest):
         "backend/requirements.in", "backend/requirements.txt",
     }
     previous = []
-    for row in manifest["files"]:
+    for row in _before_ci_runner_repair_rows(manifest):
         restored = dict(row)
         if row["path"] in update["changed_files"]:
             assert row["sha256"] != update["changed_files"][row["path"]]

@@ -18,6 +18,18 @@
     "version": "0.18.2-0067"
   },
   "baseline_application_commit": "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531",
+  "ci_runner_repair_update": {
+    "base_commit": "bffdde2e4f2e660b3cadfd945afb9932711a6b52",
+    "bead": "enhancedchannelmanager-vn6jt",
+    "changed_files": {
+      "backend/main.py": "6b01157a16dceb5e36cfbbc9f24b792f8a164f396cfbf95a92710253fbab3631",
+      "backend/routers/backup.py": "a20510461d9d486ed95398ae6122d7b38a898cc6fad8638d968f4364f4cdd3ef",
+      "frontend/package.json": "8c021731ffd54e6385b67e782d7286d8170ed1b12b7ba995e28e4d6bf8ceb8f8"
+    },
+    "previous_manifest_sha256": "29a1e09f0850d98c31ae8bad4b8a0895a912895949821a1808fabf2ffd3dfa10",
+    "scope": "0070 version-only application touchpoints accompanying the separately tracked AMD64 CI runner pin. All application logic, dependencies, file inventory and prior source/native evidence remain unchanged. No publication, runtime or deployed approval.",
+    "version": "0.18.2-0070"
+  },
   "dependency_security_update": {
     "base_commit": "a6fcdce407f5be9ed97b82eb6b5f9f9d01c8144f",
     "bead": "enhancedchannelmanager-w8h34",
@@ -955,7 +967,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "6b01157a16dceb5e36cfbbc9f24b792f8a164f396cfbf95a92710253fbab3631",
+      "sha256": "286c1b0114e7ae9ea2d0bbfd2d96149c7d975f6e95c75c9e3e3fc430c5d656ff",
       "type": "file"
     },
     {
@@ -1069,7 +1081,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "a20510461d9d486ed95398ae6122d7b38a898cc6fad8638d968f4364f4cdd3ef",
+      "sha256": "eeaa39f914099b7e279ea3177fbfe20d9600ea05cd6ed9cc60686548ba4b0b59",
       "type": "file"
     },
     {
@@ -1771,7 +1783,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "8c021731ffd54e6385b67e782d7286d8170ed1b12b7ba995e28e4d6bf8ceb8f8",
+      "sha256": "fbd5cee0ecd513f9f338a666d6967796b01abdf4d2577dfa3f75c692f2a8542e",
       "type": "file"
     },
     {
