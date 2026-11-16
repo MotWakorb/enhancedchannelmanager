@@ -31,6 +31,7 @@ class ToolSafety(str, Enum):
 # Inventory generated from the actual FastMCP registry on 2026-08-17 and kept
 # explicit so registry drift fails closed. Aliases are inventory entries too.
 _ALL_TOOLS = frozenset("""
+get_m3u_change_exclusions list_m3u_change_groups update_m3u_change_exclusions
 accept_channel_merge add_sd_lineup add_stream add_stream_to_channel add_tags_to_group
 analyze_auto_creation_rules analyze_channel_pipeline_rules apply_normalization_to_channels
 apply_profile_to_channels assign_channel_numbers audit_epg_duplicates build_channel_lineup

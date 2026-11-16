@@ -3542,6 +3542,37 @@ export async function testTags(groupId: number, text: string): Promise<TestTagsR
 // M3U Change Tracking API
 // =============================================================================
 
+export interface M3UChangeGroup {
+  m3u_account_id: number;
+  group_name: string;
+}
+
+export interface M3UChangeExclusionsUpdateRequest {
+  add?: M3UChangeGroup[];
+  remove?: M3UChangeGroup[];
+  clear?: boolean;
+}
+
+export async function getM3UChangeExclusions(): Promise<{ exclusions: M3UChangeGroup[] }> {
+  return fetchJson(`${API_BASE}/m3u/changes/exclusions`);
+}
+
+export async function updateM3UChangeExclusions(
+  delta: M3UChangeExclusionsUpdateRequest,
+): Promise<{ exclusions: M3UChangeGroup[] }> {
+  return fetchJson(`${API_BASE}/m3u/changes/exclusions`, {
+    method: 'PATCH', body: JSON.stringify(delta),
+  });
+}
+
+export async function getM3UChangeGroups(params?: { page?: number; pageSize?: number }): Promise<{
+  results: M3UChangeGroup[]; total: number; total_pages: number;
+}> {
+  return fetchJson(`${API_BASE}/m3u/changes/groups${buildQuery({
+    page: params?.page, page_size: params?.pageSize,
+  })}`);
+}
+
 /**
  * Get paginated list of M3U change logs
  */
@@ -3555,6 +3586,7 @@ export async function getM3UChanges(params?: {
   sortOrder?: 'asc' | 'desc';
   dateFrom?: string;  // ISO timestamp
   dateTo?: string;    // ISO timestamp
+  includeExcluded?: boolean;
 }): Promise<M3UChangesResponse> {
   const query = buildQuery({
     page: params?.page,
@@ -3566,6 +3598,7 @@ export async function getM3UChanges(params?: {
     sort_order: params?.sortOrder,
     date_from: params?.dateFrom,
     date_to: params?.dateTo,
+    include_excluded: params?.includeExcluded,
   });
   return fetchJson(`${API_BASE}/m3u/changes${query}`);
 }

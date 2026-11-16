@@ -1,5 +1,5 @@
 import { logger } from '../../utils/logger';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { M3UChangeLog, M3UChangeSummary, M3UChangeType, M3UAccount } from '../../types';
 import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
@@ -9,6 +9,11 @@ import { formatTimestamp, formatRelativeTime } from '../../utils/formatting';
 import { RouteHeaderSlot } from '../RouteHeaderSlots';
 import { DenseToolbar } from '../DenseToolbar';
 import { HttpError } from '../../services/httpClient';
+import { GroupMultiSelectDropdown } from '../GroupMultiSelectDropdown';
+import { OverflowMenu } from '../OverflowMenu';
+import { useAdminNavVisible } from '../../hooks/useAuth';
+
+const groupKey = (group: api.M3UChangeGroup) => JSON.stringify([group.m3u_account_id, group.group_name]);
 
 // Get icon for change type
 function getChangeTypeIcon(changeType: M3UChangeType): string {
@@ -94,6 +99,77 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
 
   // Expanded stream names (show all instead of first 20)
   const [expandedStreams, setExpandedStreams] = useState<Set<number>>(new Set());
+  const canEditExclusions = useAdminNavVisible();
+  const [exclusions, setExclusions] = useState<api.M3UChangeGroup[]>([]);
+  const [groupOptions, setGroupOptions] = useState<api.M3UChangeGroup[]>([]);
+  const [exclusionsReady, setExclusionsReady] = useState(false);
+  const [exclusionError, setExclusionError] = useState<string | null>(null);
+  const [savingExclusions, setSavingExclusions] = useState(false);
+  const savingExclusionsRef = useRef(false);
+  const controlsGenerationRef = useRef(0);
+  const [exclusionRevision, setExclusionRevision] = useState(0);
+
+  const fetchExclusionControls = useCallback(async () => {
+    const generation = ++controlsGenerationRef.current;
+    setExclusionsReady(false);
+    setExclusionError(null);
+    try {
+      const [saved, first] = await Promise.all([
+        api.getM3UChangeExclusions(), api.getM3UChangeGroups({ page: 1, pageSize: 200 }),
+      ]);
+      const groups = [...first.results];
+      for (let next = 2; next <= first.total_pages; next += 1) {
+        if (generation !== controlsGenerationRef.current) return;
+        const result = await api.getM3UChangeGroups({ page: next, pageSize: 200 });
+        groups.push(...result.results);
+      }
+      if (generation !== controlsGenerationRef.current) return;
+      setExclusions(saved.exclusions);
+      setGroupOptions(groups);
+      setExclusionsReady(true);
+    } catch (error) {
+      if (generation !== controlsGenerationRef.current) return;
+      setExclusionError(error instanceof Error ? error.message : 'Failed to load exclusions');
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchExclusionControls();
+    return () => { controlsGenerationRef.current += 1; };
+  }, [fetchExclusionControls]);
+
+  const saveExclusions = async (delta: api.M3UChangeExclusionsUpdateRequest) => {
+    if (savingExclusionsRef.current || !canEditExclusions || !exclusionsReady) return;
+    if ((delta.add?.length ?? 0) > 1000 || (delta.remove?.length ?? 0) > 1000) {
+      setExclusionError('Select at most 1000 groups per save. Use search to narrow the selection.');
+      return;
+    }
+    savingExclusionsRef.current = true;
+    setSavingExclusions(true);
+    setExclusionError(null);
+    try {
+      const result = await api.updateM3UChangeExclusions(delta);
+      setExclusions(result.exclusions);
+      changesRequestGenerationRef.current += 1;
+      setPage(1);
+      setExpandedId(null);
+      setExclusionRevision(revision => revision + 1);
+    } catch (error) {
+      setExclusionError(error instanceof Error ? error.message : 'Failed to save exclusions');
+    } finally {
+      savingExclusionsRef.current = false;
+      setSavingExclusions(false);
+    }
+  };
+
+  // Numeric IDs belong only to this render's checklist, never to saved state.
+  const choices = useMemo(() => {
+    const unique = new Map<string, api.M3UChangeGroup>();
+    [...groupOptions, ...exclusions].forEach(group => unique.set(groupKey(group), group));
+    return [...unique.values()];
+  }, [groupOptions, exclusions]);
+  const excludedKeys = new Set(exclusions.map(groupKey));
+  const selectedIds = choices.flatMap((group, index) => excludedKeys.has(groupKey(group)) ? [index] : []);
 
   // Fetch M3U accounts for filter dropdown
   useEffect(() => {
@@ -158,7 +234,7 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
     return () => {
       changesRequestGenerationRef.current += 1;
     };
-  }, [fetchChanges]);
+  }, [fetchChanges, exclusionRevision]);
 
   // Reset page when filters change
   useEffect(() => {
@@ -282,10 +358,10 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
         <RouteHeaderSlot name="primary-action"><div className="header-actions">
           {requestState !== 'permission' && <button
             className="btn-secondary"
-            onClick={fetchChanges}
-            disabled={loading}
+            onClick={() => { void fetchChanges(); void fetchExclusionControls(); }}
+            disabled={loading || savingExclusions}
           >
-            <span className={`material-icons ${loading ? 'spinning-cw' : ''}`}>refresh</span>
+            <span className={`material-icons ${loading ? 'spinning-cw' : ''}`} aria-hidden="true">refresh</span>
             Refresh
           </button>}
         </div></RouteHeaderSlot>
@@ -334,7 +410,32 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
               placeholder="Filter by Status"
             />
           </div>
+          <GroupMultiSelectDropdown
+            label={`Excluded groups (${exclusions.length})`}
+            summary={`Excluded groups (${exclusions.length})`}
+            options={choices.map((group, id) => ({
+              id, name: `${group.group_name} — ${getAccountName(group.m3u_account_id)}`,
+            }))}
+            selectedIds={selectedIds}
+            disabled={!canEditExclusions || !exclusionsReady || savingExclusions}
+            emptyMessage={exclusionsReady ? 'No recorded groups to exclude.' : 'Loading excluded groups…'}
+            onChange={ids => {
+              const wanted = new Set(ids);
+              void saveExclusions({
+                add: choices.filter((group, id) => wanted.has(id) && !excludedKeys.has(groupKey(group))),
+                remove: choices.filter((group, id) => !wanted.has(id) && excludedKeys.has(groupKey(group))),
+              });
+            }}
+          />
+          {exclusions.length > 0 && <button
+            className="btn-secondary" disabled={!canEditExclusions || !exclusionsReady || savingExclusions}
+            onClick={() => void saveExclusions({ clear: true })}
+          >Clear exclusions</button>}
         </>} />
+        {exclusionError && <div role="alert">
+          {exclusionError}
+          {!exclusionsReady && <button className="btn-secondary" onClick={() => void fetchExclusionControls()}>Retry exclusions</button>}
+        </div>}
         {summary && (
           <div className="summary-cards">
             <div className="summary-card added">
@@ -400,8 +501,10 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
       {requestState === 'success' && changes.length === 0 && (
         <div className="empty-state">
           <span className="material-icons">check_circle</span>
-          <h3>No Changes Detected</h3>
-          <p>No M3U playlist changes have been recorded yet. Changes will appear here after M3U refreshes.</p>
+          <h3>{exclusions.length > 0 ? 'No Visible Changes' : 'No Changes Detected'}</h3>
+          <p>{exclusions.length > 0 || accountFilter !== '' || changeTypeFilter !== '' || enabledFilter !== ''
+            ? 'No changes match the current filters. Recorded history is retained.'
+            : 'No M3U playlist changes have been recorded yet. Changes will appear here after M3U refreshes.'}</p>
         </div>
       )}
 
@@ -460,6 +563,16 @@ export function M3UChangesTab({ initialHours = 168 }: { initialHours?: number })
                     </span>
                   </span>
                   <span className="change-expand">
+                    {change.group_name && canEditExclusions && <OverflowMenu
+                      label={`Actions for ${change.group_name} (${getAccountName(change.m3u_account_id)})`}
+                      items={[{
+                        label: 'Exclude this group', icon: 'visibility_off',
+                        disabled: !exclusionsReady || savingExclusions,
+                        onClick: () => void saveExclusions({
+                          add: [{ m3u_account_id: change.m3u_account_id, group_name: change.group_name! }],
+                        }),
+                      }]}
+                    />}
                     <span className="material-icons">
                       {expandedId === change.id ? 'expand_less' : 'expand_more'}
                     </span>

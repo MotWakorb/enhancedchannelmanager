@@ -220,7 +220,7 @@
    floor and the sticky behaviour, the same shape JournalTab.css keeps
    (bead enhancedchannelmanager-6z299.3). */
 .m3u-changes-tab .list-header {
-  grid-template-columns: 100px 150px 150px 1fr 80px 70px 40px;
+  grid-template-columns: 100px 150px 150px 1fr 80px 70px 72px;
   min-width: 750px;
   position: sticky;
   top: 0;
@@ -266,7 +266,7 @@
 
 .change-row {
   display: grid;
-  grid-template-columns: 100px 150px 150px 1fr 80px 70px 40px;
+  grid-template-columns: 100px 150px 150px 1fr 80px 70px 72px;
   gap: 0.75rem;
   padding: 0.5rem 1rem;
   align-items: center;
@@ -383,6 +383,7 @@
 .change-expand {
   display: flex;
   justify-content: center;
+  align-items: center;
 }
 
 /* A small inline row indicator — the action icon size, and --text-secondary

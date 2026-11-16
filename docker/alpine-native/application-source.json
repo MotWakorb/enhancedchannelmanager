@@ -66,6 +66,35 @@
     "scope": "Source candidate for the PO-approved best-effort probe policy and 0068 version touchpoints. Retains prior application and native compatibility history. Not native runtime, advisory, publication, independent review or deployed approval.",
     "version": "0.18.2-0068"
   },
+  "m3u_change_exclusions_update": {
+    "added_files": [
+      "backend/alembic/versions/20261116_1200_0057_m3u_change_exclusions.py",
+      "backend/m3u_change_exclusions.py",
+      "mcp-server/tests/test_m3u_change_exclusions.py"
+    ],
+    "base_commit": "e8f2d1e984667d3136235a959759205bda3c5fd3",
+    "bead": "enhancedchannelmanager-z6jtf",
+    "changed_files": {
+      "backend/auth/mcp_capabilities.py": "ab4f8a405f35015c77e707702148e0960205323bb89435028fa2608fdcedcc70",
+      "backend/m3u_change_detector.py": "94b5ad850c25870adf5fb8089f6a08647ae99f9cec9db46464cf7d4a4bb801f8",
+      "backend/main.py": "286c1b0114e7ae9ea2d0bbfd2d96149c7d975f6e95c75c9e3e3fc430c5d656ff",
+      "backend/models.py": "b79170c58cfb6214033b79a1efedf59bb6c86a75d899fd4f477d5b9f591c5b8c",
+      "backend/routers/backup.py": "eeaa39f914099b7e279ea3177fbfe20d9600ea05cd6ed9cc60686548ba4b0b59",
+      "backend/routers/m3u_digest.py": "32aea673c68ef98a2efeba3e94d17e08b6fb957abda9e64cfac086bb0fee0c60",
+      "frontend/package.json": "fbd5cee0ecd513f9f338a666d6967796b01abdf4d2577dfa3f75c692f2a8542e",
+      "frontend/src/components/GroupMultiSelectDropdown.tsx": "0ba6df2eda8e42cdc10ee47447e088642d7454b21f00c0598756b47bc1b4a2cf",
+      "frontend/src/components/tabs/M3UChangesTab.css": "3ef09d5115720e2d9b434ecc2cd67945837446f9d4099656c5e3783afacfe234",
+      "frontend/src/components/tabs/M3UChangesTab.test.tsx": "d8258ebe4d278514f56623b5c9fd02847772b177ff5a39752ef6819d9bdc8fd1",
+      "frontend/src/components/tabs/M3UChangesTab.tsx": "ad0e99e806764896910805ca99210887c7c580fe9a944f8970f46aa0589cc793",
+      "frontend/src/services/api.ts": "13def32335303479d245006a61463f8a755a050ba9bc3450efa142680626b542",
+      "mcp-server/_endpoint_contracts.py": "3b9cdc552c31eed0293b1bab19575897ed634c8bffdaa8ef8cb4d467312ce5e1",
+      "mcp-server/tools/_safety_policy.py": "76a04bf0d08b0081f5f53cb20b36b12b125accd0d68069715c7c4bdda7681f7e",
+      "mcp-server/tools/m3u.py": "0b7d54ce8021271caf2272363d0b150f09076e7f00925189980b9126c976a594"
+    },
+    "previous_manifest_sha256": "8b310e3a57d8bc1981bab3abc7e1ffe6a50311d745b4c4bbf0e65e838e6f3454",
+    "scope": "Source candidate for the approved shared M3U Changes display exclusions, UI/MCP contracts and 0071 touchpoints. Retains complete prior application/native compatibility history. Not independent review, native runtime, advisory, publication or deployed approval.",
+    "version": "0.18.2-0071"
+  },
   "files": [
     {
       "executable": false,
@@ -441,6 +470,12 @@
     },
     {
       "executable": false,
+      "path": "backend/alembic/versions/20261116_1200_0057_m3u_change_exclusions.py",
+      "sha256": "da007af473745c9bb6947bcb53961d95706658c54de1eccbb5e833514bdc460c",
+      "type": "file"
+    },
+    {
+      "executable": false,
       "path": "backend/alert_methods.py",
       "sha256": "332a83b71ad8f139f3729b276d6ffdbd9f9605212b16cdfc7f1cd506d87947d1",
       "type": "file"
@@ -496,7 +531,7 @@
     {
       "executable": false,
       "path": "backend/auth/mcp_capabilities.py",
-      "sha256": "ab4f8a405f35015c77e707702148e0960205323bb89435028fa2608fdcedcc70",
+      "sha256": "e33cf57abc1d50286a41c1070510dd67a13ab9ae2d7deafa8fa65b75df658138",
       "type": "file"
     },
     {
@@ -955,7 +990,13 @@
     {
       "executable": false,
       "path": "backend/m3u_change_detector.py",
-      "sha256": "94b5ad850c25870adf5fb8089f6a08647ae99f9cec9db46464cf7d4a4bb801f8",
+      "sha256": "240d30e82c92cbd8f8c87b9e7408ed1fa5700338cc7d139839879ecea7ecf2b8",
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "backend/m3u_change_exclusions.py",
+      "sha256": "53baa0f88825d615b51e0b2e0f1f3291caf18ed2f78752a0ced127ead437268c",
       "type": "file"
     },
     {
@@ -967,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "286c1b0114e7ae9ea2d0bbfd2d96149c7d975f6e95c75c9e3e3fc430c5d656ff",
+      "sha256": "620fe03c5b6aa0cb60ca9547f29ab0e7d0a3b93cbe4159849b7382f67aa9a710",
       "type": "file"
     },
     {
@@ -985,7 +1026,7 @@
     {
       "executable": false,
       "path": "backend/models.py",
-      "sha256": "b79170c58cfb6214033b79a1efedf59bb6c86a75d899fd4f477d5b9f591c5b8c",
+      "sha256": "ae80e66b12d4a86abe43e48a17aeada90649d10f1a03508fefc7117e44d38c56",
       "type": "file"
     },
     {
@@ -1081,7 +1122,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "eeaa39f914099b7e279ea3177fbfe20d9600ea05cd6ed9cc60686548ba4b0b59",
+      "sha256": "a0038913a8f57addd19eb09dd2a832f1dc9fd9d96f06cccad7b80a44c262a46a",
       "type": "file"
     },
     {
@@ -1177,7 +1218,7 @@
     {
       "executable": false,
       "path": "backend/routers/m3u_digest.py",
-      "sha256": "32aea673c68ef98a2efeba3e94d17e08b6fb957abda9e64cfac086bb0fee0c60",
+      "sha256": "094765d5b308539aa32139996bf428379268406310c33a9a951da6fd012f26b6",
       "type": "file"
     },
     {
@@ -1783,7 +1824,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "fbd5cee0ecd513f9f338a666d6967796b01abdf4d2577dfa3f75c692f2a8542e",
+      "sha256": "d296cc53f82be507a91945470a58fc32f4fec56019e02d3a65281915a0615b1a",
       "type": "file"
     },
     {
@@ -2515,7 +2556,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/GroupMultiSelectDropdown.tsx",
-      "sha256": "0ba6df2eda8e42cdc10ee47447e088642d7454b21f00c0598756b47bc1b4a2cf",
+      "sha256": "4886b4936639acb0eaa2ef90b32ecf46c98f3d7d74f376f0d12fc7b885777c92",
       "type": "file"
     },
     {
@@ -4597,19 +4638,19 @@
     {
       "executable": false,
       "path": "frontend/src/components/tabs/M3UChangesTab.css",
-      "sha256": "3ef09d5115720e2d9b434ecc2cd67945837446f9d4099656c5e3783afacfe234",
+      "sha256": "a2416a13acbc2be6a4e6bcbb620cf897c2ffc66aed5f249b2f8cc3a04cdbff3b",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/components/tabs/M3UChangesTab.test.tsx",
-      "sha256": "d8258ebe4d278514f56623b5c9fd02847772b177ff5a39752ef6819d9bdc8fd1",
+      "sha256": "3e3c9d16187362ed16f2ac3072c6865be5971d5e9c4f239661136fe0f8a886b6",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/components/tabs/M3UChangesTab.tsx",
-      "sha256": "ad0e99e806764896910805ca99210887c7c580fe9a944f8970f46aa0589cc793",
+      "sha256": "c74ca804f0df40bac1c86f666229d979095105779fdc425944c0b10f4dfd0c69",
       "type": "file"
     },
     {
@@ -5335,7 +5376,7 @@
     {
       "executable": false,
       "path": "frontend/src/services/api.ts",
-      "sha256": "13def32335303479d245006a61463f8a755a050ba9bc3450efa142680626b542",
+      "sha256": "fd212600028fd9085d76f953d4ab56b2f7f394d796d63871cf534802f28795eb",
       "type": "file"
     },
     {
@@ -5949,7 +5990,7 @@
     {
       "executable": false,
       "path": "mcp-server/_endpoint_contracts.py",
-      "sha256": "3b9cdc552c31eed0293b1bab19575897ed634c8bffdaa8ef8cb4d467312ce5e1",
+      "sha256": "b730632dcee4769bdb885377fcfe988afe0caecc301da65162e2f0871988d8f5",
       "type": "file"
     },
     {
@@ -6266,6 +6307,12 @@
     },
     {
       "executable": false,
+      "path": "mcp-server/tests/test_m3u_change_exclusions.py",
+      "sha256": "d0a2e911b1783a6838d1545d2808d79162af2fc8cc67aa0b683322dca7277a78",
+      "type": "file"
+    },
+    {
+      "executable": false,
       "path": "mcp-server/tests/test_omxy5_dummy_epg_crud.py",
       "sha256": "e8733af45d95144217ac5d5f83f0f2d37b758c95f083a03b175bfe4e23bd8f29",
       "type": "file"
@@ -6429,7 +6476,7 @@
     {
       "executable": false,
       "path": "mcp-server/tools/_safety_policy.py",
-      "sha256": "76a04bf0d08b0081f5f53cb20b36b12b125accd0d68069715c7c4bdda7681f7e",
+      "sha256": "8234644306585db3813ff80d5c898321b4eb0eff86e3a813b7149349fa969db1",
       "type": "file"
     },
     {
@@ -6501,7 +6548,7 @@
     {
       "executable": false,
       "path": "mcp-server/tools/m3u.py",
-      "sha256": "0b7d54ce8021271caf2272363d0b150f09076e7f00925189980b9126c976a594",
+      "sha256": "24708f62391b84f01d8ffdb4fd4281c49328b38c2dac3304e3ae95f32cc6ed72",
       "type": "file"
     },
     {

@@ -297,6 +297,22 @@ npm run test:e2e:debug     # Debug mode with breakpoints
 npm run test:e2e:report    # View test report
 ```
 
+**M3U Changes exclusions seam check (isolated, no live instance):**
+
+```bash
+ECM_PYTHON=/path/to/pinned-backend-venv/bin/python npm run test:e2e:m3u-exclusions
+```
+
+Requires installed root/frontend npm dependencies, Chromium (`npx playwright
+install chromium`) and the backend's pinned Python requirements. The dedicated
+config owns ports 42871/42872 and a temporary SQLite database. It runs the built
+React app against production Changes routes, while intercepting unrelated app
+and upstream APIs. It covers provider identity, reload persistence, bulk search,
+external API edits followed by Refresh, all-excluded feedback and clearing.
+The backend's auth matrix and MCP tool contracts have separate pytest coverage;
+this browser lane uses auth-disabled private state and does not exercise a
+deployed sidecar. The spec is excluded from the normal live-server lane.
+
 > **`E2E_BASE_URL` is required. There is no default.** It used to default to
 > `http://localhost:6100`, the product owner's LIVE ECM instance holding real
 > channel data, so an unset variable silently pointed write-capable specs (a

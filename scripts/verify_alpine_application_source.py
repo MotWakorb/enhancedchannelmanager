@@ -11,7 +11,7 @@ import stat
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_SHA256 = "8b310e3a57d8bc1981bab3abc7e1ffe6a50311d745b4c4bbf0e65e838e6f3454"
+MANIFEST_SHA256 = "3b5ef4030751a0c1d95aa1b2b325ffd2d222fdf0d25d8e0bac56440b966f70af"
 IGNORED_DIRECTORIES = frozenset(
     {
         "node_modules",
@@ -135,12 +135,13 @@ def verify(root: Path, manifest: dict) -> dict:
         "best_effort_probe_update": manifest.get("best_effort_probe_update"),
         "dependency_security_update": manifest.get("dependency_security_update"),
         "ci_runner_repair_update": manifest.get("ci_runner_repair_update"),
+        "m3u_change_exclusions_update": manifest.get("m3u_change_exclusions_update"),
         "adaptations": [
             row
             for row in rows
             if "adaptation_commit" in row or "adaptation_reason" in row
         ],
-        "scope": "Exact pinned application source candidate, including the recorded group-deletion fix, best-effort probe restoration and version touchpoints, retaining date and container-base compatibility history. Excludes backend tests and Docker-excluded build/cache artifacts. Not independent review, runtime, advisory, publication or deployed approval.",
+        "scope": "Exact pinned application source candidate, including shared M3U Changes exclusions, prior group-deletion/probe repairs and version touchpoints, retaining date and container-base compatibility history. Excludes backend tests and Docker-excluded build/cache artifacts. Not independent review, runtime, advisory, publication or deployed approval.",
     }
 
 

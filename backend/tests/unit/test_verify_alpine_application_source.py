@@ -108,7 +108,7 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     manifest = verifier.load_manifest(
         ROOT / "docker/alpine-native/application-source.json"
     )
-    assert len(manifest["files"]) == 1081
+    assert len(manifest["files"]) == 1084
     assert (
         manifest["baseline_application_commit"]
         == "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531"
@@ -127,6 +127,36 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     }
 
 
+def _before_m3u_exclusion_rows(manifest):
+    update = manifest["m3u_change_exclusions_update"]
+    assert update["base_commit"] == "e8f2d1e984667d3136235a959759205bda3c5fd3"
+    assert update["bead"] == "enhancedchannelmanager-z6jtf"
+    assert update["version"] == "0.18.2-0071"
+    assert update["previous_manifest_sha256"] == "8b310e3a57d8bc1981bab3abc7e1ffe6a50311d745b4c4bbf0e65e838e6f3454"
+    assert set(update["added_files"]) == {
+        "backend/alembic/versions/20261116_1200_0057_m3u_change_exclusions.py",
+        "backend/m3u_change_exclusions.py", "mcp-server/tests/test_m3u_change_exclusions.py",
+    }
+    previous = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            continue
+        restored = dict(row)
+        if row["path"] in update["changed_files"]:
+            assert row["sha256"] != update["changed_files"][row["path"]]
+            restored["sha256"] = update["changed_files"][row["path"]]
+        previous.append(restored)
+    assert len(previous) == 1081
+    assert hashlib.sha256(json.dumps(previous, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == "461b983dc18333fbbc9862689e9f15e2a457d84490423ac7340e792e77b644c3"
+    return previous
+
+
+def test_m3u_exclusions_snapshot_preserves_complete_previous_inventory(verifier):
+    manifest = verifier.load_manifest(ROOT / "docker/alpine-native/application-source.json")
+    _before_m3u_exclusion_rows(manifest)
+    assert verifier.verify(ROOT, manifest)["m3u_change_exclusions_update"] == manifest["m3u_change_exclusions_update"]
+
+
 def _before_ci_runner_repair_rows(manifest):
     update = manifest["ci_runner_repair_update"]
     assert update["base_commit"] == "bffdde2e4f2e660b3cadfd945afb9932711a6b52"
@@ -135,7 +165,7 @@ def _before_ci_runner_repair_rows(manifest):
     assert update["previous_manifest_sha256"] == "29a1e09f0850d98c31ae8bad4b8a0895a912895949821a1808fabf2ffd3dfa10"
     assert set(update["changed_files"]) == {"backend/main.py", "backend/routers/backup.py", "frontend/package.json"}
     previous = []
-    for row in manifest["files"]:
+    for row in _before_m3u_exclusion_rows(manifest):
         restored = dict(row)
         if row["path"] in update["changed_files"]:
             assert row["sha256"] != update["changed_files"][row["path"]]
