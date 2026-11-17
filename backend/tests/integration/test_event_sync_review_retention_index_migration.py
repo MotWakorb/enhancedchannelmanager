@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 import pytest
 
 import database
-from models import ChannelNameMapping, ChannelNameAlias
+from models import ChannelNameMapping, ChannelNameAlias, M3UChangeExclusion
 
 
 TABLE = "event_sync_reviews"
@@ -71,6 +71,7 @@ def test_migration_0052_adds_and_round_trips_retention_index(tmp_path):
             ))
         ChannelNameMapping.__table__.create(engine)
         ChannelNameAlias.__table__.create(engine)
+        M3UChangeExclusion.__table__.create(engine)
         assert database._schema_matches_head(engine) is True
         database._bootstrap_alembic(engine)
     finally:

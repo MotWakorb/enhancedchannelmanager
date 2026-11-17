@@ -2,8 +2,8 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "mcp-0.18.2-0070",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0070/mcp-2dd410f6bdc3802812eecd88dbd583408869f781eba7f8ad50327bf6aad983d2",
+  "name": "mcp-0.18.2-0071",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0071/mcp-122880aa92d5885dbe1a55afdc8a197e898de66a5c9d2fc1f72c9052e335da7f",
   "creationInfo": {
     "created": "2026-11-08T01:53:48Z",
     "creators": [
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-mcp",
       "name": "enhanced-channel-manager-mcp",
-      "versionInfo": "0.18.2-0070",
+      "versionInfo": "0.18.2-0071",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",

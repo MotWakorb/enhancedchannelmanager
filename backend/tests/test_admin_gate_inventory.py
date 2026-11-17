@@ -276,6 +276,8 @@ _CHANNEL_AUTOMATION = {
     ("PUT", "/api/normalization/mappings/{mapping_id}"),
     ("DELETE", "/api/normalization/mappings/{mapping_id}"),
     ("POST", "/api/m3u/accounts/{account_id}/group-auto-sync-toggle"),
+    # z6jtf: reversible local view preference, no outbound or notification write.
+    ("PATCH", "/api/m3u/changes/exclusions"),
 }
 
 # Channel Pipeline rules and runs, under both the legacy /api/auto-creation

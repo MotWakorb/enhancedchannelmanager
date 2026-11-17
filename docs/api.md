@@ -955,9 +955,23 @@ MCP mirror: `list_event_sync_exclusions` / `create_event_sync_exclusion` / `dele
 |-|-|
 | `GET /api/m3u/changes` | Get M3U change history (paginated, filterable) |
 | `GET /api/m3u/changes/summary` | Get change summary for a time period |
+| `GET /api/m3u/changes/groups` | Paginated recorded group identities plus saved exclusions; `m3u_account_id`, literal `search`, `page`, `page_size` (max 200) |
+| `GET /api/m3u/changes/exclusions` | Read shared exact account/name view exclusions |
+| `PATCH /api/m3u/changes/exclusions` | Apply atomic `add`/`remove` identity deltas, or `clear: true` alone; admin required when auth is enabled; MCP permitted |
 | `GET /api/m3u/digest/settings` | Get digest email settings |
 | `PUT /api/m3u/digest/settings` | Update digest email settings |
 | `POST /api/m3u/digest/test` | Send a test digest email, over the stored SMTP credentials and Discord webhook. Admin-only when auth is enabled; the MCP service key is refused (bead 9kwzp.6). |
+
+Changes list/summary responses omit saved view exclusions by default; pass
+`include_excluded=true` to either endpoint for unfiltered retained history.
+Account-history and digest callers remain unfiltered. Exclusions use
+`{"m3u_account_id": 1, "group_name": "Sports"}` identities (positive integer,
+exact name of 1–255 characters), not regex patterns. GET/PATCH exclusions
+return `{"exclusions": [...]}`. PATCH accepts at most 1000 `add` and 1000
+`remove` identities; overlap or combining either with `clear: true` returns
+422 without changing the list. Independent deltas preserve unrelated saves.
+The list is instance-wide and affects the tab only, not collection, retention
+or digest notifications.
 
 **Auth-disabled instances (bead `enhancedchannelmanager-2u4e0`):** `POST /api/m3u/digest/test` is one of twelve connection-test routes that also require an authenticated human admin while `require_auth` is false, on any instance that already holds an operator identity. Only an instance that never created a user reaches them anonymously. See `docs/auth_middleware.md` → "What `require_auth: false` permits".
 

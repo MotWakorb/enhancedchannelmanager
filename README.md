@@ -237,7 +237,7 @@ cd backend && pip install -r requirements.txt && uvicorn main:app --reload
 Full CRUD for channels and groups with a split-pane layout. Drag-and-drop streams onto channels, reorder streams by priority, bulk-create channels from stream groups with smart name normalization (quality variants, country prefixes, timezone handling), and organize everything into numbered channel groups. Staged edit mode lets you queue changes locally and commit or discard them as a batch.
 
 ### M3U Manager
-Manage Standard M3U, XtreamCodes, and HD Homerun accounts. Link related accounts so group enable/disable changes cascade automatically. Track changes detected across M3U refreshes with filtering, search, and optional email digest notifications.
+Manage Standard M3U, XtreamCodes, and HD Homerun accounts. Link related accounts so group enable/disable changes cascade automatically. Track changes detected across M3U refreshes with filtering, search, and optional email digest notifications. Reduce noisy Insights / M3U Changes with saved account-specific group exclusions, managed from the tab or MCP without deleting history or changing digest notifications.
 
 ### EPG Manager
 Configure multiple XMLTV and Schedules Direct EPG sources with drag-and-drop priority ordering. Create dummy EPG entries for channels without guide data. Bulk EPG assignment uses country-aware matching, call sign scoring, and HD preference to automatically map EPG data to channels.
@@ -498,7 +498,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `fuzzy_match_stream` | Find best fuzzy match for a stream name |
 | `preview_fuzzy_matches` | Preview scored stream→channel fuzzy matches without writing anything |
 | `match_streams_to_channels` | Match streams to channels by name similarity |
-| **M3U (9)** | |
+| **M3U** | |
 | `list_m3u_accounts` | List all M3U provider accounts |
 | `get_m3u_account` | Get detailed account info |
 | `create_m3u_account` | Create a new M3U account |
@@ -508,6 +508,9 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `refresh_all_m3u` | Refresh all M3U accounts |
 | `update_m3u_group_settings` | Enable/disable stream groups on an account |
 | `bulk_update_m3u_group_settings` | Enable/disable multiple stream groups at once |
+| `list_m3u_change_groups` | Discover recorded account/group identities for Changes view filtering |
+| `get_m3u_change_exclusions` | Read the saved exclusions shared with Insights / M3U Changes |
+| `update_m3u_change_exclusions` | Add/remove exact account/group exclusions, or clear them; display only, not digest rules |
 | **EPG (15)** | |
 | `list_epg_sources` | List EPG data sources |
 | `create_epg_source` | Create a new EPG source |

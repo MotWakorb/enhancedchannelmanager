@@ -1,5 +1,9 @@
 """M3U account management tools."""
+import json
 import logging
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from mcp.server.fastmcp import FastMCP
 
@@ -8,6 +12,12 @@ from ecm_client import get_ecm_client
 from tools import _guardrails
 
 logger = logging.getLogger(__name__)
+
+
+class M3UChangeGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    m3u_account_id: Annotated[int, Field(strict=True, gt=0, le=2**63 - 1)]
+    group_name: Annotated[str, Field(strict=True, min_length=1, max_length=255)]
 
 
 async def _get_priorities(client) -> dict:
@@ -24,6 +34,56 @@ async def _get_priorities(client) -> dict:
 
 
 def register(mcp: FastMCP):
+    @mcp.tool()
+    async def get_m3u_change_exclusions() -> str:
+        """Read saved Insights / M3U Changes display exclusions shared with the UI.
+
+        Exact account/group names, not regex notification rules. History is retained.
+        """
+        client = get_ecm_client()
+        result = await client.call_endpoint(ENDPOINTS["m3u_change_exclusions_get"])
+        return json.dumps(result, ensure_ascii=False)
+
+    @mcp.tool()
+    async def list_m3u_change_groups(
+        m3u_account_id: int | None = None,
+        search: str = "",
+        page: int = 1,
+        page_size: int = 200,
+    ) -> str:
+        """Discover recorded groups and saved exclusions for the Changes view.
+
+        Returns paginated exact account/name identities. Search is literal text.
+        """
+        client = get_ecm_client()
+        result = await client.call_endpoint(
+            ENDPOINTS["m3u_change_groups"],
+            query={"m3u_account_id": m3u_account_id, "search": search, "page": page, "page_size": page_size},
+        )
+        return json.dumps(result, ensure_ascii=False)
+
+    @mcp.tool()
+    async def update_m3u_change_exclusions(
+        add: list[M3UChangeGroup] | None = None,
+        remove: list[M3UChangeGroup] | None = None,
+        clear: bool = False,
+    ) -> str:
+        """Save shared M3U Changes view exclusions using atomic add/remove deltas.
+
+        Each identity is {"m3u_account_id": 1, "group_name": "Sports"}.
+        At most 1000 additions and 1000 removals per call. A group cannot appear
+        in both lists. Use clear=true alone to restore all hidden groups.
+        Affects the tab's rows/counts/summary only: no history deletion,
+        provider enable/disable, or digest notification changes.
+        """
+        client = get_ecm_client()
+        result = await client.call_endpoint(
+            ENDPOINTS["m3u_change_exclusions_update"],
+            body={"add": [g.model_dump() for g in add or []],
+                  "remove": [g.model_dump() for g in remove or []], "clear": clear},
+        )
+        return json.dumps(result, ensure_ascii=False)
+
     @mcp.tool()
     async def list_m3u_accounts() -> str:
         """List all configured M3U provider accounts."""
