@@ -56,6 +56,8 @@ import {
 import type { RouteChangeGuardDetail } from './hooks/useHashRoute';
 import type { SettingsPage } from './hooks/useHashRoute';
 import { useAdminNavVisible } from './hooks/useAuth';
+import { useCreatedChannelProfiles } from './hooks/useCreatedChannelProfiles';
+import { CreatedChannelProfilesNotice } from './components/CreatedChannelProfilesNotice';
 import { settingsSectionHeading } from './components/settingsSections';
 import { RouteHeaderTargetProvider } from './components/RouteHeaderSlots';
 import { classifySourceLoadError, type SourceLoadState } from './components/sourceLoadState';
@@ -309,9 +311,8 @@ function App() {
   // Track newly created group IDs in this session
   const [newlyCreatedGroupIds, setNewlyCreatedGroupIds] = useState<Set<number>>(new Set());
 
-  // Pending profile assignments (to be applied after commit)
-  // Stores { startNumber, count, profileIds, increment } for each bulk create
-  const pendingProfileAssignmentsRef = useRef<Array<{ startNumber: number; count: number; profileIds: number[]; increment: number }>>([]);
+  // Staged identities are resolved only from the commit's authoritative map.
+  const pendingProfileAssignmentsRef = useRef<Array<{ tempIds: number[]; profileIds: number[] }>>([]);
 
   // Track if baseline has been initialized
   const baselineInitialized = useRef(false);
@@ -454,6 +455,7 @@ function App() {
    * is offered or destroyed.
    */
   const operatorKey = useMemo(() => operatorLedgerKey(authenticatedUser), [authenticatedUser]);
+  const createdChannelProfiles = useCreatedChannelProfiles(operatorKey, setChannelProfiles, dispatcharrUrl);
 
   // Edit mode for staging changes
   const {
@@ -501,7 +503,15 @@ function App() {
     channels,
     operatorKey,
     onChannelsChange: setChannels,
-    onCommitComplete: async (createdGroupIds) => {
+    onCommitComplete: async (createdGroupIds, tempIdMap) => {
+      const assignments = pendingProfileAssignmentsRef.current;
+      pendingProfileAssignmentsRef.current = [];
+      createdChannelProfiles.enqueue(assignments.flatMap(assignment =>
+        assignment.tempIds.flatMap(tempId => {
+          const channelId = tempIdMap.get(tempId);
+          return channelId === undefined ? [] : [{ channelId, profileIds: assignment.profileIds }];
+        }),
+      ));
       // Refresh data from server
       await Promise.all([
         loadChannels(),
@@ -519,76 +529,13 @@ function App() {
           return prev;
         });
       }
-
-      // Apply pending profile assignments
-      if (pendingProfileAssignmentsRef.current.length > 0) {
-        try {
-          // Get fresh channel list to find channels by number
-          const freshChannels = await api.getChannels({ page: 1, pageSize: 5000 });
-          const channelsByNumber = new Map<number, Channel>();
-          for (const ch of freshChannels.results) {
-            if (ch.channel_number !== null) {
-              channelsByNumber.set(ch.channel_number, ch);
-            }
-          }
-
-          // Get all profile IDs for disabling channels in non-selected profiles
-          const freshProfiles = await api.getChannelProfiles();
-          const allProfileIds = freshProfiles.map(p => p.id);
-
-          // Process each pending assignment
-          for (const assignment of pendingProfileAssignmentsRef.current) {
-            const { startNumber, count, profileIds, increment } = assignment;
-            const channelIds: number[] = [];
-
-            // Find channels by number range using the correct increment (integer or decimal)
-            for (let i = 0; i < count; i++) {
-              const rawNumber = startNumber + i * increment;
-              // Round to 1 decimal place to handle floating point precision
-              const channelNumber = increment < 1 ? Math.round(rawNumber * 10) / 10 : rawNumber;
-              const channel = channelsByNumber.get(channelNumber);
-              if (channel) {
-                channelIds.push(channel.id);
-              }
-            }
-
-            // Enable channels in selected profiles
-            for (const profileId of profileIds) {
-              for (const channelId of channelIds) {
-                try {
-                  await api.updateProfileChannel(profileId, channelId, { enabled: true });
-                } catch (err) {
-                  logger.warn(`Failed to enable channel ${channelId} in profile ${profileId}:`, err);
-                }
-              }
-            }
-
-            // Disable channels in non-selected profiles
-            // (Dispatcharr may auto-enable new channels in all profiles)
-            const nonSelectedProfileIds = allProfileIds.filter(id => !profileIds.includes(id));
-            for (const profileId of nonSelectedProfileIds) {
-              for (const channelId of channelIds) {
-                try {
-                  await api.updateProfileChannel(profileId, channelId, { enabled: false });
-                } catch (err) {
-                  logger.warn(`Failed to disable channel ${channelId} in profile ${profileId}:`, err);
-                }
-              }
-            }
-          }
-
-          // Clear pending assignments
-          pendingProfileAssignmentsRef.current = [];
-
-          // Refresh channel profiles to reflect changes
-          loadChannelProfiles();
-        } catch (err) {
-          logger.error('Failed to apply profile assignments:', err);
-        }
-      }
     },
     onError: setError,
   });
+
+  useEffect(() => {
+    if (!isEditMode) pendingProfileAssignmentsRef.current = [];
+  }, [isEditMode]);
 
   // Auto-add staged groups to the channel group filter so they're visible
   // Also clean up temp group IDs (negative) when edit mode ends
@@ -2092,14 +2039,7 @@ function App() {
             ? profileIds
             : defaultChannelProfileIds;
 
-          if (channelNumber !== undefined) {
-            pendingProfileAssignmentsRef.current.push({
-              startNumber: channelNumber,
-              count: 1,
-              profileIds: profilesToAssign,
-              increment: 1, // Single channel, increment doesn't matter but include for type consistency
-            });
-          }
+          pendingProfileAssignmentsRef.current.push({ tempIds: [tempId], profileIds: [...profilesToAssign] });
 
           // Create a temporary channel object to return (for compatibility)
           const tempChannel: Channel = {
@@ -2263,12 +2203,10 @@ function App() {
           );
 
           // Track profile assignments (use default profiles for manual creation)
-          if (channelNumber !== undefined && defaultChannelProfileIds.length > 0) {
+          if (defaultChannelProfileIds.length > 0) {
             pendingProfileAssignmentsRef.current.push({
-              startNumber: channelNumber,
-              count: 1,
-              profileIds: defaultChannelProfileIds,
-              increment: 1,
+              tempIds: [tempId],
+              profileIds: [...defaultChannelProfileIds],
             });
           }
 
@@ -2552,6 +2490,7 @@ function App() {
         const increment = hasDecimal ? 0.1 : 1;
 
         let channelIndex = 0;
+        const createdTempIds: number[] = [];
         for (const [_groupingKey, { normalizedName, streams: groupedStreams }] of sortedEntries) {
           // Calculate channel number with proper decimal handling
           const rawChannelNumber = startingNumber + channelIndex * increment;
@@ -2632,7 +2571,7 @@ function App() {
           // normalize flag travels with the staged operation: a backend-side
           // pass would normalize an already-normalized name a second time
           // (bead enhancedchannelmanager-e9e5o).
-          stageCreateChannelWithStreams({
+          createdTempIds.push(stageCreateChannelWithStreams({
             name: channelName,
             streamIds: groupedStreams.map((stream) => stream.id),
             channelNumber,
@@ -2641,7 +2580,7 @@ function App() {
             logoUrl,
             tvgId,
             tvcGuideStationId,
-          });
+          }));
         }
 
         // End the batch
@@ -2675,10 +2614,8 @@ function App() {
           : defaultChannelProfileIds;
 
         pendingProfileAssignmentsRef.current.push({
-          startNumber: startingNumber,
-          count: streamsByBaseName.size,
-          profileIds: profileIdsToApply,
-          increment, // Use the same increment calculated for channel creation
+          tempIds: createdTempIds,
+          profileIds: [...profileIdsToApply],
         });
 
         // The caller owns the operator-facing message: StreamsPane sits inside
@@ -3198,6 +3135,13 @@ function App() {
               handleRouteChange('settings', link.href.slice('#settings/'.length) as SettingsPage);
             },
           }))}
+        />
+        <CreatedChannelProfilesNotice
+          {...createdChannelProfiles}
+          profiles={channelProfiles}
+          onRetry={() => { if (!isEditMode && !isCommitting) void createdChannelProfiles.retry(); }}
+          onDismiss={createdChannelProfiles.dismiss}
+          retryUnavailable={isEditMode || isCommitting}
         />
         <Suspense fallback={<div className="tab-loading"><span className="material-icons spinning">sync</span><p>Loading...</p></div>}>
           {activeTab === 'dashboard' && (

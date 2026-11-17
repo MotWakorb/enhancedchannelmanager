@@ -1,10 +1,12 @@
 import { StrictMode, type ReactNode } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChannelManagerTabProps } from './components/tabs/ChannelManagerTab';
 import type { BulkCommitRequest, BulkCommitResponse, ResolvedCreateChannelNames } from './services/api';
 import type { EditModeSummary, Stream } from './types';
 import { STAGED_LEDGER_STORAGE_KEY, type PersistedStagedLedger } from './utils/stagedLedgerStorage';
+import * as api from './services/api';
+import recordedProfiles from '../../backend/tests/fixtures/y3m6o1/dispatcharr_channel_profiles_mixed_membership.json';
 
 const testState = vi.hoisted(() => ({
   channelManagerProps: null as ChannelManagerTabProps | null,
@@ -78,6 +80,10 @@ vi.mock('./services/api', async (importOriginal) => {
     getAllLogos: vi.fn().mockResolvedValue([]),
     getStreamProfiles: vi.fn().mockResolvedValue([]),
     getChannelProfiles: vi.fn().mockResolvedValue([]),
+    getProfileConflictReviews: vi.fn().mockResolvedValue({ reviews: [], total: 0 }),
+    getChannelProfile: vi.fn(),
+    updateProfileChannel: vi.fn(),
+    bulkUpdateProfileChannels: vi.fn(),
     getEPGSources: vi.fn().mockResolvedValue([]),
     getEPGData: vi.fn().mockResolvedValue([]),
     getM3UStreamMetadata: vi.fn().mockResolvedValue({ count: 0, metadata: {} }),
@@ -109,6 +115,15 @@ function makeStream(index: number): Stream {
 describe('App bulk-create staging', () => {
   beforeEach(() => {
     sessionStorage.clear();
+    vi.mocked(api.getChannels).mockReset().mockResolvedValue({ results: [], count: 0, next: null, previous: null });
+    vi.mocked(api.getSettings).mockReset().mockResolvedValue({
+      configured: true, default_channel_profile_ids: [],
+      stream_sort_priority: [], stream_sort_enabled: {}, m3u_account_priorities: {},
+    } as unknown as Awaited<ReturnType<typeof api.getSettings>>);
+    vi.mocked(api.getChannelProfiles).mockReset().mockResolvedValue([]);
+    vi.mocked(api.getChannelProfile).mockReset();
+    vi.mocked(api.updateProfileChannel).mockReset();
+    vi.mocked(api.bulkUpdateProfileChannels).mockReset();
     testState.channelManagerProps = null;
     testState.exitDialogProps = null;
     testState.bulkCommit.mockReset();
@@ -149,6 +164,85 @@ describe('App bulk-create staging', () => {
     });
   });
 
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(['accepted-unapplied', 'rejected', 'final-read-failed', 'lost-response'] as const)(
+    'retains post-create profile intent and retries membership only after %s (0m06f.3.4.1)',
+    async initialFault => {
+      let fault: string = initialFault;
+      let committed = false;
+      let wrote = false;
+      const created = {
+        id: 50_000, name: 'New profile-bound channel', channel_number: 100,
+        channel_group_id: null, tvg_id: null, tvc_guide_stationid: null,
+        epg_data_id: null, streams: [], stream_profile_id: null,
+        uuid: 'synthetic-created', logo_id: null, auto_created: false,
+        auto_created_by: null, auto_created_by_name: null,
+      };
+      const originalCommit = testState.bulkCommit.getMockImplementation()!;
+      testState.bulkCommit.mockImplementation(async (...args) => {
+        const result = await originalCommit(...args);
+        committed = true;
+        return result;
+      });
+      vi.mocked(api.getChannels).mockImplementation(async () => ({
+        results: committed ? [created] : [], count: committed ? 1 : 0, next: null, previous: null,
+      }));
+      // Parse the recorded enabled-only contract; the created channel is synthetic.
+      const profile = { ...recordedProfiles.profiles.find(p => p.id === 6)!, channels: [] as number[] };
+      vi.mocked(api.getSettings).mockResolvedValue({
+        configured: true, default_channel_profile_ids: [6],
+        stream_sort_priority: [], stream_sort_enabled: {}, m3u_account_priorities: {},
+      } as unknown as Awaited<ReturnType<typeof api.getSettings>>);
+      const read = async () => {
+        if (wrote && fault === 'final-read-failed') throw new Error('Synthetic read unavailable');
+        return { ...profile, channels: [...profile.channels] };
+      };
+      vi.mocked(api.getChannelProfiles).mockImplementation(async () => [await read()]);
+      vi.mocked(api.getChannelProfile).mockImplementation(read);
+      const write = async (enabled: boolean) => {
+        wrote = true;
+        if (fault === 'rejected') throw new Error('Synthetic write rejected');
+        if (fault !== 'accepted-unapplied') profile.channels = enabled ? [created.id] : [];
+        if (fault === 'lost-response') throw new Error('Synthetic reply lost after write');
+        return { success: true };
+      };
+      vi.mocked(api.updateProfileChannel).mockImplementation(async (_profile, _channel, body) => write(body.enabled!));
+      vi.mocked(api.bulkUpdateProfileChannels).mockImplementation(async (_profile, _channels, enabled) => write(enabled));
+
+      render(<App />);
+      const editButton = await screen.findByRole('button', { name: /edit mode/i });
+      await waitFor(() => expect(editButton).toBeEnabled());
+      fireEvent.click(editButton);
+      await waitFor(() => expect(testState.channelManagerProps?.isEditMode).toBe(true));
+      await act(async () => {
+        await testState.channelManagerProps!.onCreateChannelManual!(created.name, initialFault === 'rejected' ? undefined : 100);
+      });
+      expect(wrote).toBe(false);
+      fireEvent.click(screen.getByTitle('Apply changes'));
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+      await waitFor(() => expect(wrote).toBe(true));
+      await waitFor(() => expect(testState.exitDialogProps?.isOpen).toBe(false));
+      if (initialFault === 'lost-response') {
+        await waitFor(() => expect(screen.queryByText(/checking profile assignments/i)).not.toBeInTheDocument());
+        expect(screen.queryByText(/profile assignments unresolved/i)).not.toBeInTheDocument();
+        expect(profile.channels).toEqual([created.id]);
+        expect(api.bulkUpdateProfileChannels).toHaveBeenCalledTimes(1);
+        expect(api.updateProfileChannel).not.toHaveBeenCalled();
+        expect(testState.bulkCommit).toHaveBeenCalledTimes(1);
+        return;
+      }
+      expect(await screen.findByText(/profile assignments unresolved/i)).toBeInTheDocument();
+      const retry = screen.getByRole('button', { name: 'Retry profile assignments' });
+      await waitFor(() => expect(retry).toBeEnabled());
+      fault = 'healthy';
+      fireEvent.click(retry);
+      await waitFor(() => expect(screen.queryByText(/profile assignments unresolved/i)).not.toBeInTheDocument());
+      expect(profile.channels).toContain(created.id);
+      expect(testState.bulkCommit).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('numbers mixed mapped and unmapped Create groups by visible natural name', async () => {
     const names = ['ZDF alias', 'ABC', 'C-SPAN 10', 'C-SPAN 2', 'C-SPAN'];
     const streams = names.map((name, index) => ({ ...makeStream(index), name }));
@@ -176,6 +270,64 @@ describe('App bulk-create staging', () => {
         ['ABC', 100], ['C-SPAN', 101], ['C-SPAN 2', 102], ['C-SPAN 10', 103], ['ZDF', 104],
       ]);
     });
+  });
+
+  it.each(['success', 'partial', 'undo'] as const)('binds bulk profile intent only to committed IDs after %s', async outcome => {
+    const stream = makeStream(1);
+    if (outcome === 'undo') {
+      vi.mocked(api.getSettings).mockResolvedValue({
+        configured: true, default_channel_profile_ids: [99],
+        stream_sort_priority: [], stream_sort_enabled: {}, m3u_account_priorities: {},
+      } as unknown as Awaited<ReturnType<typeof api.getSettings>>);
+    }
+    const profile = { id: 6, name: 'Synthetic profile', channels: [] as number[] };
+    vi.mocked(api.getChannelProfiles).mockResolvedValue([profile]);
+    vi.mocked(api.getChannelProfile).mockImplementation(async () => ({ ...profile, channels: [...profile.channels] }));
+    vi.mocked(api.bulkUpdateProfileChannels).mockImplementation(async (_profile, ids, enabled) => {
+      profile.channels = enabled ? [...ids] : [];
+      return { success: true };
+    });
+    const originalCommit = testState.bulkCommit.getMockImplementation()!;
+    testState.bulkCommit.mockImplementation(async (...args) => {
+      const result = await originalCommit(...args);
+      if (outcome === 'partial') {
+        result.success = false;
+        result.operationsApplied = 1;
+        result.operationsFailed = 1;
+        result.errors = [{ index: 1, type: 'addStreamToChannel', error: 'Synthetic stream assignment rejected' }];
+      }
+      const fields = {
+        name: 'Created channel', channel_group_id: null, tvg_id: null, tvc_guide_stationid: null,
+        epg_data_id: null, streams: [], stream_profile_id: null, uuid: 'synthetic', logo_id: null,
+        auto_created: false, auto_created_by: null, auto_created_by_name: null,
+      };
+      vi.mocked(api.getChannels).mockResolvedValue({
+        results: [{ ...fields, id: 50000, channel_number: 999 }, { ...fields, id: 99999, channel_number: 100 }],
+        count: 2, next: null, previous: null,
+      });
+      return result;
+    });
+    render(<App />);
+    const editButton = await screen.findByRole('button', { name: /edit mode/i });
+    await waitFor(() => expect(editButton).toBeEnabled());
+    fireEvent.click(editButton);
+    await waitFor(() => expect(testState.channelManagerProps?.isEditMode).toBe(true));
+    if (outcome === 'undo') {
+      await act(async () => testState.channelManagerProps!.onCreateChannelManual!('Undone channel', 101));
+      act(() => testState.channelManagerProps!.onUndo());
+    }
+    await act(async () => {
+      await testState.channelManagerProps!.onBulkCreateFromGroup(
+        [stream], 100, null, undefined, undefined, undefined, false, undefined,
+        false, undefined, undefined, undefined, undefined, undefined, undefined,
+        [6], false, new NameResolution(new Map([[stream.name, stream.name]]), false),
+      );
+    });
+    fireEvent.click(screen.getByTitle('Apply changes'));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(profile.channels).toEqual([50000]));
+    expect(vi.mocked(api.bulkUpdateProfileChannels).mock.calls.flatMap(([, ids]) => ids)).not.toContain(99999);
+    expect(testState.bulkCommit).toHaveBeenCalledTimes(1);
   });
 
   it('stages and applies every one-stream channel through the real App callback', async () => {

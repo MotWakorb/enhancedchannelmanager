@@ -65,6 +65,11 @@ Clearing is only available from the inline channel-number editor. In the **Edit 
 
 **Result:** ECM commits every staged change to Dispatcharr in one batch, the dialog closes, and Edit Mode turns off. Open **Guide** or a media client pointed at ECM/Dispatcharr to confirm the change is live.
 
+Channel creation can succeed while its profile visibility updates remain
+unverified. If **Profile assignments unresolved** appears, use
+[Profile Assignment Recovery](profile-assignment-recovery.md) to retry membership
+only; do not create the channels again.
+
 ![Exit Edit Mode dialog listing one pending change ("1 new channel created") with Keep Editing, Discard, and Apply All buttons](../../images/user_guide/channels-streams/3-exit-edit-mode-summary.png)
 
 ### Discard changes you don't want to keep

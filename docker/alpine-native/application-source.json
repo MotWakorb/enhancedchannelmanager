@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "620fe03c5b6aa0cb60ca9547f29ab0e7d0a3b93cbe4159849b7382f67aa9a710",
+      "sha256": "626c5674e05a29f7f0b90e5285e179b9ef4d020b28f32ea89b69e006eec0c860",
       "type": "file"
     },
     {
@@ -1122,7 +1122,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "a0038913a8f57addd19eb09dd2a832f1dc9fd9d96f06cccad7b80a44c262a46a",
+      "sha256": "cda70514ef689dbeaa65276ee29ffef84387b3821089bbfc73f4ee9dd6b300bd",
       "type": "file"
     },
     {
@@ -1824,7 +1824,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "d296cc53f82be507a91945470a58fc32f4fec56019e02d3a65281915a0615b1a",
+      "sha256": "6f8935e3e4565d7fc20186296e30d9592fff883f9e68f6fc80a8712211e58361",
       "type": "file"
     },
     {
@@ -1866,19 +1866,19 @@
     {
       "executable": false,
       "path": "frontend/src/App.bulkCreateStaging.test.tsx",
-      "sha256": "6e0d301c68fe6a8d72f10ee67817a9fc045b716f33d4788f84b91dc5383a6fd1",
+      "sha256": "d909a046267b4daa10d71feff916f6edcfa46c653b07b45133f344fa3816d942",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/App.css",
-      "sha256": "ac179eb7957f5b58fca32dc29920904847dc7f56af460ff37ae67807e77bdfb8",
+      "sha256": "ef4e31a1d7110eee350bb1f84e3f33945f0fae001710e8731ad5bcaafc6c30b8",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/App.tsx",
-      "sha256": "591cbfd9172d28cfb263e7f53f02d54ba818140a8a6ed729f05000050d408908",
+      "sha256": "0c70e8c52c42cebe0919570a4e181a974456d054b05ad2ab02a35e93120988b5",
       "type": "file"
     },
     {
@@ -2191,6 +2191,24 @@
       "executable": false,
       "path": "frontend/src/components/ChannelsPane.tsx",
       "sha256": "90c8d6286698231aaee32177542598429a73005dee00895c33971afa73790918",
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "frontend/src/components/CreatedChannelProfilesNotice.css",
+      "sha256": "cd326ca48bc59c54d47ca681f70388900ab7caf0e08b4a4e74ec2d78c35fad93",
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "frontend/src/components/CreatedChannelProfilesNotice.test.tsx",
+      "sha256": "c4643a4624b6c12e9b89d0ab6b96af316c4fbbd211afade95f059919cccf00a2",
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "frontend/src/components/CreatedChannelProfilesNotice.tsx",
+      "sha256": "9d00a07e5552fc60a39a6ff871d1a835bfc9c5e3e4c8720a28f0ae4c0a495f8c",
       "type": "file"
     },
     {
@@ -5141,6 +5159,18 @@
     },
     {
       "executable": false,
+      "path": "frontend/src/hooks/useCreatedChannelProfiles.test.ts",
+      "sha256": "8077d09b8b24fffc77dfdf0a1e9c81376ae0bfdfc9c33156c0f572925f34adcc",
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "frontend/src/hooks/useCreatedChannelProfiles.ts",
+      "sha256": "5b564c449d12c4c56f4f5b65be30c2c1080b2d83b4f8197491e32bad4aedb5f2",
+      "type": "file"
+    },
+    {
+      "executable": false,
       "path": "frontend/src/hooks/useDedupOnDrop.test.ts",
       "sha256": "2f22ee258a8f54e1c4e4b4f27f29bafe863dfe2b587c2e418fbc0cc4bece4893",
       "type": "file"
@@ -5220,7 +5250,7 @@
     {
       "executable": false,
       "path": "frontend/src/hooks/useEditMode.ts",
-      "sha256": "0846ddfbacfb25baa2db9bbe2182a3abfdbbf225b32ddfdb03fb913e62840ce0",
+      "sha256": "fd09e4ff035c55b198e2350b9629673f9ba6848ef3b07c8b3b2c11a5655f5da5",
       "type": "file"
     },
     {
@@ -5423,6 +5453,24 @@
     },
     {
       "executable": false,
+      "path": "frontend/src/services/createdChannelProfiles.http.test.ts",
+      "sha256": "70774f02fc0e1364b8fc1d2285e303fcb6a2f86e0dca48f6ea112b65ad9901b6",
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "frontend/src/services/createdChannelProfiles.test.ts",
+      "sha256": "8b034e300ec7d6d0cca953b18d456eb266e3c15b512555ed15cd24ea9c09d452",
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "frontend/src/services/createdChannelProfiles.ts",
+      "sha256": "903ad39a6e2f5ff90753d1da101ec776df05e93cb71b4756354ad0c5599bd278",
+      "type": "file"
+    },
+    {
+      "executable": false,
       "path": "frontend/src/services/epgGuideWatch.test.ts",
       "sha256": "089aacc0bdeca05ef43e37ddd782ecc9a1c52e8c18e968d56a20bd6efdca7578",
       "type": "file"
@@ -5454,7 +5502,7 @@
     {
       "executable": false,
       "path": "frontend/src/services/profileMembership.ts",
-      "sha256": "5626cdd0df26056d312d0f72c2d91aff46c066ef202c7449d682d4d2aaaf9cec",
+      "sha256": "ffb63bf869fedf01044e3e1e568eeab374fda76773cf65c05a3870aba07276c2",
       "type": "file"
     },
     {
@@ -6607,5 +6655,32 @@
     }
   ],
   "schema_version": 1,
-  "scope": "Exact reviewed application snapshot, excluding backend tests, with the recorded jtrlf application update and version-only touchpoints. Retains the original GNU date-format and container-base compatibility history. No native compatibility, advisory, publication or deployed approval from hashes alone."
+  "scope": "Exact reviewed application snapshot, excluding backend tests, with the recorded jtrlf application update and version-only touchpoints. Retains the original GNU date-format and container-base compatibility history. No native compatibility, advisory, publication or deployed approval from hashes alone.",
+  "postcreate_profile_intent_update": {
+    "added_files": [
+      "frontend/src/components/CreatedChannelProfilesNotice.css",
+      "frontend/src/components/CreatedChannelProfilesNotice.test.tsx",
+      "frontend/src/components/CreatedChannelProfilesNotice.tsx",
+      "frontend/src/hooks/useCreatedChannelProfiles.test.ts",
+      "frontend/src/hooks/useCreatedChannelProfiles.ts",
+      "frontend/src/services/createdChannelProfiles.http.test.ts",
+      "frontend/src/services/createdChannelProfiles.test.ts",
+      "frontend/src/services/createdChannelProfiles.ts"
+    ],
+    "base_commit": "bc4215697181cc4e8e3cc62d5c6e4b2c37b3345b",
+    "bead": "enhancedchannelmanager-0m06f.3.4.1",
+    "changed_files": {
+      "backend/main.py": "620fe03c5b6aa0cb60ca9547f29ab0e7d0a3b93cbe4159849b7382f67aa9a710",
+      "backend/routers/backup.py": "a0038913a8f57addd19eb09dd2a832f1dc9fd9d96f06cccad7b80a44c262a46a",
+      "frontend/package.json": "d296cc53f82be507a91945470a58fc32f4fec56019e02d3a65281915a0615b1a",
+      "frontend/src/App.bulkCreateStaging.test.tsx": "6e0d301c68fe6a8d72f10ee67817a9fc045b716f33d4788f84b91dc5383a6fd1",
+      "frontend/src/App.css": "ac179eb7957f5b58fca32dc29920904847dc7f56af460ff37ae67807e77bdfb8",
+      "frontend/src/App.tsx": "591cbfd9172d28cfb263e7f53f02d54ba818140a8a6ed729f05000050d408908",
+      "frontend/src/hooks/useEditMode.ts": "0846ddfbacfb25baa2db9bbe2182a3abfdbbf225b32ddfdb03fb913e62840ce0",
+      "frontend/src/services/profileMembership.ts": "5626cdd0df26056d312d0f72c2d91aff46c066ef202c7449d682d4d2aaaf9cec"
+    },
+    "previous_manifest_sha256": "3b5ef4030751a0c1d95aa1b2b325ffd2d222fdf0d25d8e0bac56440b966f70af",
+    "scope": "Post-create profile-intent recovery candidate and 0072 version touchpoints. Retains complete previous inventory and native compatibility history. No dependency, native input, publication, independent review or deployed approval.",
+    "version": "0.18.2-0072"
+  }
 }

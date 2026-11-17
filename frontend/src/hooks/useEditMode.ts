@@ -264,7 +264,7 @@ function createInitialState(): EditModeState {
 export interface UseEditModeOptions {
   channels: Channel[];
   onChannelsChange: (channels: Channel[]) => void;
-  onCommitComplete?: (createdGroupIds: number[]) => void;
+  onCommitComplete?: (createdGroupIds: number[], tempIdMap: ReadonlyMap<number, number>) => void;
   onError?: (message: string) => void;
   /**
    * Identity of the operator staging this work, from
@@ -2297,7 +2297,7 @@ export function useEditMode({
         forgetStagedLedger();
         setState(createInitialState());
         const createdGroupIds = Array.from(newGroupIdMap.values());
-        onCommitComplete?.(createdGroupIds);
+        onCommitComplete?.(createdGroupIds, tempIdMap);
       }
 
       if (hadFailures) {

@@ -8,7 +8,11 @@ const PROFILE_MEMBERSHIP_BATCH_SIZE = 100;
  * Readback confirms visibility only: an absent enabled ID does not identify
  * whether a disabled membership row exists. Covered by the modal HTTP tests.
  */
-export async function applyProfileMembership(profileId: number, intents: ReadonlyMap<number, boolean>) {
+export async function applyProfileMembership(
+  profileId: number,
+  intents: ReadonlyMap<number, boolean>,
+  isCurrent: () => boolean = () => true,
+) {
   const requested = new Map(intents);
   const remaining = new Map(requested);
   let profile: ChannelProfile | null = null;
@@ -23,7 +27,9 @@ export async function applyProfileMembership(profileId: number, intents: Readonl
     remaining.clear();
     for (const [id, enabled] of requested) remaining.set(id, enabled);
     try {
+      if (!isCurrent()) return false;
       const updated = await api.getChannelProfile(profileId, { fresh: true });
+      if (!isCurrent()) return false;
       if (updated?.id !== profileId || !Array.isArray(updated.channels) ||
           !updated.channels.every(id => Number.isSafeInteger(id) && id > 0)) {
         return false;
@@ -48,6 +54,7 @@ export async function applyProfileMembership(profileId: number, intents: Readonl
   for (const enabled of [true, false]) {
     const ids = [...remaining].filter(([, on]) => on === enabled).map(([id]) => id);
     for (let i = 0; i < ids.length; i += PROFILE_MEMBERSHIP_BATCH_SIZE) {
+      if (!isCurrent()) return result();
       const batch = ids.slice(i, i + PROFILE_MEMBERSHIP_BATCH_SIZE);
       try {
         await api.bulkUpdateProfileChannels(profileId, batch, enabled);
@@ -66,6 +73,7 @@ export async function applyProfileMembership(profileId: number, intents: Readonl
   // Failed bulk requests await operator retry instead of an automatic storm.
   const fallback = [...remaining].filter(([id]) => acceptedIds.has(id));
   for (const [id, enabled] of fallback) {
+    if (!isCurrent()) return result();
     try {
       await api.updateProfileChannel(profileId, id, { enabled });
     } catch {
