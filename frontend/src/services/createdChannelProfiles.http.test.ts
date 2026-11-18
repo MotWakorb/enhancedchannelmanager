@@ -6,6 +6,7 @@ import recorded from '../../../backend/tests/fixtures/y3m6o1/dispatcharr_channel
 import { applyCreatedChannelProfiles } from './createdChannelProfiles';
 
 const nativeFetch = globalThis.fetch;
+const binding = 'f'.repeat(64);
 let server: Server;
 let profiles: typeof recorded.profiles;
 let fault: 'healthy' | 'ignored' | 'rejected' | 'lost' | 'read-failed';
@@ -20,10 +21,15 @@ beforeEach(async () => {
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Connection', 'close');
     const path = req.url;
-    const single = path?.match(/^\/api\/channel-profiles\/(\d+)\/channels\/(\d+)$/);
-    const bulk = path?.match(/^\/api\/channel-profiles\/(\d+)\/channels\/bulk-update$/);
-    const profileRead = path?.match(/^\/api\/channel-profiles\/(\d+)$/);
-    if (req.method === 'GET' && (path === '/api/channel-profiles' || profileRead)) {
+    const single = path?.match(/^\/api\/created-channel-profiles\/(\d+)\/channels\/(\d+)$/);
+    const bulk = path?.match(/^\/api\/created-channel-profiles\/(\d+)\/channels\/bulk-update$/);
+    const profileRead = path?.match(/^\/api\/created-channel-profiles\/(\d+)$/);
+    if (req.headers['x-ecm-profile-recovery'] !== binding) {
+      unexpected.push(`Unbound ${req.method} ${path}`);
+      res.writeHead(409).end('{}');
+      return;
+    }
+    if (req.method === 'GET' && (path === '/api/created-channel-profiles' || profileRead)) {
       if (fault === 'read-failed' && wrote) {
         res.writeHead(503).end('{"detail":"Synthetic read unavailable"}');
       } else {
@@ -76,11 +82,11 @@ it.each(['ignored', 'rejected', 'read-failed'] as const)(
   async mode => {
     fault = mode;
     const intent = [{ channelId: recorded.probe_channel_id, profileIds: [6] }];
-    const first = await applyCreatedChannelProfiles(intent);
+    const first = await applyCreatedChannelProfiles(intent, binding);
     expect(first.remaining).toEqual(intent);
     expect(first.verified).toBe(mode !== 'read-failed');
     fault = 'healthy';
-    expect((await applyCreatedChannelProfiles(first.remaining)).remaining).toEqual([]);
+    expect((await applyCreatedChannelProfiles(first.remaining, binding)).remaining).toEqual([]);
     expect(profiles.filter(profile => profile.channels.includes(recorded.probe_channel_id)).map(profile => profile.id)).toEqual([6]);
     expect(writes.every(write => write.channelIds.length <= 100)).toBe(true);
   },
@@ -88,7 +94,7 @@ it.each(['ignored', 'rejected', 'read-failed'] as const)(
 
 it('confirms a landed write after a lost HTTP response without repeating the mutation', async () => {
   fault = 'lost';
-  const outcome = await applyCreatedChannelProfiles([{ channelId: recorded.probe_channel_id, profileIds: [6] }]);
+  const outcome = await applyCreatedChannelProfiles([{ channelId: recorded.probe_channel_id, profileIds: [6] }], binding);
   expect(outcome.remaining).toEqual([]);
   expect(writes.filter(write => write.profileId === 6)).toHaveLength(1);
 });

@@ -503,15 +503,7 @@ function App() {
     channels,
     operatorKey,
     onChannelsChange: setChannels,
-    onCommitComplete: async (createdGroupIds, tempIdMap) => {
-      const assignments = pendingProfileAssignmentsRef.current;
-      pendingProfileAssignmentsRef.current = [];
-      createdChannelProfiles.enqueue(assignments.flatMap(assignment =>
-        assignment.tempIds.flatMap(tempId => {
-          const channelId = tempIdMap.get(tempId);
-          return channelId === undefined ? [] : [{ channelId, profileIds: assignment.profileIds }];
-        }),
-      ));
+    onCommitComplete: async (createdGroupIds) => {
       // Refresh data from server
       await Promise.all([
         loadChannels(),
@@ -630,10 +622,29 @@ function App() {
 
   // Handle dialog actions
   const handleApplyChanges = useCallback(async () => {
+    // Capture both intent and its local scope before waiting for the create
+    // job. A late result must neither consume another session's intent nor
+    // start recovery using its generation.
+    const assignments = [...pendingProfileAssignmentsRef.current];
+    const enqueue = createdChannelProfiles.enqueue;
+    let startRecovery: (() => void) | undefined;
     setCommitProgress({ current: 0, total: 1, currentOperation: 'Starting...' });
     const result = await commit((progress) => {
       setCommitProgress(progress);
-    }, { continueOnError: true });
+    }, {
+      continueOnError: true,
+      ...(assignments.length > 0 && {
+        onCreatesCommitted: (tempIds, binding) => {
+          startRecovery = enqueue(assignments.flatMap(assignment => assignment.tempIds.flatMap(tempId => {
+            const channelId = tempIds.get(tempId);
+            return channelId === undefined ? [] : [{ channelId, profileIds: assignment.profileIds }];
+          })), binding, true);
+        },
+      }),
+    });
+    // Do not race staged profile edits from later Apply batches. The intent is
+    // already saved; only the automatic attempt waits for the commit to settle.
+    startRecovery?.();
     setCommitProgress(null);
 
     // NOTHING WAS APPLIED, and this is a question rather than a failure: a
@@ -688,7 +699,7 @@ function App() {
     clearHistory();
     // Carry the operator wherever they were trying to go — or sign them out
     completeDeferredExit();
-  }, [commit, clearHistory, completeDeferredExit]);
+  }, [commit, clearHistory, completeDeferredExit, createdChannelProfiles.enqueue]);
 
   /**
    * Fold the operator's per-channel answers into the staged plan, then Apply

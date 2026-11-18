@@ -1073,6 +1073,12 @@
     },
     {
       "executable": false,
+      "path": "backend/profile_recovery.py",
+      "sha256": "5c858a55b7b5545ef74a795aaed70bef01792ffb2493a91f83128cfb99cafa7f",
+      "type": "file"
+    },
+    {
+      "executable": false,
       "path": "backend/pytest.ini",
       "sha256": "df2b810304b6dcbfb1cbc619b12f3db722abe1a16ec11005f0f8a0eff143c794",
       "type": "file"
@@ -1146,7 +1152,7 @@
     {
       "executable": false,
       "path": "backend/routers/channels.py",
-      "sha256": "cc212b81bc9f0045e740cd2a5df98ac72c5e6b62dc0c7c9f384a17570d1495e1",
+      "sha256": "f09a907311a867e3225e425c5532c4165fec15a1aa0a654da22c10bbaa1198a7",
       "type": "file"
     },
     {
@@ -1242,7 +1248,7 @@
     {
       "executable": false,
       "path": "backend/routers/profiles.py",
-      "sha256": "b73429d888f8285d4d3500af41d91e5316e48c34e0a166444d22dd67d4726dda",
+      "sha256": "ac964e865e17365dc95f9d02af794028dc279508ac289f1cbcbff1fa5634f721",
       "type": "file"
     },
     {
@@ -1866,7 +1872,7 @@
     {
       "executable": false,
       "path": "frontend/src/App.bulkCreateStaging.test.tsx",
-      "sha256": "d909a046267b4daa10d71feff916f6edcfa46c653b07b45133f344fa3816d942",
+      "sha256": "6108c44448bfd7d6dced27df0502a18ea81596efb90b32e0c22b186c8105d0f7",
       "type": "file"
     },
     {
@@ -1878,7 +1884,7 @@
     {
       "executable": false,
       "path": "frontend/src/App.tsx",
-      "sha256": "0c70e8c52c42cebe0919570a4e181a974456d054b05ad2ab02a35e93120988b5",
+      "sha256": "6f36fbb8f3510b1a1cdaabe17dc1481be78734072c0fe4e9ca17254faddb17f3",
       "type": "file"
     },
     {
@@ -2208,7 +2214,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/CreatedChannelProfilesNotice.tsx",
-      "sha256": "9d00a07e5552fc60a39a6ff871d1a835bfc9c5e3e4c8720a28f0ae4c0a495f8c",
+      "sha256": "7e076bae8e86fa5bc02d24035d8cf5dafc135ed262a5552756ed5a7d2ba48a02",
       "type": "file"
     },
     {
@@ -5160,13 +5166,13 @@
     {
       "executable": false,
       "path": "frontend/src/hooks/useCreatedChannelProfiles.test.ts",
-      "sha256": "8077d09b8b24fffc77dfdf0a1e9c81376ae0bfdfc9c33156c0f572925f34adcc",
+      "sha256": "e7ca0fc9d228f3ba32eb30cb6fa4faf61822f236380ac19fc11eb96ad5b8dca6",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/hooks/useCreatedChannelProfiles.ts",
-      "sha256": "5b564c449d12c4c56f4f5b65be30c2c1080b2d83b4f8197491e32bad4aedb5f2",
+      "sha256": "a52349ed9cd66cc12c82d73cee26689fb594ee0f386b90b15c6fc0ae695ee854",
       "type": "file"
     },
     {
@@ -5250,7 +5256,7 @@
     {
       "executable": false,
       "path": "frontend/src/hooks/useEditMode.ts",
-      "sha256": "fd09e4ff035c55b198e2350b9629673f9ba6848ef3b07c8b3b2c11a5655f5da5",
+      "sha256": "6a846ef0209dffc41ab1e6978548075626ca375a2f8aa303814807ce96b7aadc",
       "type": "file"
     },
     {
@@ -5406,7 +5412,7 @@
     {
       "executable": false,
       "path": "frontend/src/services/api.ts",
-      "sha256": "fd212600028fd9085d76f953d4ab56b2f7f394d796d63871cf534802f28795eb",
+      "sha256": "34e66bff7a1568a10285df318647035cb9273fb924eeb073d78e52f88f768b29",
       "type": "file"
     },
     {
@@ -5454,19 +5460,19 @@
     {
       "executable": false,
       "path": "frontend/src/services/createdChannelProfiles.http.test.ts",
-      "sha256": "70774f02fc0e1364b8fc1d2285e303fcb6a2f86e0dca48f6ea112b65ad9901b6",
+      "sha256": "0d04c3fd92b7902c7a6c63026f0008e67257eabf0c2f3a62506c68719e87ba44",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/services/createdChannelProfiles.test.ts",
-      "sha256": "8b034e300ec7d6d0cca953b18d456eb266e3c15b512555ed15cd24ea9c09d452",
+      "sha256": "14b88ece5512116ea594e3e315a3e0447a5491fbe5434218dca27e8bedd7809b",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/services/createdChannelProfiles.ts",
-      "sha256": "903ad39a6e2f5ff90753d1da101ec776df05e93cb71b4756354ad0c5599bd278",
+      "sha256": "5d01fd6b572b9129b4117108d0f587e4a1725094f1d7d229d703b3dcca2a27b9",
       "type": "file"
     },
     {
@@ -5502,7 +5508,7 @@
     {
       "executable": false,
       "path": "frontend/src/services/profileMembership.ts",
-      "sha256": "ffb63bf869fedf01044e3e1e568eeab374fda76773cf65c05a3870aba07276c2",
+      "sha256": "de2c254fe4bfc6b76dfdea7897c0dd8384e7380c273be8018cf4d711bee55fde",
       "type": "file"
     },
     {
@@ -5592,7 +5598,7 @@
     {
       "executable": false,
       "path": "frontend/src/types/editMode.ts",
-      "sha256": "bae734ebcf410159ebbe556747e8ef7d6fd380b76a2f77440769348b3268321f",
+      "sha256": "f2aa745af17dec0a8dd9fbd97f66aa1d50374fdc01370c7abb7c659bf163615f",
       "type": "file"
     },
     {
@@ -5892,7 +5898,7 @@
     {
       "executable": false,
       "path": "frontend/src/utils/stagedLedgerStorage.ts",
-      "sha256": "5e62ba9c0c44f0f10c1c8f2a09e0a6813188b3cb014be33815c15f984cfe3011",
+      "sha256": "1204dc117c5ea1e51b54990038baf80b5a79e6f7bc68535fb3d9ef136eac2064",
       "type": "file"
     },
     {
@@ -6681,6 +6687,33 @@
     },
     "previous_manifest_sha256": "3b5ef4030751a0c1d95aa1b2b325ffd2d222fdf0d25d8e0bac56440b966f70af",
     "scope": "Post-create profile-intent recovery candidate and 0072 version touchpoints. Retains complete previous inventory and native compatibility history. No dependency, native input, publication, independent review or deployed approval.",
+    "version": "0.18.2-0072"
+  },
+  "postcreate_profile_review_update": {
+    "added_files": [
+      "backend/profile_recovery.py"
+    ],
+    "base_commit": "e933013f78edf7f6b730813534506ddd079f93e0",
+    "bead": "enhancedchannelmanager-0m06f.3.4.1",
+    "changed_files": {
+      "backend/routers/channels.py": "cc212b81bc9f0045e740cd2a5df98ac72c5e6b62dc0c7c9f384a17570d1495e1",
+      "backend/routers/profiles.py": "b73429d888f8285d4d3500af41d91e5316e48c34e0a166444d22dd67d4726dda",
+      "frontend/src/App.bulkCreateStaging.test.tsx": "d909a046267b4daa10d71feff916f6edcfa46c653b07b45133f344fa3816d942",
+      "frontend/src/App.tsx": "0c70e8c52c42cebe0919570a4e181a974456d054b05ad2ab02a35e93120988b5",
+      "frontend/src/components/CreatedChannelProfilesNotice.tsx": "9d00a07e5552fc60a39a6ff871d1a835bfc9c5e3e4c8720a28f0ae4c0a495f8c",
+      "frontend/src/hooks/useCreatedChannelProfiles.test.ts": "8077d09b8b24fffc77dfdf0a1e9c81376ae0bfdfc9c33156c0f572925f34adcc",
+      "frontend/src/hooks/useCreatedChannelProfiles.ts": "5b564c449d12c4c56f4f5b65be30c2c1080b2d83b4f8197491e32bad4aedb5f2",
+      "frontend/src/hooks/useEditMode.ts": "fd09e4ff035c55b198e2350b9629673f9ba6848ef3b07c8b3b2c11a5655f5da5",
+      "frontend/src/services/api.ts": "fd212600028fd9085d76f953d4ab56b2f7f394d796d63871cf534802f28795eb",
+      "frontend/src/services/createdChannelProfiles.http.test.ts": "70774f02fc0e1364b8fc1d2285e303fcb6a2f86e0dca48f6ea112b65ad9901b6",
+      "frontend/src/services/createdChannelProfiles.test.ts": "8b034e300ec7d6d0cca953b18d456eb266e3c15b512555ed15cd24ea9c09d452",
+      "frontend/src/services/createdChannelProfiles.ts": "903ad39a6e2f5ff90753d1da101ec776df05e93cb71b4756354ad0c5599bd278",
+      "frontend/src/services/profileMembership.ts": "ffb63bf869fedf01044e3e1e568eeab374fda76773cf65c05a3870aba07276c2",
+      "frontend/src/types/editMode.ts": "bae734ebcf410159ebbe556747e8ef7d6fd380b76a2f77440769348b3268321f",
+      "frontend/src/utils/stagedLedgerStorage.ts": "5e62ba9c0c44f0f10c1c8f2a09e0a6813188b3cb014be33815c15f984cfe3011"
+    },
+    "previous_manifest_sha256": "d8ca0a64beca3103322608d4af521cd74dd37bfa0b5f9f1db90a5fca818baf12",
+    "scope": "PR #1071 frozen profile-recovery blocker fixes for the same unshipped 0072 candidate, retaining the complete prior application inventory and compatibility history. Not independent review, native runtime, advisory, publication or deployed approval.",
     "version": "0.18.2-0072"
   }
 }

@@ -38,7 +38,7 @@ it('does not expose one operator’s retry plan to another operator', async () =
   expect(other.result.current.pending).toEqual([]);
 });
 
-it('serializes retry clicks and preserves new intent queued during an in-flight attempt', async () => {
+it('serializes retry clicks and drains only new intent queued during an in-flight attempt', async () => {
   let finish!: (value: Awaited<ReturnType<typeof applyCreatedChannelProfiles>>) => void;
   vi.mocked(applyCreatedChannelProfiles).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
   const hook = renderHook(() => useCreatedChannelProfiles('local:7', vi.fn()));
@@ -48,8 +48,68 @@ it('serializes retry clicks and preserves new intent queued during an in-flight 
     hook.result.current.enqueue([{ channelId: 50001, profileIds: [] }]);
   });
   expect(applyCreatedChannelProfiles).toHaveBeenCalledTimes(1);
-  await act(async () => finish({ remaining: [], profiles: [], verified: true }));
-  expect(hook.result.current.pending).toEqual([{ channelId: 50001, profileIds: [] }]);
+  await act(async () => finish({ remaining: [intent], profiles: [], verified: true }));
+  expect(vi.mocked(applyCreatedChannelProfiles).mock.calls.map(([intents]) => intents)).toEqual([
+    [intent], [{ channelId: 50001, profileIds: [] }],
+  ]);
+  expect(hook.result.current.pending).toEqual([intent, { channelId: 50001, profileIds: [] }]);
+});
+
+it('does not replay restored intent when a new create is enqueued', async () => {
+  const first = renderHook(() => useCreatedChannelProfiles('local:7', vi.fn()));
+  act(() => first.result.current.enqueue([intent]));
+  await waitFor(() => expect(first.result.current.busy).toBe(false));
+  first.unmount();
+  const restored = renderHook(() => useCreatedChannelProfiles('local:7', vi.fn()));
+  const newIntent = { channelId: 50001, profileIds: [] };
+  act(() => restored.result.current.enqueue([newIntent]));
+  await waitFor(() => expect(restored.result.current.busy).toBe(false));
+  expect(vi.mocked(applyCreatedChannelProfiles).mock.calls.map(([intents]) => intents)).toEqual([
+    [intent], [newIntent],
+  ]);
+  expect(restored.result.current.pending).toEqual([intent, newIntent]);
+});
+
+it('stores a stale callback’s mapped intent in the original scope without starting requests', () => {
+  const saved = vi.fn();
+  const hook = renderHook(({ destination }) => useCreatedChannelProfiles('local:7', saved, destination), {
+    initialProps: { destination: 'https://first.invalid' },
+  });
+  const lateEnqueue = hook.result.current.enqueue;
+  hook.rerender({ destination: 'https://second.invalid' });
+  act(() => lateEnqueue([intent]));
+  expect(applyCreatedChannelProfiles).not.toHaveBeenCalled();
+  expect(hook.result.current.pending).toEqual([]);
+  hook.rerender({ destination: 'https://first.invalid' });
+  expect(hook.result.current.pending).toEqual([intent]);
+});
+
+it('does not restart recovery from a callback whose original scope was left and re-entered', () => {
+  const saved = vi.fn();
+  const hook = renderHook(({ operator }) => useCreatedChannelProfiles(operator, saved), {
+    initialProps: { operator: 'local:7' },
+  });
+  const lateEnqueue = hook.result.current.enqueue;
+  hook.rerender({ operator: 'local:8' });
+  hook.rerender({ operator: 'local:7' });
+  act(() => lateEnqueue([intent]));
+  expect(applyCreatedChannelProfiles).not.toHaveBeenCalled();
+  expect(hook.result.current.pending).toEqual([intent]);
+});
+
+it('defers the automatic attempt without deferring persistence or borrowing a later scope', () => {
+  const saved = vi.fn();
+  const hook = renderHook(({ operator }) => useCreatedChannelProfiles(operator, saved), {
+    initialProps: { operator: 'local:7' },
+  });
+  let start: (() => void) | void;
+  act(() => { start = hook.result.current.enqueue([intent], undefined, true); });
+  expect(applyCreatedChannelProfiles).not.toHaveBeenCalled();
+  hook.rerender({ operator: 'local:8' });
+  act(() => start?.());
+  expect(applyCreatedChannelProfiles).not.toHaveBeenCalled();
+  hook.rerender({ operator: 'local:7' });
+  expect(hook.result.current.pending).toEqual([intent]);
 });
 
 it('does not carry saved intent to another Dispatcharr destination', async () => {

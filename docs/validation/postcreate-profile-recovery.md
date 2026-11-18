@@ -2,11 +2,24 @@
 
 ## Scope and contract
 
-This candidate repairs App's post-create membership handling, not selection-bar
-reporting or the staged operation executor. Committed channel identities come
-from `useEditMode`'s temp-ID map, not channel-number lookup. Only mapped creates
-enter the post-commit queue; Undo and partial-commit behavior remain with the
-existing staged ledger.
+Candidate `0.18.2-0072` covers the three frozen PR #1071 blockers and the related
+regression evidence. Committed channel identities come from `useEditMode`'s
+temp-ID map, not channel-number lookup. On receipt, App saves membership intent
+and the staged ledger retires those creates before later phases or channel
+refresh. A failed sibling and unrelated updates retain their own outcome.
+The picker, pre-Apply staged-intent restore, and accessibility follow-ups are
+out of scope.
+
+The create worker issues an opaque binding from the requesting ECM operator
+and the actual Dispatcharr client that produced the map. Recovery-only profile
+routes require it on every read and mutation and use the same verified client
+for the operation. The normal profile routes are unchanged. No credentials or
+raw connection URL are added to the receipt. A stale callback saves only in its
+original local queue; the queue key uses the settings this tab loaded, but
+only the server-issued binding determines where a request may run. A stale
+tab cannot redirect a recovery mutation. Older saved intent runs only on
+explicit retry; an absent selected profile blocks the affected channel, not
+its neighbors.
 
 The recorded Dispatcharr response at
 `backend/tests/fixtures/y3m6o1/dispatcharr_channel_profiles_mixed_membership.json`
@@ -22,24 +35,49 @@ and scripted faults are identified as such, not represented as live Dispatcharr.
 - **Actual App/useEditMode/component seam:** `App.bulkCreateStaging.test.tsx`
   exercises the normal manual-create callback, post-commit rejection, ignored
   writes, final read failure, and lost replies. Bulk tests cover committed IDs
-  differing from channel numbers, partial creation outcomes, and Undo. The
-  original unfixed implementation produced three intended missing-feedback
-  failures with two existing passes; no import/setup failures.
+  differing from channel numbers, and Undo. The mixed-create regression has
+  an unmapped rejected sibling (not just a failed stream assignment), an
+  unrelated update, and either failed channel refresh or a lost later batch
+  reply. Tests also cover late operator handoff, a missing create result,
+  and the actionable missing-profile notice on explicit retry.
 - **Service logic:** `services/createdChannelProfiles.test.ts` exercises complete
   selected/unselected visibility, explicit empty selections, missing/malformed
-  profiles, concurrent changes before final read, and serial 100-ID slices.
+  profiles, a mixed missing/healthy batch, concurrent changes before final read,
+  and serial 100-ID slices.
 - **Lifecycle:** `hooks/useCreatedChannelProfiles.test.ts` covers reload without
-  replay, operator/destination isolation, late completion, serialization, storage
-  failures, sanitized destination keys and discard.
+  replay even when more channels are created, operator/destination isolation,
+  late starts and completions, serial draining of new-only work, storage failures,
+  sanitized destination keys and discard.
 - **Consumer HTTP integration:** `services/createdChannelProfiles.http.test.ts`
   uses production service/API/fetch code against an isolated loopback socket
   peer. It covers ignored/rejected writes, failed readback, and a landed write
   followed by a dropped response. It is not a real upstream or backend test.
+- **Backend route and client:** `test_profile_membership_http.py` covers
+  binding provenance through the actual asynchronous create result, stale
+  destination or upstream credentials, actual JWT operator changes with auth
+  optional, and a swap while a bound mutation is reading its body. A real
+  Dispatcharr adapter supplies membership traffic to a private synthetic peer.
 - **Rendered Chromium:** `e2e/post-create-profiles.spec.ts` drives the normal
   manual-create dialog and asynchronous bulk-commit polling contract against
   a private routed peer. It checks reload, membership-only retry, server-assigned
-  numbering, lost replies and compact notice layout. Each unresolved case
+  numbering, lost replies, a scope change between verification and mutation,
+  failed channel refresh after a successful write, and compact notice layout. Each unresolved case
   produces `unresolved-profile-intent.png` in the Playwright output directory.
+
+### RED and sensitivity evidence
+
+- The original pre-recovery App run showed three missing-feedback failures and
+  two existing passes, not a fourth lost-reply failure.
+- On PR #1071's review baseline, five added frontend expectations failed:
+  known creates after failed refresh, stale callback writes, replay of
+  restored work, failure to drain just-new work, and a missing profile blocking
+  the healthy channel. The backend comparison against the same baseline
+  reached the completed create and valid map but failed because the binding
+  was absent.
+- A temporary local mutation reused the pre-write profile snapshot in place
+  of the final complete GET. Both the App and loopback HTTP landed-lost-reply
+  tests failed because verified intent stayed pending. With the fresh read
+  restored, both passed. The mutation was not retained.
 
 ```bash
 cd frontend
@@ -53,14 +91,20 @@ npm run lint
 cd ..
 TMPDIR=/tmp/opencode npx playwright test \
   --config playwright.verification.config.ts e2e/post-create-profiles.spec.ts
+scripts/backend-gate.sh --subset tests/routers/test_profile_membership_http.py \
+  tests/routers/test_profiles.py tests/routers/test_channels.py \
+  tests/auth/test_mcp_sidecar_boundary.py
 ```
 
 ## Limits
 
 Fresh enabled-only membership proves visible state at read time, not global CAS,
-durability, or disabled-row existence. Operator/destination changes stop
-subsequent requests and suppress old completion updates; already-sent writes
-cannot be withdrawn. The saved queue is tab-local, not a durable server journal.
-Creation results that never reach App's commit callback remain governed by the
-existing bulk-commit flow; this repair does not redefine unknown creation outcomes.
-No new endpoint, MCP tool, dependency, or production-service mutation is required.
+durability, or disabled-row existence. A request already sent cannot be
+withdrawn. The binding fences the configured connection, not replacement
+upstreams indistinguishable at the same URL and credentials. A rotated ECM
+signing secret or Dispatcharr credential can invalidate saved bindings; no
+late refresh issues a replacement binding for old IDs. The saved queue is
+tab-local, not a durable server journal. Unknown create results remain governed
+by the existing bulk-commit flow. The browser and server regressions use
+synthetic writes only; they are not production, publication, or deployment
+evidence.

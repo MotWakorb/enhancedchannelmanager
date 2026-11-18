@@ -384,6 +384,8 @@ export interface CommitOptions {
   continueOnError?: boolean;
   /** Skip validation step (use when user already confirmed to proceed) */
   skipValidation?: boolean;
+  /** Synchronous handoff of confirmed creates, before any post-commit reads. */
+  onCreatesCommitted?: (tempIds: ReadonlyMap<number, number>, binding?: string) => void;
 }
 
 /**

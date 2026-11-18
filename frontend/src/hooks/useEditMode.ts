@@ -37,6 +37,7 @@ import { logger } from '../utils/logger';
 import {
   clearStagedLedger,
   readStagedLedger,
+  retireStagedLedgerOperations,
   saveStagedLedger,
   type PersistedStagedLedger,
   type RestoreStagedLedgerInput,
@@ -264,7 +265,7 @@ function createInitialState(): EditModeState {
 export interface UseEditModeOptions {
   channels: Channel[];
   onChannelsChange: (channels: Channel[]) => void;
-  onCommitComplete?: (createdGroupIds: number[], tempIdMap: ReadonlyMap<number, number>) => void;
+  onCommitComplete?: (createdGroupIds: number[]) => void;
   onError?: (message: string) => void;
   /**
    * Identity of the operator staging this work, from
@@ -2082,8 +2083,6 @@ export function useEditMode({
       // Total steps: 1 (creates) + batches + fetch pages
       const totalSteps = 1 + numBatches + estimatedFetchPages;
       let completedSteps = 0;
-      let totalApplied = 0;
-      let totalFailed = 0;
       /**
        * True when any bulk-commit response reported an unclean outcome that its
        * own failure count does not describe.
@@ -2134,29 +2133,65 @@ export function useEditMode({
           groupsToCreate: groupsToCreate.length > 0 ? groupsToCreate : undefined,
           continueOnError: options?.continueOnError,
           consolidate: true,
+          ...(options?.onCreatesCommitted && channelCreateOps.length > 0 && { profileRecoveryOperator: operatorKey }),
         }, commitBatchId);
-
-        // Check for validation failures
-        if (!createResponse.success && createResponse.validationIssues?.length) {
-          result.success = false;
-          result.validationIssues = createResponse.validationIssues;
-          result.validationPassed = false;
-          throw new Error('Validation failed');
-        }
 
         // Store temp ID mappings
         for (const [tempIdStr, realId] of Object.entries(createResponse.tempIdMap)) {
-          tempIdMap.set(Number(tempIdStr), realId);
+          const tempId = Number(tempIdStr);
+          if (assignmentsByTempId.has(tempId) && Number.isSafeInteger(realId) && realId > 0) {
+            tempIdMap.set(tempId, realId);
+          }
         }
         for (const [groupName, groupId] of Object.entries(createResponse.groupIdMap)) {
           newGroupIdMap.set(groupName, groupId);
         }
 
-        totalApplied += createResponse.operationsApplied;
-        totalFailed += createResponse.operationsFailed;
+        result.operationsApplied += createResponse.operationsApplied;
+        result.operationsFailed += createResponse.operationsFailed;
         if (!createResponse.success) sawUncleanResponse = true;
         result.errors.push(...createResponse.errors);
         collectRecoverySteps(createResponse);
+
+        if (tempIdMap.size > 0) {
+          options?.onCreatesCommitted?.(tempIdMap, createResponse.profileRecoveryBinding);
+          const isCommittedCreateOperation = (op: StagedOperation) => {
+            const { apiCall } = op;
+            if (apiCall.type === 'createChannel') return tempIdMap.has(op.afterSnapshot[0]?.id);
+            return (apiCall.type === 'addStreamToChannel' || apiCall.type === 'removeStreamFromChannel'
+              || apiCall.type === 'reorderChannelStreams') && tempIdMap.has(apiCall.channelId);
+          };
+          const retired = new Set(consolidatedOps.filter(isCommittedCreateOperation).map(op => op.id));
+          // Do not wait for later writes, channel refresh, or a persistence
+          // effect: a reload or logout must not offer these creates again.
+          retireStagedLedgerOperations(operatorKey, retired);
+          setState(prev => {
+            if (!prev.stagedOperations.some(op => retired.has(op.id))) return prev;
+            const keep = (op: StagedOperation) => !retired.has(op.id);
+            const pruneStack = (stack: UndoEntry[]) => stack
+              .map(entry => ({ ...entry, operations: entry.operations.filter(keep) }))
+              .filter(entry => entry.operations.length > 0);
+            const workingCopy = prev.workingCopy.filter(ch => !tempIdMap.has(ch.id));
+            return {
+              ...prev, workingCopy, stagedOperations: prev.stagedOperations.filter(keep),
+              localUndoStack: pruneStack(prev.localUndoStack),
+              localRedoStack: prev.localRedoStack.map(entry => ({
+                ...entry, operations: entry.operations.filter(op =>
+                  !isCommittedCreateOperation(op) && !affectedChannelIdsOf(op.apiCall).some(id => tempIdMap.has(id))),
+              })).filter(entry => entry.operations.length > 0),
+              modifiedChannelIds: computeModifiedChannelIds(workingCopy, prev.baselineSnapshot),
+            };
+          });
+        }
+
+        // A continue-on-error create reply can carry both validation issues
+        // and a confirmed map. Disclose the issues without losing that map.
+        if (!createResponse.success && createResponse.validationIssues?.length) {
+          result.success = false;
+          result.validationIssues = createResponse.validationIssues;
+          result.validationPassed = false;
+          if (tempIdMap.size === 0 || !options?.continueOnError) throw new Error('Validation failed');
+        }
       }
 
       completedSteps = 1;
@@ -2201,7 +2236,7 @@ export function useEditMode({
       }
       if (unresolvedGroupOps.length > 0) {
         logger.error('[EditMode] Dropped %d operation(s) targeting an uncreated group', unresolvedGroupOps.length);
-        totalFailed += unresolvedGroupOps.length;
+        result.operationsFailed += unresolvedGroupOps.length;
         result.errors.push(...unresolvedGroupOps);
       }
 
@@ -2234,8 +2269,8 @@ export function useEditMode({
           }
         }
 
-        totalApplied += batchResponse.operationsApplied;
-        totalFailed += batchResponse.operationsFailed;
+        result.operationsApplied += batchResponse.operationsApplied;
+        result.operationsFailed += batchResponse.operationsFailed;
         if (!batchResponse.success) sawUncleanResponse = true;
         result.errors.push(...batchResponse.errors);
         collectRecoverySteps(batchResponse);
@@ -2249,30 +2284,9 @@ export function useEditMode({
 
       completedSteps = 1 + numBatches;
 
-      // Update result totals
-      result.operationsApplied = totalApplied;
-      result.operationsFailed = totalFailed;
-      result.success = totalFailed === 0 && !sawUncleanResponse;
+      result.success = result.operationsFailed === 0 && !sawUncleanResponse;
 
-      logger.info(`[EditMode] Bulk commit completed: ${totalApplied} applied, ${totalFailed} failed`);
-
-      // Fetch updated channels with per-page progress
-      const allChannels: Channel[] = [];
-      let page = 1;
-      let hasMore = true;
-
-      while (hasMore) {
-        reportProgress(completedSteps + page, totalSteps, `Fetching channels (page ${page})...`);
-        const response = await api.getChannels({ page, pageSize: 500 });
-        allChannels.push(...response.results);
-        hasMore = response.next !== null;
-        page++;
-      }
-
-      // Final progress
-      reportProgress(totalSteps, totalSteps, `Complete: ${totalApplied} operations applied`);
-
-      result.updatedChannels = allChannels;
+      logger.info(`[EditMode] Bulk commit completed: ${result.operationsApplied} applied, ${result.operationsFailed} failed`);
 
       // Determine if we had any success (partial or complete).
       //
@@ -2282,22 +2296,41 @@ export function useEditMode({
       // — therefore looked like a no-op, and edit mode would never stand down
       // even though the groups really had been created (bead
       // enhancedchannelmanager-vtapf).
-      const hadSuccess = result.operationsApplied > 0 || newGroupIdMap.size > 0;
+      const hadSuccess = result.operationsApplied > 0 || newGroupIdMap.size > 0 || tempIdMap.size > 0;
       const hadFailures = result.operationsFailed > 0 || (result.validationIssues && result.validationIssues.length > 0);
 
-      // Always update channels if any operations succeeded
-      // This ensures partial success is reflected in the UI
-      if (hadSuccess) {
-        onChannelsChange(allChannels);
-        // The staged queue is gone, so the ledger that mirrors it has to go in
-        // the same tick — Apply All from the exit dialog also completes a
-        // deferred sign-out, and a surviving ledger would offer these
-        // operations back to the operator's next session. Replaying a create
-        // is not idempotent (see `forgetStagedLedger`).
-        forgetStagedLedger();
+      const retireCompletedApply = () => {
+        retireStagedLedgerOperations(operatorKey, new Set(consolidatedOps.map(op => op.id)));
+        ledgerWrittenRef.current = false;
         setState(createInitialState());
-        const createdGroupIds = Array.from(newGroupIdMap.values());
-        onCommitComplete?.(createdGroupIds, tempIdMap);
+      };
+      // Preserve ordinary Apply behavior outside the known-create path.
+      if (tempIdMap.size > 0) retireCompletedApply();
+
+      let refreshWarning = '';
+      const allChannels: Channel[] = [];
+      try {
+        let page = 1;
+        let hasMore = true;
+        while (hasMore) {
+          reportProgress(completedSteps + page, totalSteps, `Fetching channels (page ${page})...`);
+          const response = await api.getChannels({ page, pageSize: 500 });
+          allChannels.push(...response.results);
+          hasMore = response.next !== null;
+          page++;
+        }
+        result.updatedChannels = allChannels;
+      } catch (err) {
+        if (tempIdMap.size === 0) throw err;
+        logger.error('[EditMode] Channel refresh after Apply failed:', err);
+        refreshWarning = 'The channel list could not be refreshed after Apply. Reload to see the latest channels.';
+        result.updatedChannels = channels;
+      }
+      reportProgress(totalSteps, totalSteps, `Complete: ${result.operationsApplied} operations applied`);
+      if (hadSuccess) {
+        if (tempIdMap.size === 0) retireCompletedApply();
+        if (!refreshWarning) onChannelsChange(allChannels);
+        onCommitComplete?.(Array.from(newGroupIdMap.values()));
       }
 
       if (hadFailures) {
@@ -2347,12 +2380,18 @@ export function useEditMode({
         } else {
           errorMessage = `Failed to apply ${result.operationsFailed} operation(s)`;
         }
-        onError?.(errorMessage);
+        onError?.([errorMessage, refreshWarning].filter(Boolean).join(' '));
+      } else if (refreshWarning) {
+        onError?.(refreshWarning);
       }
     } catch (err) {
       logger.error('Commit failed:', err);
       result.success = false;
-      onError?.('Commit failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+      const error = err instanceof Error ? err.message : 'Unknown error';
+      if (tempIdMap.size > 0) {
+        result.errors.push({ operationId: 'commit-interrupted', error: `Apply stopped after confirmed channel creation: ${error}` });
+      }
+      onError?.('Commit failed: ' + error);
     } finally {
       setIsCommitting(false);
     }
@@ -2369,7 +2408,7 @@ export function useEditMode({
     onCommitComplete,
     onError,
     buildBulkOperations,
-    forgetStagedLedger,
+    operatorKey,
   ]);
 
   /**

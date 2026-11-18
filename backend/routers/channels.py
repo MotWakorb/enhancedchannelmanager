@@ -54,6 +54,7 @@ from database import get_session
 from dispatcharr_client import get_client, logo_was_reused, strip_logo_reuse_marker, upstream_http_exception
 from match_fold import fold_match_key
 from normalization_engine import get_normalization_engine
+from profile_recovery import recovery_binding, recovery_operator
 import journal
 
 logger = logging.getLogger(__name__)
@@ -827,6 +828,8 @@ class BulkCommitRequest(BaseModel):
     continueOnError: Optional[bool] = False
     # If true, consolidate redundant operations before executing
     consolidate: Optional[bool] = False
+    # Opt in to a recovery binding, and refuse if the browser's operator is stale.
+    profileRecoveryOperator: Optional[str] = None
 
     @model_validator(mode="after")
     def _validate_temp_channel_dependencies(self):
@@ -884,6 +887,7 @@ class BulkCommitResponse(BaseModel):
     errors: list[dict]
     # Map of temp channel IDs to real IDs
     tempIdMap: dict[int, int]
+    profileRecoveryBinding: Optional[str] = None
     # Map of group names to real IDs
     groupIdMap: dict[str, int]
     # Validation issues found during pre-validation
@@ -2417,7 +2421,7 @@ def _prune_old_bulk_commit_jobs() -> None:
 
 
 @router.post("/bulk-commit")
-async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdminIfEnabled):
+async def bulk_commit_operations(request: BulkCommitRequest, http_request: Request, _admin=RequireAdminIfEnabled):
     """
     Process multiple channel operations. Admin only (bulk operator op, bd-um30y).
 
@@ -2438,6 +2442,7 @@ async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdmin
     - validateOnly: If true, only validate without executing
     - continueOnError: If true, continue processing even when operations fail
     - consolidate: If true, server-side dedup of redundant ops
+    - profileRecoveryOperator: Opt in to a binding for the committed channel map
     """
     # One Apply All is several bulk-commit requests: a create phase, then
     # batches of 200. A client that sends the same X-ECM-Batch-Id on all of
@@ -2451,6 +2456,13 @@ async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdmin
     if request.validateOnly:
         return await _run_bulk_commit(request, batch_id=request_batch_id)
 
+    recovery_scope: dict[str, str] = {}
+    if request.profileRecoveryOperator is not None:
+        operator = await recovery_operator(http_request)
+        if operator != request.profileRecoveryOperator:
+            raise HTTPException(409, "The ECM operator changed. Reload before applying channel changes.")
+        recovery_scope["profile_recovery_operator"] = operator
+
     # Enqueue the actual commit as a supervised background task.
     _prune_old_bulk_commit_jobs()
     job_id = uuid.uuid4().hex
@@ -2463,7 +2475,7 @@ async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdmin
             logger.warning("[CHANNELS-BULK] Job %s missing before start", job_id)
             return
         try:
-            result = await _run_bulk_commit(request, batch_id=request_batch_id)
+            result = await _run_bulk_commit(request, batch_id=request_batch_id, **recovery_scope)
             job.result = result
             job.status = "completed"
             job.completed_at = time.time()
@@ -2530,7 +2542,7 @@ async def get_bulk_commit_status(job_id: str):
 
 
 async def _run_bulk_commit(
-    request: BulkCommitRequest, batch_id: Optional[str] = None
+    request: BulkCommitRequest, batch_id: Optional[str] = None, *, profile_recovery_operator: Optional[str] = None
 ) -> dict:
     """Execute a bulk-commit request and return the result envelope.
 
@@ -2548,6 +2560,7 @@ async def _run_bulk_commit(
     # effective plan must be revalidated after consolidation.
     _validate_bulk_channel_dependencies(request.operations)
     client = get_client()
+    binding = recovery_binding(client, profile_recovery_operator) if profile_recovery_operator is not None else None
     batch_id = batch_id or str(uuid.uuid4())[:8]
 
     # Phase 1 onwards. Until this flips, nothing has been written anywhere, so
@@ -3975,6 +3988,8 @@ async def _run_bulk_commit(
                     # Track temp ID -> real ID mapping
                     if op.tempId < 0:
                         result["tempIdMap"][op.tempId] = created_id
+                        if binding is not None:
+                            result["profileRecoveryBinding"] = binding
 
                     # Nameable by later ops in this same batch.
                     existing_channels[created_id] = new_channel

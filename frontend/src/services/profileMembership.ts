@@ -12,6 +12,7 @@ export async function applyProfileMembership(
   profileId: number,
   intents: ReadonlyMap<number, boolean>,
   isCurrent: () => boolean = () => true,
+  binding?: string,
 ) {
   const requested = new Map(intents);
   const remaining = new Map(requested);
@@ -28,7 +29,7 @@ export async function applyProfileMembership(
     for (const [id, enabled] of requested) remaining.set(id, enabled);
     try {
       if (!isCurrent()) return false;
-      const updated = await api.getChannelProfile(profileId, { fresh: true });
+      const updated = await api.getChannelProfile(profileId, binding === undefined ? { fresh: true } : { fresh: true, binding });
       if (!isCurrent()) return false;
       if (updated?.id !== profileId || !Array.isArray(updated.channels) ||
           !updated.channels.every(id => Number.isSafeInteger(id) && id > 0)) {
@@ -57,7 +58,8 @@ export async function applyProfileMembership(
       if (!isCurrent()) return result();
       const batch = ids.slice(i, i + PROFILE_MEMBERSHIP_BATCH_SIZE);
       try {
-        await api.bulkUpdateProfileChannels(profileId, batch, enabled);
+        if (binding === undefined) await api.bulkUpdateProfileChannels(profileId, batch, enabled);
+        else await api.bulkUpdateProfileChannels(profileId, batch, enabled, binding);
         batch.forEach(id => acceptedIds.add(id));
       } catch {
         failedRequests++;
@@ -75,7 +77,8 @@ export async function applyProfileMembership(
   for (const [id, enabled] of fallback) {
     if (!isCurrent()) return result();
     try {
-      await api.updateProfileChannel(profileId, id, { enabled });
+      if (binding === undefined) await api.updateProfileChannel(profileId, id, { enabled });
+      else await api.updateProfileChannel(profileId, id, { enabled }, binding);
     } catch {
       failedRequests++;
     }

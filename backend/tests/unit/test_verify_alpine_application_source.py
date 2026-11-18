@@ -108,7 +108,7 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     manifest = verifier.load_manifest(
         ROOT / "docker/alpine-native/application-source.json"
     )
-    assert len(manifest["files"]) == 1092
+    assert len(manifest["files"]) == 1093
     assert (
         manifest["baseline_application_commit"]
         == "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531"
@@ -125,6 +125,52 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
         "backend/date_placeholders.py",
         "mcp-server/Dockerfile",
     }
+
+
+def _before_postcreate_profile_review_rows(manifest):
+    update = manifest["postcreate_profile_review_update"]
+    assert update["base_commit"] == "e933013f78edf7f6b730813534506ddd079f93e0"
+    assert update["bead"] == "enhancedchannelmanager-0m06f.3.4.1"
+    assert update["version"] == "0.18.2-0072"
+    assert update["previous_manifest_sha256"] == "d8ca0a64beca3103322608d4af521cd74dd37bfa0b5f9f1db90a5fca818baf12"
+    assert update["added_files"] == ["backend/profile_recovery.py"]
+    assert set(update["changed_files"]) == {
+        "backend/routers/channels.py",
+        "backend/routers/profiles.py",
+        "frontend/src/App.bulkCreateStaging.test.tsx",
+        "frontend/src/App.tsx",
+        "frontend/src/components/CreatedChannelProfilesNotice.tsx",
+        "frontend/src/hooks/useCreatedChannelProfiles.test.ts",
+        "frontend/src/hooks/useCreatedChannelProfiles.ts",
+        "frontend/src/hooks/useEditMode.ts",
+        "frontend/src/services/api.ts",
+        "frontend/src/services/createdChannelProfiles.http.test.ts",
+        "frontend/src/services/createdChannelProfiles.test.ts",
+        "frontend/src/services/createdChannelProfiles.ts",
+        "frontend/src/services/profileMembership.ts",
+        "frontend/src/types/editMode.ts",
+        "frontend/src/utils/stagedLedgerStorage.ts",
+    }
+    previous = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        restored = dict(row)
+        if row["path"] in update["changed_files"]:
+            assert row["sha256"] != update["changed_files"][row["path"]]
+            restored["sha256"] = update["changed_files"][row["path"]]
+        previous.append(restored)
+    original = {k: v for k, v in manifest.items() if k != "postcreate_profile_review_update"}
+    original["files"] = previous
+    assert hashlib.sha256((json.dumps(original, indent=2) + "\n").encode()).hexdigest() == update["previous_manifest_sha256"]
+    return previous
+
+
+def test_postcreate_profile_review_snapshot_recovers_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(ROOT / "docker/alpine-native/application-source.json")
+    _before_postcreate_profile_review_rows(manifest)
+    assert verifier.verify(ROOT, manifest)["postcreate_profile_review_update"] == manifest["postcreate_profile_review_update"]
 
 
 def _before_postcreate_profile_rows(manifest):
@@ -150,7 +196,7 @@ def _before_postcreate_profile_rows(manifest):
         "frontend/src/services/createdChannelProfiles.ts",
     }
     previous = []
-    for row in manifest["files"]:
+    for row in _before_postcreate_profile_review_rows(manifest):
         if row["path"] in update["added_files"]:
             assert row["type"] == "file" and row["executable"] is False
             continue

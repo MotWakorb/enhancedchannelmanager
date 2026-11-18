@@ -193,6 +193,24 @@ export function saveStagedLedger({
   }
 }
 
+/** Retire only IDs from this Apply, without clearing a newer session's ledger. */
+export function retireStagedLedgerOperations(operatorKey: string, retired: ReadonlySet<string>): void {
+  try {
+    const raw = store()?.getItem(STAGED_LEDGER_STORAGE_KEY);
+    if (!raw) return;
+    const record = JSON.parse(raw) as PersistedStagedLedger;
+    if (record.version !== STAGED_LEDGER_FORMAT_VERSION || record.operatorKey !== operatorKey) return;
+    const operations = record.operations.filter(op => !retired.has(op.id));
+    if (operations.length === record.operations.length) return;
+    saveStagedLedger({
+      operatorKey, operations, now: record.savedAt,
+      undoGroups: record.undoGroups.map(group => group.filter(id => !retired.has(id))).filter(group => group.length > 0),
+    });
+  } catch {
+    // As with ordinary ledger persistence, an unusable store must not abort Apply.
+  }
+}
+
 /** Shape check for one persisted operation. Anything short of this is refused. */
 function isStagedOperation(value: unknown): value is StagedOperation {
   if (typeof value !== 'object' || value === null) return false;
