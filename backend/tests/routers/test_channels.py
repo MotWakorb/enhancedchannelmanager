@@ -2128,6 +2128,58 @@ class TestBulkCommitPartialSuccess:
         assert result["settledOperationIndexes"] == [0, 2]
 
     @pytest.mark.asyncio
+    async def test_settled_number_is_reported_even_if_superseded_update_fails(self, async_client):
+        client = AsyncMock()
+        client.get_channels.return_value = {
+            "results": [{"id": 44, "name": "Original", "channel_number": 80}],
+            "count": 1, "next": None,
+        }
+        client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        client.update_channel.side_effect = ValueError("Synthetic rename rejected")
+        operations = [
+            {"type": "updateChannel", "channelId": 44, "data": {"name": "New", "channel_number": 70}},
+            {"type": "bulkAssignChannelNumbers", "channelIds": [44], "startingNumber": 80},
+        ]
+        with patch("routers.channels.get_client", return_value=client), patch("routers.channels.journal"):
+            _, result = await _commit_and_wait(async_client, {
+                "operations": operations, "continueOnError": True, "consolidate": True,
+                "returnSettledOperationIndexes": True,
+            })
+        client.update_channel.assert_awaited_once_with(44, {"name": "New"})
+        assert (result["operationsApplied"], result["operationsFailed"]) == (1, 1)
+        assert result["settledOperationIndexes"] == [1]
+        assert result["settledChannelNumbers"] == {"44": 80}
+
+    @pytest.mark.asyncio
+    async def test_settled_middle_placement_does_not_settle_other_range_members(self, async_client):
+        client = AsyncMock()
+        client.get_channels.return_value = {
+            "results": [{"id": cid, "name": str(cid), "channel_number": cid + 36} for cid in (44, 45, 46)],
+            "count": 3, "next": None,
+        }
+        client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+
+        async def assign(channel_ids, _start):
+            if channel_ids != [45]:
+                raise ValueError("Synthetic range rejected")
+
+        client.assign_channel_numbers.side_effect = assign
+        with patch("routers.channels.get_client", return_value=client), patch("routers.channels.journal"):
+            _, result = await _commit_and_wait(async_client, {
+                "operations": [
+                    {"type": "bulkAssignChannelNumbers", "channelIds": [44, 45, 46], "startingNumber": 70},
+                    {"type": "bulkAssignChannelNumbers", "channelIds": [45], "startingNumber": 81},
+                ],
+                "continueOnError": True, "consolidate": True, "returnSettledOperationIndexes": True,
+            })
+        assert sorted(call.args for call in client.assign_channel_numbers.await_args_list) == [
+            ([44], 70), ([45], 81), ([46], 72),
+        ]
+        assert (result["operationsApplied"], result["operationsFailed"]) == (1, 2)
+        assert result["settledOperationIndexes"] == [1]
+        assert result["settledChannelNumbers"] == {"45": 81}
+
+    @pytest.mark.asyncio
     async def test_partial_success_envelope(self, async_client):
         """Mixed success/failure with continueOnError returns applied + failed
         counts, a populated errors list, the tempIdMap of what committed, and a

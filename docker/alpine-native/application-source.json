@@ -1152,7 +1152,7 @@
     {
       "executable": false,
       "path": "backend/routers/channels.py",
-      "sha256": "68bb14dbbdf9d28b1624ac06ff6e1089c90fc07b66536941b3ea37409738f479",
+      "sha256": "74fcd565462ab449963db58e315c937a67799e046aaa19e59c9ae1eef4254282",
       "type": "file"
     },
     {
@@ -1872,7 +1872,7 @@
     {
       "executable": false,
       "path": "frontend/src/App.bulkCreateStaging.test.tsx",
-      "sha256": "688fc84e9d6a0fb031855dc15e06b74f8bf128701a3b4fc64ee36d630f1b520c",
+      "sha256": "f31e566a10f5e60faa24bbafa7715cafd9eaab0879a854f94f37b927044c1f12",
       "type": "file"
     },
     {
@@ -5256,7 +5256,7 @@
     {
       "executable": false,
       "path": "frontend/src/hooks/useEditMode.ts",
-      "sha256": "346a14ef2608dc5f7341886cb0da4d441f1a70794ffd199c2741421fbe02d561",
+      "sha256": "86c5ae4e0187f4a7f7ab7efbf0338c57ebfa7992e287bfd4de1286c89d971130",
       "type": "file"
     },
     {
@@ -5412,7 +5412,7 @@
     {
       "executable": false,
       "path": "frontend/src/services/api.ts",
-      "sha256": "318599cbd19fc63a45b5ebea95fee000cece2c1897b6cf2557569d2289b2e8e1",
+      "sha256": "28273fabcda1c451edd9f964c2a793bf31148fb56d8b487ef80d393adfabcf08",
       "type": "file"
     },
     {
@@ -5898,7 +5898,7 @@
     {
       "executable": false,
       "path": "frontend/src/utils/stagedLedgerStorage.ts",
-      "sha256": "3be484c230f1c8bc43a95d7c56e9d279d1f59b4fb276705dd7429448c4f8cfc0",
+      "sha256": "5e6ba95cbb18b4de5f4dad0625560a28f1e0d0e0f669dde2eeff9020fda53a05",
       "type": "file"
     },
     {
@@ -6735,6 +6735,20 @@
     },
     "previous_manifest_sha256": "fd4c2f7120e98da0d00ec531ed9cd0615092b5886f37f2ecb9daa512839bd1fc",
     "scope": "PR #1071 targeted delta: verify staged destination before create, and retire only confirmed work after partial Apply. Same unshipped 0072; retains complete prior application and compatibility history. Not runtime, independent review, publication or deployed approval.",
+    "version": "0.18.2-0072"
+  },
+  "postcreate_profile_number_retry_update": {
+    "base_commit": "d09d386a749e21163639eb53ccff56564312f002",
+    "bead": "enhancedchannelmanager-0m06f.3.4.1",
+    "changed_files": {
+      "backend/routers/channels.py": "68bb14dbbdf9d28b1624ac06ff6e1089c90fc07b66536941b3ea37409738f479",
+      "frontend/src/App.bulkCreateStaging.test.tsx": "688fc84e9d6a0fb031855dc15e06b74f8bf128701a3b4fc64ee36d630f1b520c",
+      "frontend/src/hooks/useEditMode.ts": "346a14ef2608dc5f7341886cb0da4d441f1a70794ffd199c2741421fbe02d561",
+      "frontend/src/services/api.ts": "318599cbd19fc63a45b5ebea95fee000cece2c1897b6cf2557569d2289b2e8e1",
+      "frontend/src/utils/stagedLedgerStorage.ts": "3be484c230f1c8bc43a95d7c56e9d279d1f59b4fb276705dd7429448c4f8cfc0"
+    },
+    "previous_manifest_sha256": "21d359fae93655f3c97a9ba59e5ee0e064110179c191ef26c0ad3355381ce065",
+    "scope": "PR #1071 partial Apply delta: retain failed fields and range positions without replaying settled or superseded numbers. Same unshipped 0072; retains prior source and compatibility history. Not runtime, independent review, publication or deployed approval.",
     "version": "0.18.2-0072"
   }
 }

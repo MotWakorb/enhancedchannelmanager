@@ -127,7 +127,39 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     }
 
 
+def _before_postcreate_profile_number_retry(manifest):
+    key = "postcreate_profile_number_retry_update"
+    update = manifest[key]
+    assert update["base_commit"] == "d09d386a749e21163639eb53ccff56564312f002"
+    assert update["bead"] == "enhancedchannelmanager-0m06f.3.4.1"
+    assert update["version"] == "0.18.2-0072"
+    assert update["previous_manifest_sha256"] == "21d359fae93655f3c97a9ba59e5ee0e064110179c191ef26c0ad3355381ce065"
+    assert set(update["changed_files"]) == {
+        "backend/routers/channels.py", "frontend/src/App.bulkCreateStaging.test.tsx",
+        "frontend/src/hooks/useEditMode.ts", "frontend/src/services/api.ts",
+        "frontend/src/utils/stagedLedgerStorage.ts",
+    }
+    original = {k: v for k, v in manifest.items() if k != key}
+    previous = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous.append(row)
+    original["files"] = previous
+    assert hashlib.sha256((json.dumps(original, indent=2) + "\n").encode()).hexdigest() == update["previous_manifest_sha256"]
+    return original
+
+
+def test_postcreate_profile_number_retry_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(ROOT / "docker/alpine-native/application-source.json")
+    _before_postcreate_profile_number_retry(manifest)
+    assert verifier.verify(ROOT, manifest)["postcreate_profile_number_retry_update"] == manifest["postcreate_profile_number_retry_update"]
+
+
 def _before_postcreate_profile_review_delta(manifest):
+    manifest = _before_postcreate_profile_number_retry(manifest)
     key = "postcreate_profile_review_delta_update"
     update = manifest[key]
     assert update["base_commit"] == "dbffd1e14ec6e89754c4586c4d285d4011baaff3"

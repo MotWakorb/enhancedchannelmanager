@@ -49,7 +49,10 @@ and scripted faults are identified as such, not represented as live Dispatcharr.
   and the actionable missing-profile notice on explicit retry. The mixed
   response retries only the rejected sibling and rejected update, even when
   another update was confirmed in the same response. A settings refresh does
-  not re-label a staged selection.
+  not re-label a staged selection. A rejected rename whose original number
+  was superseded retries the name only, even after failed refresh. Partial
+  range retirement preserves the original positions around a settled channel
+  placement or deletion.
 - **Service logic:** `services/createdChannelProfiles.test.ts` exercises complete
   selected/unselected visibility, explicit empty selections, missing/malformed
   profiles, a mixed missing/healthy batch, concurrent changes before final read,
@@ -71,6 +74,8 @@ and scripted faults are identified as such, not represented as live Dispatcharr.
   swaps to a peer with overlapping IDs, and checks that the worker refuses
   before creating a channel or issuing a binding. The bulk-commit router
   test verifies retirement indexes after updates are merged and reordered.
+  The numbering receipt reports settled placements separately from wholly
+  settled operations, and does not report compensated numbers as settled.
 - **Rendered Chromium:** `e2e/post-create-profiles.spec.ts` drives the normal
   manual-create dialog and asynchronous bulk-commit polling contract against
   a private routed peer. It checks reload, membership-only retry, server-assigned
@@ -96,6 +101,10 @@ and scripted faults are identified as such, not represented as live Dispatcharr.
   map from the replacement connection, and the failed-refresh test found the
   staged ledger missing. Both checks now pass: the worker refuses the stale
   scope and the ledger retains only the unresolved work.
+- On `d09d386a`, the staged Apply/retry test resent superseded `#70` with
+  the rejected rename after `#80` settled; the range test resent the settled
+  middle member. With component-level receipts, the retry sends the rename
+  alone and resumes the two rejected ranges at their original offsets.
 
 ```bash
 cd frontend

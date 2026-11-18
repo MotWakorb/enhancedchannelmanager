@@ -891,6 +891,7 @@ class BulkCommitResponse(BaseModel):
     tempIdMap: dict[int, int]
     profileRecoveryBinding: Optional[str] = None
     settledOperationIndexes: Optional[list[int]] = None
+    settledChannelNumbers: Optional[dict[int, ChannelNumber | None]] = None
     # Map of group names to real IDs
     groupIdMap: dict[str, int]
     # Validation issues found during pre-validation
@@ -2943,6 +2944,21 @@ async def _run_bulk_commit(
             processed = set().union(*(origins[index] for index in settled))
             incomplete = set().union(*(origin for index, origin in enumerate(origins) if index not in settled))
             result["settledOperationIndexes"] = sorted(processed - incomplete)
+            if request.consolidate:
+                # One final placement per channel in the consolidated plan.
+                # An original mixed-field operation may remain pending even
+                # though its superseding placement settled. Report that
+                # component separately, after any numbering compensation.
+                numbers: dict[int, ChannelNumber | None] = {}
+                for index in settled:
+                    op = operations[index]
+                    if op.type == "updateChannel" and "channel_number" in op.data:
+                        numbers[resolve_id(op.channelId)] = op.data["channel_number"]
+                    elif op.type == "bulkAssignChannelNumbers":
+                        start = op.startingNumber if op.startingNumber is not None else 1
+                        for offset, channel_id in enumerate(op.channelIds):
+                            numbers[resolve_id(channel_id)] = start + offset
+                result["settledChannelNumbers"] = numbers
         logger.info(
             "[CHANNELS-BULK] Completed (batch=%s): success=%s, applied=%s, failed=%s%s",
             batch_id, result["success"], result["operationsApplied"],

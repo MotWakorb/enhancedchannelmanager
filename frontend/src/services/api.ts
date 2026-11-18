@@ -470,6 +470,8 @@ export interface BulkCommitResponse {
   profileRecoveryBinding?: string;
   /** Submitted operation indexes whose complete effects are safe to retire. */
   settledOperationIndexes?: number[];
+  /** Confirmed placements of the consolidated batch, excluding compensated numbering. */
+  settledChannelNumbers?: Record<number, number | null>;
   groupIdMap: Record<string, number>;
   /** Validation issues found during pre-validation */
   validationIssues?: ValidationIssue[];

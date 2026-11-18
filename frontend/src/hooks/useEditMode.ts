@@ -2103,11 +2103,26 @@ export function useEditMode({
       const trackSettled = channelCreateOps.length > 0 || continued !== undefined;
       const retired = new Set<string>();
       const submittedIds = new Set(consolidatedOps.map(op => op.id));
+      // A later batch can settle more of an earlier, already split range.
+      // Resolve its fragments to the submitted operation for this Apply.
+      const sourceId = (id: string) => {
+        let candidate = id;
+        while (!submittedIds.has(candidate)) {
+          const split = candidate.lastIndexOf(':range:');
+          if (split < 0) return id;
+          candidate = candidate.slice(0, split);
+        }
+        return candidate;
+      };
+      const numbersByOperation = new Map<string, Map<number, number | null | 'deleted'>>();
+      const confirmedNumbers = new Map<number, number | null>();
       const groupIds = new Map<number, number>();
       const remapChannel = (id: number) => tempIdMap.get(id) ?? id;
       const remapGroup = (id: number | null | undefined) => typeof id === 'number' ? groupIds.get(id) ?? id : id;
-      const rewriteOperation = (op: StagedOperation): StagedOperation => {
-        if (!submittedIds.has(op.id)) return op;
+      const rewriteOperation = (op: StagedOperation): StagedOperation[] => {
+        const source = sourceId(op.id);
+        if (retired.has(source)) return [];
+        if (!submittedIds.has(source)) return [op];
         let { apiCall } = op;
         if ('channelId' in apiCall && remapChannel(apiCall.channelId) !== apiCall.channelId) {
           apiCall = { ...apiCall, channelId: remapChannel(apiCall.channelId) };
@@ -2121,11 +2136,52 @@ export function useEditMode({
           const groupId = createdGroupId ?? remapGroup(apiCall.groupId) ?? undefined;
           if (groupId !== apiCall.groupId) apiCall = { ...apiCall, groupId, newGroupName: undefined, stagedGroupId: undefined };
         }
-        if (apiCall === op.apiCall) return op;
         const remapSnapshot = (ch: ChannelSnapshot) => ({
           ...ch, id: remapChannel(ch.id), channel_group_id: remapGroup(ch.channel_group_id) ?? null,
         });
-        return { ...op, apiCall, beforeSnapshot: op.beforeSnapshot.map(remapSnapshot), afterSnapshot: op.afterSnapshot.map(remapSnapshot) };
+        const rewritten = apiCall === op.apiCall ? op : {
+          ...op, apiCall, beforeSnapshot: op.beforeSnapshot.map(remapSnapshot), afterSnapshot: op.afterSnapshot.map(remapSnapshot),
+        };
+        const confirmed = numbersByOperation.get(source);
+        if (!confirmed) return [rewritten];
+        if (apiCall.type === 'updateChannel' && confirmed.get(apiCall.channelId) === 'deleted') return [];
+        if (apiCall.type === 'updateChannel' && confirmed.has(apiCall.channelId) && apiCall.data.channel_number !== undefined) {
+          const number = confirmed.get(apiCall.channelId)!;
+          const data = { ...apiCall.data };
+          delete data.channel_number;
+          if (Object.keys(data).length === 0 || number === 'deleted') return [];
+          const repairNumber = (ch: ChannelSnapshot) => ({ ...ch, channel_number: number });
+          return [{
+            ...rewritten, apiCall: { type: 'updateChannel', channelId: apiCall.channelId, data },
+            beforeSnapshot: rewritten.beforeSnapshot.map(repairNumber),
+            afterSnapshot: rewritten.afterSnapshot.map(repairNumber),
+          }];
+        }
+        if (apiCall.type !== 'bulkAssignChannelNumbers' || !apiCall.channelIds.some(id => confirmed.has(id))) return [rewritten];
+
+        // A range is positional. Split around confirmed placements instead of
+        // compacting its remaining channels onto different numbers.
+        const ranges: StagedOperation[] = [];
+        for (let start = 0; start < apiCall.channelIds.length;) {
+          if (confirmed.has(apiCall.channelIds[start])) { start++; continue; }
+          let end = start + 1;
+          while (end < apiCall.channelIds.length && !confirmed.has(apiCall.channelIds[end])) end++;
+          const channelIds = apiCall.channelIds.slice(start, end);
+          const included = new Set(channelIds);
+          const id = ranges.length === 0 ? op.id : `${op.id}:range:${start}`;
+          const acknowledgedConcurrentChanges = apiCall.acknowledgedConcurrentChanges?.filter(entry => included.has(entry.channelId));
+          ranges.push({
+            ...rewritten, id,
+            apiCall: {
+              type: 'bulkAssignChannelNumbers', channelIds, startingNumber: (apiCall.startingNumber ?? 1) + start,
+              ...(acknowledgedConcurrentChanges?.length && { acknowledgedConcurrentChanges }),
+            },
+            beforeSnapshot: rewritten.beforeSnapshot.filter(ch => included.has(ch.id)),
+            afterSnapshot: rewritten.afterSnapshot.filter(ch => included.has(ch.id)),
+          });
+          start = end;
+        }
+        return ranges;
       };
       const rememberSettled = (response: api.BulkCommitResponse, batch: api.BulkOperation[]) => {
         // Never infer partial success from aggregate counts or consolidated error indexes.
@@ -2136,29 +2192,31 @@ export function useEditMode({
         }
       };
       const persistSettled = () => {
-        if (!retired.size && !newGroupIdMap.size) return;
+        if (!retired.size && !newGroupIdMap.size && !numbersByOperation.size) return;
         const ids = new Set(retired);
         retireStagedLedgerOperations(operatorKey, ids, rewriteOperation);
         setState(prev => {
-          if (!prev.stagedOperations.some(op => submittedIds.has(op.id))) return prev;
-          const keep = (op: StagedOperation) => !ids.has(op.id)
+          if (!prev.stagedOperations.some(op => submittedIds.has(sourceId(op.id)))) return prev;
+          const keep = (op: StagedOperation) => !ids.has(sourceId(op.id))
             && !(op.apiCall.type === 'createChannel' && tempIdMap.has(op.afterSnapshot[0]?.id));
           const prune = (entries: UndoEntry[]) => entries
-            .map(entry => ({ ...entry, operations: entry.operations.filter(keep).map(rewriteOperation) }))
+            .map(entry => ({ ...entry, operations: entry.operations.filter(keep).flatMap(rewriteOperation) }))
             .filter(entry => entry.operations.length > 0);
           const workingCopy = prev.workingCopy.map(ch => {
             const id = remapChannel(ch.id);
             const groupId = remapGroup(ch.channel_group_id) ?? null;
             return id === ch.id && groupId === ch.channel_group_id ? ch : { ...ch, id, channel_group_id: groupId };
           });
+          const baselineSnapshot = prev.baselineSnapshot.map(ch => confirmedNumbers.has(ch.id)
+            ? { ...ch, channel_number: confirmedNumbers.get(ch.id)! } : ch);
           return {
-            ...prev, workingCopy, stagedOperations: prev.stagedOperations.filter(keep).map(rewriteOperation),
+            ...prev, workingCopy, baselineSnapshot, stagedOperations: prev.stagedOperations.filter(keep).flatMap(rewriteOperation),
             localUndoStack: prune(prev.localUndoStack),
             // Redo entries were not submitted; do not revive a former temp-channel plan.
             localRedoStack: prune(prev.localRedoStack.map(entry => ({
               ...entry, operations: entry.operations.filter(op => !affectedChannelIdsOf(op.apiCall).some(id => tempIdMap.has(id))),
             }))),
-            modifiedChannelIds: computeModifiedChannelIds(workingCopy, prev.baselineSnapshot),
+            modifiedChannelIds: computeModifiedChannelIds(workingCopy, baselineSnapshot),
           };
         });
       };
@@ -2362,6 +2420,30 @@ export function useEditMode({
         collectRecoverySteps(batchResponse);
         if (trackSettled) {
           rememberSettled(batchResponse, batch);
+          const confirmed = new Map<number, number | null | 'deleted'>();
+          for (const [channel, number] of Object.entries(batchResponse.settledChannelNumbers ?? {})) {
+            confirmed.set(Number(channel), number);
+            confirmedNumbers.set(Number(channel), number);
+          }
+          for (const position of batchResponse.settledOperationIndexes ?? []) {
+            const op = batch[position];
+            if (op?.type === 'deleteChannel' && typeof op.channelId === 'number') confirmed.set(op.channelId, 'deleted');
+          }
+          if (confirmed.size) {
+            // Include older unresolved writes, but not later batches that may
+            // deliberately set a different number. No inference from counts.
+            for (const op of resolvedOps.slice(0, i + batch.length)) {
+              const channels = op.type === 'bulkAssignChannelNumbers' && Array.isArray(op.channelIds)
+                ? op.channelIds : op.type === 'updateChannel' ? [op.channelId] : [];
+              for (const channel of channels) {
+                if (typeof channel !== 'number' || !confirmed.has(channel)) continue;
+                const id = operationIds.get(op)!;
+                const components = numbersByOperation.get(id) ?? new Map();
+                components.set(channel, confirmed.get(channel)!);
+                numbersByOperation.set(id, components);
+              }
+            }
+          }
           persistSettled();
         }
         if (batchResponse.errors.some(error => error.operationId === 'profile-recovery-destination')) {
@@ -2400,7 +2482,7 @@ export function useEditMode({
         setState(createInitialState());
       };
       const hasKnownCreate = tempIdMap.size > 0 || continued !== undefined;
-      const keepPending = trackSettled && !result.success && consolidatedOps.some(op => !retired.has(op.id));
+      const keepPending = trackSettled && !result.success && consolidatedOps.some(op => rewriteOperation(op).length > 0);
       result.keepEditing = keepPending;
       if (hasKnownCreate && !keepPending) retireCompletedApply();
 

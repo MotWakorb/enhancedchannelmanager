@@ -195,18 +195,21 @@ export function saveStagedLedger({
 
 /** Retire only IDs from this Apply, without clearing a newer session's ledger. */
 export function retireStagedLedgerOperations(
-  operatorKey: string, retired: ReadonlySet<string>, rewrite = (op: StagedOperation) => op,
+  operatorKey: string, retired: ReadonlySet<string>, rewrite = (op: StagedOperation) => [op],
 ): void {
   try {
     const raw = store()?.getItem(STAGED_LEDGER_STORAGE_KEY);
     if (!raw) return;
     const record = JSON.parse(raw) as PersistedStagedLedger;
     if (record.version !== STAGED_LEDGER_FORMAT_VERSION || record.operatorKey !== operatorKey) return;
-    const operations = record.operations.filter(op => !retired.has(op.id)).map(rewrite);
+    const rewrites = new Map(record.operations.map(op => [op.id, retired.has(op.id) ? [] : rewrite(op)]));
+    const operations = [...rewrites.values()].flat();
     if (operations.length === record.operations.length && operations.every((op, i) => op === record.operations[i])) return;
     saveStagedLedger({
       operatorKey, operations, now: record.savedAt,
-      undoGroups: record.undoGroups.map(group => group.filter(id => !retired.has(id))).filter(group => group.length > 0),
+      undoGroups: record.undoGroups
+        .map(group => group.flatMap(id => rewrites.get(id)?.map(op => op.id) ?? []))
+        .filter(group => group.length > 0),
     });
   } catch {
     // As with ordinary ledger persistence, an unusable store must not abort Apply.

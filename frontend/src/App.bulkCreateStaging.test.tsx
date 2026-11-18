@@ -374,6 +374,129 @@ describe('App bulk-create staging', () => {
     }
   });
 
+  it('retries a rejected rename without reviving its superseded number after refresh fails', async () => {
+    const channel: Channel = {
+      id: 44, name: 'Original', channel_number: 80, streams: [],
+      channel_group_id: null, tvg_id: null, tvc_guide_stationid: null, epg_data_id: null,
+      stream_profile_id: null, uuid: 'existing-44', logo_id: null,
+      auto_created: false, auto_created_by: null, auto_created_by_name: null,
+    };
+    const read = { results: [channel], count: 1, next: null, previous: null };
+    vi.mocked(api.getChannels).mockResolvedValue(read);
+    testState.bulkCommit.mockImplementationOnce(async (request: BulkCommitRequest) => ({
+      success: true, operationsApplied: 1, operationsFailed: 0, errors: [],
+      tempIdMap: { [Number(request.operations[0].tempId)]: 50000 }, groupIdMap: {},
+    })).mockImplementationOnce(async () => {
+      vi.mocked(api.getChannels).mockRejectedValue(new Error('Post-Apply refresh unavailable'));
+      return {
+        success: false, operationsApplied: 1, operationsFailed: 1,
+        errors: [{ operationId: 'op-0-updateChannel', error: 'Rename rejected' }],
+        tempIdMap: {}, groupIdMap: {}, settledOperationIndexes: [1], settledChannelNumbers: { 44: 80 },
+      };
+    }).mockResolvedValue({
+      success: true, operationsApplied: 1, operationsFailed: 0, errors: [],
+      tempIdMap: {}, groupIdMap: {},
+    });
+
+    render(<App />);
+    const editButton = await screen.findByRole('button', { name: /edit mode/i });
+    await waitFor(() => expect(editButton).toBeEnabled());
+    fireEvent.click(editButton);
+    await waitFor(() => expect(testState.channelManagerProps?.isEditMode).toBe(true));
+    await act(async () => testState.channelManagerProps!.onCreateChannelManual!('Mapped channel', 100));
+    act(() => {
+      testState.channelManagerProps!.onStageUpdateChannel(44, { name: 'Renamed', channel_number: 70 }, 'Rename and number');
+      testState.channelManagerProps!.onStageBulkAssignNumbers([44], 80, 'Put channel on 80');
+    });
+    fireEvent.click(screen.getByTitle('Apply changes'));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(testState.exitDialogProps?.commitFailure).toMatchObject({
+      applied: 2, failed: 1, keepEditing: true,
+    }));
+    expect(testState.bulkCommit.mock.calls[1][0].operations).toEqual([
+      expect.objectContaining({ type: 'updateChannel', data: { name: 'Renamed', channel_number: 70 } }),
+      expect.objectContaining({ type: 'bulkAssignChannelNumbers', channelIds: [44], startingNumber: 80 }),
+    ]);
+    const saved = JSON.parse(sessionStorage.getItem(STAGED_LEDGER_STORAGE_KEY)!) as PersistedStagedLedger;
+
+    act(() => (testState.exitDialogProps?.onAcknowledgeFailure as () => void)());
+    act(() => testState.channelManagerProps!.onUndo());
+    expect(testState.channelManagerProps!.channels.find(ch => ch.id === 44)).toMatchObject({ name: 'Original', channel_number: 80 });
+    act(() => testState.channelManagerProps!.onRedo());
+    expect(testState.channelManagerProps!.channels.find(ch => ch.id === 44)).toMatchObject({ name: 'Renamed', channel_number: 80 });
+    vi.mocked(api.getChannels).mockResolvedValue(read);
+    fireEvent.click(screen.getByTitle('Apply changes'));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(testState.bulkCommit).toHaveBeenCalledTimes(3));
+    const retry = testState.bulkCommit.mock.calls[2][0].operations;
+    expect(retry).toHaveLength(1);
+    expect(retry[0]).toMatchObject({ type: 'updateChannel', channelId: 44 });
+    expect(retry[0].data).toEqual({ name: 'Renamed' });
+    expect(retry[0]).not.toHaveProperty('expectedNumber');
+    expect(saved.operations.map(op => op.apiCall)).toEqual([
+      { type: 'updateChannel', channelId: 44, data: { name: 'Renamed' } },
+    ]);
+    expect(saved.operations[0].afterSnapshot[0].channel_number).toBe(80);
+  });
+
+  it.each(['placement', 'deletion'] as const)('preserves both original offsets when a settled %s cuts a rejected range in two', async settled => {
+    const template: Channel = {
+      id: 44, name: 'Original', channel_number: 80, streams: [],
+      channel_group_id: null, tvg_id: null, tvc_guide_stationid: null, epg_data_id: null,
+      stream_profile_id: null, uuid: 'existing-44', logo_id: null,
+      auto_created: false, auto_created_by: null, auto_created_by_name: null,
+    };
+    const read = { results: [template, { ...template, id: 45, channel_number: 81 },
+      { ...template, id: 46, channel_number: 82 }], count: 3, next: null, previous: null };
+    vi.mocked(api.getChannels).mockResolvedValue(read);
+    testState.bulkCommit.mockImplementationOnce(async (request: BulkCommitRequest) => ({
+      success: true, operationsApplied: 1, operationsFailed: 0, errors: [],
+      tempIdMap: { [Number(request.operations[0].tempId)]: 50000 }, groupIdMap: {},
+    })).mockImplementationOnce(async () => {
+      vi.mocked(api.getChannels).mockRejectedValue(new Error('Post-Apply refresh unavailable'));
+      return {
+        success: false, operationsApplied: 1, operationsFailed: 2,
+        errors: [{ operationId: 'op-1-bulkAssignChannelNumbers', error: 'First range rejected' },
+          { operationId: 'op-2-bulkAssignChannelNumbers', error: 'Second range rejected' }],
+        tempIdMap: {}, groupIdMap: {}, settledOperationIndexes: [1],
+        settledChannelNumbers: settled === 'placement' ? { 45: 81 } : {},
+      };
+    }).mockResolvedValue({
+      success: true, operationsApplied: 2, operationsFailed: 0, errors: [],
+      tempIdMap: {}, groupIdMap: {},
+    });
+
+    render(<App />);
+    const editButton = await screen.findByRole('button', { name: /edit mode/i });
+    await waitFor(() => expect(editButton).toBeEnabled());
+    fireEvent.click(editButton);
+    await waitFor(() => expect(testState.channelManagerProps?.isEditMode).toBe(true));
+    await act(async () => testState.channelManagerProps!.onCreateChannelManual!('Mapped channel', 100));
+    act(() => {
+      testState.channelManagerProps!.onStageBulkAssignNumbers([44, 45, 46], 70, 'Place channels starting at 70');
+      if (settled === 'placement') testState.channelManagerProps!.onStageBulkAssignNumbers([45], 81, 'Keep middle channel on 81');
+      else testState.channelManagerProps!.onStageDeleteChannel(45, 'Delete middle channel');
+    });
+    fireEvent.click(screen.getByTitle('Apply changes'));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(testState.exitDialogProps?.commitFailure).toMatchObject({ applied: 2, failed: 2 }));
+    const saved = JSON.parse(sessionStorage.getItem(STAGED_LEDGER_STORAGE_KEY)!) as PersistedStagedLedger;
+    act(() => (testState.exitDialogProps?.onAcknowledgeFailure as () => void)());
+    vi.mocked(api.getChannels).mockResolvedValue(settled === 'placement'
+      ? read : { ...read, results: read.results.filter(ch => ch.id !== 45), count: 2 });
+    fireEvent.click(screen.getByTitle('Apply changes'));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(testState.bulkCommit).toHaveBeenCalledTimes(3));
+    const expected = [
+      { type: 'bulkAssignChannelNumbers', channelIds: [44], startingNumber: 70 },
+      { type: 'bulkAssignChannelNumbers', channelIds: [46], startingNumber: 72 },
+    ];
+    expect(testState.bulkCommit.mock.calls[2][0].operations).toEqual(expected);
+    expect(saved.operations.map(op => op.apiCall)).toEqual(expected);
+    expect(saved.undoGroups).toEqual([saved.operations.map(op => op.id)]);
+    expect(saved.operations.flatMap(op => op.beforeSnapshot.map(ch => ch.id))).toEqual([44, 46]);
+  });
+
   it('keeps a late create receipt in the original operator scope without starting recovery', async () => {
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
