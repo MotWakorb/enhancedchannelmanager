@@ -108,7 +108,7 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     manifest = verifier.load_manifest(
         ROOT / "docker/alpine-native/application-source.json"
     )
-    assert len(manifest["files"]) == 1084
+    assert len(manifest["files"]) == 1093
     assert (
         manifest["baseline_application_commit"]
         == "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531"
@@ -127,6 +127,161 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     }
 
 
+def _before_postcreate_profile_number_retry(manifest):
+    key = "postcreate_profile_number_retry_update"
+    update = manifest[key]
+    assert update["base_commit"] == "d09d386a749e21163639eb53ccff56564312f002"
+    assert update["bead"] == "enhancedchannelmanager-0m06f.3.4.1"
+    assert update["version"] == "0.18.2-0072"
+    assert update["previous_manifest_sha256"] == "21d359fae93655f3c97a9ba59e5ee0e064110179c191ef26c0ad3355381ce065"
+    assert set(update["changed_files"]) == {
+        "backend/routers/channels.py", "frontend/src/App.bulkCreateStaging.test.tsx",
+        "frontend/src/hooks/useEditMode.ts", "frontend/src/services/api.ts",
+        "frontend/src/utils/stagedLedgerStorage.ts",
+    }
+    original = {k: v for k, v in manifest.items() if k != key}
+    previous = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous.append(row)
+    original["files"] = previous
+    assert hashlib.sha256((json.dumps(original, indent=2) + "\n").encode()).hexdigest() == update["previous_manifest_sha256"]
+    return original
+
+
+def test_postcreate_profile_number_retry_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(ROOT / "docker/alpine-native/application-source.json")
+    _before_postcreate_profile_number_retry(manifest)
+    assert verifier.verify(ROOT, manifest)["postcreate_profile_number_retry_update"] == manifest["postcreate_profile_number_retry_update"]
+
+
+def _before_postcreate_profile_review_delta(manifest):
+    manifest = _before_postcreate_profile_number_retry(manifest)
+    key = "postcreate_profile_review_delta_update"
+    update = manifest[key]
+    assert update["base_commit"] == "dbffd1e14ec6e89754c4586c4d285d4011baaff3"
+    assert update["bead"] == "enhancedchannelmanager-0m06f.3.4.1"
+    assert update["version"] == "0.18.2-0072"
+    assert update["previous_manifest_sha256"] == "fd4c2f7120e98da0d00ec531ed9cd0615092b5886f37f2ecb9daa512839bd1fc"
+    assert set(update["changed_files"]) == {
+        "backend/profile_recovery.py", "backend/routers/channels.py", "backend/routers/profiles.py",
+        "backend/routers/settings.py", "frontend/src/App.bulkCreateStaging.test.tsx", "frontend/src/App.tsx",
+        "frontend/src/components/EditModeExitDialog.tsx", "frontend/src/hooks/useCreatedChannelProfiles.ts",
+        "frontend/src/hooks/useEditMode.ts", "frontend/src/services/api.ts", "frontend/src/types/editMode.ts",
+        "frontend/src/utils/stagedLedgerStorage.ts",
+    }
+    original = {k: v for k, v in manifest.items() if k != key}
+    previous = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous.append(row)
+    original["files"] = previous
+    assert hashlib.sha256((json.dumps(original, indent=2) + "\n").encode()).hexdigest() == update["previous_manifest_sha256"]
+    return original
+
+
+def test_postcreate_profile_review_delta_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(ROOT / "docker/alpine-native/application-source.json")
+    _before_postcreate_profile_review_delta(manifest)
+    assert verifier.verify(ROOT, manifest)["postcreate_profile_review_delta_update"] == manifest["postcreate_profile_review_delta_update"]
+
+
+def _before_postcreate_profile_review_rows(manifest):
+    manifest = _before_postcreate_profile_review_delta(manifest)
+    update = manifest["postcreate_profile_review_update"]
+    assert update["base_commit"] == "e933013f78edf7f6b730813534506ddd079f93e0"
+    assert update["bead"] == "enhancedchannelmanager-0m06f.3.4.1"
+    assert update["version"] == "0.18.2-0072"
+    assert update["previous_manifest_sha256"] == "d8ca0a64beca3103322608d4af521cd74dd37bfa0b5f9f1db90a5fca818baf12"
+    assert update["added_files"] == ["backend/profile_recovery.py"]
+    assert set(update["changed_files"]) == {
+        "backend/routers/channels.py",
+        "backend/routers/profiles.py",
+        "frontend/src/App.bulkCreateStaging.test.tsx",
+        "frontend/src/App.tsx",
+        "frontend/src/components/CreatedChannelProfilesNotice.tsx",
+        "frontend/src/hooks/useCreatedChannelProfiles.test.ts",
+        "frontend/src/hooks/useCreatedChannelProfiles.ts",
+        "frontend/src/hooks/useEditMode.ts",
+        "frontend/src/services/api.ts",
+        "frontend/src/services/createdChannelProfiles.http.test.ts",
+        "frontend/src/services/createdChannelProfiles.test.ts",
+        "frontend/src/services/createdChannelProfiles.ts",
+        "frontend/src/services/profileMembership.ts",
+        "frontend/src/types/editMode.ts",
+        "frontend/src/utils/stagedLedgerStorage.ts",
+    }
+    previous = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        restored = dict(row)
+        if row["path"] in update["changed_files"]:
+            assert row["sha256"] != update["changed_files"][row["path"]]
+            restored["sha256"] = update["changed_files"][row["path"]]
+        previous.append(restored)
+    original = {k: v for k, v in manifest.items() if k != "postcreate_profile_review_update"}
+    original["files"] = previous
+    assert hashlib.sha256((json.dumps(original, indent=2) + "\n").encode()).hexdigest() == update["previous_manifest_sha256"]
+    return previous
+
+
+def test_postcreate_profile_review_snapshot_recovers_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(ROOT / "docker/alpine-native/application-source.json")
+    _before_postcreate_profile_review_rows(manifest)
+    assert verifier.verify(ROOT, manifest)["postcreate_profile_review_update"] == manifest["postcreate_profile_review_update"]
+
+
+def _before_postcreate_profile_rows(manifest):
+    update = manifest["postcreate_profile_intent_update"]
+    assert update["base_commit"] == "bc4215697181cc4e8e3cc62d5c6e4b2c37b3345b"
+    assert update["bead"] == "enhancedchannelmanager-0m06f.3.4.1"
+    assert update["version"] == "0.18.2-0072"
+    assert update["previous_manifest_sha256"] == "3b5ef4030751a0c1d95aa1b2b325ffd2d222fdf0d25d8e0bac56440b966f70af"
+    assert set(update["changed_files"]) == {
+        "backend/main.py", "backend/routers/backup.py", "frontend/package.json",
+        "frontend/src/App.bulkCreateStaging.test.tsx", "frontend/src/App.css",
+        "frontend/src/App.tsx", "frontend/src/hooks/useEditMode.ts",
+        "frontend/src/services/profileMembership.ts",
+    }
+    assert set(update["added_files"]) == {
+        "frontend/src/components/CreatedChannelProfilesNotice.css",
+        "frontend/src/components/CreatedChannelProfilesNotice.test.tsx",
+        "frontend/src/components/CreatedChannelProfilesNotice.tsx",
+        "frontend/src/hooks/useCreatedChannelProfiles.test.ts",
+        "frontend/src/hooks/useCreatedChannelProfiles.ts",
+        "frontend/src/services/createdChannelProfiles.http.test.ts",
+        "frontend/src/services/createdChannelProfiles.test.ts",
+        "frontend/src/services/createdChannelProfiles.ts",
+    }
+    previous = []
+    for row in _before_postcreate_profile_review_rows(manifest):
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        restored = dict(row)
+        if row["path"] in update["changed_files"]:
+            assert row["sha256"] != update["changed_files"][row["path"]]
+            restored["sha256"] = update["changed_files"][row["path"]]
+        previous.append(restored)
+    assert len(previous) == 1084
+    assert hashlib.sha256(json.dumps(previous, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == "6d18db7c1758b0effb4e27c27cb451730a65a5cb0e5b3f30d6f6488b325d2f41"
+    return previous
+
+
+def test_postcreate_profile_snapshot_preserves_complete_previous_inventory(verifier):
+    manifest = verifier.load_manifest(ROOT / "docker/alpine-native/application-source.json")
+    _before_postcreate_profile_rows(manifest)
+    assert verifier.verify(ROOT, manifest)["postcreate_profile_intent_update"] == manifest["postcreate_profile_intent_update"]
+
+
 def _before_m3u_exclusion_rows(manifest):
     update = manifest["m3u_change_exclusions_update"]
     assert update["base_commit"] == "e8f2d1e984667d3136235a959759205bda3c5fd3"
@@ -138,7 +293,7 @@ def _before_m3u_exclusion_rows(manifest):
         "backend/m3u_change_exclusions.py", "mcp-server/tests/test_m3u_change_exclusions.py",
     }
     previous = []
-    for row in manifest["files"]:
+    for row in _before_postcreate_profile_rows(manifest):
         if row["path"] in update["added_files"]:
             continue
         restored = dict(row)

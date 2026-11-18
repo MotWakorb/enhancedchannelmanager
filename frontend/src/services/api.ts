@@ -433,6 +433,10 @@ export interface BulkCommitRequest {
   continueOnError?: boolean;
   /** If true, server consolidates redundant operations before executing */
   consolidate?: boolean;
+  /** Request a recovery receipt tied to the operator and actual create client. */
+  profileRecoveryOperator?: string;
+  profileRecoveryDestination?: string;
+  returnSettledOperationIndexes?: boolean;
 }
 
 export interface ValidationIssue {
@@ -463,6 +467,11 @@ export interface BulkCommitResponse {
   operationsFailed: number;
   errors: BulkCommitError[];
   tempIdMap: Record<number, number>;
+  profileRecoveryBinding?: string;
+  /** Submitted operation indexes whose complete effects are safe to retire. */
+  settledOperationIndexes?: number[];
+  /** Confirmed placements of the consolidated batch, excluding compensated numbering. */
+  settledChannelNumbers?: Record<number, number | null>;
   groupIdMap: Record<string, number>;
   /** Validation issues found during pre-validation */
   validationIssues?: ValidationIssue[];
@@ -1118,6 +1127,7 @@ export type GracenoteConflictMode = 'ask' | 'skip' | 'overwrite';
 export type DispatcharrAuthMethod = 'password' | 'api_key';
 
 export interface SettingsResponse {
+  profile_recovery_destination?: string | null;
   url: string;
   auth_method: DispatcharrAuthMethod;
   username: string;
@@ -2152,12 +2162,25 @@ export async function createStreamProfile(data: StreamProfileCreateRequest): Pro
 }
 
 // Channel Profiles
-export async function getChannelProfiles(): Promise<ChannelProfile[]> {
-  return fetchJson(`${API_BASE}/channel-profiles`, { cache: 'no-store' });
+function profileRequest(binding?: string) {
+  return binding === undefined
+    ? { path: `${API_BASE}/channel-profiles`, headers: undefined }
+    : { path: `${API_BASE}/created-channel-profiles`, headers: { 'X-ECM-Profile-Recovery': binding } };
 }
 
-export async function getChannelProfile(id: number, options?: { fresh?: boolean }): Promise<ChannelProfile> {
-  return fetchJson(`${API_BASE}/channel-profiles/${id}`, options?.fresh ? { cache: 'no-store' } : undefined);
+export async function getChannelProfiles(binding?: string, destination?: string): Promise<ChannelProfile[]> {
+  if (destination) {
+    return fetchJson(`${API_BASE}/created-channel-profiles/catalog`, {
+      cache: 'no-store', headers: { 'X-ECM-Profile-Destination': destination },
+    });
+  }
+  const { path, headers } = profileRequest(binding);
+  return fetchJson(path, { cache: 'no-store', headers });
+}
+
+export async function getChannelProfile(id: number, options?: { fresh?: boolean; binding?: string }): Promise<ChannelProfile> {
+  const { path, headers } = profileRequest(options?.binding);
+  return fetchJson(`${path}/${id}`, options?.fresh || headers ? { cache: 'no-store', headers } : undefined);
 }
 
 export async function createChannelProfile(data: { name: string }): Promise<ChannelProfile> {
@@ -2186,10 +2209,13 @@ export async function deleteChannelProfile(id: number): Promise<{ status: string
 export async function updateProfileChannel(
   profileId: number,
   channelId: number,
-  data: { enabled: boolean }
+  data: { enabled: boolean },
+  binding?: string,
 ): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/channel-profiles/${profileId}/channels/${channelId}`, {
+  const { path, headers } = profileRequest(binding);
+  return fetchJson(`${path}/${profileId}/channels/${channelId}`, {
     method: 'PATCH',
+    headers,
     body: JSON.stringify(data),
   });
 }
@@ -2206,9 +2232,12 @@ export async function bulkUpdateProfileChannels(
   profileId: number,
   channelIds: number[],
   enabled: boolean,
+  binding?: string,
 ): Promise<Record<string, unknown>> {
-  return fetchJson(`${API_BASE}/channel-profiles/${profileId}/channels/bulk-update`, {
+  const { path, headers } = profileRequest(binding);
+  return fetchJson(`${path}/${profileId}/channels/bulk-update`, {
     method: 'PATCH',
+    headers,
     body: JSON.stringify({ channel_ids: channelIds, enabled }),
   });
 }

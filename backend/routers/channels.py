@@ -54,6 +54,7 @@ from database import get_session
 from dispatcharr_client import get_client, logo_was_reused, strip_logo_reuse_marker, upstream_http_exception
 from match_fold import fold_match_key
 from normalization_engine import get_normalization_engine
+from profile_recovery import recovery_binding, recovery_destination_matches, recovery_operator
 import journal
 
 logger = logging.getLogger(__name__)
@@ -827,6 +828,10 @@ class BulkCommitRequest(BaseModel):
     continueOnError: Optional[bool] = False
     # If true, consolidate redundant operations before executing
     consolidate: Optional[bool] = False
+    # Opt in to a recovery binding, and refuse if the browser's operator is stale.
+    profileRecoveryOperator: Optional[str] = None
+    profileRecoveryDestination: Optional[str] = None
+    returnSettledOperationIndexes: bool = False
 
     @model_validator(mode="after")
     def _validate_temp_channel_dependencies(self):
@@ -884,6 +889,9 @@ class BulkCommitResponse(BaseModel):
     errors: list[dict]
     # Map of temp channel IDs to real IDs
     tempIdMap: dict[int, int]
+    profileRecoveryBinding: Optional[str] = None
+    settledOperationIndexes: Optional[list[int]] = None
+    settledChannelNumbers: Optional[dict[int, ChannelNumber | None]] = None
     # Map of group names to real IDs
     groupIdMap: dict[str, int]
     # Validation issues found during pre-validation
@@ -2014,7 +2022,9 @@ _NUMBER_SCOPED_UPDATE_FIELDS = ("acknowledgedDuplicate", "expectedNumber")
 _NUMBER_SCOPED_CREATE_FIELDS = ("channelNumber", "acknowledgedDuplicate")
 
 
-def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperation]:
+def _consolidate_operations(
+    operations: list[BulkOperation], origins: list[set[int]] | None = None,
+) -> list[BulkOperation]:
     """Consolidate redundant operations to minimize API calls.
 
     Optimizations:
@@ -2052,6 +2062,12 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     """
     start = time.time()
     original_count = len(operations)
+    # Optional retirement provenance: an input contributing to multiple
+    # consolidated writes only settles when every one of those writes settles.
+    original_indexes = {id(op): i for i, op in enumerate(operations)} if origins is not None else {}
+    update_origins: dict[int, set[int]] = {}
+    number_origins: dict[int, set[int]] = {}
+    deleted_origins: dict[int, set[int]] = {}
 
     # First pass: find channels to be deleted and temp channels to be created.
     # Both sets are computed up front so that create+delete cancellation is
@@ -2099,7 +2115,7 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     channel_number_owner: dict[int, str] = {}
     ordered_ops: list[BulkOperation] = []  # create/delete ops in order
 
-    for op in operations:
+    for index, op in enumerate(operations):
         if op.type == "bulkAssignChannelNumbers":
             # An omitted start is 1, which is what the frontend materialiser,
             # the backend materialiser and the executor all already say. It was
@@ -2113,9 +2129,15 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
                 if cid not in channels_to_delete:
                     channel_final_numbers[cid] = start_num + i
                     channel_number_owner[cid] = "bulkAssignChannelNumbers"
+                    if origins is not None:
+                        number_origins.setdefault(cid, set()).add(index)
+                elif origins is not None:
+                    deleted_origins.setdefault(cid, set()).add(index)
 
         elif op.type == "updateChannel":
             if op.channelId not in channels_to_delete:
+                if origins is not None:
+                    update_origins.setdefault(op.channelId, set()).add(index)
                 existing = channel_final_updates.get(op.channelId, {})
                 existing.update(op.data)
                 channel_final_updates[op.channelId] = existing
@@ -2123,6 +2145,10 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
                 if "channel_number" in op.data:
                     channel_update_number_source[op.channelId] = op
                     channel_number_owner[op.channelId] = "updateChannel"
+                    if origins is not None:
+                        number_origins.setdefault(op.channelId, set()).add(index)
+            elif origins is not None:
+                deleted_origins.setdefault(op.channelId, set()).add(index)
 
         elif op.type in (
             "addStreamToChannel",
@@ -2146,6 +2172,8 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
             if op.tempId not in channels_to_delete:
                 ordered_ops.append(op)
                 channel_number_owner[op.tempId] = "createChannel"
+                if origins is not None and op.channelNumber is not None:
+                    number_origins.setdefault(op.tempId, set()).add(index)
 
         elif op.type == "deleteChannel":
             if op.channelId < 0 and op.channelId in channels_to_create:
@@ -2197,6 +2225,13 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     # envelope to say which of the two writes was the authoritative one.
     consolidated: list[BulkOperation] = []
     for op in ordered_ops:
+        if origins is not None:
+            origin = {original_indexes[id(op)]}
+            if op.type == "createChannel" and channel_number_owner.get(op.tempId) == "createChannel":
+                origin |= number_origins.get(op.tempId, set())
+            elif op.type == "deleteChannel":
+                origin |= deleted_origins.get(op.channelId, set())
+            origins.append(origin)
         if (
             op.type == "createChannel"
             and op.channelNumber is not None
@@ -2224,6 +2259,11 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
             continue
         template = channel_update_number_source.get(cid) or channel_update_last[cid]
         consolidated.append(template.model_copy(update={"data": merged, **overrides}))
+        if origins is not None:
+            origin = update_origins[cid].copy()
+            if "channel_number" in merged:
+                origin |= number_origins[cid]
+            origins.append(origin)
 
     # Consolidated bulkAssign: group into consecutive ranges. This is the one
     # arm that genuinely cannot copy a single input op — it regroups several
@@ -2250,6 +2290,8 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
                 j += 1
             ids = [e[0] for e in entries[i:j + 1]]
             consolidated.append(BulkAssignNumbersOp(channelIds=ids, startingNumber=start_num))
+            if origins is not None:
+                origins.append(set().union(*(number_origins[cid] for cid in ids)))
             i = j + 1
 
     elapsed = (time.time() - start) * 1000
@@ -2417,7 +2459,7 @@ def _prune_old_bulk_commit_jobs() -> None:
 
 
 @router.post("/bulk-commit")
-async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdminIfEnabled):
+async def bulk_commit_operations(request: BulkCommitRequest, http_request: Request, _admin=RequireAdminIfEnabled):
     """
     Process multiple channel operations. Admin only (bulk operator op, bd-um30y).
 
@@ -2438,6 +2480,9 @@ async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdmin
     - validateOnly: If true, only validate without executing
     - continueOnError: If true, continue processing even when operations fail
     - consolidate: If true, server-side dedup of redundant ops
+    - profileRecoveryOperator: Opt in to a binding for the committed channel map
+    - profileRecoveryDestination: Expected staged connection identity, checked by the worker
+    - returnSettledOperationIndexes: Include confirmable positions in the submitted operation list
     """
     # One Apply All is several bulk-commit requests: a create phase, then
     # batches of 200. A client that sends the same X-ECM-Batch-Id on all of
@@ -2451,6 +2496,17 @@ async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdmin
     if request.validateOnly:
         return await _run_bulk_commit(request, batch_id=request_batch_id)
 
+    recovery_scope: dict[str, str] = {}
+    if request.profileRecoveryOperator is not None:
+        operator = await recovery_operator(http_request)
+        if operator != request.profileRecoveryOperator:
+            raise HTTPException(409, "The ECM operator changed. Reload before applying channel changes.")
+        if not request.profileRecoveryDestination:
+            raise HTTPException(409, "Reload the channel manager before applying profile selections.")
+        recovery_scope["profile_recovery_operator"] = operator
+    elif request.profileRecoveryDestination is not None:
+        raise HTTPException(409, "Profile recovery requires the original ECM operator.")
+
     # Enqueue the actual commit as a supervised background task.
     _prune_old_bulk_commit_jobs()
     job_id = uuid.uuid4().hex
@@ -2463,7 +2519,7 @@ async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdmin
             logger.warning("[CHANNELS-BULK] Job %s missing before start", job_id)
             return
         try:
-            result = await _run_bulk_commit(request, batch_id=request_batch_id)
+            result = await _run_bulk_commit(request, batch_id=request_batch_id, **recovery_scope)
             job.result = result
             job.status = "completed"
             job.completed_at = time.time()
@@ -2530,7 +2586,7 @@ async def get_bulk_commit_status(job_id: str):
 
 
 async def _run_bulk_commit(
-    request: BulkCommitRequest, batch_id: Optional[str] = None
+    request: BulkCommitRequest, batch_id: Optional[str] = None, *, profile_recovery_operator: Optional[str] = None
 ) -> dict:
     """Execute a bulk-commit request and return the result envelope.
 
@@ -2548,6 +2604,18 @@ async def _run_bulk_commit(
     # effective plan must be revalidated after consolidation.
     _validate_bulk_channel_dependencies(request.operations)
     client = get_client()
+    if profile_recovery_operator is not None and not recovery_destination_matches(
+        request.profileRecoveryDestination or "", client,
+    ):
+        return {
+            "success": False, "operationsApplied": 0, "operationsFailed": 0,
+            "tempIdMap": {}, "groupIdMap": {}, "settledOperationIndexes": [],
+            "errors": [{
+                "operationId": "profile-recovery-destination",
+                "error": "The Dispatcharr destination changed. Nothing was applied. Return to the original connection before retrying.",
+            }],
+        }
+    binding = recovery_binding(client, profile_recovery_operator) if profile_recovery_operator is not None else None
     batch_id = batch_id or str(uuid.uuid4())[:8]
 
     # Phase 1 onwards. Until this flips, nothing has been written anywhere, so
@@ -2612,10 +2680,14 @@ async def _run_bulk_commit(
 
     # Consolidate operations if requested
     operations = request.operations
+    origins: list[set[int]] = []
+    settled: set[int] = set()
     if request.consolidate:
-        operations = _consolidate_operations(operations)
+        operations = _consolidate_operations(operations, origins if request.returnSettledOperationIndexes else None)
         _validate_bulk_channel_dependencies(operations)
         request = request.model_copy(update={"operations": operations})
+    elif request.returnSettledOperationIndexes:
+        origins = [{index} for index in range(len(operations))]
     temp_channel_names = {
         op.tempId: op.name
         for op in request.operations
@@ -2868,6 +2940,25 @@ async def _run_bulk_commit(
         """
         flush_journal()
         finalize_bulk_commit_result(result, ledger)
+        if request.returnSettledOperationIndexes:
+            processed = set().union(*(origins[index] for index in settled))
+            incomplete = set().union(*(origin for index, origin in enumerate(origins) if index not in settled))
+            result["settledOperationIndexes"] = sorted(processed - incomplete)
+            if request.consolidate:
+                # One final placement per channel in the consolidated plan.
+                # An original mixed-field operation may remain pending even
+                # though its superseding placement settled. Report that
+                # component separately, after any numbering compensation.
+                numbers: dict[int, ChannelNumber | None] = {}
+                for index in settled:
+                    op = operations[index]
+                    if op.type == "updateChannel" and "channel_number" in op.data:
+                        numbers[resolve_id(op.channelId)] = op.data["channel_number"]
+                    elif op.type == "bulkAssignChannelNumbers":
+                        start = op.startingNumber if op.startingNumber is not None else 1
+                        for offset, channel_id in enumerate(op.channelIds):
+                            numbers[resolve_id(channel_id)] = start + offset
+                result["settledChannelNumbers"] = numbers
         logger.info(
             "[CHANNELS-BULK] Completed (batch=%s): success=%s, applied=%s, failed=%s%s",
             batch_id, result["success"], result["operationsApplied"],
@@ -3975,6 +4066,8 @@ async def _run_bulk_commit(
                     # Track temp ID -> real ID mapping
                     if op.tempId < 0:
                         result["tempIdMap"][op.tempId] = created_id
+                        if binding is not None:
+                            result["profileRecoveryBinding"] = binding
 
                     # Nameable by later ops in this same batch.
                     existing_channels[created_id] = new_channel
@@ -4195,6 +4288,8 @@ async def _run_bulk_commit(
                     )
 
                 ledger.record_applied()
+                if request.returnSettledOperationIndexes:
+                    settled.add(idx)
 
             except Exception as e:
                 # Build detailed error info with channel/stream names
@@ -4273,6 +4368,8 @@ async def _run_bulk_commit(
                     # batch as clean (bead enhancedchannelmanager-e9e5o).
                     error_details["applied"] = True
                     ledger.record_applied(incomplete=True)
+                    if request.returnSettledOperationIndexes:
+                        settled.add(idx)
                     logger.error(
                         "[CHANNELS-BULK] Operation %s APPLIED upstream but could not be "
                         "recorded; do not retry it: %s", op_id, e,
@@ -4332,6 +4429,13 @@ async def _run_bulk_commit(
         # it is deliberately prescriptive: an unexplained middle is the one
         # outcome this whole pass exists to prevent.
         if compensator.half_applied:
+            # A write counted as applied may now be compensated; do not use
+            # the operation-retirement receipt to claim its requested final state.
+            settled.difference_update(
+                i for i, op in enumerate(operations)
+                if op.type == "bulkAssignChannelNumbers"
+                or (op.type == "updateChannel" and "channel_number" in op.data)
+            )
             steps = compensator.compensation_steps()
             logger.warning(
                 "[CHANNELS-BULK] Numbering stopped part way (batch=%s): %s landed, "

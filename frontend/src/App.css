@@ -268,6 +268,12 @@
   min-height: 18rem;
 }
 
+/* Post-commit feedback is a content-sized band, not another workspace pane. */
+.main > .created-channel-profiles-notice {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
 /* The route header is a band, not a pane: it has its own background and its
    own bottom border, and it is the only `.page-header` in the app that pays
    for its own padding (the shared rule's `margin-bottom` is zeroed here).

@@ -11,6 +11,7 @@ Document the core ECM workflow: viewing channels and streams, editing them, assi
 | I want to… | Go to |
 |-|-|
 | Understand Edit Mode, staging, and how Undo/Redo/checkpoints work | [Channel Manager](channels-overview.md) |
+| Retry unresolved profile assignments without creating channels again | [Profile Assignment Recovery](profile-assignment-recovery.md) |
 | Import channels from a CSV, bulk-assign EPG, or fetch Gracenote IDs | [Bulk Channel Operations](bulk-edit.md) |
 | Find and merge duplicate channels across many at once | [Bulk Channel Operations](bulk-edit.md#find-and-merge-duplicate-channels) |
 | Resolve dedup prompts ECM raises automatically during an M3U refresh | [Stream Deduplication](stream-dedup.md) |

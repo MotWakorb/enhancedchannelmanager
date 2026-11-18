@@ -62,6 +62,7 @@ from media_connection_errors import media_connection_error, redact_media_diagnos
 from cache import get_cache
 from database import get_session
 from log_utils import get_persistent_log_policy
+from profile_recovery import recovery_destination
 from stream_prober import StreamProber, get_prober, set_prober
 from stream_user_agent import StreamUserAgent
 from bandwidth_tracker import BandwidthTracker, get_tracker, set_tracker
@@ -569,6 +570,7 @@ class SettingsRequest(BaseModel):
 
 
 class SettingsResponse(BaseModel):
+    profile_recovery_destination: str | None = None
     url: str
     auth_method: str
     username: str
@@ -841,6 +843,7 @@ async def get_current_settings(
     # exists to handle. An empty redaction has nothing to write back.
     redact = not is_settings_admin
     return SettingsResponse(
+        profile_recovery_destination=recovery_destination(settings) if settings.is_configured() else None,
         url=settings.url,
         auth_method=settings.auth_method,
         username=settings.username,

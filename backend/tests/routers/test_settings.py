@@ -205,6 +205,9 @@ class TestGetSettings:
         assert data["url"] == "http://dispatcharr:8000"
         assert data["configured"] is True
         assert "password" not in data
+        from profile_recovery import recovery_destination
+
+        assert data["profile_recovery_destination"] == recovery_destination(mock)
 
     @pytest.mark.asyncio
     async def test_exposes_resdet_resolution_setting(self, async_client):
