@@ -4,7 +4,7 @@
 // lint gate blocks only new violations introduced here, not grandfathered
 // ones inherited from dev. Remove this directive once zjge5 lands.
 /* eslint-disable react-hooks/exhaustive-deps */
-import { useState, useEffect, useCallback, useRef, useMemo, Suspense, lazy } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, Suspense, lazy } from 'react';
 import {
   SettingsModal,
   EditModeExitDialog,
@@ -245,6 +245,9 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [autoRenameChannelNumber, setAutoRenameChannelNumber] = useState(false);
   const [dispatcharrUrl, setDispatcharrUrl] = useState('');
+  const [profileDestination, setProfileDestination] = useState<string>();
+  const [profileCatalogDestination, setProfileCatalogDestination] = useState<string>();
+  const profileDestinationRef = useRef<string | undefined>(undefined);
   const [showStreamUrls, setShowStreamUrls] = useState(true);
   const [strikeThreshold, setStrikeThreshold] = useState(3);
   const [hideUngroupedStreams, setHideUngroupedStreams] = useState(true);
@@ -312,7 +315,10 @@ function App() {
   const [newlyCreatedGroupIds, setNewlyCreatedGroupIds] = useState<Set<number>>(new Set());
 
   // Staged identities are resolved only from the commit's authoritative map.
-  const pendingProfileAssignmentsRef = useRef<Array<{ tempIds: number[]; profileIds: number[] }>>([]);
+  const pendingProfileAssignmentsRef = useRef<Array<{
+    tempIds: number[]; profileIds: number[]; operator: string; destination?: string;
+  }>>([]);
+  const editProfileScope = useRef<{ operator: string; destination?: string } | null>(null);
 
   // Track if baseline has been initialized
   const baselineInitialized = useRef(false);
@@ -455,7 +461,7 @@ function App() {
    * is offered or destroyed.
    */
   const operatorKey = useMemo(() => operatorLedgerKey(authenticatedUser), [authenticatedUser]);
-  const createdChannelProfiles = useCreatedChannelProfiles(operatorKey, setChannelProfiles, dispatcharrUrl);
+  const createdChannelProfiles = useCreatedChannelProfiles(operatorKey, setChannelProfiles, dispatcharrUrl, profileDestination);
 
   // Edit mode for staging changes
   const {
@@ -525,9 +531,23 @@ function App() {
     onError: setError,
   });
 
-  useEffect(() => {
-    if (!isEditMode) pendingProfileAssignmentsRef.current = [];
-  }, [isEditMode]);
+  useLayoutEffect(() => {
+    if (isEditMode) editProfileScope.current = { operator: operatorKey, destination: profileDestination };
+    else {
+      editProfileScope.current = null;
+      pendingProfileAssignmentsRef.current = [];
+    }
+    // Pin the session, not a later settings refresh while a picker is open.
+  }, [isEditMode, editModeEnteredAt]);
+
+  const stageProfileIntent = useCallback((tempIds: number[], profileIds: number[], fromCatalog = false) => {
+    const source = fromCatalog ? profileCatalogDestination : profileDestination;
+    const opened = editProfileScope.current;
+    pendingProfileAssignmentsRef.current.push({
+      tempIds, profileIds: [...profileIds], operator: operatorKey,
+      destination: opened?.operator === operatorKey && opened.destination === source ? source : undefined,
+    });
+  }, [operatorKey, profileDestination, profileCatalogDestination]);
 
   // Auto-add staged groups to the channel group filter so they're visible
   // Also clean up temp group IDs (negative) when edit mode ends
@@ -634,6 +654,9 @@ function App() {
     }, {
       continueOnError: true,
       ...(assignments.length > 0 && {
+        currentProfileDestination: profileDestination,
+        createProfileScopes: new Map(assignments.flatMap(assignment =>
+          assignment.tempIds.map(tempId => [tempId, assignment] as const))),
         onCreatesCommitted: (tempIds, binding) => {
           startRecovery = enqueue(assignments.flatMap(assignment => assignment.tempIds.flatMap(tempId => {
             const channelId = tempIds.get(tempId);
@@ -685,6 +708,7 @@ function App() {
         if (messages.length === 5) break;
       }
       setCommitFailure({
+        keepEditing: result.keepEditing,
         applied: result.operationsApplied,
         failed: result.operationsFailed,
         messages,
@@ -699,7 +723,7 @@ function App() {
     clearHistory();
     // Carry the operator wherever they were trying to go — or sign them out
     completeDeferredExit();
-  }, [commit, clearHistory, completeDeferredExit, createdChannelProfiles.enqueue]);
+  }, [commit, clearHistory, completeDeferredExit, createdChannelProfiles.enqueue, profileDestination]);
 
   /**
    * Fold the operator's per-channel answers into the staged plan, then Apply
@@ -747,10 +771,16 @@ function App() {
   const handleAcknowledgeCommitFailure = useCallback(() => {
     setCommitFailure(null);
     setShowExitDialog(false);
+    if (commitFailure?.keepEditing) {
+      replacePendingRouteChange(null);
+      pendingSignOutRef.current = null;
+      focusHeadingOnRouteChangeRef.current = false;
+      return;
+    }
     setSelectedChannelIds(new Set());
     clearHistory();
     completeDeferredExit();
-  }, [clearHistory, completeDeferredExit]);
+  }, [clearHistory, completeDeferredExit, commitFailure, replacePendingRouteChange]);
 
   const handleDiscardChanges = useCallback(() => {
     discard();
@@ -937,6 +967,9 @@ function App() {
 
         setAutoRenameChannelNumber(settings.auto_rename_channel_number);
         setDispatcharrUrl(settings.url);
+        const destination = settings.profile_recovery_destination ?? undefined;
+        profileDestinationRef.current = destination;
+        setProfileDestination(destination);
         setShowStreamUrls(settings.show_stream_urls);
         setStrikeThreshold(settings.strike_threshold ?? 3);
         setHideUngroupedStreams(settings.hide_ungrouped_streams);
@@ -1029,7 +1062,7 @@ function App() {
         // This prevents loading 27,000+ streams on app startup which causes high CPU
         loadLogos();
         loadStreamProfiles();
-        loadChannelProfiles();
+        void loadChannelProfiles(destination);
         loadEpgSources();
         loadEpgData();
       } catch (err) {
@@ -1155,11 +1188,15 @@ function App() {
 
   const handleSettingsSaved = async () => {
     setError(null);
+    let destination = profileDestinationRef.current;
     // Reload settings to get updated values
     try {
       const settings = await api.getSettings();
       setAutoRenameChannelNumber(settings.auto_rename_channel_number);
       setDispatcharrUrl(settings.url);
+      destination = settings.profile_recovery_destination ?? undefined;
+      profileDestinationRef.current = destination;
+      setProfileDestination(destination);
       setShowStreamUrls(settings.show_stream_urls);
       setHideUngroupedStreams(settings.hide_ungrouped_streams);
       setHideEpgUrls(settings.hide_epg_urls ?? false);
@@ -1219,7 +1256,7 @@ function App() {
     }
     loadLogos();
     loadStreamProfiles();
-    loadChannelProfiles();
+    void loadChannelProfiles(destination);
     loadEpgSources();
     loadEpgData();
   };
@@ -1473,9 +1510,11 @@ function App() {
     }
   };
 
-  const loadChannelProfiles = async () => {
+  const loadChannelProfiles = async (destination = profileDestinationRef.current) => {
     try {
-      const profiles = await api.getChannelProfiles();
+      const profiles = await api.getChannelProfiles(undefined, destination);
+      if (destination !== profileDestinationRef.current) return;
+      setProfileCatalogDestination(destination);
       setChannelProfiles(profiles);
     } catch (err) {
       logger.error('Failed to load channel profiles:', err);
@@ -2050,7 +2089,7 @@ function App() {
             ? profileIds
             : defaultChannelProfileIds;
 
-          pendingProfileAssignmentsRef.current.push({ tempIds: [tempId], profileIds: [...profilesToAssign] });
+          stageProfileIntent([tempId], profilesToAssign, !!profileIds?.length);
 
           // Create a temporary channel object to return (for compatibility)
           const tempChannel: Channel = {
@@ -2102,7 +2141,7 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, defaultChannelProfileIds]
+    [isEditMode, stageCreateChannel, defaultChannelProfileIds, stageProfileIntent]
   );
 
   /**
@@ -2215,10 +2254,7 @@ function App() {
 
           // Track profile assignments (use default profiles for manual creation)
           if (defaultChannelProfileIds.length > 0) {
-            pendingProfileAssignmentsRef.current.push({
-              tempIds: [tempId],
-              profileIds: [...defaultChannelProfileIds],
-            });
+            stageProfileIntent([tempId], defaultChannelProfileIds);
           }
 
           // Track the newly created group so it appears in the filter
@@ -2265,6 +2301,7 @@ function App() {
       endBatch,
       displayChannels,
       defaultChannelProfileIds,
+      stageProfileIntent,
       loadChannels,
       loadChannelGroups,
       trackNewlyCreatedGroup,
@@ -2624,10 +2661,7 @@ function App() {
           ? profileIds
           : defaultChannelProfileIds;
 
-        pendingProfileAssignmentsRef.current.push({
-          tempIds: createdTempIds,
-          profileIds: [...profileIdsToApply],
-        });
+        stageProfileIntent(createdTempIds, profileIdsToApply, !!profileIds?.length);
 
         // The caller owns the operator-facing message: StreamsPane sits inside
         // the notification provider, App renders it (bead
@@ -2639,7 +2673,7 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannelWithStreams, stageUpdateChannel, stagePushDownShifts, startBatch, endBatch, displayChannels, defaultChannelProfileIds]
+    [isEditMode, stageCreateChannelWithStreams, stageUpdateChannel, stagePushDownShifts, startBatch, endBatch, displayChannels, defaultChannelProfileIds, stageProfileIntent]
   );
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
@@ -3266,7 +3300,7 @@ function App() {
 
               // Channel Profiles
               channelProfiles={channelProfiles}
-              onChannelProfilesChange={loadChannelProfiles}
+              onChannelProfilesChange={() => loadChannelProfiles()}
 
               // Provider & Filter Settings
               providerGroupSettings={providerGroupSettings}

@@ -386,6 +386,9 @@ export interface CommitOptions {
   skipValidation?: boolean;
   /** Synchronous handoff of confirmed creates, before any post-commit reads. */
   onCreatesCommitted?: (tempIds: ReadonlyMap<number, number>, binding?: string) => void;
+  /** Connection and operator captured with each staged profile selection. */
+  createProfileScopes?: ReadonlyMap<number, { operator: string; destination?: string }>;
+  currentProfileDestination?: string;
 }
 
 /**
@@ -393,6 +396,7 @@ export interface CommitOptions {
  */
 export interface CommitResult {
   success: boolean;
+  keepEditing?: boolean;
   operationsApplied: number;
   operationsFailed: number;
   errors: CommitError[];
@@ -605,6 +609,7 @@ export interface EditModeExitDialogProps {
  * operator needs to read.
  */
 export interface CommitFailure {
+  keepEditing?: boolean;
   applied: number;
   failed: number;
   /** Deduplicated error lines, most useful first. */

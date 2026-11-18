@@ -2101,6 +2101,33 @@ class TestBulkCommitPartialSuccess:
         router_module._BULK_COMMIT_JOBS.clear()
 
     @pytest.mark.asyncio
+    async def test_settled_indexes_refer_to_submitted_operations_after_consolidation(self, async_client):
+        client = AsyncMock()
+        client.get_channels.return_value = {
+            "results": [{"id": 44, "name": "A"}, {"id": 45, "name": "B"}],
+            "count": 2, "next": None,
+        }
+        client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+
+        async def update(channel_id, _payload):
+            if channel_id == 44:
+                raise ValueError("Synthetic update rejected")
+
+        client.update_channel.side_effect = update
+        operations = [
+            {"type": "updateChannel", "channelId": 45, "data": {"name": "B2"}},
+            {"type": "updateChannel", "channelId": 44, "data": {"name": "A2"}},
+            {"type": "updateChannel", "channelId": 45, "data": {"tvg_id": "B guide"}},
+        ]
+        with patch("routers.channels.get_client", return_value=client), patch("routers.channels.journal"):
+            _, result = await _commit_and_wait(async_client, {
+                "operations": operations, "continueOnError": True, "consolidate": True,
+                "returnSettledOperationIndexes": True,
+            })
+        assert (result["operationsApplied"], result["operationsFailed"]) == (1, 1)
+        assert result["settledOperationIndexes"] == [0, 2]
+
+    @pytest.mark.asyncio
     async def test_partial_success_envelope(self, async_client):
         """Mixed success/failure with continueOnError returns applied + failed
         counts, a populated errors list, the tempIdMap of what committed, and a

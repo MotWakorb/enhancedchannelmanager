@@ -10,12 +10,14 @@ import recordedProfiles from '../../backend/tests/fixtures/y3m6o1/dispatcharr_ch
 
 const testState = vi.hoisted(() => ({
   operatorId: 7,
+  onSettingsSaved: null as (() => Promise<void>) | null,
   channelManagerProps: null as ChannelManagerTabProps | null,
   exitDialogProps: null as Record<string, unknown> | null,
   bulkCommit: vi.fn(),
   resolvedAssignmentPairs: [] as Array<{ channelId: number; streamId: number }>,
 }));
 const recoveryBinding = 'f'.repeat(64);
+const profileDestination = vi.hoisted(() => 'a'.repeat(64));
 
 vi.mock('./hooks/useAuth', () => ({
   useAuth: () => ({
@@ -40,7 +42,10 @@ vi.mock('./components', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./components')>();
   return {
     ...actual,
-    SettingsModal: () => null,
+    SettingsModal: ({ onSaved }: { onSaved: () => Promise<void> }) => {
+      testState.onSettingsSaved = onSaved;
+      return null;
+    },
     EditModeRestoreDialog: () => null,
     EditModeRestoredBadge: () => null,
     TabNavigation: () => null,
@@ -68,6 +73,7 @@ vi.mock('./services/api', async (importOriginal) => {
     getHealth: vi.fn().mockResolvedValue({ status: 'healthy', service: 'ECM' }),
     getSettings: vi.fn().mockResolvedValue({
       configured: true,
+      profile_recovery_destination: profileDestination,
       default_channel_profile_ids: [],
       stream_sort_priority: [],
       stream_sort_enabled: {},
@@ -120,7 +126,7 @@ describe('App bulk-create staging', () => {
     testState.operatorId = 7;
     vi.mocked(api.getChannels).mockReset().mockResolvedValue({ results: [], count: 0, next: null, previous: null });
     vi.mocked(api.getSettings).mockReset().mockResolvedValue({
-      configured: true, default_channel_profile_ids: [],
+      configured: true, default_channel_profile_ids: [], profile_recovery_destination: profileDestination,
       stream_sort_priority: [], stream_sort_enabled: {}, m3u_account_priorities: {},
     } as unknown as Awaited<ReturnType<typeof api.getSettings>>);
     vi.mocked(api.getChannelProfiles).mockReset().mockResolvedValue([]);
@@ -196,6 +202,7 @@ describe('App bulk-create staging', () => {
       const profile = { ...recordedProfiles.profiles.find(p => p.id === 6)!, channels: [] as number[] };
       vi.mocked(api.getSettings).mockResolvedValue({
         configured: true, default_channel_profile_ids: [6],
+        profile_recovery_destination: profileDestination,
         stream_sort_priority: [], stream_sort_enabled: {}, m3u_account_priorities: {},
       } as unknown as Awaited<ReturnType<typeof api.getSettings>>);
       const read = async () => {
@@ -276,27 +283,30 @@ describe('App bulk-create staging', () => {
     });
   });
 
-  it.each(['refresh', 'later-batch'] as const)('does not lose known creates or misreport other work after %s failure', async failure => {
+  it.each(['refresh', 'later-batch', 'mixed-receipt'] as const)('does not lose known creates or misreport other work after %s failure', async failure => {
+    const mixed = failure === 'mixed-receipt';
     testState.bulkCommit.mockImplementation(async (request: BulkCommitRequest) => {
       const creates = request.operations.filter(op => op.type === 'createChannel');
       if (!creates.length) {
         const ledger = JSON.parse(sessionStorage.getItem(STAGED_LEDGER_STORAGE_KEY)!) as PersistedStagedLedger;
-        expect(ledger.operations.map(op => op.apiCall.type)).toEqual(['createChannel', 'updateChannel']);
+        expect(ledger.operations.map(op => op.apiCall.type)).toEqual([
+          'createChannel', 'updateChannel', ...(mixed ? ['updateChannel'] : []),
+        ]);
         expect(ledger.operations[0].description).toContain('Unmapped sibling');
         expect(sessionStorage.getItem(`ecm.created-channel-profiles.v1:${encodeURIComponent(JSON.stringify(['local#7', '']))}`))
           .toContain('"channelId":50000');
         expect(api.getChannelProfiles).not.toHaveBeenCalledWith(recoveryBinding);
         if (failure === 'later-batch') throw new Error('Synthetic later batch reply unavailable');
         return {
-          success: false, operationsApplied: 0, operationsFailed: 1, errors: [
+          success: false, operationsApplied: mixed ? 1 : 0, operationsFailed: 1, errors: [
             { operationId: 'unrelated', error: 'Unrelated update rejected' },
-          ], tempIdMap: {}, groupIdMap: {},
+          ], tempIdMap: {}, groupIdMap: {}, settledOperationIndexes: mixed ? [1] : [],
         };
       }
       expect(creates.map(op => op.name)).toEqual(['Mapped channel', 'Unmapped sibling']);
       const tempId = Number(creates[0].tempId);
       expect(tempId).toBeLessThan(0);
-      if (failure === 'refresh') vi.mocked(api.getChannels).mockRejectedValue(new Error('Synthetic postcommit refresh failure'));
+      if (failure !== 'later-batch') vi.mocked(api.getChannels).mockRejectedValue(new Error('Synthetic postcommit refresh failure'));
       return {
         success: false, operationsApplied: 1, operationsFailed: 1, errors: [
           { operationId: 'unmapped', channelName: 'Unmapped sibling', error: 'Create rejected' },
@@ -310,7 +320,8 @@ describe('App bulk-create staging', () => {
       stream_profile_id: null, uuid: 'synthetic-existing-channel', logo_id: null,
       auto_created: false, auto_created_by: null, auto_created_by_name: null,
     };
-    vi.mocked(api.getChannels).mockResolvedValue({ results: [existing], count: 1, next: null, previous: null });
+    const loaded = [existing, ...(mixed ? [{ ...existing, id: 45, channel_number: 45 }] : [])];
+    vi.mocked(api.getChannels).mockResolvedValue({ results: loaded, count: loaded.length, next: null, previous: null });
     vi.mocked(api.getSettings).mockResolvedValue({
       ...await api.getSettings(), default_channel_profile_ids: [6],
     });
@@ -324,20 +335,43 @@ describe('App bulk-create staging', () => {
       await testState.channelManagerProps!.onCreateChannelManual!('Unmapped sibling', 101);
     });
     act(() => testState.channelManagerProps!.onStageUpdateChannel(44, { name: 'Unrelated update' }, 'Unrelated update'));
+    if (mixed) act(() => testState.channelManagerProps!.onStageUpdateChannel(45, { name: 'Confirmed update' }, 'Confirmed update'));
     fireEvent.click(screen.getByTitle('Apply changes'));
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     expect(await screen.findByText(/profile assignments unresolved/i)).toBeInTheDocument();
     expect(screen.getByText(/Channel #50000/)).toBeInTheDocument();
-    expect(testState.exitDialogProps?.commitFailure).toMatchObject({ applied: 1, failed: failure === 'refresh' ? 2 : 1 });
+    expect(testState.exitDialogProps?.commitFailure).toMatchObject({
+      applied: mixed ? 2 : 1, failed: failure === 'later-batch' ? 1 : 2,
+    });
     expect((testState.exitDialogProps?.commitFailure as { messages: string[] }).messages).toEqual(
       expect.arrayContaining([
         'Unmapped sibling: Create rejected',
-        failure === 'refresh' ? 'Unrelated update rejected' : expect.stringContaining('Apply stopped after confirmed channel creation'),
+        failure === 'later-batch' ? expect.stringContaining('Check Dispatcharr before retrying') : 'Unrelated update rejected',
       ]),
     );
-    if (failure === 'refresh') expect(sessionStorage.getItem(STAGED_LEDGER_STORAGE_KEY)).toBeNull();
-    else expect(sessionStorage.getItem(STAGED_LEDGER_STORAGE_KEY)).not.toContain('Mapped channel');
+    const ledger = JSON.parse(sessionStorage.getItem(STAGED_LEDGER_STORAGE_KEY)!) as PersistedStagedLedger;
+    expect(ledger.operations.map(op => op.description)).toEqual(['Create channel "Unmapped sibling"', 'Unrelated update']);
+    expect(testState.channelManagerProps?.isEditMode).toBe(true);
     expect(testState.bulkCommit).toHaveBeenCalledTimes(2);
+    if (failure !== 'later-batch') {
+      // Return to edit mode and retry after the peer is healthy.
+      act(() => (testState.exitDialogProps?.onAcknowledgeFailure as () => void)());
+      vi.mocked(api.getChannels).mockResolvedValue({ results: loaded, count: loaded.length, next: null, previous: null });
+      testState.bulkCommit.mockImplementation(async (request: BulkCommitRequest) => ({
+        success: true, operationsApplied: request.operations.length, operationsFailed: 0, errors: [],
+        tempIdMap: Object.fromEntries(request.operations.filter(op => op.type === 'createChannel')
+          .map(op => [Number(op.tempId), 50001])),
+        groupIdMap: {}, profileRecoveryBinding: recoveryBinding,
+      }));
+      fireEvent.click(screen.getByTitle('Apply changes'));
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+      await waitFor(() => expect(testState.bulkCommit).toHaveBeenCalledTimes(4));
+      expect(testState.bulkCommit.mock.calls.slice(2).map(([request]) => request.operations)).toEqual([
+        [expect.objectContaining({ type: 'createChannel', name: 'Unmapped sibling' })],
+        [expect.objectContaining({ type: 'updateChannel', channelId: 44 })],
+      ]);
+      await waitFor(() => expect(sessionStorage.getItem(STAGED_LEDGER_STORAGE_KEY)).toBeNull());
+    }
   });
 
   it('keeps a late create receipt in the original operator scope without starting recovery', async () => {
@@ -361,6 +395,7 @@ describe('App bulk-create staging', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(testState.bulkCommit).toHaveBeenCalledTimes(1));
     expect(testState.bulkCommit.mock.calls[0][0]).toMatchObject({ profileRecoveryOperator: 'local#7' });
+    expect(testState.bulkCommit.mock.calls[0][0]).toMatchObject({ profileRecoveryDestination: profileDestination });
     testState.operatorId = 8;
     rerender(<App />);
     await act(async () => release());
@@ -372,6 +407,35 @@ describe('App bulk-create staging', () => {
     expect(await screen.findByText(/profile assignments unresolved/i)).toBeInTheDocument();
     expect(screen.getByText(/Channel #50000/)).toBeInTheDocument();
     expect(api.getChannelProfiles).not.toHaveBeenCalledWith(recoveryBinding);
+  });
+
+  it('does not re-label staged profile IDs when settings refresh to a replacement connection', async () => {
+    const read = await api.getSettings();
+    vi.mocked(api.getSettings).mockResolvedValue({ ...read, default_channel_profile_ids: [6] });
+    render(<App />);
+    const editButton = await screen.findByRole('button', { name: /edit mode/i });
+    await waitFor(() => expect(editButton).toBeEnabled());
+    fireEvent.click(editButton);
+    await waitFor(() => expect(testState.channelManagerProps?.isEditMode).toBe(true));
+    await act(async () => testState.channelManagerProps!.onCreateChannelManual!('Channel for A', 100));
+    vi.mocked(api.getSettings).mockResolvedValue({ ...read, profile_recovery_destination: 'b'.repeat(64), default_channel_profile_ids: [6] });
+    await act(async () => testState.onSettingsSaved!());
+    fireEvent.click(screen.getByTitle('Apply changes'));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(testState.exitDialogProps?.commitFailure).toMatchObject({
+      applied: 0, failed: 0, keepEditing: true,
+    }));
+    expect(testState.bulkCommit).not.toHaveBeenCalled();
+    expect(api.bulkUpdateProfileChannels).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(STAGED_LEDGER_STORAGE_KEY)).toContain('Channel for A');
+
+    act(() => (testState.exitDialogProps?.onAcknowledgeFailure as () => void)());
+    vi.mocked(api.getSettings).mockResolvedValue({ ...read, default_channel_profile_ids: [6] });
+    await act(async () => testState.onSettingsSaved!());
+    fireEvent.click(screen.getByTitle('Apply changes'));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(testState.bulkCommit).toHaveBeenCalledTimes(1));
+    expect(testState.bulkCommit.mock.calls[0][0]).toMatchObject({ profileRecoveryDestination: profileDestination });
   });
 
   it('does not infer a channel ID or retire a create whose result never came back', async () => {
@@ -406,6 +470,7 @@ describe('App bulk-create staging', () => {
       return { success: true };
     });
     render(<App />);
+    await waitFor(() => expect(api.getChannelProfiles).toHaveBeenCalledWith(undefined, profileDestination));
     const retry = await screen.findByRole('button', { name: 'Retry profile assignments' });
     expect(api.bulkUpdateProfileChannels).not.toHaveBeenCalled();
     fireEvent.click(retry);
@@ -420,7 +485,7 @@ describe('App bulk-create staging', () => {
     const stream = makeStream(1);
     if (outcome === 'undo') {
       vi.mocked(api.getSettings).mockResolvedValue({
-        configured: true, default_channel_profile_ids: [99],
+        configured: true, default_channel_profile_ids: [99], profile_recovery_destination: profileDestination,
         stream_sort_priority: [], stream_sort_enabled: {}, m3u_account_priorities: {},
       } as unknown as Awaited<ReturnType<typeof api.getSettings>>);
     }

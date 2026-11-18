@@ -1074,7 +1074,7 @@
     {
       "executable": false,
       "path": "backend/profile_recovery.py",
-      "sha256": "5c858a55b7b5545ef74a795aaed70bef01792ffb2493a91f83128cfb99cafa7f",
+      "sha256": "770c72a0eb46db706c01a58c6f89ad293079997cb719b152aca9e8d603af0b7c",
       "type": "file"
     },
     {
@@ -1152,7 +1152,7 @@
     {
       "executable": false,
       "path": "backend/routers/channels.py",
-      "sha256": "f09a907311a867e3225e425c5532c4165fec15a1aa0a654da22c10bbaa1198a7",
+      "sha256": "68bb14dbbdf9d28b1624ac06ff6e1089c90fc07b66536941b3ea37409738f479",
       "type": "file"
     },
     {
@@ -1248,7 +1248,7 @@
     {
       "executable": false,
       "path": "backend/routers/profiles.py",
-      "sha256": "ac964e865e17365dc95f9d02af794028dc279508ac289f1cbcbff1fa5634f721",
+      "sha256": "35bacad0e8330aa50c6cdc6e71abab309f797137d38c6980856fcfff0f302aee",
       "type": "file"
     },
     {
@@ -1260,7 +1260,7 @@
     {
       "executable": false,
       "path": "backend/routers/settings.py",
-      "sha256": "5cfee5b3e373f5d215d5916be4795eaec885b5b3072d9addbd89a1135e6d3ae9",
+      "sha256": "ffa40e174939a9c976b5c0ea9b7c5dac7491f777f9497cdacd067d9783a75566",
       "type": "file"
     },
     {
@@ -1872,7 +1872,7 @@
     {
       "executable": false,
       "path": "frontend/src/App.bulkCreateStaging.test.tsx",
-      "sha256": "6108c44448bfd7d6dced27df0502a18ea81596efb90b32e0c22b186c8105d0f7",
+      "sha256": "688fc84e9d6a0fb031855dc15e06b74f8bf128701a3b4fc64ee36d630f1b520c",
       "type": "file"
     },
     {
@@ -1884,7 +1884,7 @@
     {
       "executable": false,
       "path": "frontend/src/App.tsx",
-      "sha256": "6f36fbb8f3510b1a1cdaabe17dc1481be78734072c0fe4e9ca17254faddb17f3",
+      "sha256": "d74e39be30568bdc0bf89b9904c21883de036774519a854318edb3be762967ff",
       "type": "file"
     },
     {
@@ -2454,7 +2454,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/EditModeExitDialog.tsx",
-      "sha256": "43ff35cb013923774d295320048b6ffbe754b2135b041ddf0716708ef73849b0",
+      "sha256": "e647c606ab855047fe69ccf15c73d0763c2587546f853aacd1c5760439cc5b4e",
       "type": "file"
     },
     {
@@ -5172,7 +5172,7 @@
     {
       "executable": false,
       "path": "frontend/src/hooks/useCreatedChannelProfiles.ts",
-      "sha256": "a52349ed9cd66cc12c82d73cee26689fb594ee0f386b90b15c6fc0ae695ee854",
+      "sha256": "82a9984f3061b919ec1e7a655533a1123bdb31f6378ff5454a4153b481b56ef4",
       "type": "file"
     },
     {
@@ -5256,7 +5256,7 @@
     {
       "executable": false,
       "path": "frontend/src/hooks/useEditMode.ts",
-      "sha256": "6a846ef0209dffc41ab1e6978548075626ca375a2f8aa303814807ce96b7aadc",
+      "sha256": "346a14ef2608dc5f7341886cb0da4d441f1a70794ffd199c2741421fbe02d561",
       "type": "file"
     },
     {
@@ -5412,7 +5412,7 @@
     {
       "executable": false,
       "path": "frontend/src/services/api.ts",
-      "sha256": "34e66bff7a1568a10285df318647035cb9273fb924eeb073d78e52f88f768b29",
+      "sha256": "318599cbd19fc63a45b5ebea95fee000cece2c1897b6cf2557569d2289b2e8e1",
       "type": "file"
     },
     {
@@ -5598,7 +5598,7 @@
     {
       "executable": false,
       "path": "frontend/src/types/editMode.ts",
-      "sha256": "f2aa745af17dec0a8dd9fbd97f66aa1d50374fdc01370c7abb7c659bf163615f",
+      "sha256": "06c12605cf4bec073f6c06d1bc93a82872c379b86bb41aacf34dbd532795b65d",
       "type": "file"
     },
     {
@@ -5898,7 +5898,7 @@
     {
       "executable": false,
       "path": "frontend/src/utils/stagedLedgerStorage.ts",
-      "sha256": "1204dc117c5ea1e51b54990038baf80b5a79e6f7bc68535fb3d9ef136eac2064",
+      "sha256": "3be484c230f1c8bc43a95d7c56e9d279d1f59b4fb276705dd7429448c4f8cfc0",
       "type": "file"
     },
     {
@@ -6714,6 +6714,27 @@
     },
     "previous_manifest_sha256": "d8ca0a64beca3103322608d4af521cd74dd37bfa0b5f9f1db90a5fca818baf12",
     "scope": "PR #1071 frozen profile-recovery blocker fixes for the same unshipped 0072 candidate, retaining the complete prior application inventory and compatibility history. Not independent review, native runtime, advisory, publication or deployed approval.",
+    "version": "0.18.2-0072"
+  },
+  "postcreate_profile_review_delta_update": {
+    "base_commit": "dbffd1e14ec6e89754c4586c4d285d4011baaff3",
+    "bead": "enhancedchannelmanager-0m06f.3.4.1",
+    "changed_files": {
+      "backend/profile_recovery.py": "5c858a55b7b5545ef74a795aaed70bef01792ffb2493a91f83128cfb99cafa7f",
+      "backend/routers/channels.py": "f09a907311a867e3225e425c5532c4165fec15a1aa0a654da22c10bbaa1198a7",
+      "backend/routers/profiles.py": "ac964e865e17365dc95f9d02af794028dc279508ac289f1cbcbff1fa5634f721",
+      "backend/routers/settings.py": "5cfee5b3e373f5d215d5916be4795eaec885b5b3072d9addbd89a1135e6d3ae9",
+      "frontend/src/App.bulkCreateStaging.test.tsx": "6108c44448bfd7d6dced27df0502a18ea81596efb90b32e0c22b186c8105d0f7",
+      "frontend/src/App.tsx": "6f36fbb8f3510b1a1cdaabe17dc1481be78734072c0fe4e9ca17254faddb17f3",
+      "frontend/src/components/EditModeExitDialog.tsx": "43ff35cb013923774d295320048b6ffbe754b2135b041ddf0716708ef73849b0",
+      "frontend/src/hooks/useCreatedChannelProfiles.ts": "a52349ed9cd66cc12c82d73cee26689fb594ee0f386b90b15c6fc0ae695ee854",
+      "frontend/src/hooks/useEditMode.ts": "6a846ef0209dffc41ab1e6978548075626ca375a2f8aa303814807ce96b7aadc",
+      "frontend/src/services/api.ts": "34e66bff7a1568a10285df318647035cb9273fb924eeb073d78e52f88f768b29",
+      "frontend/src/types/editMode.ts": "f2aa745af17dec0a8dd9fbd97f66aa1d50374fdc01370c7abb7c659bf163615f",
+      "frontend/src/utils/stagedLedgerStorage.ts": "1204dc117c5ea1e51b54990038baf80b5a79e6f7bc68535fb3d9ef136eac2064"
+    },
+    "previous_manifest_sha256": "fd4c2f7120e98da0d00ec531ed9cd0615092b5886f37f2ecb9daa512839bd1fc",
+    "scope": "PR #1071 targeted delta: verify staged destination before create, and retire only confirmed work after partial Apply. Same unshipped 0072; retains complete prior application and compatibility history. Not runtime, independent review, publication or deployed approval.",
     "version": "0.18.2-0072"
   }
 }

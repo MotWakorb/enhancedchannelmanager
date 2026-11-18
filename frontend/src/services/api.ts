@@ -435,6 +435,8 @@ export interface BulkCommitRequest {
   consolidate?: boolean;
   /** Request a recovery receipt tied to the operator and actual create client. */
   profileRecoveryOperator?: string;
+  profileRecoveryDestination?: string;
+  returnSettledOperationIndexes?: boolean;
 }
 
 export interface ValidationIssue {
@@ -466,6 +468,8 @@ export interface BulkCommitResponse {
   errors: BulkCommitError[];
   tempIdMap: Record<number, number>;
   profileRecoveryBinding?: string;
+  /** Submitted operation indexes whose complete effects are safe to retire. */
+  settledOperationIndexes?: number[];
   groupIdMap: Record<string, number>;
   /** Validation issues found during pre-validation */
   validationIssues?: ValidationIssue[];
@@ -1121,6 +1125,7 @@ export type GracenoteConflictMode = 'ask' | 'skip' | 'overwrite';
 export type DispatcharrAuthMethod = 'password' | 'api_key';
 
 export interface SettingsResponse {
+  profile_recovery_destination?: string | null;
   url: string;
   auth_method: DispatcharrAuthMethod;
   username: string;
@@ -2161,7 +2166,12 @@ function profileRequest(binding?: string) {
     : { path: `${API_BASE}/created-channel-profiles`, headers: { 'X-ECM-Profile-Recovery': binding } };
 }
 
-export async function getChannelProfiles(binding?: string): Promise<ChannelProfile[]> {
+export async function getChannelProfiles(binding?: string, destination?: string): Promise<ChannelProfile[]> {
+  if (destination) {
+    return fetchJson(`${API_BASE}/created-channel-profiles/catalog`, {
+      cache: 'no-store', headers: { 'X-ECM-Profile-Destination': destination },
+    });
+  }
   const { path, headers } = profileRequest(binding);
   return fetchJson(path, { cache: 'no-store', headers });
 }

@@ -5,6 +5,7 @@ This does not execute upstream Django or the browser; recorded membership
 contracts are covered by tests/integration/test_channel_profile_membership_contract.py.
 """
 import asyncio
+import hmac
 import json
 from unittest.mock import AsyncMock
 
@@ -190,10 +191,51 @@ async def test_create_receipt_fences_recovery_to_the_actual_client(profile_bound
 
     monkeypatch.setattr(original, "create_channel", create)
     try:
-        accepted = await local.post("/api/channels/bulk-commit", json={
+        request = {
             "operations": [{"type": "createChannel", "tempId": -1, "name": "Synthetic committed channel"}],
             "profileRecoveryOperator": "anonymous",
-        })
+            "profileRecoveryDestination": hmac.digest(
+                profile_recovery.get_jwt_secret_key().encode(),
+                b"ecm.profile-destination.v1\0" + json.dumps([
+                    original.base_url, "api_key", [original.settings.dispatcharr_api_key],
+                ]).encode(),
+                "sha256",
+            ).hex(),
+        }
+        # The scheduled job has not selected its client yet. Switch to another
+        # connection that also has profile #7 and could return the same channel ID.
+        entered = asyncio.Event()
+        gate = asyncio.Event()
+        run = channels._run_bulk_commit
+        replacement_create = AsyncMock(return_value={"id": 108, "name": "Overlapping channel ID"})
+        monkeypatch.setattr(replacement, "create_channel", replacement_create)
+
+        async def hold_worker(*args, **kwargs):
+            entered.set()
+            await gate.wait()
+            return await run(*args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(channels, "_run_bulk_commit", hold_worker)
+            accepted = await local.post("/api/channels/bulk-commit", json=request)
+            assert accepted.status_code == 202
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            active = replacement
+            gate.set()
+            for _ in range(100):
+                poll = (await local.get(f"/api/channels/bulk-commit/{accepted.json()['job_id']}")).json()
+                if poll["status"] != "running":
+                    break
+                await asyncio.sleep(0)
+            assert poll["status"] == "completed"
+            assert poll["result"]["tempIdMap"] == {}
+            assert "profileRecoveryBinding" not in poll["result"]
+            assert "destination changed" in poll["result"]["errors"][0]["error"]
+            replacement_create.assert_not_awaited()
+            assert state["requests"] == []
+
+        active = original
+        accepted = await local.post("/api/channels/bulk-commit", json=request)
         assert accepted.status_code == 202
         for _ in range(100):
             poll = (await local.get(f"/api/channels/bulk-commit/{accepted.json()['job_id']}")).json()

@@ -45,11 +45,16 @@ tab still shows old settings. If the original sign-in or connection is no longer
 available, or there is no saved connection binding, review the requested
 assignments and set visibility manually.
 
+**Apply All** refuses profile-bearing creates if the operator or connection
+changed since staging. Return to the original connection or discard and restage
+the affected selection. Profile names and numeric IDs can overlap between servers.
+
 This notice covers only channels whose committed IDs reached ECM's browser.
 If Apply reports that the channel list could not refresh, reload to see what
-already committed. If the create result itself was lost, check the lineup
-before attempting another create; profile recovery does not infer which channel
-was created.
+already committed. In a partial Apply that confirmed creates, rejected edits
+stay staged and confirmed operations are not repeated. If an operation's reply
+was lost, check Dispatcharr before retrying it. Profile recovery does not infer
+which channel was created when the create result itself was lost.
 
 **Discard saved profile intent** asks for confirmation, then forgets the retry
 plan. It does not delete channels, reverse memberships already applied, or discard

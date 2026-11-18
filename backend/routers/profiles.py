@@ -10,7 +10,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from dispatcharr_client import DispatcharrClient, get_client, upstream_http_exception
-from profile_recovery import recovery_binding, recovery_operator
+from profile_recovery import recovery_binding, recovery_destination_matches, recovery_operator
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +237,16 @@ async def _recovery_client(request: Request) -> DispatcharrClient:
 
 # Separate routes fail closed when the binding is missing or when a new
 # frontend talks to an older backend. Ordinary profile callers are unchanged.
+@router.get("/api/created-channel-profiles/catalog", tags=["Channel Profiles"])
+async def get_recovery_catalog(request: Request, response: Response):
+    """Load the picker catalog from the same destination as the tab's settings."""
+    client = get_client()
+    if not recovery_destination_matches(request.headers.get("X-ECM-Profile-Destination", ""), client):
+        raise HTTPException(409, "The Dispatcharr destination changed. Reload the channel manager.")
+    response.headers["Cache-Control"] = "private, no-store"
+    return await _get_channel_profiles(client)
+
+
 @router.get("/api/created-channel-profiles", tags=["Channel Profiles"])
 async def get_recovery_profiles(response: Response, client: DispatcharrClient = Depends(_recovery_client)):
     response.headers["Cache-Control"] = "private, no-store"

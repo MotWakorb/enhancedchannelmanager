@@ -20,6 +20,7 @@ for (const initialFault of ['accepted-unapplied', 'rejected', 'read-failed', 'lo
     let commitResult: BulkCommitResponse | undefined
     const writes: Array<{ channelIds: number[]; enabled: boolean }> = []
     const binding = 'f'.repeat(64)
+    const destination = 'a'.repeat(64)
     const profile = { ...recorded.profiles.find(item => item.id === 6)!, channels: [] as number[] }
     const channel = {
       id: 50000, name: 'Profile intent browser fixture', channel_number: 100,
@@ -29,6 +30,7 @@ for (const initialFault of ['accepted-unapplied', 'rejected', 'read-failed', 'lo
     }
     await page.route('**/api/settings', route => route.fulfill({ json: {
       configured: true, url: 'https://fixture.invalid', theme: 'dark',
+      profile_recovery_destination: destination,
       default_channel_profile_ids: [6], default_normalize_on_create: false,
     } }))
     await page.route('**/api/channels?*', route => {
@@ -52,6 +54,7 @@ for (const initialFault of ['accepted-unapplied', 'rejected', 'read-failed', 'lo
       const body = route.request().postDataJSON()
       expect(body.validateOnly).not.toBe(true)
       expect(body.profileRecoveryOperator).toBe('anonymous')
+      expect(body.profileRecoveryDestination).toBe(destination)
       const creates = body.operations.filter((operation: { type: string }) => operation.type === 'createChannel')
       expect(creates).toHaveLength(1)
       expect(creates[0].name).toBe(channel.name)
@@ -68,6 +71,10 @@ for (const initialFault of ['accepted-unapplied', 'rejected', 'read-failed', 'lo
     await page.route('**/api/created-channel-profiles**', async route => {
       const request = route.request()
       const path = new URL(request.url()).pathname
+      if (path === '/api/created-channel-profiles/catalog') {
+        expect(request.headers()['x-ecm-profile-destination']).toBe(destination)
+        return route.fulfill({ json: [profile] })
+      }
       expect(request.headers()['x-ecm-profile-recovery']).toBe(binding)
       if (fault === 'scope-changed' && request.method() === 'PATCH') {
         // The browser URL and receipt are unchanged; switch the private peer's

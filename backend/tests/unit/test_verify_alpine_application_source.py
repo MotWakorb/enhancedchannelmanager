@@ -127,7 +127,41 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     }
 
 
+def _before_postcreate_profile_review_delta(manifest):
+    key = "postcreate_profile_review_delta_update"
+    update = manifest[key]
+    assert update["base_commit"] == "dbffd1e14ec6e89754c4586c4d285d4011baaff3"
+    assert update["bead"] == "enhancedchannelmanager-0m06f.3.4.1"
+    assert update["version"] == "0.18.2-0072"
+    assert update["previous_manifest_sha256"] == "fd4c2f7120e98da0d00ec531ed9cd0615092b5886f37f2ecb9daa512839bd1fc"
+    assert set(update["changed_files"]) == {
+        "backend/profile_recovery.py", "backend/routers/channels.py", "backend/routers/profiles.py",
+        "backend/routers/settings.py", "frontend/src/App.bulkCreateStaging.test.tsx", "frontend/src/App.tsx",
+        "frontend/src/components/EditModeExitDialog.tsx", "frontend/src/hooks/useCreatedChannelProfiles.ts",
+        "frontend/src/hooks/useEditMode.ts", "frontend/src/services/api.ts", "frontend/src/types/editMode.ts",
+        "frontend/src/utils/stagedLedgerStorage.ts",
+    }
+    original = {k: v for k, v in manifest.items() if k != key}
+    previous = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous.append(row)
+    original["files"] = previous
+    assert hashlib.sha256((json.dumps(original, indent=2) + "\n").encode()).hexdigest() == update["previous_manifest_sha256"]
+    return original
+
+
+def test_postcreate_profile_review_delta_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(ROOT / "docker/alpine-native/application-source.json")
+    _before_postcreate_profile_review_delta(manifest)
+    assert verifier.verify(ROOT, manifest)["postcreate_profile_review_delta_update"] == manifest["postcreate_profile_review_delta_update"]
+
+
 def _before_postcreate_profile_review_rows(manifest):
+    manifest = _before_postcreate_profile_review_delta(manifest)
     update = manifest["postcreate_profile_review_update"]
     assert update["base_commit"] == "e933013f78edf7f6b730813534506ddd079f93e0"
     assert update["bead"] == "enhancedchannelmanager-0m06f.3.4.1"

@@ -10,8 +10,15 @@ refresh. A failed sibling and unrelated updates retain their own outcome.
 The picker, pre-Apply staged-intent restore, and accessibility follow-ups are
 out of scope.
 
+Settings supply a non-authorizing destination identifier. The profile catalog
+used for staging is read from that destination; App keeps the identifier with
+the staged profile IDs. Apply rejects mismatched selections locally, and the
+queued worker compares the expected destination to the client it actually
+selected, before writing anything. A mismatch returns an unapplied result and
+does not produce a map or recovery binding.
+
 The create worker issues an opaque binding from the requesting ECM operator
-and the actual Dispatcharr client that produced the map. Recovery-only profile
+and the verified Dispatcharr client that produced the map. Recovery-only profile
 routes require it on every read and mutation and use the same verified client
 for the operation. The normal profile routes are unchanged. No credentials or
 raw connection URL are added to the receipt. A stale callback saves only in its
@@ -39,7 +46,10 @@ and scripted faults are identified as such, not represented as live Dispatcharr.
   an unmapped rejected sibling (not just a failed stream assignment), an
   unrelated update, and either failed channel refresh or a lost later batch
   reply. Tests also cover late operator handoff, a missing create result,
-  and the actionable missing-profile notice on explicit retry.
+  and the actionable missing-profile notice on explicit retry. The mixed
+  response retries only the rejected sibling and rejected update, even when
+  another update was confirmed in the same response. A settings refresh does
+  not re-label a staged selection.
 - **Service logic:** `services/createdChannelProfiles.test.ts` exercises complete
   selected/unselected visibility, explicit empty selections, missing/malformed
   profiles, a mixed missing/healthy batch, concurrent changes before final read,
@@ -57,6 +67,10 @@ and scripted faults are identified as such, not represented as live Dispatcharr.
   destination or upstream credentials, actual JWT operator changes with auth
   optional, and a swap while a bound mutation is reading its body. A real
   Dispatcharr adapter supplies membership traffic to a private synthetic peer.
+  The async worker test pauses after queueing but before client selection,
+  swaps to a peer with overlapping IDs, and checks that the worker refuses
+  before creating a channel or issuing a binding. The bulk-commit router
+  test verifies retirement indexes after updates are merged and reordered.
 - **Rendered Chromium:** `e2e/post-create-profiles.spec.ts` drives the normal
   manual-create dialog and asynchronous bulk-commit polling contract against
   a private routed peer. It checks reload, membership-only retry, server-assigned
@@ -78,6 +92,10 @@ and scripted faults are identified as such, not represented as live Dispatcharr.
   of the final complete GET. Both the App and loopback HTTP landed-lost-reply
   tests failed because verified intent stayed pending. With the fresh read
   restored, both passed. The mutation was not retained.
+- On the first remediation commit the queued-worker test returned a valid ID
+  map from the replacement connection, and the failed-refresh test found the
+  staged ledger missing. Both checks now pass: the worker refuses the stale
+  scope and the ledger retains only the unresolved work.
 
 ```bash
 cd frontend

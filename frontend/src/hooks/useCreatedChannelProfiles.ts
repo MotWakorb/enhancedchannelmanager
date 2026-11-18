@@ -49,6 +49,7 @@ export function useCreatedChannelProfiles(
   operatorKey: string,
   onProfilesChange: (profiles: ChannelProfile[]) => void,
   serverUrl = '',
+  connectionIdentity?: string,
 ) {
   let destination = '';
   try {
@@ -59,8 +60,8 @@ export function useCreatedChannelProfiles(
   }
   const storageKey = STORAGE_PREFIX + encodeURIComponent(JSON.stringify([operatorKey, destination]));
   const scope = useMemo<Scope>(() => ({
-    key: storageKey, queue: new Map(), newIds: new Set(), locked: false, unknown: false,
-  }), [storageKey]);
+    key: storageKey, connectionIdentity, queue: new Map(), newIds: new Set(), locked: false, unknown: false,
+  }), [storageKey, connectionIdentity]);
   const active = useRef<Scope | null>(null);
   const [pending, setPending] = useState<PendingIntent[]>([]);
   const [pendingScope, setPendingScope] = useState<Scope | null>(null);
