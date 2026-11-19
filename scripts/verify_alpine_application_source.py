@@ -11,7 +11,7 @@ import stat
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_SHA256 = "000b5340fd654920bf9a92876818edf6907829b3fc5edd890e7c3f9561614301"
+MANIFEST_SHA256 = "cd0ca696817566b4281c9c41e6016d43c64db4c9a1f5fd45173596a6de5757b1"
 IGNORED_DIRECTORIES = frozenset(
     {
         "node_modules",
@@ -140,12 +140,13 @@ def verify(root: Path, manifest: dict) -> dict:
         "postcreate_profile_review_update": manifest.get("postcreate_profile_review_update"),
         "postcreate_profile_review_delta_update": manifest.get("postcreate_profile_review_delta_update"),
         "postcreate_profile_number_retry_update": manifest.get("postcreate_profile_number_retry_update"),
+        "vitest_mocker_security_update": manifest.get("vitest_mocker_security_update"),
         "adaptations": [
             row
             for row in rows
             if "adaptation_commit" in row or "adaptation_reason" in row
         ],
-        "scope": "Exact pinned application source candidate, including post-create profile-intent recovery, shared M3U Changes exclusions, prior group-deletion/probe repairs and version touchpoints, retaining date and container-base compatibility history. Excludes backend tests and Docker-excluded build/cache artifacts. Not independent review, runtime, advisory, publication or deployed approval.",
+        "scope": "Exact pinned application source candidate, including coordinated Vitest development-tool hardening, post-create profile-intent recovery, shared M3U Changes exclusions, prior group-deletion/probe repairs and version touchpoints, retaining date and container-base compatibility history. Excludes backend tests and Docker-excluded build/cache artifacts. Not independent review, runtime, advisory, publication or deployed approval.",
     }
 
 

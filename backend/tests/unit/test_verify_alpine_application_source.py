@@ -127,7 +127,47 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     }
 
 
+def _before_vitest_mocker_security(manifest):
+    key = "vitest_mocker_security_update"
+    update = manifest[key]
+    assert update["base_commit"] == "5694644dba3f05715ed554dbe42a4b00a22af3d0"
+    assert update["bead"] == "enhancedchannelmanager-wgf0b"
+    assert update["version"] == "0.18.2-0073"
+    assert update["previous_manifest_sha256"] == (
+        "000b5340fd654920bf9a92876818edf6907829b3fc5edd890e7c3f9561614301"
+    )
+    assert set(update["changed_files"]) == {
+        *VERSION_TOUCHPOINTS,
+        "frontend/package-lock.json",
+    }
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_vitest_mocker_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_vitest_mocker_security(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert (
+        result["vitest_mocker_security_update"] == manifest["vitest_mocker_security_update"]
+    )
+
+
 def _before_postcreate_profile_number_retry(manifest):
+    manifest = _before_vitest_mocker_security(manifest)
     key = "postcreate_profile_number_retry_update"
     update = manifest[key]
     assert update["base_commit"] == "d09d386a749e21163639eb53ccff56564312f002"

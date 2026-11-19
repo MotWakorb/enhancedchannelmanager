@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "ecm-0.18.2-0072",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0072/ecm-6e6408f9f714f898776bf96b5c0fe5e4e2de63f8d2b80f77abea80160cb2ac3b",
+  "name": "ecm-0.18.2-0073",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0073/ecm-d7eaa1d86404ade534ef5df0f0544000deab219b3dcfc8ac8b814edb3cb28c1e",
   "creationInfo": {
-    "created": "2026-11-18T18:00:51Z",
+    "created": "2026-11-18T20:52:32Z",
     "creators": [
       "Tool: scripts/generate_sbom.py-6"
     ],
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-ecm",
       "name": "enhanced-channel-manager",
-      "versionInfo": "0.18.2-0072",
+      "versionInfo": "0.18.2-0073",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2527,9 +2527,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.coverage-v8-4.1.11",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.coverage-v8-4.1.12",
       "name": "@vitest/coverage-v8",
-      "versionInfo": "4.1.11",
+      "versionInfo": "4.1.12",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2540,15 +2540,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40vitest/coverage-v8@4.1.11"
+          "referenceLocator": "pkg:npm/%40vitest/coverage-v8@4.1.12"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.expect-4.1.11",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.expect-4.1.12",
       "name": "@vitest/expect",
-      "versionInfo": "4.1.11",
+      "versionInfo": "4.1.12",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2559,15 +2559,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40vitest/expect@4.1.11"
+          "referenceLocator": "pkg:npm/%40vitest/expect@4.1.12"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.mocker-4.1.11",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.mocker-4.1.12",
       "name": "@vitest/mocker",
-      "versionInfo": "4.1.11",
+      "versionInfo": "4.1.12",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2578,15 +2578,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40vitest/mocker@4.1.11"
+          "referenceLocator": "pkg:npm/%40vitest/mocker@4.1.12"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.pretty-format-4.1.11",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.pretty-format-4.1.12",
       "name": "@vitest/pretty-format",
-      "versionInfo": "4.1.11",
+      "versionInfo": "4.1.12",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2597,15 +2597,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40vitest/pretty-format@4.1.11"
+          "referenceLocator": "pkg:npm/%40vitest/pretty-format@4.1.12"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.runner-4.1.11",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.runner-4.1.12",
       "name": "@vitest/runner",
-      "versionInfo": "4.1.11",
+      "versionInfo": "4.1.12",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2616,15 +2616,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40vitest/runner@4.1.11"
+          "referenceLocator": "pkg:npm/%40vitest/runner@4.1.12"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.snapshot-4.1.11",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.snapshot-4.1.12",
       "name": "@vitest/snapshot",
-      "versionInfo": "4.1.11",
+      "versionInfo": "4.1.12",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2635,15 +2635,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40vitest/snapshot@4.1.11"
+          "referenceLocator": "pkg:npm/%40vitest/snapshot@4.1.12"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.spy-4.1.11",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.spy-4.1.12",
       "name": "@vitest/spy",
-      "versionInfo": "4.1.11",
+      "versionInfo": "4.1.12",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2654,15 +2654,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40vitest/spy@4.1.11"
+          "referenceLocator": "pkg:npm/%40vitest/spy@4.1.12"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.utils-4.1.11",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.utils-4.1.12",
       "name": "@vitest/utils",
-      "versionInfo": "4.1.11",
+      "versionInfo": "4.1.12",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2673,7 +2673,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/%40vitest/utils@4.1.11"
+          "referenceLocator": "pkg:npm/%40vitest/utils@4.1.12"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -6935,9 +6935,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-vitest-4.1.11",
+      "SPDXID": "SPDXRef-Package-npm-vitest-4.1.12",
       "name": "vitest",
-      "versionInfo": "4.1.11",
+      "versionInfo": "4.1.12",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -6948,7 +6948,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/vitest@4.1.11"
+          "referenceLocator": "pkg:npm/vitest@4.1.12"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -9541,42 +9541,42 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.coverage-v8-4.1.11",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.coverage-v8-4.1.12",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.expect-4.1.11",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.expect-4.1.12",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.mocker-4.1.11",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.mocker-4.1.12",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.pretty-format-4.1.11",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.pretty-format-4.1.12",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.runner-4.1.11",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.runner-4.1.12",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.snapshot-4.1.11",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.snapshot-4.1.12",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.spy-4.1.11",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.spy-4.1.12",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.utils-4.1.11",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.utils-4.1.12",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10511,7 +10511,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-vitest-4.1.11",
+      "spdxElementId": "SPDXRef-Package-npm-vitest-4.1.12",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },

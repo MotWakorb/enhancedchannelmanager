@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "626c5674e05a29f7f0b90e5285e179b9ef4d020b28f32ea89b69e006eec0c860",
+      "sha256": "25a23ae4864215918731e0345abe1daf4d6daf63f4c97dc3241521426efd144d",
       "type": "file"
     },
     {
@@ -1128,7 +1128,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "cda70514ef689dbeaa65276ee29ffef84387b3821089bbfc73f4ee9dd6b300bd",
+      "sha256": "47d514a660126c114040211a7a9e9e2eac750a575aeb5ced85abca08480d68b6",
       "type": "file"
     },
     {
@@ -1824,13 +1824,13 @@
     {
       "executable": false,
       "path": "frontend/package-lock.json",
-      "sha256": "ed0636d796d038afefb3e13bd7fa6829c8aa572b4bb83ae6178b6586f3fc3e6c",
+      "sha256": "fc3a7b7b8db064e56d2bae376d20475b8c21cccc1d2b088514b0c20fdedbcd6d",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "6f8935e3e4565d7fc20186296e30d9592fff883f9e68f6fc80a8712211e58361",
+      "sha256": "88f8b27bbc9cc27130e9789b6d6177bfc38cfdc00d1e2f4435b05a078052d90a",
       "type": "file"
     },
     {
@@ -6750,5 +6750,18 @@
     "previous_manifest_sha256": "21d359fae93655f3c97a9ba59e5ee0e064110179c191ef26c0ad3355381ce065",
     "scope": "PR #1071 partial Apply delta: retain failed fields and range positions without replaying settled or superseded numbers. Same unshipped 0072; retains prior source and compatibility history. Not runtime, independent review, publication or deployed approval.",
     "version": "0.18.2-0072"
+  },
+  "vitest_mocker_security_update": {
+    "base_commit": "5694644dba3f05715ed554dbe42a4b00a22af3d0",
+    "bead": "enhancedchannelmanager-wgf0b",
+    "changed_files": {
+      "backend/main.py": "626c5674e05a29f7f0b90e5285e179b9ef4d020b28f32ea89b69e006eec0c860",
+      "backend/routers/backup.py": "cda70514ef689dbeaa65276ee29ffef84387b3821089bbfc73f4ee9dd6b300bd",
+      "frontend/package-lock.json": "ed0636d796d038afefb3e13bd7fa6829c8aa572b4bb83ae6178b6586f3fc3e6c",
+      "frontend/package.json": "6f8935e3e4565d7fc20186296e30d9592fff883f9e68f6fc80a8712211e58361"
+    },
+    "previous_manifest_sha256": "000b5340fd654920bf9a92876818edf6907829b3fc5edd890e7c3f9561614301",
+    "scope": "PR #1044 refreshed on current dev: coordinated Vitest 4.1.12 development tooling and 0073 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0073"
   }
 }
