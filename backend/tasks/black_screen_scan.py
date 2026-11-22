@@ -269,7 +269,30 @@ class BlackScreenScanTask(TaskScheduler):
                 )
 
         try:
-            tasks = [scan_one(sid, name, url) for sid, name, url in work_items]
+            # Bounded fan-out, mirroring probe_streams_by_ids: a few workers per
+            # M3U account pull streams one at a time. Starting one coroutine per
+            # stream (2000+) made every one of them run probe admission at once,
+            # i.e. thousands of concurrent get_stream/get_channel_stats calls
+            # against a 20-connection Dispatcharr client. Those calls are wrapped
+            # in asyncio.wait_for(timeout=10); cancelling queued/in-flight httpx
+            # requests en masse leaked pool slots until every Dispatcharr call in
+            # ECM failed with PoolTimeout (CLOSE-WAIT sockets) until a restart.
+            queues: dict = {}
+            for sid, name, url in work_items:
+                aid = self._prober._extract_m3u_account_id(stream_map[sid].get("m3u_account"))
+                queues.setdefault(aid, []).append((sid, name, url))
+
+            async def scan_queue(rows):
+                for sid, name, url in rows:
+                    if self._cancel_requested:
+                        break
+                    await scan_one(sid, name, url)
+
+            tasks = [
+                scan_queue(rows[offset::max_concurrent])
+                for rows in queues.values()
+                for offset in range(min(max_concurrent, len(rows)))
+            ]
             await asyncio.gather(*tasks)
         except Exception as e:
             logger.exception("[%s] Black screen scan failed: %s", self.task_id, e)

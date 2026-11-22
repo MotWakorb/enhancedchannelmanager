@@ -127,7 +127,45 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     }
 
 
+def _before_black_screen_scan_fanout(manifest):
+    key = "black_screen_scan_fanout_update"
+    update = manifest[key]
+    assert update["base_commit"] == "43a821c107a556aad117e2ff6af7d87646cf2e07"
+    assert update["bead"] == "gh-1074"
+    assert update["version"] == "0.18.2-0073"
+    assert update["previous_manifest_sha256"] == (
+        "cd0ca696817566b4281c9c41e6016d43c64db4c9a1f5fd45173596a6de5757b1"
+    )
+    assert set(update["changed_files"]) == {"backend/tasks/black_screen_scan.py"}
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_black_screen_scan_fanout_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_black_screen_scan_fanout(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert (
+        result["black_screen_scan_fanout_update"]
+        == manifest["black_screen_scan_fanout_update"]
+    )
+
+
 def _before_vitest_mocker_security(manifest):
+    manifest = _before_black_screen_scan_fanout(manifest)
     key = "vitest_mocker_security_update"
     update = manifest[key]
     assert update["base_commit"] == "5694644dba3f05715ed554dbe42a4b00a22af3d0"

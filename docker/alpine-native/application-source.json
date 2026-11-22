@@ -1572,7 +1572,7 @@
     {
       "executable": false,
       "path": "backend/tasks/black_screen_scan.py",
-      "sha256": "348f2fc43b21e3c585922fb581dd6fccc84219e15413bc6c1b4a95b554152371",
+      "sha256": "fecd9b3232eafebd801f8ed8787cc92a7a6c039415905a322627b74af307ffd2",
       "type": "file"
     },
     {
@@ -6762,6 +6762,16 @@
     },
     "previous_manifest_sha256": "000b5340fd654920bf9a92876818edf6907829b3fc5edd890e7c3f9561614301",
     "scope": "PR #1044 refreshed on current dev: coordinated Vitest 4.1.12 development tooling and 0073 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0073"
+  },
+  "black_screen_scan_fanout_update": {
+    "base_commit": "43a821c107a556aad117e2ff6af7d87646cf2e07",
+    "bead": "gh-1074",
+    "changed_files": {
+      "backend/tasks/black_screen_scan.py": "348f2fc43b21e3c585922fb581dd6fccc84219e15413bc6c1b4a95b554152371"
+    },
+    "previous_manifest_sha256": "cd0ca696817566b4281c9c41e6016d43c64db4c9a1f5fd45173596a6de5757b1",
+    "scope": "PR #1073 / issue #1074: bound black-screen-scan probe fan-out with per-M3U-account worker queues so Dispatcharr's connection pool is not exhausted. Same unshipped 0073; retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0073"
   }
 }
