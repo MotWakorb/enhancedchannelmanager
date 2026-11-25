@@ -201,6 +201,7 @@ def retain(
     }
     with (output / "index.json").open("x") as stream:
         stream.write(json.dumps(result, sort_keys=True, indent=2) + "\n")
+    (output / "index.json").chmod(0o644)
     return result
 
 

@@ -8,6 +8,7 @@ import gzip
 import hashlib
 import importlib.util
 import json
+import stat
 from pathlib import Path
 
 import pytest
@@ -118,6 +119,22 @@ def test_closed_public_evidence_namespace_keeps_original_bytes_and_no_private_in
     )
     assert {p.name for p in (out / "native").glob("*.pub")} == {"ecm-build.pub"}
     assert {p.name for p in (out / "busybox").glob("*.pub")} == {"ecm-busybox.rsa.pub"}
+
+
+def test_every_delivered_evidence_file_has_the_exact_recorded_mode_under_any_umask(
+    copier, subject
+):
+    """The owned-evidence reader requires exactly 0644 for every delivered file,
+    index.json included; the copier must set it rather than inherit the umask."""
+    native, busy, arch, _source, out, _calls = subject
+    copier.retain(native, busy, arch, out)
+    modes = {
+        path.relative_to(out).as_posix(): stat.S_IMODE(path.stat().st_mode)
+        for path in out.rglob("*")
+        if path.is_file()
+    }
+    assert len(modes) == 12  # eleven selected files plus index.json
+    assert {name: mode for name, mode in modes.items() if mode != 0o644} == {}
 
 
 def test_separate_original_busybox_source_root_reuses_all_existing_validation(
