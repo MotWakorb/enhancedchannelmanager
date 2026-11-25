@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "25a23ae4864215918731e0345abe1daf4d6daf63f4c97dc3241521426efd144d",
+      "sha256": "472f516dfe910891921e0a90ab0613a5e1d8d10718c218df71a41a1169b657d7",
       "type": "file"
     },
     {
@@ -1128,7 +1128,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "47d514a660126c114040211a7a9e9e2eac750a575aeb5ced85abca08480d68b6",
+      "sha256": "4eb350b46c83f459c5009d109ffd7a91a636d79268dc3b45562bab593191b56f",
       "type": "file"
     },
     {
@@ -1830,7 +1830,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "88f8b27bbc9cc27130e9789b6d6177bfc38cfdc00d1e2f4435b05a078052d90a",
+      "sha256": "ce9eeca7756d63aa51316ccee50615bb28a8ec24b98f4bcfa441f29d963bf049",
       "type": "file"
     },
     {
@@ -6763,5 +6763,17 @@
     "previous_manifest_sha256": "000b5340fd654920bf9a92876818edf6907829b3fc5edd890e7c3f9561614301",
     "scope": "PR #1044 refreshed on current dev: coordinated Vitest 4.1.12 development tooling and 0073 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0073"
+  },
+  "owned_evidence_mode_update": {
+    "base_commit": "43a821c107a556aad117e2ff6af7d87646cf2e07",
+    "bead": "enhancedchannelmanager-7fzq0",
+    "changed_files": {
+      "backend/main.py": "25a23ae4864215918731e0345abe1daf4d6daf63f4c97dc3241521426efd144d",
+      "backend/routers/backup.py": "47d514a660126c114040211a7a9e9e2eac750a575aeb5ced85abca08480d68b6",
+      "frontend/package.json": "88f8b27bbc9cc27130e9789b6d6177bfc38cfdc00d1e2f4435b05a078052d90a"
+    },
+    "previous_manifest_sha256": "cd0ca696817566b4281c9c41e6016d43c64db4c9a1f5fd45173596a6de5757b1",
+    "scope": "Umask-independent Alpine owned-evidence tests and copier index.json mode, plus 0074 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0074"
   }
 }

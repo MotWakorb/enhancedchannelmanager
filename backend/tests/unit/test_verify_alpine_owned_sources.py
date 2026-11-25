@@ -69,6 +69,10 @@ def capsule(consumer, tmp_path, request):
     ).hexdigest()
     index["files"] = consumer.owned_artifacts(proof)
     (proof / "index.json").write_text(json.dumps(index))
+    # write_text()/mkdir() inherit the caller's umask; the reader requires exact
+    # recorded modes, so pin them explicitly instead of relying on umask 022.
+    for path in sorted(proof.rglob("*")):
+        path.chmod(0o755 if path.is_dir() else 0o644)
     return tmp_path, arch, proof, index
 
 

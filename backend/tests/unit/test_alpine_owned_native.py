@@ -183,6 +183,9 @@ def test_package_label_and_self_reported_status_never_clear_incomplete_component
 def live(tmp_path):
     directory = tmp_path / "usr/lib"
     directory.mkdir(parents=True)
+    # mkdir() inherits the caller's umask; the recorded directory modes are 755.
+    directory.parent.chmod(0o755)
+    directory.chmod(0o755)
     file = directory / "library.so.1"
     file.write_bytes(b"original signed file bytes")
     file.chmod(0o755)
