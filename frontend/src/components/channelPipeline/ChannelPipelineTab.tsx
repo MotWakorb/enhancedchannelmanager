@@ -746,12 +746,6 @@ export function ChannelPipelineTab() {
         for (const w of nonReversibleWarnings) {
           notifications.warning(w.message, 'Channel Pipeline');
         }
-        // GH #1018: a dry run previewed as the M3U-refresh trigger predicts
-        // streams that run would defer behind pending merges. The message is
-        // backend-authored PREDICTED copy; nothing was queued.
-        for (const w of allWarnings.filter(isPendingMergeDeferralPredictedWarning)) {
-          notifications.warning(w.message, 'Channel Pipeline');
-        }
         // Refresh executions list and rule stats (match counts). The hook
         // already refetches executions in its finally block, but rule stats
         // (last_run_at / match_count) live on a separate endpoint.
@@ -2267,7 +2261,7 @@ export function ChannelPipelineTab() {
                         role="status"
                         key={`predicted-deferral-${i}`}
                       >
-                        <span className="material-icons norm-warning-icon">schedule</span>
+                        <span className="material-icons norm-warning-icon" aria-hidden="true">schedule</span>
                         <div className="norm-warning-content">
                           <p className="norm-warning-title">
                             Predicted: {w.stream_count} stream{w.stream_count !== 1 ? 's' : ''}{' '}

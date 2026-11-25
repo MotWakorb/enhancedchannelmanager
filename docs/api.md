@@ -1587,6 +1587,12 @@ A predicted deferral appears as:
 `preview_trigger` without `dry_run: true`, or with any value other than
 `m3u_refresh`, is rejected with 422.
 
+On a dry run, `pending_merges_added`, `pending_merge_stream_count` and
+`pending_merge_deferred` are **predicted** counts, not applied work: nothing was
+queued or deferred. Treat them as live-run counters only when `mode` is not
+`dry_run`. The prediction is advisory: a concurrent live run can insert the
+blocking row before the preview's answer is acted on.
+
 Execution history is ordered by newest `started_at`, then newest execution `id`
 when timestamps tie. `limit` defaults to 50 and accepts 1 through 500; `offset`
 defaults to 0. The same filters and ordering are applied before pagination, and

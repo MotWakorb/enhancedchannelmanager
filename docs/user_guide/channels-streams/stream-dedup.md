@@ -111,13 +111,13 @@ That preview makes the same create-or-defer decision the refresh makes, using th
 - the id of the pending row it would stay blocked behind, the same row the refresh would collide with;
 - a predicted **new** row (counted, with no id yet) when the refresh would queue a fresh one, because no pending row exists for that stream and channel yet.
 
-The counts use the live run's units: streams, deferred create actions, and distinct rows. Every line is labeled **PREDICTED**. The execution's details show a **Predicted: N streams would be deferred by pending merges** banner that lists the blocking row ids, and the run's toast repeats it.
+The counts use the live run's units: streams, deferred create actions, and distinct rows. Every line is labeled **PREDICTED**. The execution's details (open an execution in the Channel Pipeline history) show a **Predicted: N streams would be deferred by pending merges** banner that lists the blocking row ids. The banner is the only place the prediction appears in the UI; no toast is shown.
 
 **The preview never touches the queue.** It does not insert, update, dismiss or resolve a pending merge, and it writes no journal row. A dismissed or merged row does not block, both in the preview and in a real refresh.
 
 Things to know:
 
-- **The toolbar Dry Run and the per-rule Test icon do not preview the refresh.** They run as API-triggered dry runs. A manual **Run** never defers to the queue (see the table above), so those previews correctly predict creation for these streams. Only a preview with `preview_trigger: "m3u_refresh"` predicts what the unattended refresh will do. Its execution history row shows the trigger as `m3u_refresh` with mode **Dry Run**.
+- **The toolbar Dry Run and the per-rule Test icon do not preview the refresh.** They run as API-triggered dry runs and never predict a deferral, which matches a live API run: a manual **Run** never defers to the queue (see the table above), so those previews correctly predict creation for these streams. The UI has no control that sends `preview_trigger`. Only a preview with `preview_trigger: "m3u_refresh"` predicts what the unattended refresh will do. Its execution history row shows the trigger as `m3u_refresh` with mode **Dry Run**.
 - **Pick the same rules the refresh runs.** The refresh runs only enabled rules with **Run on refresh** set (plus Event Sync rules opted into auto-run). Pass those rule ids for an exact prediction.
 - `preview_trigger` is refused (HTTP 422) without `dry_run: true`. It cannot change what a live run does.
 

@@ -6570,6 +6570,11 @@ class ActionExecutor:
         PREDICTED throughout: nothing was queued and nothing was deferred.
         """
         candidate_id = prediction.candidate.candidate_channel_id
+        # On a dry run these counters (and the ``pending_merges_added`` /
+        # ``pending_merge_deferred`` fields the engine copies from them) are
+        # PREDICTED counts: nothing was queued or deferred. Every consumer
+        # that treats them as applied work is live-only; a dry-run reader
+        # must pair them with ``dry_run`` / the predicted warning.
         exec_ctx.pending_merges_added += 1
         exec_ctx.pending_merge_stream_ids.add(stream_ctx.stream_id)
         if prediction.merge_id is not None:

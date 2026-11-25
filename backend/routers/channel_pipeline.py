@@ -1645,6 +1645,27 @@ def _supervise_background_pipeline(coro, *, execution_id: int, label: str) -> as
     return task
 
 
+def _refuse_preview_trigger_on_live_run(request, route: str) -> None:
+    """Defence in depth for GH #1018: the request model already refuses it.
+
+    ``preview_trigger`` on a live run would change what a live API run does,
+    so the handlers re-check instead of trusting that validation ran (a
+    ``model_construct`` caller or a future model change skips it). Read with
+    ``getattr`` so a plain ``RunPipelineRequest`` (in-process callers, no
+    such field) keeps the API trigger.
+    """
+    preview_trigger = getattr(request, "preview_trigger", None)
+    if preview_trigger is not None and not request.dry_run:
+        logger.warning(
+            "[AUTO-CREATE] POST %s refused: preview_trigger=%s requires dry_run=true",
+            route, preview_trigger,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail="preview_trigger is only valid with dry_run=true",
+        )
+
+
 @router.post("/run", status_code=202)
 async def run_auto_creation_pipeline(
     request: RunPipelinePreviewableRequest,
@@ -1663,6 +1684,7 @@ async def run_auto_creation_pipeline(
     """
     if caller_is_mcp and not request.dry_run:
         raise HTTPException(status_code=409, detail="MCP execution requires prepare and commit")
+    _refuse_preview_trigger_on_live_run(request, "/run")
     # A plain RunPipelineRequest (in-process callers) carries no
     # preview_trigger and keeps the API trigger unchanged.
     preview_trigger = getattr(request, "preview_trigger", None)
@@ -1720,6 +1742,8 @@ async def run_selected_auto_creation_rules(
             status_code=409,
             detail="MCP execution requires prepare and commit",
         )
+
+    _refuse_preview_trigger_on_live_run(request, "/run-selected")
 
     if not request.rule_ids:
         raise HTTPException(status_code=400, detail={
