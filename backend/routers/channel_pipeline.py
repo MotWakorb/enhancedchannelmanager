@@ -1663,11 +1663,14 @@ async def run_auto_creation_pipeline(
     """
     if caller_is_mcp and not request.dry_run:
         raise HTTPException(status_code=409, detail="MCP execution requires prepare and commit")
+    # A plain RunPipelineRequest (in-process callers) carries no
+    # preview_trigger and keeps the API trigger unchanged.
+    preview_trigger = getattr(request, "preview_trigger", None)
     logger.debug(
         "[AUTO-CREATE] POST /run - dry_run=%s preview_trigger=%s",
-        request.dry_run, request.preview_trigger,
+        request.dry_run, preview_trigger,
     )
-    triggered_by = request.preview_trigger or "api"
+    triggered_by = preview_trigger or "api"
     try:
         engine = await _ensure_engine()
         execution_id = _create_pending_execution(
