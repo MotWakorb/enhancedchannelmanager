@@ -1635,6 +1635,97 @@ describe('ChannelPipelineTab', () => {
       });
     });
 
+    // GH #1018: a dry run previewed as the M3U-refresh trigger predicts the
+    // streams that run would defer behind pending merges. The prediction is
+    // persisted as a warning and must read as PREDICTED, never as applied.
+    const PREDICTED_DEFERRAL_MSG =
+      'PREDICTED: 2 streams would be deferred by pending merges (no channel ' +
+      'would be created) — rows: 7. Nothing was queued; a live M3U-refresh ' +
+      'run with the same rules, streams, channels and queue would defer these ' +
+      'streams until the rows are resolved in Pending Merges.';
+
+    const predictedDeferralWarning = () => ({
+      type: 'pending_merge_deferral_predicted' as const,
+      predicted: true as const,
+      stream_count: 2,
+      action_count: 2,
+      pending_merge_ids: [7],
+      new_row_count: 0,
+      message: PREDICTED_DEFERRAL_MSG,
+    });
+
+    it('dry run predicting pending-merge deferrals: toasts the predicted copy, not a normalization toast', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ name: 'Slots', enabled: true }),
+      );
+      server.use(
+        http.post('/api/channel-pipeline/run', async () => {
+          const execution = createMockChannelPipelineExecution({
+            mode: 'dry_run',
+            triggered_by: 'm3u_refresh',
+            status: 'completed',
+            channels_created: 0,
+            streams_matched: 2,
+            warnings: [predictedDeferralWarning()],
+          });
+          mockDataStore.channelPipelineExecutions.unshift(execution);
+          return HttpResponse.json(
+            { execution_id: execution.id, status: 'running', message: 'started' },
+            { status: 202 },
+          );
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await waitFor(() => {
+        expect(screen.getByText('Slots')).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('button', { name: /^dry run$/i }));
+
+      await waitFor(() => {
+        expect(
+          screen.getByText(/PREDICTED: 2 streams would be deferred by pending merges/),
+        ).toBeInTheDocument();
+      });
+      expect(
+        screen.queryByText(/normalization applied no changes/i),
+      ).toBeNull();
+    });
+
+    it('expanded dry-run details with a predicted deferral: renders a predicted banner with the blocking rows', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          mode: 'dry_run',
+          triggered_by: 'm3u_refresh',
+          streams_matched: 2,
+          channels_created: 0,
+          status: 'completed',
+          warnings: [predictedDeferralWarning()],
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /view details/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('button', { name: /view details/i }));
+
+      await waitFor(() => {
+        expect(
+          screen.getByText(/predicted: 2 streams would be deferred by pending merges/i, {
+            selector: '.norm-warning-title',
+          }),
+        ).toBeInTheDocument();
+      });
+      expect(screen.getByText(/blocking pending-merge rows: 7/i)).toBeInTheDocument();
+      expect(screen.getByText(/nothing was queued/i)).toBeInTheDocument();
+      expect(
+        screen.queryByText(/normalization applied no changes/i),
+      ).toBeNull();
+    });
+
     // enhancedchannelmanager-7wuhd: event_sync runs need an event_sync-aware
     // summary — the standard evaluated/matched/created counters are
     // structurally 0 for them and read as "nothing happened".

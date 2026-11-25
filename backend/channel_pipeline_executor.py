@@ -176,6 +176,13 @@ class ActionResult:
     # can reverse. Such results set this False so add_result does NOT record a
     # misleading modified/rollback entity claiming the change is reversible.
     rollbackable: bool = True
+    # GH #1018: a create_channel the pending-merges queue deferred (live) or
+    # would defer (dry-run prediction), and the existing row it is blocked
+    # behind. ``pending_merge_id`` is None for a predicted deferral behind a
+    # row a live run would insert. The engine copies both onto the execution
+    # log and dry-run results so live and preview report the same units.
+    pending_merge_deferred: bool = False
+    pending_merge_id: Optional[int] = None
 
 
 @dataclass
@@ -295,6 +302,10 @@ class ExecutionContext:
     # streams affected are tracked separately so the summary can report
     # streams, actions and rows with accurate units.
     pending_merge_stream_ids: set = field(default_factory=set)
+    # GH #1018: dry-run only. The distinct (stream_name, candidate_channel_id)
+    # pairs a live run would INSERT a new pending row for — no id exists yet,
+    # so these are counted, not listed, alongside ``pending_merge_ids``.
+    predicted_new_pending_merge_keys: set = field(default_factory=set)
 
     def add_result(self, result: ActionResult):
         """Add an action result and update statistics."""
@@ -1554,8 +1565,10 @@ class ActionExecutor:
         # row encodes the deferred operator decision for BD-J's UI
         # (and BD-E's accept/dismiss endpoints) to resolve.
         #
-        # The hook short-circuits in dry-run (a preview must not
-        # mutate the queue) and for triggered_by values other than
+        # In dry-run the hook PREDICTS instead of writing (GH #1018: same
+        # decision, read-only, so a preview shows the deferral the live run
+        # would apply without mutating the queue). It short-circuits
+        # for triggered_by values other than
         # ``m3u_refresh`` (scheduled / manual auto-creation runs
         # predate the dedup epic and stay on the legacy "always
         # create" semantics — they are not one of the four ADR-008
@@ -2756,15 +2769,17 @@ class ActionExecutor:
             # read as an EPG problem and go looking in the wrong place.
             deferral = self._deferred_channel_creations.get(stream_ctx.stream_id)
             if deferral:
+                # GH #1018: a dry run predicts the deferral, it does not apply it.
+                verb = "would be deferred" if exec_ctx.dry_run else "was deferred"
                 return ActionResult(
                     success=False,
                     action_type=action.type,
                     description=(
-                        "No channel context for assign_epg — channel creation "
-                        "was deferred: " + deferral
+                        f"No channel context for assign_epg — channel creation "
+                        f"{verb}: " + deferral
                     ),
                     error=(
-                        "No channel to update — channel creation was deferred: "
+                        f"No channel to update — channel creation {verb}: "
                         + deferral
                     ),
                 )
@@ -6359,13 +6374,16 @@ class ActionExecutor:
             was enqueued (or was already present from an earlier M3U
             refresh — §D5 partial-unique-index collision). The caller
             MUST return this verbatim instead of creating the channel.
+            In dry-run (GH #1018) the same ``skipped=True`` shape carries a
+            PREDICTED deferral computed read-only; nothing is queued.
             ``None`` when no candidate was found or the hook
-            short-circuited (dry-run, non-m3u_refresh triggered_by) —
+            short-circuited (non-m3u_refresh triggered_by) —
             the caller proceeds with normal channel creation.
         """
         from services.m3u_dedup_hook import (
             M3U_REFRESH_TRIGGERED_BY,
             check_and_enqueue_pending_merge,
+            predict_pending_merge,
         )
 
         # Cheap short-circuit before any imports / DB work: only the
@@ -6377,10 +6395,11 @@ class ActionExecutor:
         if self._triggered_by != M3U_REFRESH_TRIGGERED_BY:
             return None
 
-        if exec_ctx.dry_run:
-            # Dry-run preview must not mutate the queue. The
-            # downstream branch handles the simulated channel.
-            return None
+        # GH #1018: a dry run no longer returns early here. It builds the
+        # SAME candidate list and reads the SAME threshold below, then asks
+        # the read-only ``predict_pending_merge`` instead of the writing hook,
+        # so the preview predicts the deferral the live run would apply
+        # without touching the queue.
 
         # Build same-group candidate list from the executor's already-
         # loaded channel cache. The auto-creation engine fetches the
@@ -6446,6 +6465,25 @@ class ActionExecutor:
 
         from database import get_session
         db_session = get_session()
+        if exec_ctx.dry_run:
+            try:
+                prediction = predict_pending_merge(
+                    stream_name=stream_ctx.stream_name,
+                    candidates=candidates,
+                    threshold=threshold,
+                    triggered_by=self._triggered_by,
+                    db_session=db_session,
+                )
+            finally:
+                db_session.close()
+            if not prediction.deferred:
+                return None
+            return self._record_predicted_pending_merge(
+                stream_ctx=stream_ctx,
+                channel_name=channel_name,
+                exec_ctx=exec_ctx,
+                prediction=prediction,
+            )
         try:
             result = check_and_enqueue_pending_merge(
                 stream_name=stream_ctx.stream_name,
@@ -6510,6 +6548,63 @@ class ActionExecutor:
             entity_name=channel_name,
             skipped=True,
             details=[description],
+            pending_merge_deferred=True,
+            pending_merge_id=result.merge_id,
+        )
+
+    def _record_predicted_pending_merge(
+        self,
+        *,
+        stream_ctx: StreamContext,
+        channel_name: str,
+        exec_ctx: ExecutionContext,
+        prediction,
+    ) -> ActionResult:
+        """GH #1018: the dry-run twin of the live deferral bookkeeping above.
+
+        Counts the predicted deferral in the same three units the live run
+        reports (create actions, distinct streams, distinct rows) so a preview
+        and the run it predicts can be compared directly. A row that exists
+        is named by id; a row a live run would insert has no id yet, so it is
+        counted by its (stream_name, candidate) pair instead. Wording is
+        PREDICTED throughout: nothing was queued and nothing was deferred.
+        """
+        candidate_id = prediction.candidate.candidate_channel_id
+        exec_ctx.pending_merges_added += 1
+        exec_ctx.pending_merge_stream_ids.add(stream_ctx.stream_id)
+        if prediction.merge_id is not None:
+            if prediction.merge_id not in exec_ctx.pending_merge_ids:
+                exec_ctx.pending_merge_ids.append(prediction.merge_id)
+            description = (
+                f"PREDICTED (dry run, nothing queued): stream "
+                f"'{stream_ctx.stream_name}' would be deferred behind existing "
+                f"pending merge row id={prediction.merge_id} for channel "
+                f"id={candidate_id} (confidence="
+                f"{prediction.candidate.confidence:.2f}); no channel would be "
+                f"created"
+            )
+        else:
+            exec_ctx.predicted_new_pending_merge_keys.add(
+                (stream_ctx.stream_name, candidate_id)
+            )
+            description = (
+                f"PREDICTED (dry run, nothing queued): stream "
+                f"'{stream_ctx.stream_name}' would be queued as a new pending "
+                f"merge candidate for existing channel id={candidate_id} "
+                f"(confidence={prediction.candidate.confidence:.2f}); no "
+                f"channel would be created"
+            )
+        self._deferred_channel_creations[stream_ctx.stream_id] = description
+        return ActionResult(
+            success=True,
+            action_type="create_channel",
+            description=description,
+            entity_type="channel",
+            entity_name=channel_name,
+            skipped=True,
+            details=[description],
+            pending_merge_deferred=True,
+            pending_merge_id=prediction.merge_id,
         )
 
     def _find_channel_by_regex(self, pattern: str) -> Optional[dict]:

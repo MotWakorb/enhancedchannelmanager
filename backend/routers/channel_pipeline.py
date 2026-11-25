@@ -13,7 +13,7 @@ import tempfile
 import time
 import uuid
 from datetime import date, datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import httpx
 
@@ -245,7 +245,38 @@ class RunPipelineRequest(BaseModel):
     rule_ids: Optional[List[int]] = None
 
 
-class RunSelectedRulesRequest(BaseModel):
+# GH #1018: the one trigger a dry run may preview AS. Only the M3U-refresh
+# run defers creations behind the pending-merges queue (ADR-008 §D1), so it is
+# the only trigger whose preview differs from the plain API dry run.
+PreviewTrigger = Literal["m3u_refresh"]
+
+
+class _PreviewTriggerMixin(BaseModel):
+    """``preview_trigger``: run a DRY RUN under another trigger's semantics.
+
+    With ``preview_trigger="m3u_refresh"`` the dry run makes the same
+    create-versus-defer decision the unattended M3U-refresh run makes, so a
+    stream that run would defer behind a pending merge is predicted as a
+    deferral (with the blocking row id) instead of a create. Read-only:
+    the queue is never written. Refused for a live run — it would change
+    what a live API run does, which is not what it is for.
+    """
+
+    preview_trigger: Optional[PreviewTrigger] = None
+
+    @model_validator(mode="after")
+    def _preview_trigger_requires_dry_run(self):
+        if self.preview_trigger is not None and not self.dry_run:
+            raise ValueError("preview_trigger is only valid with dry_run=true")
+        return self
+
+
+class RunPipelinePreviewableRequest(_PreviewTriggerMixin, RunPipelineRequest):
+    """``POST /run`` body. Kept separate from :class:`RunPipelineRequest`,
+    whose dump is part of the MCP prepare/commit plan payload."""
+
+
+class RunSelectedRulesRequest(_PreviewTriggerMixin):
     """Strict scope for an atomic selected-rule run."""
     dry_run: bool = False
     rule_ids: List[int] = Field(default_factory=list, max_length=500)
@@ -1616,7 +1647,7 @@ def _supervise_background_pipeline(coro, *, execution_id: int, label: str) -> as
 
 @router.post("/run", status_code=202)
 async def run_auto_creation_pipeline(
-    request: RunPipelineRequest,
+    request: RunPipelinePreviewableRequest,
     _admin=RequireAdminIfEnabled,
     caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
 ):
@@ -1632,17 +1663,21 @@ async def run_auto_creation_pipeline(
     """
     if caller_is_mcp and not request.dry_run:
         raise HTTPException(status_code=409, detail="MCP execution requires prepare and commit")
-    logger.debug("[AUTO-CREATE] POST /run - dry_run=%s", request.dry_run)
+    logger.debug(
+        "[AUTO-CREATE] POST /run - dry_run=%s preview_trigger=%s",
+        request.dry_run, request.preview_trigger,
+    )
+    triggered_by = request.preview_trigger or "api"
     try:
         engine = await _ensure_engine()
         execution_id = _create_pending_execution(
             mode="dry_run" if request.dry_run else "execute",
-            triggered_by="api",
+            triggered_by=triggered_by,
         )
         _supervise_background_pipeline(
             engine.run_pipeline(
                 dry_run=request.dry_run,
-                triggered_by="api",
+                triggered_by=triggered_by,
                 m3u_account_ids=request.m3u_account_ids,
                 rule_ids=request.rule_ids,
                 execution_id=execution_id,
@@ -1707,18 +1742,19 @@ async def run_selected_auto_creation_rules(
             detail=detail,
         )
 
+    triggered_by = request.preview_trigger or "api"
     try:
         engine = await _ensure_engine()
         execution_id = _create_pending_execution(
             mode="dry_run" if request.dry_run else "execute",
-            triggered_by="api",
+            triggered_by=triggered_by,
             selected_rules=rules,
         )
         canonical_rule_ids = [rule.id for rule in rules]
         _supervise_background_pipeline(
             engine.run_pipeline(
                 dry_run=request.dry_run,
-                triggered_by="api",
+                triggered_by=triggered_by,
                 rule_ids=canonical_rule_ids,
                 execution_id=execution_id,
                 require_all_rule_ids=True,

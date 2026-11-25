@@ -626,13 +626,32 @@ export interface NonReversibleProfileChangesWarning {
 }
 
 /**
+ * GH #1018: a DRY RUN previewed as the M3U-refresh trigger predicts streams that
+ * run would defer behind pending merges instead of creating a channel. Nothing
+ * was queued. Units match the live run's deferral report: ``stream_count``
+ * distinct streams, ``action_count`` deferred create actions, the existing
+ * blocking ``pending_merge_ids``, and ``new_row_count`` rows a live run would
+ * insert (no id until it does). ``message`` is operator-ready PREDICTED copy.
+ */
+export interface PendingMergeDeferralPredictedWarning {
+  type: 'pending_merge_deferral_predicted';
+  predicted: true;
+  stream_count: number;
+  action_count: number;
+  pending_merge_ids: number[];
+  new_row_count: number;
+  message: string;
+}
+
+/**
  * Discriminated union of every warning shape the backend can persist into the
  * execution ``warnings`` column. Discriminate on ``type``; a missing ``type``
  * is a legacy NormalizationWarning row (see {@link isNormalizationWarning}).
  */
 export type ExecutionWarning =
   | NormalizationWarning
-  | NonReversibleProfileChangesWarning;
+  | NonReversibleProfileChangesWarning
+  | PendingMergeDeferralPredictedWarning;
 
 /**
  * True for the disabled-normalization-group warning variant. Robust to legacy
@@ -644,7 +663,12 @@ export type ExecutionWarning =
 export function isNormalizationWarning(
   w: ExecutionWarning,
 ): w is NormalizationWarning {
-  if (w.type === 'non_reversible_profile_changes') return false;
+  if (
+    w.type === 'non_reversible_profile_changes' ||
+    w.type === 'pending_merge_deferral_predicted'
+  ) {
+    return false;
+  }
   return (
     w.type === 'disabled_normalization_group' ||
     w.type === undefined ||
@@ -657,6 +681,13 @@ export function isNonReversibleProfileChangesWarning(
   w: ExecutionWarning,
 ): w is NonReversibleProfileChangesWarning {
   return w.type === 'non_reversible_profile_changes';
+}
+
+/** True for the GH #1018 predicted pending-merge deferral warning (dry run only). */
+export function isPendingMergeDeferralPredictedWarning(
+  w: ExecutionWarning,
+): w is PendingMergeDeferralPredictedWarning {
+  return w.type === 'pending_merge_deferral_predicted';
 }
 
 export interface DisabledNormalizationGroup {
@@ -688,6 +719,13 @@ export interface DryRunResult {
   action: string;
   would_create: boolean;
   would_modify: boolean;
+  /**
+   * GH #1018: present (true) only when the preview predicts the M3U-refresh
+   * run would defer this create behind a pending merge instead.
+   */
+  would_defer?: boolean;
+  /** The existing blocking row; null when a live run would insert a new one. */
+  pending_merge_id?: number | null;
 }
 
 // =============================================================================
@@ -725,6 +763,13 @@ export interface ActionLogEntry {
   entity_id?: number;
   error?: string;
   details?: string[];
+  /**
+   * GH #1018: set on a create_channel the pending-merges queue deferred (live)
+   * or would defer (dry run); same shape in both modes.
+   */
+  pending_merge_deferred?: boolean;
+  /** The existing blocking row; null for a predicted new row. */
+  pending_merge_id?: number | null;
 }
 
 // =============================================================================
