@@ -639,7 +639,7 @@
     {
       "executable": false,
       "path": "backend/channel_pipeline_executor.py",
-      "sha256": "aaccf5fce71edc38288672a4fbad0cec2c7adf019dbce9023e66c89506226835",
+      "sha256": "75e4675b769fce50d90f6d51c39c4d83840f0e36b932fe84f6360c88fbf32842",
       "type": "file"
     },
     {
@@ -1146,7 +1146,7 @@
     {
       "executable": false,
       "path": "backend/routers/channel_pipeline.py",
-      "sha256": "d7a22129816e0163d88b59ddd888cf812fc82c0a779ae7f9d0d074ba855a08f9",
+      "sha256": "9bfcbbbc4a9662f4eead4a45ee4f0723683d14c4ce6df63177b1d04ce07fa3ca",
       "type": "file"
     },
     {
@@ -3684,13 +3684,13 @@
     {
       "executable": false,
       "path": "frontend/src/components/channelPipeline/ChannelPipelineTab.test.tsx",
-      "sha256": "c870232b59782015e9df5911729070345e9d74201fd10c3037d957209c55716b",
+      "sha256": "c6cd2bfa354c31fe1b7fb2ad318a2498a2001b167572738cfdc6be1feba1d5ab",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/components/channelPipeline/ChannelPipelineTab.tsx",
-      "sha256": "50c44c2d12b92c0aa93cf49ec6d7848f9f487b67960ad041f6f727265e4f473f",
+      "sha256": "2782d308ff64be97f318067d912ea1bd4a502a8a207d860ee22e37e33984b183",
       "type": "file"
     },
     {

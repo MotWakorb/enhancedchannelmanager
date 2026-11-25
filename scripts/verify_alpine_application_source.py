@@ -11,7 +11,7 @@ import stat
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_SHA256 = "0602134b4851c025fea463864e697f581372c4fa822fa84fa3a284dc52885ea2"
+MANIFEST_SHA256 = "d2f75cc8ef5015eaaf60070469bfc1ffc172452763db7a7bda3b816b720fe7dc"
 IGNORED_DIRECTORIES = frozenset(
     {
         "node_modules",
