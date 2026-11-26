@@ -1,9 +1,7 @@
 /**
- * Bead enhancedchannelmanager-bv8n7: the "reload channels when search changes"
- * effect used to fire a second full loadChannels() ~500ms after mount even
- * though the search term never changed. loadChannels() flips the channels
- * loading flag, so ChannelsPane swapped its whole group tree for a placeholder
- * and destroyed any open row/group menu.
+ * loadChannels() flips the channels loading flag, so ChannelsPane swaps its
+ * group tree for a placeholder and destroys open row/group menus; the search
+ * effect must not reload a term that is already loaded.
  */
 import { StrictMode, type ReactNode } from 'react';
 import { act, render, waitFor } from '@testing-library/react';
@@ -99,7 +97,7 @@ async function mountApp(strict = false) {
   await settle();
 }
 
-describe('App channel search reload (bv8n7)', () => {
+describe('App channel search reload', () => {
   beforeEach(() => {
     sessionStorage.clear();
     testState.channelManagerProps = null;
@@ -176,5 +174,21 @@ describe('App channel search reload (bv8n7)', () => {
     act(() => testState.channelManagerProps!.onChannelSearchChange(''));
     await advance(2000);
     expect(channelCalls().length).toBe(before);
+  });
+
+  it('reloads when typing reverts to a term whose load was aborted by the intervening edit', async () => {
+    await mountApp();
+    await advance(1000);
+    const before = channelCalls().length;
+    act(() => testState.channelManagerProps!.onChannelSearchChange('a'));
+    await advance(600);
+    expect(channelCalls().length).toBe(before + 1);
+    expect(searchesRequested().slice(-1)[0]).toBe('a');
+    act(() => testState.channelManagerProps!.onChannelSearchChange('ab'));
+    await advance(100);
+    act(() => testState.channelManagerProps!.onChannelSearchChange('a'));
+    await advance(600);
+    expect(channelCalls().length).toBe(before + 2);
+    expect(searchesRequested().slice(-1)[0]).toBe('a');
   });
 });
