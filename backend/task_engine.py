@@ -466,6 +466,35 @@ def _success_task_completion_message(task_id: str, result: TaskResult) -> str:
     return f"Successfully completed. {result.success_count} items processed{skip_note}{dur}"
 
 
+# The alert body is pushed to Telegram, Discord, SMTP and ntfy, so the appended
+# category list is bounded; the full list stays in details and Task History.
+_DEGRADED_NAMES_IN_ALERT = 5
+
+
+def _error_task_completion_message(task_id: str, result: TaskResult) -> str:
+    """Alert body for a run routed to the error branch.
+
+    The error code stays the primary signal. A DBAS backup that failed its cloud
+    upload AND stubbed Dispatcharr categories also names those categories,
+    because the error code alone would let the operator fix the upload and never
+    learn the artifact is missing data. Plain text only: category names are
+    code-defined section keys and the channel formatters escape the body.
+    """
+    body = result.error or result.message or "Unknown error"
+    if task_id != "dbas_backup":
+        return body
+    details = result.details if isinstance(result.details, dict) else {}
+    degraded = details.get("degraded_categories") or []
+    if not degraded:
+        return body
+    names = [str(name) for name in degraded[:_DEGRADED_NAMES_IN_ALERT]]
+    if len(degraded) > _DEGRADED_NAMES_IN_ALERT:
+        names.append("+%d more" % (len(degraded) - _DEGRADED_NAMES_IN_ALERT))
+    return "%s; also: %d categor%s degraded - %s" % (
+        body, len(degraded), "y" if len(degraded) == 1 else "ies", ", ".join(names),
+    )
+
+
 def _warning_task_completion_message(task_id: str, result: TaskResult) -> str:
     """Human-readable partial-success ('Completed with Warnings') line.
 
@@ -1309,7 +1338,7 @@ class TaskEngine:
                     task_id=task_id,
                     notification_type=completion_notification_type(result),
                     title=f"Task Failed: {instance.task_name}",
-                    message=result.error or result.message or "Unknown error",
+                    message=_error_task_completion_message(task_id, result),
                     result=result,
                     alert_category=alert_category,
                 )
