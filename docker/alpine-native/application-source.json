@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "fe7d05f1b4cdeb384f4c6801b4886a3b862814fd39aedf427f820d02984b43dd",
+      "sha256": "c9d05f796a9783dcc05c907da2d2cb31ce8a7d5cad4850095806210b4beba887",
       "type": "file"
     },
     {
@@ -1128,7 +1128,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "67fb9d4a69b2f70fe5776649f36498f5781c4b763f2f0961f18a0b42ae0ff53c",
+      "sha256": "fbaf044c5a1f848d97dba7e300808ad98d29ace51c11ea27e02ca7d6851672bb",
       "type": "file"
     },
     {
@@ -1830,7 +1830,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "fa1348c1b073e8b59ff80e7d286064416ce6de059bae3a27dcea0ba81c25e14b",
+      "sha256": "5a2125865345c2e46e42b35c491e2d245706988e173b1e4a1c88089a2b5a6330",
       "type": "file"
     },
     {
@@ -1883,8 +1883,14 @@
     },
     {
       "executable": false,
+      "path": "frontend/src/App.searchReload.test.tsx",
+      "sha256": "39d168c1e30200e063994fae034355822f4cb4ff98e49cc33103f8c24a1f5446",
+      "type": "file"
+    },
+    {
+      "executable": false,
       "path": "frontend/src/App.tsx",
-      "sha256": "d74e39be30568bdc0bf89b9904c21883de036774519a854318edb3be762967ff",
+      "sha256": "94ccc17cc754246055ef60e9873d65a452021d066fbd916f4bdcb3a62c69b915",
       "type": "file"
     },
     {
@@ -6881,5 +6887,21 @@
     "previous_manifest_sha256": "f23c27043d94de56587deeebcfdbe5bf7c1265bc2cc34513825f96f60f84c513",
     "scope": "Give the reusable dev publisher its own concurrency lane so standalone Publish Verified Images workflow_run runs cannot cancel it, plus 0080 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0080"
+  },
+  "search_reload_mount_update": {
+    "added_files": [
+      "frontend/src/App.searchReload.test.tsx"
+    ],
+    "base_commit": "e0f7781da6e9b870f8317d9c544a3532600ce0c2",
+    "bead": "enhancedchannelmanager-bv8n7",
+    "changed_files": {
+      "backend/main.py": "fe7d05f1b4cdeb384f4c6801b4886a3b862814fd39aedf427f820d02984b43dd",
+      "backend/routers/backup.py": "67fb9d4a69b2f70fe5776649f36498f5781c4b763f2f0961f18a0b42ae0ff53c",
+      "frontend/package.json": "fa1348c1b073e8b59ff80e7d286064416ce6de059bae3a27dcea0ba81c25e14b",
+      "frontend/src/App.tsx": "d74e39be30568bdc0bf89b9904c21883de036774519a854318edb3be762967ff"
+    },
+    "previous_manifest_sha256": "7bb86c07f81f057e0a55b9d8de2da275cc75bd5caecddfb33ad26deedd32493c",
+    "scope": "Stop the Channel Manager search-reload effect from firing a second full channel load about 500ms after mount when the search term has not changed, so the channel list is no longer blanked and open menus are no longer destroyed, plus 0081 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0081"
   }
 }

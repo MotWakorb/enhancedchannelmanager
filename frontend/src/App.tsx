@@ -1747,14 +1747,27 @@ function App() {
     rememberSeenStreams,
   ]);
 
-  // Reload channels when search changes
+  // Reload channels when the search changes.
+  //
+  // The mount load already fetched the initial term, so skip the term that was
+  // last loaded: loadChannels() flips loadingStates.channels, and ChannelsPane
+  // then unmounts the whole list, destroying any open menu. loadedSearchRef is
+  // null after a load we started is cancelled, so reverting to that term reloads.
+  const loadedSearchRef = useRef<string | null>(channelFilters.search);
   useEffect(() => {
+    const search = channelFilters.search;
+    if (search === loadedSearchRef.current) return;
     const abortController = new AbortController();
+    let started = false;
     const timer = setTimeout(() => {
+      started = true;
+      loadedSearchRef.current = search;
       loadChannels(abortController.signal);
     }, 500); // Debounce: 500ms for less frequent API requests
     return () => {
       clearTimeout(timer);
+      // Cannot tell a finished load from an aborted one, so forget either; the cost is one redundant reload on revert.
+      if (started) loadedSearchRef.current = null;
       abortController.abort(); // Cancel in-flight request when search changes
     };
   }, [channelFilters.search]);
