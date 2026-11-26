@@ -472,6 +472,8 @@ export interface BulkCommitResponse {
   success: boolean;
   operationsApplied: number;
   operationsFailed: number;
+  /** Failed operations whose own upstream writes landed before they failed. */
+  operationsPartiallyApplied?: number;
   errors: BulkCommitError[];
   tempIdMap: Record<number, number>;
   profileRecoveryBinding?: string;
@@ -491,6 +493,10 @@ export interface BulkCommitResponse {
    * duplicates. False for full success and for total failure (nothing applied).
    */
   partial?: boolean;
+  /** createChannel operations that asked for normalization and did not get it. */
+  normalizationFailures?: Record<string, unknown>[];
+  /** Journal rows for landed writes that ECM could not write. Non-zero: do not retry. */
+  journalRowsUnwritten?: number;
   /**
    * Channels a failed numbering plan left on the wrong number, which the
    * compensating write could not put back either (bead
@@ -505,7 +511,8 @@ export interface BulkCommitResponse {
   numberingRecovery?: {
     channelId: number;
     channelName: string;
-    currentNumber: number | null;
+    /** Absent when the channel sits on a number Dispatcharr chose and ECM has not read back. */
+    currentNumber?: number | null;
     targetNumber: number | null;
     step: string;
     error: string;

@@ -1820,6 +1820,57 @@ def _assignment_description(old_number, new_number, *, observed: bool) -> str:
     )
 
 
+def _range_assignment_description(
+    old_number, new_number, *, old_known: bool, observed: bool,
+) -> str:
+    """:func:`_assignment_description`, for a channel whose previous number
+    ECM may not have observed either (``old_known=False``)."""
+    if old_known:
+        return _assignment_description(old_number, new_number, observed=observed)
+    if not observed:
+        return (
+            "Changed channel number; Dispatcharr chose the new number and ECM "
+            "has not read it back"
+        )
+    if new_number is None:
+        return (
+            "Changed channel number; the channel now carries no number, and ECM "
+            "had not read the previous number"
+        )
+    return (
+        f"Changed channel number to {format_channel_number(new_number)}; ECM had "
+        "not read the previous number"
+    )
+
+
+def _number_before_value(before_channel: dict, name: str) -> dict:
+    """A numbering row's ``before_value``, naming an unobserved number as unknown."""
+    if "channel_number" in before_channel:
+        return {"channel_number": before_channel["channel_number"], "name": name}
+    return {BEFORE_STATE_UNKNOWN_KEY: ["channel_number"], "name": name}
+
+
+async def _read_back_channels(client, channel_ids, *, log_tag: str = "CHANNELS"):
+    """Yield ``(channel_id, channel)`` for each channel Dispatcharr returns.
+
+    One GET per channel, in order, after an assignment that let Dispatcharr
+    choose the numbers. A read that fails is logged and skipped: the
+    assignment has already landed, and the caller's row keeps saying the
+    number was not read back. Only ``Exception`` is caught, so a cancellation
+    still propagates.
+    """
+    for channel_id in channel_ids:
+        try:
+            observed = await client.get_channel(channel_id)
+        except Exception as e:
+            logger.warning(
+                "[%s] Assigned channel %s but could not read its new number back: %s",
+                log_tag, channel_id, e,
+            )
+            continue
+        yield channel_id, observed
+
+
 @router.post("/assign-numbers")
 async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAdminIfEnabled):
     """Bulk assign channel numbers. Admin only (bulk operator op, bd-um30y)."""
@@ -1945,18 +1996,13 @@ async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAd
         # specify the numbers — the specified path already knows them and must
         # not pay N extra GETs for a several-hundred-channel renumber.
         if chose_numbers_upstream:
-            for channel_id, row in row_for_channel.items():
-                try:
-                    observed = await client.get_channel(channel_id)
-                except Exception as e:
-                    # The assignment landed; only the read-back failed. The row
-                    # keeps saying the number has not been read back, which is
-                    # true, rather than acquiring one nothing observed.
-                    logger.warning(
-                        "[CHANNELS] Assigned channel %s but could not read its "
-                        "new number back: %s", channel_id, e,
-                    )
-                    continue
+            # A read that fails leaves its row saying the number has not been
+            # read back, which is true, rather than acquiring one nothing
+            # observed.
+            async for channel_id, observed in _read_back_channels(
+                client, list(row_for_channel),
+            ):
+                row = row_for_channel[channel_id]
                 new_number = observed.get("channel_number")
                 row["after_value"]["channel_number"] = new_number
                 row["description"] = _assignment_description(
@@ -3907,68 +3953,106 @@ async def _run_bulk_commit(
                     # An omitted start survives to here only when consolidation
                     # is off, and it goes upstream as omitted: Dispatcharr
                     # chooses the numbers and the assign endpoint returns none.
-                    # The rows must then name no target number, and a channel
-                    # cannot be skipped as "already on its target" either.
+                    # Those rows name no target number until the read-back
+                    # below observes one, and no channel can be skipped as
+                    # "already on its target", because there is no target.
+                    #
+                    # A channel whose entry in `existing_channels` carries no
+                    # `channel_number` key is one whose current number ECM has
+                    # not observed, so its row names no previous number either.
                     chose_numbers_upstream = op.startingNumber is None
-                    assign_start = op.startingNumber if op.startingNumber is not None else 1
                     assigned_rows: list[dict] = []
                     renumbered: dict[int, int] = {}
                     for offset, assigned_id in enumerate(resolved_ids):
-                        old_number = existing_channels.get(assigned_id, {}).get("channel_number")
-                        new_number = assign_start + offset
-                        if chose_numbers_upstream:
-                            assigned_name = channel_name_of(assigned_id)
-                            if old_number != new_number:
-                                renumbered[assigned_id] = new_number
-                            # `channel_number` is left out of `after_value`
-                            # rather than set to None, which would claim the
-                            # channel now carries no number.
-                            assigned_rows.append(journal_row(
-                                action_type="reorder",
-                                entity_id=assigned_id,
-                                entity_name=assigned_name,
-                                description=_assignment_description(
-                                    old_number, None, observed=False,
-                                ),
-                                before_value={"channel_number": old_number, "name": assigned_name},
-                                after_value={"name": assigned_name},
-                            ))
-                            continue
-                        if old_number == new_number:
+                        before_channel = existing_channels.get(assigned_id, {})
+                        old_known = "channel_number" in before_channel
+                        old_number = before_channel.get("channel_number")
+                        new_number = None if chose_numbers_upstream else op.startingNumber + offset
+                        if not chose_numbers_upstream and old_known and old_number == new_number:
                             continue
                         assigned_name = channel_name_of(assigned_id)
-                        renumbered[assigned_id] = new_number
+                        if not chose_numbers_upstream:
+                            renumbered[assigned_id] = new_number
+                        after_value = {"name": assigned_name}
+                        if not chose_numbers_upstream:
+                            after_value = {"channel_number": new_number, **after_value}
                         assigned_rows.append(journal_row(
                             action_type="reorder",
                             entity_id=assigned_id,
                             entity_name=assigned_name,
-                            description=(
-                                f"Changed channel number from {format_channel_number(old_number)} "
-                                f"to {format_channel_number(new_number)}"
+                            description=_range_assignment_description(
+                                old_number, new_number,
+                                old_known=old_known, observed=not chose_numbers_upstream,
                             ),
-                            before_value={"channel_number": old_number, "name": assigned_name},
-                            after_value={"channel_number": new_number, "name": assigned_name},
+                            before_value=_number_before_value(
+                                before_channel, assigned_name,
+                            ),
+                            after_value=after_value,
                         ))
                     await client.assign_channel_numbers(resolved_ids, op.startingNumber)
-                    # One upstream call, N channel numbers changed. Each is a
-                    # separate fact to put back, exactly as each is a separate
-                    # journal row.
-                    for assigned_id, new_number in renumbered.items():
-                        compensator.record_landed(
-                            channel_id=assigned_id,
-                            name=channel_name_of(assigned_id),
-                            before=existing_channels.get(assigned_id, {}).get("channel_number"),
-                            after=new_number,
-                        )
-                    numbering_landed = True
-                    ledger.record_persisted(journal_row=assigned_rows or nothing_to_journal(
-                        "every channel in the range already carried its target number"
-                    ))
-                    for assigned_id, new_number in renumbered.items():
-                        if assigned_id in existing_channels:
-                            existing_channels[assigned_id] = {
-                                **existing_channels[assigned_id], "channel_number": new_number
-                            }
+                    if chose_numbers_upstream:
+                        # Queued before the read-back's awaits, so a
+                        # cancellation during it still writes rows that are
+                        # true at that instant.
+                        numbering_landed = True
+                        ledger.record_persisted(journal_row=assigned_rows or nothing_to_journal(
+                            "the range named no channels"
+                        ))
+                        observed_numbers: dict[int, Any] = {}
+                        async for assigned_id, observed in _read_back_channels(
+                            client, list(dict.fromkeys(resolved_ids)), log_tag="CHANNELS-BULK",
+                        ):
+                            if isinstance(observed, dict) and "channel_number" in observed:
+                                observed_numbers[assigned_id] = observed["channel_number"]
+                        for row in assigned_rows:
+                            assigned_id = row["entity_id"]
+                            if assigned_id not in observed_numbers:
+                                continue
+                            new_number = observed_numbers[assigned_id]
+                            before_channel = existing_channels.get(assigned_id, {})
+                            row["description"] = _range_assignment_description(
+                                before_channel.get("channel_number"), new_number,
+                                old_known="channel_number" in before_channel, observed=True,
+                            )
+                            row["after_value"] = {"channel_number": new_number, **row["after_value"]}
+                        for assigned_id in dict.fromkeys(resolved_ids):
+                            before_channel = existing_channels.get(assigned_id, {})
+                            observed = assigned_id in observed_numbers
+                            compensator.record_landed(
+                                channel_id=assigned_id,
+                                name=channel_name_of(assigned_id),
+                                before=before_channel.get("channel_number"),
+                                after=observed_numbers.get(assigned_id),
+                                after_known=observed,
+                            )
+                            if assigned_id not in existing_channels:
+                                continue
+                            updated = dict(existing_channels[assigned_id])
+                            if observed:
+                                updated["channel_number"] = observed_numbers[assigned_id]
+                            else:
+                                updated.pop("channel_number", None)
+                            existing_channels[assigned_id] = updated
+                    else:
+                        # One upstream call, N channel numbers changed. Each is
+                        # a separate fact to put back, exactly as each is a
+                        # separate journal row.
+                        for assigned_id, new_number in renumbered.items():
+                            compensator.record_landed(
+                                channel_id=assigned_id,
+                                name=channel_name_of(assigned_id),
+                                before=existing_channels.get(assigned_id, {}).get("channel_number"),
+                                after=new_number,
+                            )
+                        numbering_landed = True
+                        ledger.record_persisted(journal_row=assigned_rows or nothing_to_journal(
+                            "every channel in the range already carried its target number"
+                        ))
+                        for assigned_id, new_number in renumbered.items():
+                            if assigned_id in existing_channels:
+                                existing_channels[assigned_id] = {
+                                    **existing_channels[assigned_id], "channel_number": new_number
+                                }
 
                 elif op.type == "createChannel":
                     logger.debug("[CHANNELS-BULK] [%s/%s] createChannel: name='%s', tempId=%s, groupId=%s, newGroupName=%s, normalize=%s", idx+1, len(request.operations), op.name, op.tempId, op.groupId, op.newGroupName, op.normalize)
@@ -4145,10 +4229,18 @@ async def _run_bulk_commit(
                         entity_id=channel_id,
                         entity_name=deleted_name,
                         description=f"Deleted channel '{deleted_name}'",
-                        before_value={
-                            "name": deleted_name,
-                            "channel_number": (deleted_before or {}).get("channel_number"),
-                        },
+                        before_value=(
+                            {
+                                BEFORE_STATE_UNKNOWN_KEY: ["channel_number"],
+                                "name": deleted_name,
+                            }
+                            if isinstance(deleted_before, dict)
+                            and "channel_number" not in deleted_before
+                            else {
+                                "name": deleted_name,
+                                "channel_number": (deleted_before or {}).get("channel_number"),
+                            }
+                        ),
                     ) if really_deleted else nothing_to_journal(
                         f"Dispatcharr answered 404 for channel {channel_id}: it was "
                         "already gone, so this run deleted nothing"
@@ -4517,7 +4609,11 @@ async def _run_bulk_commit(
                         f"{format_channel_number(step.after)} after this batch's "
                         "numbering changes stopped part way"
                     ),
-                    before_value={"channel_number": step.before, "name": step.name},
+                    before_value=(
+                        {"channel_number": step.before, "name": step.name}
+                        if step.before_known
+                        else {BEFORE_STATE_UNKNOWN_KEY: ["channel_number"], "name": step.name}
+                    ),
                     after_value={"channel_number": step.after, "name": step.name},
                 ))
                 if step.channel_id in existing_channels:

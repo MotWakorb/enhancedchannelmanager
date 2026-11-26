@@ -109,16 +109,29 @@ class NumberingWrite:
     ``before`` is the number the channel held before the run began, and
     ``after`` the number the run puts it on. Either may be ``None`` — a channel
     with no number, or a number being cleared.
+
+    ``after_known`` is False when Dispatcharr chose ``after`` and ECM did not
+    read it back; ``after`` is then ``None`` and means nothing. ``before_known``
+    is the same for ``before``, which happens on a compensating write that
+    starts from such a number.
     """
 
     channel_id: int
     name: str
     before: Optional[float]
     after: Optional[float]
+    before_known: bool = True
+    after_known: bool = True
 
     @property
     def moves(self) -> bool:
-        """Does this write change anything?"""
+        """Does this write change anything?
+
+        A number ECM never observed cannot be shown to already hold the
+        target, so it counts as a change.
+        """
+        if not (self.before_known and self.after_known):
+            return True
         if self.before is None and self.after is None:
             return False
         if self.before is None or self.after is None:
@@ -132,6 +145,8 @@ class NumberingWrite:
             name=self.name,
             before=self.after,
             after=self.before,
+            before_known=self.after_known,
+            after_known=self.before_known,
         )
 
 
@@ -290,13 +305,19 @@ class NumberingCompensator:
         name: str,
         before: Optional[float],
         after: Optional[float],
+        after_known: bool = True,
     ) -> None:
-        """An upstream numbering write returned. Note what it changed."""
+        """An upstream numbering write returned. Note what it changed.
+
+        ``after_known=False`` records a write whose resulting number
+        Dispatcharr chose and ECM has not read back.
+        """
         if channel_id not in self._first_before:
             self._first_before[channel_id] = before
         self._landed.append(
             NumberingWrite(
-                channel_id=channel_id, name=name, before=before, after=after
+                channel_id=channel_id, name=name, before=before, after=after,
+                after_known=after_known,
             )
         )
 
@@ -362,6 +383,7 @@ class NumberingCompensator:
                 name=write.name,
                 before=write.after,
                 after=self._first_before.get(write.channel_id),
+                before_known=write.after_known,
             )
             if not restore.moves:
                 continue
@@ -382,27 +404,30 @@ class NumberingCompensator:
         """
         report: list[dict] = []
         for step, error in unrepaired:
-            current = format_channel_number(step.before)
+            if step.before_known:
+                where = f"left on {format_channel_number(step.before)}"
+                left = f"this run left it on {format_channel_number(step.before)}"
+            else:
+                where = "moved to a number ECM has not read back"
+                left = "this run moved it to a number ECM has not read back"
             if step.after is None:
                 instruction = (
                     f'Clear the channel number on "{step.name}" (channel '
-                    f"{step.channel_id}), which this run left on {current}; it "
+                    f"{step.channel_id}), which this run {where}; it "
                     "had no number before."
                 )
             else:
                 target = format_channel_number(step.after)
                 instruction = (
                     f'Set "{step.name}" (channel {step.channel_id}) back to '
-                    f"channel number {target}; this run left it on {current}."
+                    f"channel number {target}; {left}."
                 )
-            report.append(
-                {
-                    "channelId": step.channel_id,
-                    "channelName": step.name,
-                    "currentNumber": step.before,
-                    "targetNumber": step.after,
-                    "step": instruction,
-                    "error": str(error),
-                }
+            entry: dict = {"channelId": step.channel_id, "channelName": step.name}
+            # Left out rather than null, which would say "no number".
+            if step.before_known:
+                entry["currentNumber"] = step.before
+            entry.update(
+                targetNumber=step.after, step=instruction, error=str(error),
             )
+            report.append(entry)
         return report
