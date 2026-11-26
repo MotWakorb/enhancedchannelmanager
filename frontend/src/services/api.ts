@@ -107,6 +107,7 @@ import type {
   AcceptProfileConflictOutcome,
   ProfileConflictReviewsResponse,
 } from '../types/profileConflict';
+import type { ValidationIssueType } from '../types/editMode';
 import { logger } from '../utils/logger';
 import { voidBackupBannerSnoozeIfScheduled } from '../utils/backupBannerSnooze';
 import { fetchJson, fetchText, buildQuery, HttpError } from './httpClient';
@@ -440,7 +441,7 @@ export interface BulkCommitRequest {
 }
 
 export interface ValidationIssue {
-  type: 'missing_channel' | 'missing_stream' | 'invalid_operation';
+  type: ValidationIssueType;
   severity: 'error' | 'warning';
   message: string;
   operationIndex?: number;
@@ -448,6 +449,12 @@ export interface ValidationIssue {
   channelName?: string;
   streamId?: number;
   streamName?: string;
+  /** The contested or out-of-contract number (numbering issues only). */
+  channelNumber?: number;
+  /** Every channel on that number in the proposed final state. */
+  channelIds?: number[];
+  /** Every operation to change to resolve it; `operationIndex` is the first. */
+  operationIndexes?: number[];
 }
 
 export interface BulkCommitError {

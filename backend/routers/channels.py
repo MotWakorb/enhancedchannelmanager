@@ -883,21 +883,43 @@ class ValidationIssue(BaseModel):
 
 
 class BulkCommitResponse(BaseModel):
+    """The envelope ``_run_bulk_commit`` returns.
+
+    Not a ``response_model``: the POST returns this only for ``validateOnly``
+    and otherwise a 202 job envelope, and the completed result is delivered
+    inside ``GET /bulk-commit/{job_id}``'s wrapper. Validating through this
+    model would also filter the response, so it documents the contract and
+    ``tests/routers/test_bulk_commit_response_contract.py`` keeps it complete.
+
+    The fields with defaults are absent from the early return for a changed
+    profile-recovery destination; the last three appear only on the paths
+    that produce them.
+    """
     success: bool
     operationsApplied: int
     operationsFailed: int
+    # Failed operations whose own upstream writes landed before they failed.
+    operationsPartiallyApplied: Optional[int] = None
     errors: list[dict]
     # Map of temp channel IDs to real IDs
     tempIdMap: dict[int, int]
-    profileRecoveryBinding: Optional[str] = None
-    settledOperationIndexes: Optional[list[int]] = None
-    settledChannelNumbers: Optional[dict[int, ChannelNumber | None]] = None
     # Map of group names to real IDs
     groupIdMap: dict[str, int]
     # Validation issues found during pre-validation
     validationIssues: Optional[list[dict]] = None
     # Whether validation passed (no errors, may have warnings)
     validationPassed: Optional[bool] = None
+    # Some operations applied and some failed.
+    partial: Optional[bool] = None
+    # createChannel operations that asked for normalization and did not get it.
+    normalizationFailures: Optional[list[dict]] = None
+    # Journal rows for landed writes that could not be written.
+    journalRowsUnwritten: Optional[int] = None
+    # Channels left on a wrong number that compensation could not put back.
+    numberingRecovery: Optional[list[dict]] = None
+    profileRecoveryBinding: Optional[str] = None
+    settledOperationIndexes: Optional[list[int]] = None
+    settledChannelNumbers: Optional[dict[int, ChannelNumber | None]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -3881,12 +3903,37 @@ async def _run_bulk_commit(
                     # the operator was shown. Every row is built from the state
                     # BEFORE the write, so they are all in hand the moment it
                     # lands.
+                    #
+                    # An omitted start survives to here only when consolidation
+                    # is off, and it goes upstream as omitted: Dispatcharr
+                    # chooses the numbers and the assign endpoint returns none.
+                    # The rows must then name no target number, and a channel
+                    # cannot be skipped as "already on its target" either.
+                    chose_numbers_upstream = op.startingNumber is None
                     assign_start = op.startingNumber if op.startingNumber is not None else 1
                     assigned_rows: list[dict] = []
                     renumbered: dict[int, int] = {}
                     for offset, assigned_id in enumerate(resolved_ids):
                         old_number = existing_channels.get(assigned_id, {}).get("channel_number")
                         new_number = assign_start + offset
+                        if chose_numbers_upstream:
+                            assigned_name = channel_name_of(assigned_id)
+                            if old_number != new_number:
+                                renumbered[assigned_id] = new_number
+                            # `channel_number` is left out of `after_value`
+                            # rather than set to None, which would claim the
+                            # channel now carries no number.
+                            assigned_rows.append(journal_row(
+                                action_type="reorder",
+                                entity_id=assigned_id,
+                                entity_name=assigned_name,
+                                description=_assignment_description(
+                                    old_number, None, observed=False,
+                                ),
+                                before_value={"channel_number": old_number, "name": assigned_name},
+                                after_value={"name": assigned_name},
+                            ))
+                            continue
                         if old_number == new_number:
                             continue
                         assigned_name = channel_name_of(assigned_id)

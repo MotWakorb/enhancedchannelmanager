@@ -138,9 +138,9 @@ This shape exists because an Apply All over a large lineup does not fit inside t
 
 `{ success, operationsApplied, operationsFailed, operationsPartiallyApplied, errors, tempIdMap, groupIdMap, validationIssues, validationPassed, partial, normalizationFailures, journalRowsUnwritten, numberingRecovery }`.
 
-All thirteen keys are initialised unconditionally, so **every one is always present** on every path that returns an envelope. Branch on values, never on key presence. Pre-validation (missing referenced channels or streams) surfaces in `validationIssues` on a success status. Only schema-shape failures produce a `422`.
+All thirteen keys are initialised unconditionally, so **every one is present** on every path that returns this envelope. Branch on values, never on key presence. One early return is shorter: a profile-recovery request whose Dispatcharr destination changed returns only `success`, `operationsApplied`, `operationsFailed`, `errors`, `tempIdMap`, `groupIdMap` and `settledOperationIndexes`, with nothing applied. Pre-validation (missing referenced channels or streams) surfaces in `validationIssues` on a success status. Only schema-shape failures produce a `422`.
 
-**Do not read `BulkCommitResponse` in `backend/routers/channels.py` as the schema.** That Pydantic model declares nine of these thirteen fields and is not wired as a `response_model` anywhere, because the handler returns a plain dict. It looks authoritative and is not.
+`BulkCommitResponse` in `backend/routers/channels.py` declares all thirteen, plus the three conditional fields (`profileRecoveryBinding`, `settledOperationIndexes`, `settledChannelNumbers`), and `backend/tests/routers/test_bulk_commit_response_contract.py` fails if the handler returns a field the model does not declare. It is still not wired as a `response_model`: the default path returns a 202 job envelope and the result arrives inside the poll response, so FastAPI never validates it.
 
 **`normalizationFailures`** is the batch counterpart of the [`normalization` block on `POST /api/channels`](#post-apichannels-the-normalization-disclosure-block). It is **always present** and is an empty list on a clean batch, so check its length rather than probing for the key. It carries one entry per `createChannel` operation that set `normalize: true` and did not get it:
 
@@ -293,8 +293,6 @@ Three properties worth knowing before you write a client against it:
 | `duplicate_channel_number` | error | `channelNumber`, `channelIds`, `operationIndex`, `operationIndexes`, `channelId` |
 | `invalid_channel_number` | error | same set as above |
 
-The frontend's own `ValidationIssue` union names only three of the six, so do not take it as the list.
-
 On the last two, `operationIndex` is simply the first element of `operationIndexes`, and `channelId` the first of `channelIds`. They are scalars kept for schema compatibility, not independent facts.
 
 **`numbering_preflight_unavailable` is the one to handle deliberately.** It is raised when the batch places a channel but ECM could not read the current lineup to check the resulting final state against. Under the **default `continueOnError: false` it refuses the commit**: nothing is executed, and because execution never started there is no journal trace at all. Under `continueOnError: true` the run proceeds unchecked, which is what ECM's own Edit Mode sends, because by that point the browser has already run its own preflight against a lineup it fetched itself.
@@ -342,7 +340,7 @@ Range assignments deliberately send no `expectedNumber`, so a `bulkAssignChannel
 
 `bulkAssignChannelNumbers` has three edge cases worth stating exactly:
 
-- **`startingNumber` omitted defaults to `1`** in consolidation, in the final-state materialiser, and in the executor's journal and compensation bookkeeping. There is one gap: on the `consolidate: false` path the executor forwards the raw `None` upstream and lets Dispatcharr choose, while journaling as though the start were `1`. ECM's own UI always sends `consolidate: true`, which rewrites the range with an explicit `startingNumber`, so this is not reachable from the interface. Send `startingNumber` explicitly if you are not consolidating.
+- **`startingNumber` omitted means different things depending on `consolidate`.** Under `consolidate: true`, which ECM's own UI always sends, consolidation materialises it as `1`, and that is what is sent and journaled. Under `consolidate: false` the executor sends no starting number, so Dispatcharr chooses the numbers and returns none of them. Each journal row then reads "Changed channel number from X; Dispatcharr chose the new number and ECM has not read it back", and its `after_value` carries no `channel_number`. The final-state preflight and compensation bookkeeping still assume `1` on that path. Send `startingNumber` explicitly if you are not consolidating.
 - **An explicit `0` is honoured.** Zero is in contract, and an earlier implementation that collapsed "omitted" and "explicitly zero" into one branch was fixed deliberately.
 - **An empty `channelIds` is a no-op only under `consolidate: true`.** With `consolidate: false` the executor still issues one upstream assign call with an empty id list and records the operation as applied. It changes no channel, but calling it a pure no-op overstates it.
 
