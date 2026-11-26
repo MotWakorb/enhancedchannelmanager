@@ -139,8 +139,45 @@ PENDING_MERGE_PREVIEW_FILES = (
 )
 
 
+def _before_smtp_html_escape(manifest):
+    key = "smtp_html_escape_update"
+    update = manifest[key]
+    assert update["base_commit"] == "69c31168b4d77d92f9d526e65fbf8913b1314ade"
+    assert update["bead"] == "enhancedchannelmanager-98k3b"
+    assert update["version"] == "0.18.2-0077"
+    assert update["previous_manifest_sha256"] == (
+        "8792a518b7f7cb097befa0ff3dd263e055c731893ba9362caa5bc89164455fa3"
+    )
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | {"backend/alert_methods_smtp.py"}
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_smtp_html_escape_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_smtp_html_escape(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["smtp_html_escape_update"] == manifest["smtp_html_escape_update"]
+
+
 def _before_telegram_html_escape(manifest):
     key = "telegram_html_escape_update"
+    manifest = _before_smtp_html_escape(manifest)
     update = manifest[key]
     assert update["base_commit"] == "494697b69b4f5b862e874029dbfbc040bb0214be"
     assert update["bead"] == "enhancedchannelmanager-j28qs"
