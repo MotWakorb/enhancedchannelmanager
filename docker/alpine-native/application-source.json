@@ -615,7 +615,7 @@
     {
       "executable": false,
       "path": "backend/channel_number_apply.py",
-      "sha256": "7d2333cc3608554c2324097596d25879b68329b185e92d99c76548ee9335cb60",
+      "sha256": "115635d9b55d861b7e4dbe752b1b565f7c44806bf50be72b7b446a9af4b43533",
       "type": "file"
     },
     {
@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "b397eb24d8456ad543f4542993e7976d1540b5c6116630a97b182767f8d381fa",
+      "sha256": "0839185df7cd657335764ce3136f9969cd3d447d2139b1168dcc37af463c066e",
       "type": "file"
     },
     {
@@ -1128,7 +1128,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "df47c6cf442b6d2e68f95caf2a7855e8256f87f75fb23547e9e928ae80f7b3d0",
+      "sha256": "2f22fcb3c80f472723c5265b1ee03e2e3b66abc8ae59a74848d234e1d53823c7",
       "type": "file"
     },
     {
@@ -1152,7 +1152,7 @@
     {
       "executable": false,
       "path": "backend/routers/channels.py",
-      "sha256": "74fcd565462ab449963db58e315c937a67799e046aaa19e59c9ae1eef4254282",
+      "sha256": "e997719b91fc8f58d3b3baaf77b004150107ccbfb2162db306adcd75b1145e5b",
       "type": "file"
     },
     {
@@ -1830,7 +1830,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "057ddbc399940fdd843883c605854846577239ea654c54290c73720452134295",
+      "sha256": "3e728bd6c870b7764048c7507d0dbd000ebbd2d35ac7f5c7baacba1e9570d211",
       "type": "file"
     },
     {
@@ -5430,7 +5430,7 @@
     {
       "executable": false,
       "path": "frontend/src/services/api.ts",
-      "sha256": "28273fabcda1c451edd9f964c2a793bf31148fb56d8b487ef80d393adfabcf08",
+      "sha256": "7b669c80ae329f91bc9e8219fbdc5fc9fa4d005971d23698915d195ab8cf8d63",
       "type": "file"
     },
     {
@@ -5616,7 +5616,7 @@
     {
       "executable": false,
       "path": "frontend/src/types/editMode.ts",
-      "sha256": "04eb8f1dd7ba3e231bc40a78772b0c1ff74a5422419b61cd283c3a7612f85abf",
+      "sha256": "e0cf48a42ed12d2666f7dc9a06ed649dd760c5828ec5356120e00e39a06fee17",
       "type": "file"
     },
     {
@@ -6993,5 +6993,22 @@
     "previous_manifest_sha256": "0e8a11085dfe55b602a3bed8b64912818ec9c3703b7ce4735d56a5e520bb064b",
     "scope": "Document the ECM_PYTHON, ECM_UVICORN and CONFIG_DIR startup contract in the README and state accurately what each backup type restores in the backup pages, plus 0086 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0086"
+  },
+  "renumber_journal_start_update": {
+    "added_files": [],
+    "base_commit": "1f9bab15914d0233db3f25f83754163357f31109",
+    "bead": "enhancedchannelmanager-0by9g",
+    "changed_files": {
+      "backend/channel_number_apply.py": "7d2333cc3608554c2324097596d25879b68329b185e92d99c76548ee9335cb60",
+      "backend/main.py": "b397eb24d8456ad543f4542993e7976d1540b5c6116630a97b182767f8d381fa",
+      "backend/routers/backup.py": "df47c6cf442b6d2e68f95caf2a7855e8256f87f75fb23547e9e928ae80f7b3d0",
+      "backend/routers/channels.py": "74fcd565462ab449963db58e315c937a67799e046aaa19e59c9ae1eef4254282",
+      "frontend/package.json": "057ddbc399940fdd843883c605854846577239ea654c54290c73720452134295",
+      "frontend/src/services/api.ts": "28273fabcda1c451edd9f964c2a793bf31148fb56d8b487ef80d393adfabcf08",
+      "frontend/src/types/editMode.ts": "04eb8f1dd7ba3e231bc40a78772b0c1ff74a5422419b61cd283c3a7612f85abf"
+    },
+    "previous_manifest_sha256": "fefb1086c0d41cccc42fd35f68b64317ecc319ea35b6d7cbc3db1fa642a19a37",
+    "scope": "Stop a range renumber that sends no starting number from journaling one: read back the numbers Dispatcharr chose, and treat any not read back as unknown in later rows, compensation and recovery steps; declare every bulk-commit envelope field on BulkCommitResponse, and name all six validation issue types in the frontend types, plus 0087 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0087"
   }
 }

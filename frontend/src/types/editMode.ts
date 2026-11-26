@@ -350,21 +350,28 @@ export interface EditModeState {
 }
 
 /**
+ * Every `type` the bulk-commit endpoint puts in `validationIssues`.
+ *
+ * `duplicate_channel_number` and `invalid_channel_number` are raised by the
+ * final-state preflight (`channelNumberPlan.ts` in the browser,
+ * `backend/channel_number_plan.py` on the server) rather than by the
+ * per-operation checks, so they describe the COMBINED result of the staged
+ * plan rather than any one operation. `numbering_preflight_unavailable` means
+ * the server could not read the lineup, so that preflight did not run.
+ */
+export type ValidationIssueType =
+  | 'missing_channel'
+  | 'missing_stream'
+  | 'invalid_operation'
+  | 'duplicate_channel_number'
+  | 'invalid_channel_number'
+  | 'numbering_preflight_unavailable';
+
+/**
  * Validation issue found during pre-commit validation
  */
 export interface ValidationIssue {
-  /**
-   * The two numbering types are raised by the final-state preflight
-   * (`channelNumberPlan.ts` in the browser, `backend/channel_number_plan.py`
-   * on the server) rather than by the per-operation checks, so they describe
-   * the COMBINED result of the staged plan rather than any one operation.
-   */
-  type:
-    | 'missing_channel'
-    | 'missing_stream'
-    | 'invalid_operation'
-    | 'duplicate_channel_number'
-    | 'invalid_channel_number';
+  type: ValidationIssueType;
   severity: 'error' | 'warning';
   message: string;
   operationIndex?: number;
