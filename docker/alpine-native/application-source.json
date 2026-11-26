@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "b25fe4ae8692c8eafff24e7c86f10c7781c4b19bdd333b5a2644d0b9a6d52026",
+      "sha256": "b397eb24d8456ad543f4542993e7976d1540b5c6116630a97b182767f8d381fa",
       "type": "file"
     },
     {
@@ -1128,7 +1128,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "0802938d0d9e27c5c42d72b6e92b2a66736333c9a5b9c9aa73f0a15a6ee3ef10",
+      "sha256": "df47c6cf442b6d2e68f95caf2a7855e8256f87f75fb23547e9e928ae80f7b3d0",
       "type": "file"
     },
     {
@@ -1830,7 +1830,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "89b356687cbbdb82aacc70fb5cf729d9955a6ab986d7f95b46f811b8a35f9d91",
+      "sha256": "057ddbc399940fdd843883c605854846577239ea654c54290c73720452134295",
       "type": "file"
     },
     {
@@ -6980,5 +6980,18 @@
     "previous_manifest_sha256": "afe7345d4e06cb57642ae5e7fd1bfcebb60696c9200e2348f74908420cbb7001",
     "scope": "Repoint one historical CHANGELOG link from a removed restore-drill page to the current operator-guide section on renaming and deleting channel groups, plus 0085 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0085"
+  },
+  "startup_env_contract_docs_update": {
+    "added_files": [],
+    "base_commit": "eef60af0965748af7bc3fb983589190e26ad07f4",
+    "bead": "enhancedchannelmanager-mevqr",
+    "changed_files": {
+      "backend/main.py": "b25fe4ae8692c8eafff24e7c86f10c7781c4b19bdd333b5a2644d0b9a6d52026",
+      "backend/routers/backup.py": "0802938d0d9e27c5c42d72b6e92b2a66736333c9a5b9c9aa73f0a15a6ee3ef10",
+      "frontend/package.json": "89b356687cbbdb82aacc70fb5cf729d9955a6ab986d7f95b46f811b8a35f9d91"
+    },
+    "previous_manifest_sha256": "0e8a11085dfe55b602a3bed8b64912818ec9c3703b7ce4735d56a5e520bb064b",
+    "scope": "Document the ECM_PYTHON, ECM_UVICORN and CONFIG_DIR startup contract in the README and state accurately what each backup type restores in the backup pages, plus 0086 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0086"
   }
 }

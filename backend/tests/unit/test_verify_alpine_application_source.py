@@ -163,12 +163,60 @@ SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
 SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
 
+STARTUP_ENV_CONTRACT_DOCS_FILES = ()
+STARTUP_ENV_CONTRACT_DOCS_ADDED_FILES = ()
+
+
+def _before_startup_env_contract_docs(manifest):
+    key = "startup_env_contract_docs_update"
+    update = manifest[key]
+    assert update["base_commit"] == "eef60af0965748af7bc3fb983589190e26ad07f4"
+    assert update["bead"] == "enhancedchannelmanager-mevqr"
+    assert update["version"] == "0.18.2-0086"
+    assert update["previous_manifest_sha256"] == (
+        "0e8a11085dfe55b602a3bed8b64912818ec9c3703b7ce4735d56a5e520bb064b"
+    )
+    assert set(update["added_files"]) == set(STARTUP_ENV_CONTRACT_DOCS_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(STARTUP_ENV_CONTRACT_DOCS_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_startup_env_contract_docs_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_startup_env_contract_docs(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert (
+        result["startup_env_contract_docs_update"]
+        == manifest["startup_env_contract_docs_update"]
+    )
+
+
 RESTORE_DRILL_LINK_FILES = ()
 RESTORE_DRILL_LINK_ADDED_FILES = ()
 
 
 def _before_restore_drill_link(manifest):
     key = "restore_drill_link_update"
+    manifest = _before_startup_env_contract_docs(manifest)
     update = manifest[key]
     assert update["base_commit"] == "a950c3ef70b1f975544940fa9a976bfe2a2d6c2b"
     assert update["bead"] == "enhancedchannelmanager-nupa7"
