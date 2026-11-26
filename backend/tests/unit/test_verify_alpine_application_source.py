@@ -159,8 +159,43 @@ M3U_EMPTY_STATE_ADDED_FILES = (
 )
 
 
+def _before_publish_concurrency(manifest):
+    key = "publish_concurrency_update"
+    update = manifest[key]
+    assert update["base_commit"] == "2b63af8eed785b231c93ad6d6aedd3eb38991779"
+    assert update["bead"] == "enhancedchannelmanager-9iagf"
+    assert update["version"] == "0.18.2-0080"
+    assert update["previous_manifest_sha256"] == (
+        "f23c27043d94de56587deeebcfdbe5bf7c1265bc2cc34513825f96f60f84c513"
+    )
+    assert set(update["changed_files"]) == set(VERSION_TOUCHPOINTS)
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_publish_concurrency_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_publish_concurrency(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["publish_concurrency_update"] == manifest["publish_concurrency_update"]
+
+
 def _before_m3u_empty_state(manifest):
     key = "m3u_empty_state_update"
+    manifest = _before_publish_concurrency(manifest)
     update = manifest[key]
     assert update["base_commit"] == "04587fc8033e2a7334529796819cdc282afde347"
     assert update["bead"] == "enhancedchannelmanager-381gu"

@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "f7a840ed8eb55a9d3c7a91ccc6a3fad0b9ce64e18eeca502ae64233903af9ff9",
+      "sha256": "fe7d05f1b4cdeb384f4c6801b4886a3b862814fd39aedf427f820d02984b43dd",
       "type": "file"
     },
     {
@@ -1128,7 +1128,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "4963a8316f82cc6e0fd8147012e0ad25e8c0bc78e1c25b84a942821bae43e08a",
+      "sha256": "67fb9d4a69b2f70fe5776649f36498f5781c4b763f2f0961f18a0b42ae0ff53c",
       "type": "file"
     },
     {
@@ -1830,7 +1830,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "9f478bff8aea7924e6cea9d67520374b4012294383567c6d6d9c1248d21db933",
+      "sha256": "fa1348c1b073e8b59ff80e7d286064416ce6de059bae3a27dcea0ba81c25e14b",
       "type": "file"
     },
     {
@@ -6869,5 +6869,17 @@
     "previous_manifest_sha256": "72d41b6fc5c9509f276a5204761df454a1a4eecfff97d99dfc275d8c1b4ec453",
     "scope": "Stop the M3U Manager empty state claiming zero accounts when accounts exist but are all hidden or filtered, offer Add M3U Account when only the hidden custom account exists, and share one displayable-account predicate, plus 0079 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0079"
+  },
+  "publish_concurrency_update": {
+    "base_commit": "2b63af8eed785b231c93ad6d6aedd3eb38991779",
+    "bead": "enhancedchannelmanager-9iagf",
+    "changed_files": {
+      "backend/main.py": "f7a840ed8eb55a9d3c7a91ccc6a3fad0b9ce64e18eeca502ae64233903af9ff9",
+      "backend/routers/backup.py": "4963a8316f82cc6e0fd8147012e0ad25e8c0bc78e1c25b84a942821bae43e08a",
+      "frontend/package.json": "9f478bff8aea7924e6cea9d67520374b4012294383567c6d6d9c1248d21db933"
+    },
+    "previous_manifest_sha256": "f23c27043d94de56587deeebcfdbe5bf7c1265bc2cc34513825f96f60f84c513",
+    "scope": "Give the reusable dev publisher its own concurrency lane so standalone Publish Verified Images workflow_run runs cannot cancel it, plus 0080 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0080"
   }
 }
