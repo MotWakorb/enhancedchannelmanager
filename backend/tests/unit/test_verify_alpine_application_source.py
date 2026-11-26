@@ -160,6 +160,7 @@ M3U_EMPTY_STATE_ADDED_FILES = (
 
 
 RENUMBER_JOURNAL_START_FILES = (
+    "backend/channel_number_apply.py",
     "backend/routers/channels.py",
     "frontend/src/services/api.ts",
     "frontend/src/types/editMode.ts",

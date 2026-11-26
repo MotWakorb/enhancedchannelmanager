@@ -615,7 +615,7 @@
     {
       "executable": false,
       "path": "backend/channel_number_apply.py",
-      "sha256": "7d2333cc3608554c2324097596d25879b68329b185e92d99c76548ee9335cb60",
+      "sha256": "115635d9b55d861b7e4dbe752b1b565f7c44806bf50be72b7b446a9af4b43533",
       "type": "file"
     },
     {
@@ -1152,7 +1152,7 @@
     {
       "executable": false,
       "path": "backend/routers/channels.py",
-      "sha256": "18cc469a8f5162f78b2f2d39d1fdd4b28343af513ad90bf226042d8676135d65",
+      "sha256": "e997719b91fc8f58d3b3baaf77b004150107ccbfb2162db306adcd75b1145e5b",
       "type": "file"
     },
     {
@@ -5412,7 +5412,7 @@
     {
       "executable": false,
       "path": "frontend/src/services/api.ts",
-      "sha256": "df42215fbe372127854b37ca098681ed9c0303e20fc89b441f1def0446a21728",
+      "sha256": "7b669c80ae329f91bc9e8219fbdc5fc9fa4d005971d23698915d195ab8cf8d63",
       "type": "file"
     },
     {
@@ -6886,6 +6886,7 @@
     "base_commit": "e0f7781da6e9b870f8317d9c544a3532600ce0c2",
     "bead": "enhancedchannelmanager-0by9g",
     "changed_files": {
+      "backend/channel_number_apply.py": "7d2333cc3608554c2324097596d25879b68329b185e92d99c76548ee9335cb60",
       "backend/main.py": "fe7d05f1b4cdeb384f4c6801b4886a3b862814fd39aedf427f820d02984b43dd",
       "backend/routers/backup.py": "67fb9d4a69b2f70fe5776649f36498f5781c4b763f2f0961f18a0b42ae0ff53c",
       "backend/routers/channels.py": "74fcd565462ab449963db58e315c937a67799e046aaa19e59c9ae1eef4254282",
@@ -6894,7 +6895,7 @@
       "frontend/src/types/editMode.ts": "06c12605cf4bec073f6c06d1bc93a82872c379b86bb41aacf34dbd532795b65d"
     },
     "previous_manifest_sha256": "7bb86c07f81f057e0a55b9d8de2da275cc75bd5caecddfb33ad26deedd32493c",
-    "scope": "Stop a range renumber that sends no starting number from journaling one, declare every bulk-commit envelope field on BulkCommitResponse, and name all six validation issue types in the frontend types, plus 0081 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "scope": "Stop a range renumber that sends no starting number from journaling one: read back the numbers Dispatcharr chose, and treat any not read back as unknown in later rows, compensation and recovery steps; declare every bulk-commit envelope field on BulkCommitResponse, and name all six validation issue types in the frontend types, plus 0081 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0081"
   }
 }
