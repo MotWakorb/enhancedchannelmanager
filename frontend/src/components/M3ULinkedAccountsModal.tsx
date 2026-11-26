@@ -1,6 +1,7 @@
 import { useState, useMemo, memo } from 'react';
 import type { M3UAccount } from '../types';
 import { naturalCompare } from '../utils/naturalSort';
+import { isDisplayableM3UAccount } from '../utils/m3uAccountVisibility';
 import { ModalOverlay } from './ModalOverlay';
 import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ModalBase.css';
@@ -54,7 +55,7 @@ export const M3ULinkedAccountsModal = memo(function M3ULinkedAccountsModal({
   // Filter out "Custom" account and sort by type then name
   const sortedAccounts = useMemo(() => {
     return accounts
-      .filter(a => a.name.toLowerCase() !== 'custom')
+      .filter(isDisplayableM3UAccount)
       .sort((a, b) => {
         // First sort by type: STD (Standard M3U) before XC (XtreamCodes)
         if (a.account_type !== b.account_type) {
