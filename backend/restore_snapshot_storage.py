@@ -1,4 +1,4 @@
-"""Private saved-restore storage with cross-process leases (sumq7).
+"""Private saved-restore storage with cross-process leases.
 
 Only the known flat snapshot layout is reclaimed; no recursive deletion is used
 by the sweeper. The config parent must remain trusted against same-UID writers.
@@ -14,7 +14,10 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 
 _DIRECTORY_RE = re.compile(r"ecm-saved-restore-[a-z0-9_]{8}\Z")
+# Both names match tempfile.mkstemp output (8 characters from its a-z0-9_
+# alphabet): the snapshot copy and the decrypt gate's plaintext temp.
 _ARTIFACT_RE = re.compile(r"ecm-restore-[a-z0-9_]{8}\.zip\Z")
+_PLAINTEXT_RE = re.compile(r"ecm-restore-dec-[a-z0-9_]{8}\.zip\Z")
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
 
@@ -107,14 +110,21 @@ def _reclaim(root_fd: int, name: str, cutoff: float) -> None:
         if not _private(directory, 0o700) or directory.st_mtime >= cutoff:
             return
         names = os.listdir(directory_fd)
-        # A producer creates at most one ZIP. Interrupted pre-copy creation can
-        # leave an empty directory; anything else is outside our ownership claim.
-        if len(names) > 1:
+        # A producer creates at most one snapshot ZIP and, for an encrypted
+        # artifact, at most one decrypted plaintext temp beside it. A kill
+        # mid-restore can leave either or both (task cleanup unlinks the ZIP
+        # before the plaintext); interrupted pre-copy creation can leave an
+        # empty directory. Anything else is outside our ownership claim.
+        artifacts = [n for n in names if _ARTIFACT_RE.fullmatch(n)]
+        plaintexts = [n for n in names if _PLAINTEXT_RE.fullmatch(n)]
+        if (
+            len(artifacts) > 1
+            or len(plaintexts) > 1
+            or len(artifacts) + len(plaintexts) != len(names)
+        ):
             return
-        for artifact in names:
-            if not _ARTIFACT_RE.fullmatch(artifact):
-                return
-            info = os.stat(artifact, dir_fd=directory_fd, follow_symlinks=False)
+        for entry in names:
+            info = os.stat(entry, dir_fd=directory_fd, follow_symlinks=False)
             if (
                 not stat.S_ISREG(info.st_mode)
                 or not _private(info, 0o600)
@@ -122,8 +132,8 @@ def _reclaim(root_fd: int, name: str, cutoff: float) -> None:
                 or info.st_mtime >= cutoff
             ):
                 return
-        for artifact in names:
-            os.unlink(artifact, dir_fd=directory_fd)
+        for entry in names:
+            os.unlink(entry, dir_fd=directory_fd)
         # Never remove a replacement name after a directory rename/rebind.
         current = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
         if (current.st_dev, current.st_ino) == (directory.st_dev, directory.st_ino):

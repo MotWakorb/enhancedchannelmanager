@@ -160,3 +160,83 @@ sys.stdin.read()
         if process.poll() is None:
             process.kill()
         process.communicate(timeout=10)
+
+
+def plaintext(directory, name="ecm-restore-dec-k3_9zq0a.zip"):
+    decrypted = directory / name
+    decrypted.write_bytes(b"decrypted plaintext")
+    decrypted.chmod(0o600)
+    age(directory)
+    return decrypted
+
+
+def test_reclaims_orphan_with_artifact_and_decrypted_plaintext(tmp_path):
+    # A process killed mid-decrypt leaves the snapshot ZIP and its plaintext.
+    directory, artifact = abandoned(tmp_path)
+    decrypted = plaintext(directory)
+    backup._sweep_stale_restore_temps(tmp_path)
+    assert not artifact.exists() and not decrypted.exists()
+    assert not directory.exists()
+
+
+def test_reclaims_orphan_holding_only_decrypted_plaintext(tmp_path):
+    # Task cleanup unlinks the artifact before the plaintext, so a kill between
+    # the two leaves plaintext alone; it must not outlive the snapshot.
+    directory, artifact = abandoned(tmp_path)
+    artifact.unlink()
+    decrypted = plaintext(directory)
+    backup._sweep_stale_restore_temps(tmp_path)
+    assert not decrypted.exists()
+    assert not directory.exists()
+
+
+def test_real_mkstemp_plaintext_name_and_mode_are_reclaimable(tmp_path):
+    import tempfile
+
+    directory, artifact = abandoned(tmp_path)
+    fd, name = tempfile.mkstemp(
+        prefix="ecm-restore-dec-", suffix=".zip", dir=str(directory)
+    )
+    os.close(fd)
+    info = os.stat(name)
+    assert info.st_uid == os.geteuid() and (info.st_mode & 0o777) == 0o600
+    age(directory)
+    backup._sweep_stale_restore_temps(tmp_path)
+    assert not directory.exists()
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    ["two_plaintexts", "two_artifacts", "plaintext_hardlink", "plaintext_public",
+     "plaintext_fresh", "plaintext_symlink", "foreign_name", "plaintext_bad_charset"],
+)
+def test_refuses_unexpected_plaintext_layouts(tmp_path, unsafe):
+    directory, artifact = abandoned(tmp_path)
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"outside retained")
+    decrypted = plaintext(directory)
+    if unsafe == "two_plaintexts":
+        plaintext(directory, "ecm-restore-dec-second00.zip")
+    elif unsafe == "two_artifacts":
+        second = directory / "ecm-restore-second00.zip"
+        second.write_bytes(b"second")
+        second.chmod(0o600)
+    elif unsafe == "plaintext_hardlink":
+        (tmp_path / "retained-plaintext.zip").hardlink_to(decrypted)
+    elif unsafe == "plaintext_public":
+        decrypted.chmod(0o644)
+    elif unsafe == "plaintext_symlink":
+        decrypted.unlink()
+        decrypted.symlink_to(outside)
+    elif unsafe == "foreign_name":
+        (directory / "keep.txt").write_text("unrelated")
+    elif unsafe == "plaintext_bad_charset":
+        decrypted.rename(directory / "ecm-restore-dec-ABCDEFGH.zip")
+    if unsafe == "plaintext_fresh":
+        os.utime(decrypted, None)
+    else:
+        age(directory)
+    backup._sweep_stale_restore_temps(tmp_path)
+    assert directory.exists()
+    assert artifact.exists()
+    assert outside.read_bytes() == b"outside retained"

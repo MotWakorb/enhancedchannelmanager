@@ -4,6 +4,7 @@ import asyncio
 import os
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -321,3 +322,182 @@ async def test_foreign_owned_private_parent_is_refused(
     engine.assert_not_called()
     assert list(private.iterdir()) == []
     assert (saved / name).read_bytes() == b"retained backup"
+
+
+def _snapshot_dirs(private):
+    if not private.exists():
+        return []
+    return sorted(p.name for p in private.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_concurrent_saved_restore_is_refused_without_second_snapshot(
+    async_client, storage, scheduled, monkeypatch
+):
+    # Each preview copies up to the size cap, so parallel requests must not
+    # stack full copies in the private pool before the engine refuses them.
+    saved, private = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    (saved / name).write_bytes(b"selected backup bytes")
+    real_stream = backup._stream_upload_to_temp
+    observed = []
+
+    async def stream_while_second_request_arrives(file, dest_dir, **kwargs):
+        if observed:  # an unguarded second request copies too; never recurse
+            observed.append(("second request copied", None, None))
+            return await real_stream(file, dest_dir, **kwargs)
+        observed.append(None)
+        second = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+        observed[0] = (second.status_code, second.json(), _snapshot_dirs(private))
+        return await real_stream(file, dest_dir, **kwargs)
+
+    monkeypatch.setattr(
+        backup, "_stream_upload_to_temp", stream_while_second_request_arrives
+    )
+    engine = MagicMock(run_task=AsyncMock())
+    with patch("task_engine.get_engine", return_value=engine):
+        first = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+        await asyncio.gather(*scheduled)
+    assert first.status_code == 200
+    assert len(observed) == 1
+    status, body, dirs_during = observed[0]
+    assert status == 409
+    assert body["detail"] == "A saved restore is already being prepared"
+    assert len(dirs_during) == 1  # only the first request's snapshot
+    assert engine.run_task.await_count == 1
+    assert _snapshot_dirs(private) == []
+
+
+@pytest.mark.asyncio
+async def test_active_dbas_restore_refused_before_any_copy(
+    async_client, storage, monkeypatch
+):
+    saved, private = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    (saved / name).write_bytes(b"selected backup bytes")
+    copies = []
+
+    async def must_not_copy(*args, **kwargs):
+        copies.append(args)
+        raise AssertionError("copied while a restore was active")
+
+    monkeypatch.setattr(backup, "_stream_upload_to_temp", must_not_copy)
+    engine = MagicMock(
+        run_task=AsyncMock(),
+        get_status=MagicMock(return_value={"active_tasks": ["dbas_restore"]}),
+    )
+    with patch("task_engine.get_engine", return_value=engine):
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Task is already running"
+    assert copies == []
+    engine.run_task.assert_not_called()
+    assert _snapshot_dirs(private) == []
+    assert (saved / name).read_bytes() == b"selected backup bytes"
+
+
+@pytest.mark.asyncio
+async def test_insufficient_free_space_refused_before_copy(
+    async_client, storage, monkeypatch
+):
+    saved, private = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    (saved / name).write_bytes(b"selected backup bytes")
+    real_statvfs = os.statvfs
+
+    class Full:
+        f_bavail = 1
+        f_frsize = 4096
+
+    monkeypatch.setattr(
+        backup.os,
+        "statvfs",
+        lambda path: Full() if Path(path) == private else real_statvfs(path),
+    )
+    engine = MagicMock(run_task=AsyncMock())
+    with patch("task_engine.get_engine", return_value=engine):
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+    assert response.status_code == 507
+    assert "free space" in response.json()["detail"]
+    engine.run_task.assert_not_called()
+    assert _snapshot_dirs(private) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["lease", "copy"])
+async def test_snapshot_oserror_is_logged_500_and_cleaned(
+    async_client, storage, monkeypatch, caplog, failure
+):
+    import errno
+
+    import restore_snapshot_storage
+
+    saved, private = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    (saved / name).write_bytes(b"selected backup bytes")
+    if failure == "lease":
+        def no_flock(*args):
+            raise OSError(errno.EOPNOTSUPP, "flock unsupported")
+
+        # Replace only this module's view: fcntl itself is shared with config.
+        real = restore_snapshot_storage.fcntl
+        monkeypatch.setattr(
+            restore_snapshot_storage,
+            "fcntl",
+            SimpleNamespace(flock=no_flock, LOCK_EX=real.LOCK_EX, LOCK_NB=real.LOCK_NB),
+        )
+    else:
+        async def disk_full(file, dest_dir, **kwargs):
+            (Path(dest_dir) / "ecm-restore-partial0.zip").write_bytes(b"partial")
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(backup, "_stream_upload_to_temp", disk_full)
+    engine = MagicMock(run_task=AsyncMock())
+    with caplog.at_level("WARNING", logger="routers.backup"):
+        with patch("task_engine.get_engine", return_value=engine):
+            response = await async_client.post(
+                "/api/backup/restore-dbas-saved", json={"filename": name}
+            )
+    # The app scrubs 500 details; the logged record proves the route mapped the
+    # OSError itself instead of letting it escape as an unlogged failure.
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Internal server error"
+    assert any(
+        "saved restore snapshot" in r.getMessage() and r.exc_info
+        for r in caplog.records
+    )
+    engine.run_task.assert_not_called()
+    assert _snapshot_dirs(private) == []
+    assert (saved / name).read_bytes() == b"selected backup bytes"
+
+
+@pytest.mark.asyncio
+async def test_saved_route_reports_saved_backup_size_and_empty_errors(
+    async_client, storage, monkeypatch
+):
+    saved, private = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    selected = saved / name
+    selected.write_bytes(b"")
+    with patch("task_engine.get_engine", return_value=MagicMock(run_task=AsyncMock())):
+        empty = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+        selected.write_bytes(b"too much for this test budget")
+        monkeypatch.setattr(backup, "_RESTORE_MAX_UPLOAD_BYTES", 8)
+        large = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+    assert (empty.status_code, empty.json()["detail"]) == (400, "Saved backup is empty")
+    assert (large.status_code, large.json()["detail"]) == (
+        413, "Saved backup is too large"
+    )
+    assert _snapshot_dirs(private) == []

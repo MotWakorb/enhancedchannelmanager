@@ -113,7 +113,9 @@ def handoff(monkeypatch):
         return MagicMock()
 
     monkeypatch.setattr(DbasRestoreTask, "_run_restore", consume)
-    monkeypatch.setattr("task_engine.get_engine", lambda: SimpleNamespace(run_task=run_task))
+    monkeypatch.setattr("task_engine.get_engine", lambda: SimpleNamespace(
+        run_task=run_task, get_status=lambda: {"active_tasks": []},
+    ))
     # Scope to each HTTP call: asyncio itself is shared with the transport.
     async def restore(client, name, *, apply=False, passphrase=None):
         from unittest.mock import patch

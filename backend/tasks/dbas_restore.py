@@ -222,7 +222,7 @@ class DbasRestoreTask(TaskScheduler):
         ``cleanup_artifact`` is the fifth, and defaults back to ``True`` rather
         than retaining a previous caller's setting. Both HTTP restore routes now
         hand the task disposable input; saved restores use a private snapshot,
-        never the operator's original backup (0m06f.3.3).
+        never the operator's original backup.
 
         Called from execute()'s ``finally`` so it runs on EVERY exit path.
         """
