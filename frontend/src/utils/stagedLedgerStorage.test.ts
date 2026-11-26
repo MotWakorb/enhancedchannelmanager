@@ -577,3 +577,59 @@ describe('planLedgerRestore withdraws an acknowledgement the lineup outgrew', ()
     expect(plan.withdrawnAcknowledgements).toEqual([]);
   });
 });
+
+describe('a staged create carries its profile intent through the ledger', () => {
+  const DEST_A = 'a'.repeat(64);
+  const DEST_B = 'b'.repeat(64);
+  const SCOPE = { operator: OPERATOR_A, destination: DEST_A };
+  const created = (profileIntent?: { profileIds: number[]; operator: string; destination?: string }) =>
+    createChannelOp(-1, { type: 'createChannel', name: 'New', ...(profileIntent && { profileIntent }) });
+
+  it('round-trips the intent, including an explicit empty selection', () => {
+    const operations = [created({ profileIds: [], operator: OPERATOR_A, destination: DEST_A })];
+    saveStagedLedger({ operatorKey: OPERATOR_A, operations, undoGroups: [['op-1']], now: NOW });
+    const restored = readStagedLedger(OPERATOR_A, NOW + 1000)!;
+    expect(restored.operations[0].apiCall).toMatchObject({
+      profileIntent: { profileIds: [], operator: OPERATOR_A, destination: DEST_A },
+    });
+  });
+
+  it('accepts a record written before intents were persisted', () => {
+    saveStagedLedger({ operatorKey: OPERATOR_A, operations: [created()], undoGroups: [['op-1']], now: NOW });
+    const record = JSON.parse(window.sessionStorage.getItem(STAGED_LEDGER_STORAGE_KEY)!);
+    expect(record.version).toBe(STAGED_LEDGER_FORMAT_VERSION);
+    const restored = readStagedLedger(OPERATOR_A, NOW + 1000)!;
+    expect(restored.operations[0].apiCall).not.toHaveProperty('profileIntent');
+    const plan = planLedgerRestore(restored.operations, { channels: [], channelGroups: GROUPS, profileScope: SCOPE });
+    expect(plan.restorable).toHaveLength(1);
+    expect(plan.withdrawnProfileIntents).toEqual([]);
+  });
+
+  it('refuses a ledger whose intent is malformed', () => {
+    const bad = created({ profileIds: ['6'] as unknown as number[], operator: OPERATOR_A, destination: DEST_A });
+    saveStagedLedger({ operatorKey: OPERATOR_A, operations: [bad], undoGroups: [['op-1']], now: NOW });
+    expect(readStagedLedger(OPERATOR_A, NOW + 1000)).toBeNull();
+    expect(window.sessionStorage.getItem(STAGED_LEDGER_STORAGE_KEY)).toBeNull();
+  });
+
+  it('keeps an intent bound to the current operator and destination', () => {
+    const plan = planLedgerRestore([created({ profileIds: [9], ...SCOPE })], {
+      channels: [], channelGroups: GROUPS, profileScope: SCOPE,
+    });
+    expect(plan.restorable[0].apiCall).toMatchObject({ profileIntent: { profileIds: [9], ...SCOPE } });
+    expect(plan.withdrawnProfileIntents).toEqual([]);
+  });
+
+  it.each([
+    ['another operator', { operator: OPERATOR_B, destination: DEST_A }],
+    ['another destination', { operator: OPERATOR_A, destination: DEST_B }],
+    ['an unknown destination', { operator: OPERATOR_A }],
+  ])('withdraws an intent bound to %s but keeps the create', (_label, scope) => {
+    const staged = created({ profileIds: [9], ...scope });
+    const plan = planLedgerRestore([staged], { channels: [], channelGroups: GROUPS, profileScope: SCOPE });
+    expect(plan.restorable).toHaveLength(1);
+    expect(plan.restorable[0].apiCall).toMatchObject({ type: 'createChannel', name: 'New' });
+    expect((plan.restorable[0].apiCall as { profileIntent?: unknown }).profileIntent).toBeUndefined();
+    expect(plan.withdrawnProfileIntents.map(entry => entry.id)).toEqual([staged.id]);
+  });
+});
