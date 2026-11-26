@@ -216,6 +216,23 @@ export function retireStagedLedgerOperations(
   }
 }
 
+/**
+ * Shape check for a create's profile intent. Absent is valid: records written
+ * before intents were persisted restore their creates without one, exactly as
+ * they did then, which is why the format version did not move.
+ */
+function isProfileIntentField(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== 'object' || value === null) return false;
+  const intent = value as Record<string, unknown>;
+  return (
+    Array.isArray(intent.profileIds) &&
+    intent.profileIds.every((id) => Number.isSafeInteger(id) && (id as number) > 0) &&
+    typeof intent.operator === 'string' &&
+    (intent.destination === undefined || typeof intent.destination === 'string')
+  );
+}
+
 /** Shape check for one persisted operation. Anything short of this is refused. */
 function isStagedOperation(value: unknown): value is StagedOperation {
   if (typeof value !== 'object' || value === null) return false;
@@ -226,6 +243,7 @@ function isStagedOperation(value: unknown): value is StagedOperation {
     typeof operation.timestamp === 'number' &&
     typeof operation.description === 'string' &&
     typeof apiCall === 'object' && apiCall !== null && typeof apiCall.type === 'string' &&
+    isProfileIntentField(apiCall.profileIntent) &&
     Array.isArray(operation.beforeSnapshot) &&
     Array.isArray(operation.afterSnapshot)
   );
@@ -329,6 +347,23 @@ export interface LedgerRestoreContext {
   channelGroups: ChannelGroup[];
   /** Channel profile ids, when the caller has them. Omitted means unchecked. */
   profileIds?: number[];
+  /**
+   * The operator and Dispatcharr destination profile intents may be applied
+   * in now. A create whose intent names any other scope, or none, is restored
+   * without it. Omitted means unchecked.
+   */
+  profileScope?: { operator: string; destination?: string };
+}
+
+/**
+ * A create restored WITHOUT its profile selection, because the selection was
+ * made for a different operator or Dispatcharr destination than the current
+ * one. Applying it here would set membership on profiles nobody chose.
+ */
+export interface WithdrawnProfileIntent {
+  id: string;
+  description: string;
+  detail: string;
 }
 
 /**
@@ -352,6 +387,7 @@ export interface LedgerRestorePlan {
   restorable: StagedOperation[];
   dropped: DroppedLedgerOperation[];
   withdrawnAcknowledgements: WithdrawnAcknowledgement[];
+  withdrawnProfileIntents: WithdrawnProfileIntent[];
 }
 
 /** A single reference an operation makes to something that must still exist. */
@@ -467,6 +503,8 @@ export function planLedgerRestore(
   const restorable: StagedOperation[] = [];
   const dropped: DroppedLedgerOperation[] = [];
   const withdrawnAcknowledgements: WithdrawnAcknowledgement[] = [];
+  const withdrawnProfileIntents: WithdrawnProfileIntent[] = [];
+  const profileScope = context.profileScope;
 
   const drop = (
     operation: StagedOperation,
@@ -601,6 +639,24 @@ export function planLedgerRestore(
       }
     }
 
+    if (restored.apiCall.type === 'createChannel' && restored.apiCall.profileIntent && profileScope) {
+      const intent = restored.apiCall.profileIntent;
+      if (
+        intent.operator !== profileScope.operator ||
+        intent.destination === undefined ||
+        intent.destination !== profileScope.destination
+      ) {
+        restored = { ...restored, apiCall: { ...restored.apiCall, profileIntent: undefined } };
+        withdrawnProfileIntents.push({
+          id: operation.id,
+          description: operation.description,
+          detail:
+            'Its channel profile selection was made for a different operator or Dispatcharr ' +
+            'connection, so the channel will be created without it. Set its profiles after applying.',
+        });
+      }
+    }
+
     // --- accepted: record what it creates and how it moves the projection -
     switch (apiCall.type) {
       case 'createChannel': {
@@ -653,5 +709,5 @@ export function planLedgerRestore(
     restorable.push(restored);
   }
 
-  return { restorable, dropped, withdrawnAcknowledgements };
+  return { restorable, dropped, withdrawnAcknowledgements, withdrawnProfileIntents };
 }

@@ -108,7 +108,7 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     manifest = verifier.load_manifest(
         ROOT / "docker/alpine-native/application-source.json"
     )
-    assert len(manifest["files"]) == 1097
+    assert len(manifest["files"]) == 1098
     assert (
         manifest["baseline_application_commit"]
         == "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531"
@@ -163,6 +163,62 @@ SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
 SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
 
+RESTORED_PROFILE_INTENT_FILES = (
+    "frontend/src/App.tsx",
+    "frontend/src/components/EditModeRestoreDialog.tsx",
+    "frontend/src/hooks/useEditMode.ts",
+    "frontend/src/types/editMode.ts",
+    "frontend/src/utils/stagedLedgerStorage.ts",
+    "frontend/src/utils/stagedLedgerStorage.test.ts",
+)
+RESTORED_PROFILE_INTENT_ADDED_FILES = (
+    "frontend/src/App.restoreProfileIntent.test.tsx",
+)
+
+
+def _before_restored_profile_intent(manifest):
+    key = "restored_profile_intent_update"
+    update = manifest[key]
+    assert update["base_commit"] == "e17442485237c17509d24fa2037dd3eb9c7e81d4"
+    assert update["bead"] == "enhancedchannelmanager-0m06f.3.4.3"
+    assert update["version"] == "0.18.2-0084"
+    assert update["previous_manifest_sha256"] == (
+        "1516a70b57babe921c3256c8a953a7da1646d13d550561286694e077107c4c00"
+    )
+    assert set(update["added_files"]) == set(RESTORED_PROFILE_INTENT_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(RESTORED_PROFILE_INTENT_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_restored_profile_intent_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_restored_profile_intent(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert (
+        result["restored_profile_intent_update"]
+        == manifest["restored_profile_intent_update"]
+    )
+
+
 EXPLICIT_PROFILE_SELECTION_FILES = (
     "frontend/src/App.tsx",
     "frontend/src/components/StreamsPane.tsx",
@@ -175,6 +231,7 @@ EXPLICIT_PROFILE_SELECTION_ADDED_FILES = (
 
 def _before_explicit_profile_selection(manifest):
     key = "explicit_profile_selection_update"
+    manifest = _before_restored_profile_intent(manifest)
     update = manifest[key]
     assert update["base_commit"] == "2d33a086d5b86dcbf6a1b7ba192184b59d1ef20b"
     assert update["bead"] == "enhancedchannelmanager-0m06f.3.4.2"
