@@ -31,7 +31,7 @@ The UX label for this feature is **Backup & Restore**. The internal acronym DBAS
 | [Configure Cloud Destinations](configure-cloud-destinations.md) | Per-provider setup: S3/S3-compatible (shipped), WebDAV (shipped), Google Drive (shipped), OneDrive (deferred), Dropbox (deferred). |
 | [Troubleshoot a Restore](troubleshoot-restore.md) | Failure modes, log patterns, rollback-incomplete recovery, logo misses. |
 | [Migrate to a New Install](migrate-to-a-new-install.md) | End-to-end migration: backup on old install, install on new host, restore, verify. |
-| [Recover an Unmounted Container](recover-an-unmounted-container.md) | Copy a backup out of a container with no `/config` mount, add the mount, recreate, restore, and verify. |
+| [Recover an Unmounted Container](recover-an-unmounted-container.md) | Stop the container, copy the whole `/config` directory out, verify it, mount it, recreate, and verify. |
 | [Cross-Instance Sync](cross-instance-sync.md) | One-way A→B config replication for DR standbys and multi-instance setups. |
 
 ---

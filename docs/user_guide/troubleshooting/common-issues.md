@@ -28,7 +28,7 @@ docker logs --tail 40 ecm-ecm-1
 
 For a failed Python or uvicorn check, which prints an `Interpreter
 diagnostics:` block, follow the
-[container preflight failure runbook](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/container-preflight-failure.md).
+[container preflight failure runbook](https://github.com/MotWakorb/enhancedchannelmanager/blob/dev/docs/runbooks/container-preflight-failure.md).
 
 The checks cover user/group identity, the Python environment, the config
 directory (exists and is writable), the frontend build, port availability, and
@@ -39,8 +39,8 @@ config-persistence check. If `/config` is not on a mounted volume, ECM warns
 but starts anyway, and everything you configure is destroyed the next time the
 container is recreated. See
 [Install ECM](../getting-started/installation.md#give-ecm-a-place-to-keep-its-data)
-for the fix. If the container already holds data, take the backup first and
-follow
+for the fix. If the container already holds data, copy the whole `/config` directory
+out first and follow
 [Recover data from a container with no config mount](../backup-restore/recover-an-unmounted-container.md).
 A healthy instance logs:
 

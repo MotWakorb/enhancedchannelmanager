@@ -139,7 +139,9 @@ There is no undo for a successful restore.
 
 If the reason you need a backup is a container with no `/config` mount, follow
 [Recover data from a container with no config mount](../backup-restore/recover-an-unmounted-container.md)
-instead; it sequences the backup, the copy out, the mount and the restore.
+instead; it sequences stopping the container, copying the whole `/config`
+directory out, verifying the copy, mounting it and recreating the container.
+A backup restore alone would not bring back ECM's accounts, rules or schedules.
 
 See [Restore a Backup](../backup-restore/restore-a-backup.md) for the full
 walkthrough, and [Troubleshoot a Restore](../backup-restore/troubleshoot-restore.md)

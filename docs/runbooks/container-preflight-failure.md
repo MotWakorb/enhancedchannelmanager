@@ -30,7 +30,7 @@ Port-in-use lines (`! Port 6100 (HTTP) is already in use`) and the `DATA IS NOT 
 
 ## Before you fix anything
 
-**Check whether this container has a config mount before you recreate it.** If the log (or Step 1 below) shows `DATA IS NOT PERSISTENT`, everything ECM stores is in this container's writable layer, and removing or recreating the container destroys it. Do not remove it yet. Stopping it does not delete that data. Follow [Recover data from a container with no config mount](../user_guide/backup-restore/recover-an-unmounted-container.md) first. ECM is not running in this situation, so you cannot use the in-app backup. That page covers copying the files out of a stopped container.
+**Check whether this container has a config mount before you recreate it.** If the log (or Step 1 below) shows `DATA IS NOT PERSISTENT`, everything ECM stores is in this container's writable layer, and removing or recreating the container destroys it. Do not remove it yet. Stopping it does not delete that data. Follow [Recover data from a container with no config mount](../user_guide/backup-restore/recover-an-unmounted-container.md) first. It copies the whole `/config` directory out of the stopped container with `docker cp`, verifies the copy, and mounts that copy at `/config` when you recreate the container. Every recreate in the Resolution section below is that page's Step 7, so apply the fix there, with the mount in place. A crash-looping container needs no running ECM for any of this.
 
 ---
 
@@ -41,10 +41,10 @@ Port-in-use lines (`! Port 6100 (HTTP) is already in use`) and the `DATA IS NOT 
    ```bash
    docker logs --tail 80 ecm-ecm-1
    docker inspect ecm-ecm-1 --format '{{range .Mounts}}{{.Destination}}{{"\n"}}{{end}}'
-   docker inspect ecm-ecm-1 --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E '^(PATH|ECM_PYTHON|ECM_UVICORN)='
+   docker inspect ecm-ecm-1 --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E '^(PATH|ECM_PYTHON|ECM_UVICORN|ECM_VERSION)='
    ```
 
-   Expected on a healthy container: `/config` appears in the mounts list, and `PATH` starts with `/opt/venv/bin:`. The last command prints variable names you set yourself plus `PATH`. It does not print secrets.
+   Expected on a healthy container: `/config` appears in the mounts list, and `PATH` starts with `/opt/venv/bin:`. The last command prints only `PATH`, the two overrides and `ECM_VERSION`. It does not print secrets.
 
 2. Find the first `✗` line and match it:
 
@@ -57,13 +57,13 @@ Port-in-use lines (`! Port 6100 (HTTP) is already in use`) and the `DATA IS NOT 
    | `✗ Config directory is not writable` | `/config` cannot be written by the PUID/PGID user. Not an interpreter problem. | Step 5 |
    | `✗ MCP_SECRETS_DIR ...` or `✗ MCP credential projection ...` | The MCP secrets directory is wrong. Not an interpreter problem. | Step 5 |
 
-3. Read the `Interpreter diagnostics:` block. The container prints it on every interpreter failure:
+3. Read the `Interpreter diagnostics:` block. The container prints it on every interpreter failure. The paths below are illustrative: your values will differ (on the current Alpine image the system interpreter is `/usr/local/bin/python3`, which is Python 3.12):
 
    ```text
    → Interpreter diagnostics:
-   →   resolved python : /usr/bin/python3
+   →   resolved python : /usr/local/bin/python3
    →   resolved uvicorn: /opt/venv/bin/uvicorn (NOT EXECUTABLE — the app launch would fail here too)
-   →   sys.prefix      : /usr
+   →   sys.prefix      : /usr/local
    →   PATH            : /usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
    →   /opt/venv/bin/python: MISSING — the image virtualenv is not where ECM expects it
    ```
@@ -71,7 +71,7 @@ Port-in-use lines (`! Port 6100 (HTTP) is already in use`) and the `DATA IS NOT 
    Read it line by line:
 
    - **`sys.prefix` is `/opt/venv`**: the right interpreter ran, so the virtualenv itself is damaged or the packages are missing. Pull a fresh image and recreate.
-   - **`sys.prefix` is `/usr` (or another system path)**: the container fell back to a system interpreter that has none of ECM's packages. Continue below to find out why it fell back.
+   - **`sys.prefix` is `/usr/local` (or another system path)**: the container fell back to a system interpreter that has none of ECM's packages. Continue below to find out why it fell back.
    - **`/opt/venv/bin/python: MISSING`**: the pinned default is not executable, so the script fell back to a `PATH` lookup. Something is shadowing `/opt/venv`, usually a bind mount over it, or this is a custom image without the virtualenv.
    - **`/opt/venv/bin/python: present` but `resolved python` is something else**: an `ECM_PYTHON` override is in play. Either it points at an executable that lacks ECM's packages (the override was used), or it was not executable and was discarded. A discarded override prints `! ECM_PYTHON=<value> is not executable — falling back to a PATH lookup` earlier in the log.
    - **`resolved uvicorn: ... (NOT EXECUTABLE ...)`**: the launcher is missing. The same applies to an `ECM_UVICORN` override, which also prints a `! ECM_UVICORN=... is not executable` warning when it is discarded.
@@ -97,6 +97,8 @@ From 0.18.1 the entrypoint no longer depends on `PATH` for this. It pins `/opt/v
 
 **Mitigate first.** Pick the branch that matches step 3.
 
+Branches 1 to 4 each end with a recreate, and removing the container destroys everything ECM stored in it if `/config` has no mount. If Diagnosis step 1 showed no `/config` mount, do not run a recreate command from this section yet. First complete [steps 1 to 6 of Recover data from a container with no config mount](../user_guide/backup-restore/recover-an-unmounted-container.md#step-1-confirm-the-container-has-no-config-mount) (stop the container, copy the whole `/config` directory out, verify the copy, mount it). Then make the change below as part of that page's Step 7. When `/config` is already mounted, run the branch as written.
+
 1. **Old build (before 0.18.1) with an inherited `PATH`.** Update to an image at 0.18.1 or later and recreate the container from your compose file instead of your update tool's in-place update, so it takes the image's own environment:
 
    ```bash
@@ -104,7 +106,7 @@ From 0.18.1 the entrypoint no longer depends on `PATH` for this. It pins `/opt/v
    docker compose up -d --force-recreate ecm
    ```
 
-   Only do this once `/config` is mounted. If it is not, stop and use [Before you fix anything](#before-you-fix-anything). The service is named `ecm` in the repository's `docker-compose.yml`. Use your own service name if it differs.
+   Only do this once `/config` is mounted. If it is not, stop and use [Before you fix anything](#before-you-fix-anything), which ends with this recreate as its Step 7. The service is named `ecm` in the repository's `docker-compose.yml`. Use your own service name if it differs.
 
 2. **Something shadows `/opt/venv`.** Remove the bind mount or volume that targets `/opt/venv` from the container definition and recreate. The packages are in the image, so that directory needs no mount.
 
@@ -149,7 +151,7 @@ From 0.18.1 the entrypoint no longer depends on `PATH` for this. It pins `/opt/v
 
    Expected: `200` and `"status": "ready"`. The image ships no `curl`, which is why this uses `python3`. If the container is not running, there is nothing to exec into. Read the log instead.
 
-If any step fails, **stop** and escalate. Do not remove the container to "try again" while `/config` has no mount.
+If any step fails, **stop** and escalate. Do not remove the container to "try again" while `/config` has no mount. If you are in that state, the safe exit is the copy-first procedure: [Recover data from a container with no config mount](../user_guide/backup-restore/recover-an-unmounted-container.md). It needs only a stopped container and `docker cp`, so it works however the startup failure presents.
 
 ---
 
@@ -158,7 +160,7 @@ If any step fails, **stop** and escalate. Do not remove the container to "try ag
 If the container still exits after the branch that matched your diagnosis:
 
 - Open an issue (or ask the maintainer) and include the full output of `docker logs ecm-ecm-1`, the image tag or digest, the output of the step 1 commands, and whether the container was created before 0.16.0.
-- Do not paste secrets. The step 1 environment command prints only `PATH`, `ECM_PYTHON` and `ECM_UVICORN`.
+- Do not paste secrets. The step 1 environment command prints only `PATH`, `ECM_PYTHON`, `ECM_UVICORN` and `ECM_VERSION`.
 
 ---
 

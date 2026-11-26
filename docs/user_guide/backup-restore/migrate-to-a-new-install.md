@@ -23,9 +23,9 @@ This walkthrough assumes:
       standard artifact now removes the provider **username** as well as
       the password, so Step 6 re-enters both.
 
-    - **A standard backup does not migrate your ECM accounts.** Only an
-      encrypted backup with **Include credentials** carries them. Without
-      it, the new install starts at first-run setup and you create an
+    - **A backup does not migrate your ECM accounts.** An encrypted backup
+      with **Include credentials** holds them in the archive, but no current
+      restore path applies them. In either case, the new install starts at first-run setup and you create an
       admin account there. See
       [What a standard backup does not carry](backup-overview.md#what-a-standard-backup-does-not-carry).
 
