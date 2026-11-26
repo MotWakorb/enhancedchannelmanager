@@ -1116,7 +1116,7 @@
     {
       "executable": false,
       "path": "backend/restore_snapshot_storage.py",
-      "sha256": "c757efb79029af780029c4a8893699999ffafcc4c5c8050fbbdd9ea7123a2822",
+      "sha256": "9eb14dfc6fbab81b27b7cdaee61428816ad164707e35488f25ee0030cf1e1522",
       "type": "file"
     },
     {
@@ -1134,7 +1134,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "b89ff0633d131daf5f154f82c4712dd1898e5b5bab6153920788019a8754edc9",
+      "sha256": "a60afcf6cd37a4a1565a955668dedfc4b885b51d180314746a8874fd97648862",
       "type": "file"
     },
     {
@@ -1602,7 +1602,7 @@
     {
       "executable": false,
       "path": "backend/tasks/dbas_restore.py",
-      "sha256": "a4ad06c815a0c33eea02c3c6c396fd32c7ef5dbe13fb8b31616610b6987e3ace",
+      "sha256": "d273dd260e7f6b3500f0cd8f957609d2a0c56c0601184a20dc2bd521901b854e",
       "type": "file"
     },
     {
@@ -7061,7 +7061,7 @@
       "frontend/package.json": "348ee8e63b243c61f10ef717f5deeecf8dabc29f2cedefa86618facecb08008d"
     },
     "previous_manifest_sha256": "6fe42a80de57ec12e50da581ff98a840c8826e3ed784b525c36dbb8d0ffa457c",
-    "scope": "Bind saved DBAS restores to a private owner-only snapshot opened without following symlinks, with cleanup on every exit path, and reclaim abandoned private snapshots under cross-process leases (beads enhancedchannelmanager-0m06f.3.3 and enhancedchannelmanager-sumq7), harden an existing snapshot parent to 0700 or refuse a symlinked or foreign-owned one, plus 0089 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "scope": "Bind saved DBAS restores to a private owner-only snapshot opened without following symlinks, with cleanup on every exit path, and reclaim abandoned private snapshots, including a decrypted plaintext temp left beside or without the snapshot ZIP, under cross-process flock leases (beads enhancedchannelmanager-0m06f.3.3 and enhancedchannelmanager-sumq7), harden an existing snapshot parent to 0700 or refuse a symlinked or foreign-owned one, refuse a saved restore before copying when a DBAS restore is active, another snapshot copy is in progress, the backup exceeds the 2 GiB cap or free space is short, log snapshot filesystem errors as a 500 with the partial snapshot removed, word saved-route errors as Saved backup, plus 0089 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0089"
   }
 }
