@@ -108,7 +108,7 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     manifest = verifier.load_manifest(
         ROOT / "docker/alpine-native/application-source.json"
     )
-    assert len(manifest["files"]) == 1095
+    assert len(manifest["files"]) == 1096
     assert (
         manifest["baseline_application_commit"]
         == "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531"
@@ -159,8 +159,53 @@ M3U_EMPTY_STATE_ADDED_FILES = (
 )
 
 
+SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
+SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
+
+
+def _before_search_reload_mount(manifest):
+    key = "search_reload_mount_update"
+    update = manifest[key]
+    assert update["base_commit"] == "e0f7781da6e9b870f8317d9c544a3532600ce0c2"
+    assert update["bead"] == "enhancedchannelmanager-bv8n7"
+    assert update["version"] == "0.18.2-0081"
+    assert update["previous_manifest_sha256"] == (
+        "7bb86c07f81f057e0a55b9d8de2da275cc75bd5caecddfb33ad26deedd32493c"
+    )
+    assert set(update["added_files"]) == set(SEARCH_RELOAD_MOUNT_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(SEARCH_RELOAD_MOUNT_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_search_reload_mount_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_search_reload_mount(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["search_reload_mount_update"] == manifest["search_reload_mount_update"]
+
+
 def _before_publish_concurrency(manifest):
     key = "publish_concurrency_update"
+    manifest = _before_search_reload_mount(manifest)
     update = manifest[key]
     assert update["base_commit"] == "2b63af8eed785b231c93ad6d6aedd3eb38991779"
     assert update["bead"] == "enhancedchannelmanager-9iagf"
