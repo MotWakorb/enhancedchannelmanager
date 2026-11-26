@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "9c37e7d56bf7e671687a902d280f4c48ae83c616d76f80e1bfcd9036b5a07b35",
+      "sha256": "22e405dc83abe3847a95cf37c184c9fd4039f15b82aaae8944a526b133443f66",
       "type": "file"
     },
     {
@@ -1128,7 +1128,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "614ca389be4376d1d7ae4177291f4b7bda9c7baab47da4d9994612bf987462fc",
+      "sha256": "1552ffce1dad8a637655a192e8fe44a876cc7051ac6e9279da582acedc680804",
       "type": "file"
     },
     {
@@ -1830,7 +1830,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "3ae5ffdc176d02a16427f2810cdf4aa5ac29a1f4edaf4b84d8dd60c0133b80b5",
+      "sha256": "4a0806fba8e19685303a651663bb606a7f30ac867ef19c3e4a5306d8fa4bbee6",
       "type": "file"
     },
     {
@@ -1889,6 +1889,12 @@
     },
     {
       "executable": false,
+      "path": "frontend/src/App.restoreProfileIntent.test.tsx",
+      "sha256": "19b4383d028f85773f509370ea14aee765fb2e0fdd43628187d00afcb4fbe2ee",
+      "type": "file"
+    },
+    {
+      "executable": false,
       "path": "frontend/src/App.searchReload.test.tsx",
       "sha256": "39d168c1e30200e063994fae034355822f4cb4ff98e49cc33103f8c24a1f5446",
       "type": "file"
@@ -1896,7 +1902,7 @@
     {
       "executable": false,
       "path": "frontend/src/App.tsx",
-      "sha256": "6e1e1e85881c6d47fc51a96391e72188966b6c64fd6f7db98361fa724ef18469",
+      "sha256": "dc3ee366b95f9a244a77cd3d989e22bda39903b04db4d71f8d788f5556c9722e",
       "type": "file"
     },
     {
@@ -2478,7 +2484,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/EditModeRestoreDialog.tsx",
-      "sha256": "f1996672d7824662a15ef89b85d39f5a26663b634da3af589404e47c4e8d8726",
+      "sha256": "d36a11249b98152ee704cc8ee4936bd421448be1ff6821d619b655cf7be60f50",
       "type": "file"
     },
     {
@@ -5268,7 +5274,7 @@
     {
       "executable": false,
       "path": "frontend/src/hooks/useEditMode.ts",
-      "sha256": "86c5ae4e0187f4a7f7ab7efbf0338c57ebfa7992e287bfd4de1286c89d971130",
+      "sha256": "cebdd9e010616d65429ecb85a6eb0f430883ecdea1ed4cabd3d6c1b9fb371caa",
       "type": "file"
     },
     {
@@ -5610,7 +5616,7 @@
     {
       "executable": false,
       "path": "frontend/src/types/editMode.ts",
-      "sha256": "06c12605cf4bec073f6c06d1bc93a82872c379b86bb41aacf34dbd532795b65d",
+      "sha256": "04eb8f1dd7ba3e231bc40a78772b0c1ff74a5422419b61cd283c3a7612f85abf",
       "type": "file"
     },
     {
@@ -5916,13 +5922,13 @@
     {
       "executable": false,
       "path": "frontend/src/utils/stagedLedgerStorage.test.ts",
-      "sha256": "ed5c946932dd487a005f3fe52581ed051ae969b674298d506741ac7bbd032b09",
+      "sha256": "2c0a29c1557df2a476e5e49f9b793d3a0171a0a178d8683364c5f0c2c49c7df0",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/utils/stagedLedgerStorage.ts",
-      "sha256": "5e6ba95cbb18b4de5f4dad0625560a28f1e0d0e0f669dde2eeff9020fda53a05",
+      "sha256": "d722cce7f55fc10bbbff7e29c9805a17748a451e6bb2a6d2e53dfa8dcf07bb11",
       "type": "file"
     },
     {
@@ -6940,5 +6946,26 @@
     "previous_manifest_sha256": "a3fa9c5672c7fca1ca83e3df0a668092a18e70d38b4f9b85f1af51b2a14c842a",
     "scope": "Make the manual and bulk channel create dialogs honor the Channel Profiles picker: an untouched picker uses the configured defaults, a changed picker assigns exactly the chosen profiles, and a cleared picker hides the channel from every profile, including in the retained post-create recovery intent, plus 0083 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0083"
+  },
+  "restored_profile_intent_update": {
+    "added_files": [
+      "frontend/src/App.restoreProfileIntent.test.tsx"
+    ],
+    "base_commit": "e17442485237c17509d24fa2037dd3eb9c7e81d4",
+    "bead": "enhancedchannelmanager-0m06f.3.4.3",
+    "changed_files": {
+      "backend/main.py": "9c37e7d56bf7e671687a902d280f4c48ae83c616d76f80e1bfcd9036b5a07b35",
+      "backend/routers/backup.py": "614ca389be4376d1d7ae4177291f4b7bda9c7baab47da4d9994612bf987462fc",
+      "frontend/package.json": "3ae5ffdc176d02a16427f2810cdf4aa5ac29a1f4edaf4b84d8dd60c0133b80b5",
+      "frontend/src/App.tsx": "6e1e1e85881c6d47fc51a96391e72188966b6c64fd6f7db98361fa724ef18469",
+      "frontend/src/components/EditModeRestoreDialog.tsx": "f1996672d7824662a15ef89b85d39f5a26663b634da3af589404e47c4e8d8726",
+      "frontend/src/hooks/useEditMode.ts": "86c5ae4e0187f4a7f7ab7efbf0338c57ebfa7992e287bfd4de1286c89d971130",
+      "frontend/src/types/editMode.ts": "06c12605cf4bec073f6c06d1bc93a82872c379b86bb41aacf34dbd532795b65d",
+      "frontend/src/utils/stagedLedgerStorage.test.ts": "ed5c946932dd487a005f3fe52581ed051ae969b674298d506741ac7bbd032b09",
+      "frontend/src/utils/stagedLedgerStorage.ts": "5e6ba95cbb18b4de5f4dad0625560a28f1e0d0e0f669dde2eeff9020fda53a05"
+    },
+    "previous_manifest_sha256": "1516a70b57babe921c3256c8a953a7da1646d13d550561286694e077107c4c00",
+    "scope": "Keep each staged channel create's profile selection, including an explicit empty selection, through an Edit Mode session saved before Apply and restored after a reload, withdraw a selection bound to a different operator or Dispatcharr destination on restore, and carry it through Undo, Redo and Discard with its create, plus 0084 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0084"
   }
 }
