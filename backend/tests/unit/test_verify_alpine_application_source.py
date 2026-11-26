@@ -139,8 +139,45 @@ PENDING_MERGE_PREVIEW_FILES = (
 )
 
 
+def _before_telegram_html_escape(manifest):
+    key = "telegram_html_escape_update"
+    update = manifest[key]
+    assert update["base_commit"] == "494697b69b4f5b862e874029dbfbc040bb0214be"
+    assert update["bead"] == "enhancedchannelmanager-j28qs"
+    assert update["version"] == "0.18.2-0076"
+    assert update["previous_manifest_sha256"] == (
+        "d2f75cc8ef5015eaaf60070469bfc1ffc172452763db7a7bda3b816b720fe7dc"
+    )
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | {"backend/services/notification_service.py"}
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_telegram_html_escape_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_telegram_html_escape(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["telegram_html_escape_update"] == manifest["telegram_html_escape_update"]
+
+
 def _before_pending_merge_preview(manifest):
     key = "pending_merge_preview_update"
+    manifest = _before_telegram_html_escape(manifest)
     update = manifest[key]
     assert update["base_commit"] == "ed610cced3c0a8e0b36b80adc88b91a57c534bc2"
     assert update["bead"] == "enhancedchannelmanager-rtst2.13"

@@ -343,10 +343,15 @@ async def _dispatch_to_alert_channels(
     # Send to Telegram if configured and enabled
     if send_telegram and settings.is_telegram_configured():
         try:
-            telegram_message = f"{type_emoji} <b>{alert_title}</b>\n\n{message}"
+            # Reuse the alert-method path's escaper so both Telegram dispatch
+            # paths converge (bead j28qs). Interpolated values are escaped; the
+            # <b> tags below are this code's own markup.
+            from alert_methods_telegram import TelegramBotMethod
+            esc = TelegramBotMethod._escape_html
+            telegram_message = f"{type_emoji} <b>{esc(alert_title)}</b>\n\n{esc(message)}"
             if metadata:
                 if "task_name" in metadata:
-                    telegram_message += f"\n\n<b>Task:</b> {metadata['task_name']}"
+                    telegram_message += f"\n\n<b>Task:</b> {esc(str(metadata['task_name']))}"
                 if "duration_seconds" in metadata:
                     telegram_message += f"\n<b>Duration:</b> {metadata['duration_seconds']:.1f}s"
 

@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "4f8e1e269e35ffd60a6cf9504e329e4013761b373114d5c37f960f58a4ba5f68",
+      "sha256": "53ef6b995663a18a71523506733b5bb491c7d08c0e21811c7bb9e8a1bb5c2003",
       "type": "file"
     },
     {
@@ -1128,7 +1128,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "8235119232ed28857e3226bd6ec96a4e3afa1689a6ec1d7f1bd735df4b8849bc",
+      "sha256": "9f3be14021fe303e659aed1e45775cd956b41eaec6455b4ab503aa4f865fe345",
       "type": "file"
     },
     {
@@ -1476,7 +1476,7 @@
     {
       "executable": false,
       "path": "backend/services/notification_service.py",
-      "sha256": "d7af1e8eb112b6650a766309d0790df015b50f25fe66591b48198ba052cafdec",
+      "sha256": "330219e2b02fc3adbf884edbe87d216cce3977bfdd293f99da6333cd93a0f64d",
       "type": "file"
     },
     {
@@ -1830,7 +1830,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "c93e3b32c6a5887e8870cf8a5878f00dcfc7cb3d088178d8a2b3c6ed6961fe0a",
+      "sha256": "accaf62780de3f85c876e4748304c82bae2b9d160bc7c44dd872a5ededfb0c06",
       "type": "file"
     },
     {
@@ -6795,5 +6795,18 @@
     "previous_manifest_sha256": "e37d92a70050109cde870320c2e389ad2a70d951b00b1833893c8969edfd9070",
     "scope": "GH #1018 mutation-free dry-run prediction of pending-merge deferrals (shared live/preview decision, preview_trigger, predicted wording and UI surfacing), plus 0075 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0075"
+  },
+  "telegram_html_escape_update": {
+    "base_commit": "494697b69b4f5b862e874029dbfbc040bb0214be",
+    "bead": "enhancedchannelmanager-j28qs",
+    "changed_files": {
+      "backend/main.py": "4f8e1e269e35ffd60a6cf9504e329e4013761b373114d5c37f960f58a4ba5f68",
+      "backend/routers/backup.py": "8235119232ed28857e3226bd6ec96a4e3afa1689a6ec1d7f1bd735df4b8849bc",
+      "backend/services/notification_service.py": "d7af1e8eb112b6650a766309d0790df015b50f25fe66591b48198ba052cafdec",
+      "frontend/package.json": "c93e3b32c6a5887e8870cf8a5878f00dcfc7cb3d088178d8a2b3c6ed6961fe0a"
+    },
+    "previous_manifest_sha256": "d2f75cc8ef5015eaaf60070469bfc1ffc172452763db7a7bda3b816b720fe7dc",
+    "scope": "Escape Telegram HTML-mode title, message and task name in scheduled-task alert dispatch by reusing the alert-method escaper, plus 0076 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0076"
   }
 }
