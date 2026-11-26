@@ -81,8 +81,18 @@ async def run(client, operations, **request_kwargs):
     return result, rows_from(mock_journal)
 
 
-NO_START = {"type": "bulkAssignChannelNumbers", "channelIds": [1, 2]}
-START_10 = {"type": "bulkAssignChannelNumbers", "channelIds": [1, 2], "startingNumber": 10}
+# Baselines are the catalog's numbers: what a caller that read it would send.
+CATALOG_BASELINES = {1: 50, 2: 51}
+NO_START = {
+    "type": "bulkAssignChannelNumbers", "channelIds": [1, 2],
+    "expectedNumbers": CATALOG_BASELINES,
+}
+START_10 = {
+    "type": "bulkAssignChannelNumbers", "channelIds": [1, 2], "startingNumber": 10,
+    "expectedNumbers": CATALOG_BASELINES,
+}
+# The lineup below lists Bravo without a number, so its baseline is null.
+NO_START_BRAVO_UNNUMBERED = {**NO_START, "expectedNumbers": {1: 50, 2: None}}
 UNREAD = "Dispatcharr chose the new number and ECM has not read it back"
 
 
@@ -141,7 +151,7 @@ class TestConsolidationOffNoStart:
         )
         _result, rows = await run(
             client,
-            [{"type": "bulkAssignChannelNumbers", "channelIds": [1]}],
+            [{"type": "bulkAssignChannelNumbers", "channelIds": [1], "expectedNumbers": {1: 1}}],
             consolidate=False,
         )
 
@@ -158,7 +168,8 @@ class TestLaterRowsInTheSameBatch:
         client = make_client(catalog(), chosen={1: 7, 2: 8})
         _result, rows = await run(client, [
             NO_START,
-            {"type": "updateChannel", "channelId": 1, "data": {"channel_number": 20}},
+            {"type": "updateChannel", "channelId": 1, "data": {"channel_number": 20},
+             "expectedNumber": {"number": 50}},
         ], consolidate=False)
 
         update_row = rows[-1]
@@ -171,7 +182,8 @@ class TestLaterRowsInTheSameBatch:
         client = make_client(catalog(), chosen={1: 7, 2: 8}, read_back_fails=True)
         _result, rows = await run(client, [
             NO_START,
-            {"type": "updateChannel", "channelId": 1, "data": {"channel_number": 20}},
+            {"type": "updateChannel", "channelId": 1, "data": {"channel_number": 20},
+             "expectedNumber": {"number": 50}},
         ], consolidate=False)
 
         update_row = rows[-1]
@@ -185,7 +197,8 @@ class TestLaterRowsInTheSameBatch:
         client = make_client(catalog(), chosen={1: 7, 2: 8}, read_back_fails=True)
         _result, rows = await run(client, [
             NO_START,
-            {"type": "bulkAssignChannelNumbers", "channelIds": [1], "startingNumber": 30},
+            {"type": "bulkAssignChannelNumbers", "channelIds": [1], "startingNumber": 30,
+             "expectedNumbers": {1: 50}},
         ], consolidate=False)
 
         later = rows[-1]
@@ -219,7 +232,8 @@ class TestPartialBatchRecovery:
 
     PLAN = [
         NO_START,
-        {"type": "updateChannel", "channelId": 2, "data": {"channel_number": 99}},
+        {"type": "updateChannel", "channelId": 2, "data": {"channel_number": 99},
+         "expectedNumber": {"number": 51}},
     ]
 
     @staticmethod
@@ -393,7 +407,7 @@ class TestReadBackInterrupted:
                               {"id": 2, "name": "Bravo"}],
                              chosen={1: 7, 2: 8})
         script_read_back(client, [RuntimeError("busy"), RuntimeError("busy")])
-        _result, rows = await run(client, [NO_START], consolidate=False)
+        _result, rows = await run(client, [NO_START_BRAVO_UNNUMBERED], consolidate=False)
 
         absent = next(r for r in rows if r["entity_id"] == 2)
         assert absent["description"] == (
@@ -411,7 +425,7 @@ class TestReadBackInterrupted:
         client = make_client([{"id": 1, "name": "Alpha", "channel_number": 50},
                               {"id": 2, "name": "Bravo"}],
                              chosen={1: 7, 2: 8})
-        _result, rows = await run(client, [NO_START], consolidate=False)
+        _result, rows = await run(client, [NO_START_BRAVO_UNNUMBERED], consolidate=False)
 
         absent = next(r for r in rows if r["entity_id"] == 2)
         assert absent["description"] == (

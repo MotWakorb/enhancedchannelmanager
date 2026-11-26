@@ -96,6 +96,7 @@ vi.mock('./services/api', async (importOriginal) => {
     getEPGData: vi.fn().mockResolvedValue([]),
     getM3UStreamMetadata: vi.fn().mockResolvedValue({ count: 0, metadata: {} }),
     bulkCommit: (request: BulkCommitRequest, batchId?: string) => testState.bulkCommit(request, batchId),
+    bulkAssignChannelNumbers: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -253,6 +254,27 @@ describe('App bulk-create staging', () => {
       expect(testState.bulkCommit).toHaveBeenCalledTimes(1);
     },
   );
+
+  it('outside Edit Mode, a range renumber sends the numbers of the lineup the UI loaded', async () => {
+    const template: Channel = {
+      id: 44, name: 'Original', channel_number: 80, streams: [],
+      channel_group_id: null, tvg_id: null, tvc_guide_stationid: null, epg_data_id: null,
+      stream_profile_id: null, uuid: 'existing-44', logo_id: null,
+      auto_created: false, auto_created_by: null, auto_created_by_name: null,
+    };
+    const loaded = [template, { ...template, id: 45, uuid: 'existing-45', channel_number: null }];
+    vi.mocked(api.getChannels).mockResolvedValue({ results: loaded, count: 2, next: null, previous: null });
+    vi.mocked(api.bulkAssignChannelNumbers).mockClear();
+
+    render(<App />);
+    await waitFor(() => expect(testState.channelManagerProps?.channels.map(ch => ch.id)).toEqual([44, 45]));
+    expect(testState.channelManagerProps!.isEditMode).toBe(false);
+    await act(async () => {
+      await testState.channelManagerProps!.onChannelReorder([44, 45], 100);
+    });
+
+    expect(api.bulkAssignChannelNumbers).toHaveBeenCalledWith([44, 45], 100, { 44: 80, 45: null });
+  });
 
   it('numbers mixed mapped and unmapped Create groups by visible natural name', async () => {
     const names = ['ZDF alias', 'ABC', 'C-SPAN 10', 'C-SPAN 2', 'C-SPAN'];
@@ -491,7 +513,11 @@ describe('App bulk-create staging', () => {
       { type: 'bulkAssignChannelNumbers', channelIds: [44], startingNumber: 70 },
       { type: 'bulkAssignChannelNumbers', channelIds: [46], startingNumber: 72 },
     ];
-    expect(testState.bulkCommit.mock.calls[2][0].operations).toEqual(expected);
+    // On the wire each range also carries its channel's session baseline.
+    expect(testState.bulkCommit.mock.calls[2][0].operations).toEqual([
+      { ...expected[0], expectedNumbers: { 44: 80 } },
+      { ...expected[1], expectedNumbers: { 46: 82 } },
+    ]);
     expect(saved.operations.map(op => op.apiCall)).toEqual(expected);
     expect(saved.undoGroups).toEqual([saved.operations.map(op => op.id)]);
     expect(saved.operations.flatMap(op => op.beforeSnapshot.map(ch => ch.id))).toEqual([44, 46]);

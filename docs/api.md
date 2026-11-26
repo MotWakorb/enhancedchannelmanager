@@ -96,12 +96,12 @@ Bulk variant of `/add-stream`: fetches the channel once, appends every requested
 | `type` | Fields | Notes |
 |-|-|-|
 | `createChannel` | `tempId` (int, strictly negative), `name` (str), `channelNumber` (float, opt), `groupId` (int, opt), `newGroupName` (str, opt), `logoId` (int, opt), `logoUrl` (str, opt), `tvgId` (str, opt), `tvcGuideStationId` (str, opt), `normalize` (bool, default `false`), `expectedStreamIds` (list[int], opt, nonempty, all `> 0`, no duplicates) | `tempId` must be unique across the request and is echoed back in `tempIdMap` → real id. Zero and positive values return `422`; a create can never alias an existing channel. Use `groupId` for an existing group or `newGroupName` to reference a group created in `groupsToCreate`. When `expectedStreamIds` is present, every listed stream must remain in the create's final stream state; an add followed by a remove, or a reorder that omits one, refuses the whole request before any group or channel mutation even when `continueOnError` is true. Omit the field for an intentionally streamless create. |
-| `updateChannel` | `channelId` (int), `data` (dict), `acknowledgedDuplicate` (obj, opt), `expectedNumber` (obj, opt) | `data` is an **unvalidated field bag** forwarded to Dispatcharr wholesale. See [The `data` field bag](#the-data-field-bag-is-unvalidated). A negative `channelId` must target an earlier create in the same request. |
+| `updateChannel` | `channelId` (int), `data` (dict), `acknowledgedDuplicate` (obj, opt), `expectedNumber` (obj, **required when `data` sets `channel_number` on an existing channel**) | `data` is an **unvalidated field bag** forwarded to Dispatcharr wholesale. See [The `data` field bag](#the-data-field-bag-is-unvalidated). A negative `channelId` must target an earlier create in the same request. See [Numbering baselines](#numbering-baselines-required-on-every-numbering-write-to-an-existing-channel). |
 | `deleteChannel` | `channelId` (int) | A negative `channelId` must target an earlier create in the same request. |
 | `addStreamToChannel` | `channelId` (int), `streamId` (int) | `channelId` may be a negative temp id from a `createChannel` in the same request. The create must precede the assignment. If the create fails or returns no usable id, the assignment fails without querying Dispatcharr with the negative id; its error retains the submitted temp id and uses the intended create name when available. Stream existence is validated for both real and temp channel ids. |
 | `removeStreamFromChannel` | `channelId` (int), `streamId` (int) | A negative `channelId` must target an earlier create in the same request. |
 | `reorderChannelStreams` | `channelId` (int), `streamIds` (list[int]) | New stream order; first = highest priority. The list must be a permutation of the channel's simulated stream state at this operation's actual position. An invalid reorder rejects the whole request before mutation. |
-| `bulkAssignChannelNumbers` | `channelIds` (list[int]), `startingNumber` (float, opt) | See [Range assignment defaults](#range-assignment-defaults) for what an omitted `startingNumber`, an explicit `0`, and an empty `channelIds` each do. Every negative id in this list must target an earlier create in the same request. |
+| `bulkAssignChannelNumbers` | `channelIds` (list[int]), `startingNumber` (float, opt), `expectedNumbers` (map of channel id to number or `null`, **required for every non-negative id in `channelIds`**) | See [Range assignment defaults](#range-assignment-defaults) for what an omitted `startingNumber`, an explicit `0`, and an empty `channelIds` each do. Every negative id in this list must target an earlier create in the same request, and may not appear in `expectedNumbers`. See [Numbering baselines](#numbering-baselines-required-on-every-numbering-write-to-an-existing-channel). |
 | `createGroup` | `name` (str) | Group name → real id appears in `groupIdMap`. |
 | `deleteChannelGroup` | `groupId` (int) | |
 | `renameChannelGroup` | `groupId` (int), `newName` (str) | |
@@ -315,9 +315,33 @@ Three properties that are easy to get wrong:
 - **A caller meaning "nobody was there" must send `[]` explicitly.** There is no default, precisely so that omission cannot be read as consent.
 - **It replaces, it does not accumulate.** A later placement of the same channel that carries no acknowledgement clears the earlier one.
 
+### Numbering baselines: required on every numbering write to an existing channel
+
+**Breaking change in 0.18.2-0088.** Every write that changes an existing channel's number must carry the number its caller last read for that channel, its *baseline*. ECM refuses a write whose channel has moved since, and refuses a write that carries no baseline rather than assuming one. This holds on both numbering paths:
+
+| Path | Field | Required when |
+|-|-|-|
+| `bulk-commit` `updateChannel` | `expectedNumber: {"number": n}` | `data` contains `channel_number` and `channelId` is not negative |
+| `bulk-commit` `bulkAssignChannelNumbers` | `expectedNumbers: {"<channel id>": n, ...}` | for every non-negative id in `channelIds` |
+| `POST /api/channels/assign-numbers` | `expected_numbers: {"<channel id>": n, ...}` | for every id in `channel_ids` |
+
+`n` is a number, or `null` for "I read this channel and it had no number". A negative id is a channel created earlier in the same request, which nobody else can have moved, so it takes no baseline and may not carry one. A map entry for a channel the write does not number is also refused, because it would read as protection it does not give. Send the number from your own read of the channel (`GET /api/channels`, `GET /api/channels/{id}`); fetching it immediately before the write only to fill this field defeats the check.
+
+Callers written before this change get `422` until they send baselines. ECM's own UI, the MCP `assign_channel_numbers` tool and the MCP `bulk_commit_channels` tool's documented operation shapes all send them.
+
+**Refusal shapes.**
+
+- **A missing or misplaced baseline is `422`** before any job starts or anything is written. The error `type` is `missing_channel_number_baseline` and its `msg` names every offending operation index and channel id in one message, for example `Operation 0 (bulkAssignChannelNumbers): expectedNumbers has no baseline for channel(s) 1, 3. ...`.
+- **A stale baseline on `bulk-commit`** fails only that operation, exactly as a stale `expectedNumber` always has: an ordinary entry in `errors`, counted in `operationsFailed`, with no `applied` flag because nothing landed, and the rest of the batch's numbering put back by the compensation pass. The entry carries `concurrentNumberChanges`, one `{channelId, baselineNumber, serverNumber}` per moved channel, the same shape Edit Mode's keep-mine / take-theirs reconcile binds a decision to. A range is refused **whole**, with no upstream call: its numbers are positional, so there is no partial range to write.
+- **A stale baseline on `POST /api/channels/assign-numbers`** is `409 Conflict` with `detail: {"message": "...", "concurrentNumberChanges": [...]}`, before the upstream assign call. Nothing is written.
+
+The bulk-commit envelope's `createdChannelNumbers` maps each created channel's real id to the number Dispatcharr reported creating it on. A later request that numbers such a channel sends that value as its baseline; Edit Mode does this when one Apply creates channels and then numbers them.
+
+**The check-to-write race is a documented limitation, not compare-and-swap.** Dispatcharr 0.28.x has no conditional write: its schema contains no `If-Match`, `If-None-Match`, `If-Unmodified-Since`, `ETag` or `412`, and neither `Channel` nor `PatchedChannel` carries a version or modified-at field. ECM compares the baseline against its own read (the lineup at the start of a bulk-commit run, or the per-channel reads `assign-numbers` makes just before writing), then writes. A change that lands between that read and the write is still overwritten, and nothing can detect it. What the check closes is the much wider window between the caller's read and ECM's.
+
 ### `expectedNumber`: refuse to overwrite a change you have not seen
 
-On `updateChannel` only. It is a **wrapper object, not a bare number**:
+On `updateChannel`. It is a **wrapper object, not a bare number**:
 
 ```json
 { "expectedNumber": { "number": 101 } }
@@ -327,14 +351,14 @@ The wrapper exists because `null` is a legitimate expectation, meaning "I believ
 
 Semantics:
 
-- Ignored entirely unless `data` carries `channel_number`. An operation that does not write the number cannot overwrite anyone's change to it.
+- Ignored entirely unless `data` carries `channel_number`. An operation that does not write the number cannot overwrite anyone's change to it. When `data` does carry `channel_number` on an existing channel, it is required.
 - Compared against the lineup snapshot taken **at the start of the run**, not the running working copy, so an earlier operation in the same request moving the channel is not reported as a conflict.
 - On mismatch the PATCH is **not sent**. The operation becomes an ordinary per-operation error entry and increments `operationsFailed`; it is not an HTTP `409` and carries no `applied` flag, because nothing landed.
 - If the lineup could not be read at all, the operation is refused rather than attempted.
 
 **It is a check, not a guarantee**, and that was measured rather than assumed: the live Dispatcharr 0.28.x schema contains no `If-Match`, `If-None-Match`, `If-Unmodified-Since`, `ETag` or `412`, and neither `Channel` nor `PatchedChannel` carries a version or modified-at field. A change landing between ECM's read and its PATCH is still lost. What it closes is the much wider window between a browser reading the lineup and the executor writing to it.
 
-Range assignments deliberately send no `expectedNumber`, so a `bulkAssignChannelNumbers` has no server-side concurrency guard. That is a decision, not an oversight; the browser-side check is the only one covering it.
+Range assignments carry the per-channel form, `expectedNumbers`, described in [Numbering baselines](#numbering-baselines-required-on-every-numbering-write-to-an-existing-channel). Consolidation splits it with the range, so each regrouped range carries exactly its own channels' baselines.
 
 ### Range assignment defaults
 
@@ -358,7 +382,7 @@ Both halves matter. Ownership of a channel's number is decided by **submitted po
 
 - a superseded `createChannel` is **still emitted, without its number and without its `acknowledgedDuplicate`**, because every operation naming its temp id depends on it existing;
 - a superseded `updateChannel` loses `channel_number`, `acknowledgedDuplicate` and `expectedNumber`, and is dropped entirely if nothing else remains to PATCH;
-- a range assignment is filtered down to the channels it still owns.
+- a range assignment is filtered down to the channels it still owns, and keeps `expectedNumbers` entries for those channels only.
 
 The one-writer property is enforced as a property rather than observed as an outcome: the unit suite asserts it over generated mixed-kind operation lists, with an anti-vacuity control confirming the same check **fails** on the unconsolidated list.
 
@@ -393,6 +417,14 @@ A bulk merge moves each group's combined streams onto the target channel and the
 `sources_failed` (int, always present) is the number of source channels named for this group that are **still in Dispatcharr** when the group finishes: it counts the deletions that errored and the ones the request never reached, because both leave the channel there. It is always present, so a caller checks a number rather than probing for a key. `success: true` on the group means the group was processed, not that it completed: read `sources_failed` for that.
 
 **The Journal row for the group carries the same fact under its own action type.** A group whose streams moved and whose source channels are all gone writes a `bulk_merge` row. Anything else writes **`bulk_merge_incomplete`**, and its `after_value.undeleted_ids` names the channels that are still upstream. The row's action and prose are finalised from the outcome as each fact lands rather than asserted when the group starts, so a run cancelled mid-flight still leaves a row that describes what actually happened. Filter the Journal on the action type to find the merges that need attention instead of reading every row's description. The envelope and the Journal are built from the same counts, so they cannot tell a caller and an operator different things about one group.
+
+### `POST /api/channels/assign-numbers`: request body
+
+| Field | Type | Notes |
+|-|-|-|
+| `channel_ids` | list[int] | Numbered in this order. |
+| `starting_number` | float, opt | Omitted means Dispatcharr chooses; see below. |
+| `expected_numbers` | map of channel id to number or `null`, **required** | The number you last read for every id in `channel_ids`, and no other ids. A missing map or entry is `422`; a channel that has moved since is `409` with `concurrentNumberChanges` and nothing written. See [Numbering baselines](#numbering-baselines-required-on-every-numbering-write-to-an-existing-channel). |
 
 ### `POST /api/channels/assign-numbers`: omitting `starting_number` costs N extra reads
 

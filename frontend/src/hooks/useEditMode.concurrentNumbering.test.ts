@@ -424,3 +424,187 @@ describe('invariant 3 — the operator is given the exact remaining step', () =>
     expect(steps[0].error).toContain('back to channel number 5');
   });
 });
+
+/** The operations of the `index`th bulk-commit request. */
+function sentOperations(index = 0): Record<string, unknown>[] {
+  return (bulkCommit.mock.calls[index][0] as { operations: Record<string, unknown>[] }).operations;
+}
+
+describe('a range assignment carries a baseline for every existing channel', () => {
+  it('sends the session baseline for each channel in the range', async () => {
+    const { view } = setup();
+    act(() => {
+      view.result.current.stageBulkAssignNumbers([1, 2], 100, 'ESPN and TNT from 100');
+    });
+    await commit(view);
+    expect(sentOperations()[0]).toMatchObject({
+      type: 'bulkAssignChannelNumbers',
+      channelIds: [1, 2],
+      startingNumber: 100,
+      expectedNumbers: { 1: 5, 2: 6 },
+    });
+  });
+
+  it('keep-mine on a range sends the server number the operator agreed to overwrite', async () => {
+    const { view } = setup();
+    act(() => {
+      view.result.current.stageBulkAssignNumbers([1, 2], 100, 'ESPN and TNT from 100');
+    });
+    const moved = [makeChannel(1, 'ESPN', 88), CHANNELS[1], CHANNELS[2]];
+    serverHolds(moved);
+    const first = await commit(view);
+    expect(first.numberingConflicts![0]).toMatchObject({ channelId: 1, fromRangeAssignment: true });
+
+    act(() => {
+      view.result.current.reconcileNumberingConflicts(
+        [{ channelId: 1, choice: 'keep-mine', baselineNumber: 5, serverNumber: 88 }],
+        first.serverChannels!,
+      );
+    });
+    const second = await commit(view);
+    expect(second.success).toBe(true);
+    expect(sentOperations()[0]).toMatchObject({
+      type: 'bulkAssignChannelNumbers',
+      expectedNumbers: { 1: 88, 2: 6 },
+    });
+    // The acknowledgement is browser bookkeeping; the server gets the number.
+    expect(sentOperations()[0]).not.toHaveProperty('acknowledgedConcurrentChanges');
+  });
+
+  it('take-theirs on a range drops the whole range, so nothing is sent', async () => {
+    const { view } = setup();
+    act(() => {
+      view.result.current.stageBulkAssignNumbers([1, 2], 100, 'ESPN and TNT from 100');
+    });
+    serverHolds([makeChannel(1, 'ESPN', 88), CHANNELS[1], CHANNELS[2]]);
+    const first = await commit(view);
+    act(() => {
+      view.result.current.reconcileNumberingConflicts(
+        [{ channelId: 1, choice: 'take-theirs', baselineNumber: 5, serverNumber: 88 }],
+        first.serverChannels!,
+      );
+    });
+    expect(view.result.current.stagedOperationCount).toBe(0);
+  });
+
+  it('reports a server-side range refusal and keeps the range staged', async () => {
+    // The browser's read agreed with the baseline; the executor's later read
+    // did not. The server refuses the range and writes nothing.
+    const { view } = setup();
+    act(() => {
+      view.result.current.stageBulkAssignNumbers([1, 2], 100, 'ESPN and TNT from 100');
+    });
+    bulkCommit.mockResolvedValue({
+      success: false,
+      operationsApplied: 0,
+      operationsFailed: 1,
+      errors: [{
+        operationId: 'op-0-bulkAssignChannelNumbers',
+        operationType: 'bulkAssignChannelNumbers',
+        error: 'Channel was not renumbered: channel 2 is on channel number 9, and this '
+          + 'request expected 6. Somebody else changed it.',
+        concurrentNumberChanges: [{ channelId: 2, baselineNumber: 6, serverNumber: 9 }],
+      }],
+      tempIdMap: {},
+      groupIdMap: {},
+    } as unknown as Awaited<ReturnType<typeof api.bulkCommit>>);
+
+    const outcome = await commit(view);
+    expect(outcome.success).toBe(false);
+    expect(outcome.errors[0]).toMatchObject({
+      operationType: 'bulkAssignChannelNumbers',
+      concurrentNumberChanges: [{ channelId: 2, baselineNumber: 6, serverNumber: 9 }],
+    });
+    expect(view.result.current.stagedOperationCount).toBe(1);
+
+    // The next Apply reads the server again and raises the change as a
+    // conflict the operator can reconcile, instead of sending the range.
+    bulkCommit.mockClear();
+    serverHolds([CHANNELS[0], makeChannel(2, 'TNT', 9), CHANNELS[2]]);
+    const retry = await commit(view);
+    expect(bulkCommit).not.toHaveBeenCalled();
+    expect(retry.numberingConflicts![0]).toMatchObject({
+      channelId: 2, baselineNumber: 6, serverNumber: 9, fromRangeAssignment: true,
+    });
+  });
+
+  it('validation sends the same baselines Apply would', async () => {
+    const { view } = setup();
+    act(() => {
+      view.result.current.stageBulkAssignNumbers([1, 2], 100, 'ESPN and TNT from 100');
+      view.result.current.stageUpdateChannel(3, { channel_number: 300 }, 'AMC to 300');
+    });
+    bulkCommit.mockResolvedValue({
+      success: true, operationsApplied: 0, operationsFailed: 0, errors: [],
+      tempIdMap: {}, groupIdMap: {}, validationPassed: true, validationIssues: [],
+    } as unknown as Awaited<ReturnType<typeof api.bulkCommit>>);
+    await act(async () => {
+      await view.result.current.validate();
+    });
+    const request = bulkCommit.mock.calls[0][0] as { operations: Record<string, unknown>[]; validateOnly?: boolean };
+    expect(request.validateOnly).toBe(true);
+    expect(request.operations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'bulkAssignChannelNumbers', expectedNumbers: { 1: 5, 2: 6 } }),
+      expect.objectContaining({ type: 'updateChannel', channelId: 3, expectedNumber: { number: 7 } }),
+    ]));
+  });
+
+  it('a channel created earlier in the Apply takes the number it was created on', async () => {
+    // Creates are committed in a first request; the range naming the new
+    // channel goes in a later one, where the channel already exists.
+    const { view } = setup();
+    let tempId = 0;
+    act(() => {
+      tempId = view.result.current.stageCreateChannel('Newcomer', 12);
+    });
+    act(() => {
+      view.result.current.stageBulkAssignNumbers([1, tempId], 100, 'ESPN and Newcomer from 100');
+    });
+    bulkCommit
+      .mockResolvedValueOnce({
+        success: true, operationsApplied: 1, operationsFailed: 0, errors: [],
+        tempIdMap: { [tempId]: 77 }, createdChannelNumbers: { 77: 12 }, groupIdMap: {},
+      } as unknown as Awaited<ReturnType<typeof api.bulkCommit>>)
+      .mockResolvedValue({
+        success: true, operationsApplied: 1, operationsFailed: 0, errors: [],
+        tempIdMap: {}, groupIdMap: {},
+      } as unknown as Awaited<ReturnType<typeof api.bulkCommit>>);
+
+    await commit(view);
+    expect(sentOperations(0)[0]).toMatchObject({ type: 'createChannel', tempId });
+    expect(sentOperations(1)[0]).toEqual({
+      type: 'bulkAssignChannelNumbers',
+      channelIds: [1, 77],
+      startingNumber: 100,
+      expectedNumbers: { 1: 5, 77: 12 },
+    });
+  });
+
+  it('a renumber of a channel created earlier in the Apply takes the number it was created on', async () => {
+    const { view } = setup();
+    let tempId = 0;
+    act(() => {
+      tempId = view.result.current.stageCreateChannel('Newcomer');
+    });
+    act(() => {
+      view.result.current.stageUpdateChannel(tempId, { channel_number: 400 }, 'Newcomer to 400');
+    });
+    bulkCommit
+      .mockResolvedValueOnce({
+        success: true, operationsApplied: 1, operationsFailed: 0, errors: [],
+        tempIdMap: { [tempId]: 78 }, createdChannelNumbers: { 78: 431 }, groupIdMap: {},
+      } as unknown as Awaited<ReturnType<typeof api.bulkCommit>>)
+      .mockResolvedValue({
+        success: true, operationsApplied: 1, operationsFailed: 0, errors: [],
+        tempIdMap: {}, groupIdMap: {},
+      } as unknown as Awaited<ReturnType<typeof api.bulkCommit>>);
+
+    await commit(view);
+    expect(sentOperations(1)[0]).toMatchObject({
+      type: 'updateChannel',
+      channelId: 78,
+      data: { channel_number: 400 },
+      expectedNumber: { number: 431 },
+    });
+  });
+});

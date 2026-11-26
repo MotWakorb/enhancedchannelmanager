@@ -2830,7 +2830,12 @@ function App() {
       } else {
         // Normal mode - call API directly
         try {
-          await api.bulkAssignChannelNumbers(channelIds, startingNumber);
+          // The numbers this view loaded, so the server refuses the range
+          // rather than overwrite a change made since.
+          const expectedNumbers = Object.fromEntries(
+            beforeSnapshots.map((snapshot) => [snapshot.id, snapshot.channel_number ?? null]),
+          );
+          await api.bulkAssignChannelNumbers(channelIds, startingNumber, expectedNumbers);
 
           // Record the change
           recordChange({

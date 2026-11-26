@@ -10,6 +10,7 @@ import {
   addStreamToChannel,
   removeStreamFromChannel,
   reorderChannelStreams,
+  bulkAssignChannelNumbers,
   deleteChannel,
   bulkCommit,
   applyGuideMigration,
@@ -294,6 +295,26 @@ describe('API Service', () => {
       const result = await reorderChannelStreams(1, [30, 20, 10]);
 
       expect(result.streams).toEqual([30, 20, 10]);
+    });
+  });
+
+  describe('bulkAssignChannelNumbers', () => {
+    it('sends the caller\'s per-channel baselines with the range', async () => {
+      let body: unknown;
+      server.use(
+        http.post('/api/channels/assign-numbers', async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ success: true });
+        }),
+      );
+
+      await bulkAssignChannelNumbers([1, 2], 100, { 1: 5, 2: null });
+
+      expect(body).toEqual({
+        channel_ids: [1, 2],
+        starting_number: 100,
+        expected_numbers: { 1: 5, 2: null },
+      });
     });
   });
 

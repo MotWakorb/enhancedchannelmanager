@@ -1495,11 +1495,15 @@ export function useEditMode({
      * a change landing between the executor's own read and its PATCH is still
      * lost.
      *
-     * DELIBERATELY NOT SENT FOR A RANGE ASSIGNMENT. One
-     * `bulkAssignChannelNumbers` places many channels through a single upstream
-     * call, so there is no per-channel write for a per-channel expectation to
-     * guard. A range is covered by the browser's check only, and that gap is a
-     * decision rather than an oversight.
+     * A range assignment carries the same expectation per channel, as
+     * `expectedNumbers`, because one `bulkAssignChannelNumbers` places every
+     * channel in it through a single upstream call. The server refuses the
+     * whole range when any one of them has moved.
+     *
+     * Every numbering write to an existing channel needs one: the server
+     * rejects the request when a baseline is missing. A channel the same
+     * Apply creates is given its baseline later, once it exists (see
+     * `withCreatedChannelBaselines`).
      */
     baselineNumbers: Map<number, number | null> = new Map(),
   ) => {
@@ -1603,6 +1607,14 @@ export function useEditMode({
             type: 'bulkAssignChannelNumbers',
             channelIds: apiCall.channelIds,
             startingNumber: apiCall.startingNumber,
+            expectedNumbers: Object.fromEntries(
+              apiCall.channelIds
+                .filter((channelId) => channelId >= 0)
+                .map((channelId) => [
+                  channelId,
+                  expectedServerNumber(operation, channelId, baselineNumbers.get(channelId) ?? null),
+                ]),
+            ),
           });
           break;
 
@@ -1697,7 +1709,11 @@ export function useEditMode({
     }
 
     const { bulkOperations, groupsToCreate, unresolvedGroupRefs } =
-      buildBulkOperations(state.stagedOperations, stagedGroupsMap);
+      buildBulkOperations(
+        state.stagedOperations,
+        stagedGroupsMap,
+        new Map(state.baselineSnapshot.map((entry) => [entry.id, entry.channel_number ?? null])),
+      );
 
     if (unresolvedGroupRefs.length > 0) {
       return {
@@ -1733,7 +1749,7 @@ export function useEditMode({
         }],
       };
     }
-  }, [state.isActive, state.stagedOperations, stagedGroupsMap, buildBulkOperations]);
+  }, [state.isActive, state.stagedOperations, state.baselineSnapshot, stagedGroupsMap, buildBulkOperations]);
 
   // Commit all staged operations to server
   const commit = useCallback(async (
@@ -1968,6 +1984,9 @@ export function useEditMode({
 
     // Copy the temp ID map for tracking new channel IDs
     const tempIdMap = new Map<number, number>();
+    // Real id of each channel this Apply created -> the number it was created
+    // on. A later request that numbers the channel sends this as its baseline.
+    const createdChannelNumbers = new Map<number, number | null>();
     // Map for new group names to their created IDs
     const newGroupIdMap = new Map<string, number>();
 
@@ -2290,10 +2309,19 @@ export function useEditMode({
         }, commitBatchId);
 
         // Store temp ID mappings
+        const requestedNumbers = new Map(channelCreateOps.map((op) => [
+          Number(op.tempId), typeof op.channelNumber === 'number' ? op.channelNumber : null,
+        ]));
         for (const [tempIdStr, realId] of Object.entries(createResponse.tempIdMap)) {
           const tempId = Number(tempIdStr);
           if (assignmentsByTempId.has(tempId) && Number.isSafeInteger(realId) && realId > 0) {
             tempIdMap.set(tempId, realId);
+            // The number the server reported creating it on, else the one
+            // the create asked for.
+            const reported = createResponse.createdChannelNumbers?.[realId];
+            createdChannelNumbers.set(
+              realId, reported !== undefined ? reported : requestedNumbers.get(tempId) ?? null,
+            );
           }
         }
         for (const [groupName, groupId] of Object.entries(createResponse.groupIdMap)) {
@@ -2347,6 +2375,35 @@ export function useEditMode({
       completedSteps = 1;
       reportProgress(completedSteps, totalSteps, `Created channels, processing ${otherOps.length} updates...`);
 
+      /**
+       * Give a numbering write the baseline of each channel this Apply
+       * created. Built with temp ids, the operation carried none for them;
+       * remapped, they are existing channels, and the server requires one.
+       */
+      const withCreatedChannelBaselines = (original: api.BulkOperation, resolved: api.BulkOperation) => {
+        const baselineOf = (tempId: number) => {
+          const realId = tempIdMap.get(tempId);
+          return realId === undefined ? undefined : [realId, createdChannelNumbers.get(realId) ?? null] as const;
+        };
+        if (resolved.type === 'updateChannel' && typeof original.channelId === 'number'
+          && original.channelId < 0
+          && (resolved.data as Partial<Channel> | undefined)?.channel_number !== undefined) {
+          const baseline = baselineOf(original.channelId);
+          if (baseline) resolved.expectedNumber = { number: baseline[1] };
+        } else if (resolved.type === 'bulkAssignChannelNumbers' && Array.isArray(original.channelIds)) {
+          const created = (original.channelIds as number[])
+            .filter((channelId) => channelId < 0)
+            .map(baselineOf)
+            .filter((baseline): baseline is readonly [number, number | null] => baseline !== undefined);
+          if (created.length > 0) {
+            resolved.expectedNumbers = {
+              ...(original.expectedNumbers as Record<number, number | null> | undefined),
+              ...Object.fromEntries(created),
+            };
+          }
+        }
+      };
+
       // Step 2: Process other operations in batches
       // Replace temp IDs with real IDs in remaining operations
       const unresolvedGroupOps: api.BulkCommitError[] = [];
@@ -2363,6 +2420,7 @@ export function useEditMode({
         if (resolved.type === 'bulkAssignChannelNumbers' && Array.isArray(resolved.channelIds)) {
           resolved.channelIds = resolved.channelIds.map(remapChannel);
         }
+        withCreatedChannelBaselines(op, resolved);
         // A channel moved into a group this batch created carries that group's
         // temp id. Step 1 has just returned the real ids by name; swap them in
         // rather than posting the temp id (bead enhancedchannelmanager-udq1j).

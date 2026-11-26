@@ -105,6 +105,8 @@ class TestAssignNumbersWithoutAStartingNumber:
         with patch("routers.channels.get_client", return_value=client), \
              patch("routers.channels.get_settings", return_value=_settings()), \
              patch("routers.channels.journal", journal_double):
+            # The caller read each channel on its pre-assignment number.
+            body = {**body, "expected_numbers": {"42": 900.0, "43": 901.0}}
             return await async_client.post("/api/channels/assign-numbers", json=body)
 
     @pytest.mark.asyncio
@@ -425,7 +427,10 @@ class TestTheFlushDoesNotReplaceAnUnwindingException:
              patch("routers.channels.journal", journal_double):
             with pytest.raises(asyncio.CancelledError):
                 await assign_channel_numbers(
-                    AssignNumbersRequest(channel_ids=[42], starting_number=1),
+                    AssignNumbersRequest(
+                        channel_ids=[42], starting_number=1,
+                        expected_numbers={42: 900.0},
+                    ),
                     _admin=None,
                 )
 
@@ -502,7 +507,8 @@ class TestTheFlushDoesNotReplaceAnUnwindingException:
             with pytest.raises(RuntimeError) as excinfo:
                 await async_client.post(
                     "/api/channels/assign-numbers",
-                    json={"channel_ids": [42], "starting_number": 1},
+                    json={"channel_ids": [42], "starting_number": 1,
+                          "expected_numbers": {"42": 900.0}},
                 )
 
         assert isinstance(excinfo.value.__cause__, SystemExit)
