@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "10fbbe95b540339b806a96b4332b17ec39426acc19f37bf3e5ad0f60fc02a85a",
+      "sha256": "f7a840ed8eb55a9d3c7a91ccc6a3fad0b9ce64e18eeca502ae64233903af9ff9",
       "type": "file"
     },
     {
@@ -1128,7 +1128,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "fc90ff202712e07c9ce5de42c6f0e164deebc53437d20578199c7a4226b3d1ab",
+      "sha256": "4963a8316f82cc6e0fd8147012e0ad25e8c0bc78e1c25b84a942821bae43e08a",
       "type": "file"
     },
     {
@@ -1830,7 +1830,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "a60895d610c1363a51583112387bf61a19d875c5326b3476fcc9b700cbe6a685",
+      "sha256": "9f478bff8aea7924e6cea9d67520374b4012294383567c6d6d9c1248d21db933",
       "type": "file"
     },
     {
@@ -2772,7 +2772,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/M3ULinkedAccountsModal.tsx",
-      "sha256": "95d2f3ce91274db64c712b3cc600b26776b372e79644bd84cc1227baae07f73c",
+      "sha256": "cb90f2185c27b3e89cc6297c740fc249beb7a05f58428c999f22fd00800c78d6",
       "type": "file"
     },
     {
@@ -3450,7 +3450,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/TaskEditorModal.tsx",
-      "sha256": "e7bcc05bb330fd6d3398964120c14351b9bf883da0dc4c1f1601adbf057bfd4b",
+      "sha256": "f58cb7feaae2255fa63f0b6c4df0ffb3c4a98dc7a4d02b5c2ec55e4b91d0e257",
       "type": "file"
     },
     {
@@ -4686,13 +4686,13 @@
     {
       "executable": false,
       "path": "frontend/src/components/tabs/M3UManagerTab.test.tsx",
-      "sha256": "da7b67e2907100b2271f2896ac8fec9b33918ffd3bdfa7ea42a39a60d05fa66b",
+      "sha256": "eeb5ca0b8e451ed5b194a4b2ac7c6d4ccec9f7247701a085f7cb4d92c1eefe54",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/components/tabs/M3UManagerTab.tsx",
-      "sha256": "84bca09c71a4f499d4a28033992c95bf43074d9de8a56380c7825f9904e83ca6",
+      "sha256": "308f83afb21bb5ade922fd0a05e57bf02ad0db59f06a3e712ad9037153fe6023",
       "type": "file"
     },
     {
@@ -4884,7 +4884,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/tabs/StatsTab.tsx",
-      "sha256": "3deedeeb2a15654abaa627bb2a0b24cb896961b867c74307e3eb422852aa6f59",
+      "sha256": "15e646c8975fff33b512380906586f3c0dff2d6ba916c55ef8fea848e8647196",
       "type": "file"
     },
     {
@@ -5845,6 +5845,18 @@
       "executable": false,
       "path": "frontend/src/utils/logger.ts",
       "sha256": "2162ef747b24f438105e913d4f8bd9dd130b85c154e17b0beafc3850b9c04c3b",
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "frontend/src/utils/m3uAccountVisibility.test.ts",
+      "sha256": "c7eefdc1de0d93a35b2be6bdee34ff30646e558a588f34e85f4fbe9436a04cc3",
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "frontend/src/utils/m3uAccountVisibility.ts",
+      "sha256": "25ab38cdaa7e410de5bf09fdf364a7111a3ff3ef1fea984066f33d9b500af36d",
       "type": "file"
     },
     {
@@ -6836,5 +6848,26 @@
     "previous_manifest_sha256": "ffdc3ae7983cd30e7ab326dd4448d9ba51269934753e415298dc86406316a2dc",
     "scope": "Remove the hard-coded tool count from the MCP Available Tools heading and pin its section anchor with data-section-id, plus 0078 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0078"
+  },
+  "m3u_empty_state_update": {
+    "added_files": [
+      "frontend/src/utils/m3uAccountVisibility.test.ts",
+      "frontend/src/utils/m3uAccountVisibility.ts"
+    ],
+    "base_commit": "04587fc8033e2a7334529796819cdc282afde347",
+    "bead": "enhancedchannelmanager-381gu",
+    "changed_files": {
+      "backend/main.py": "10fbbe95b540339b806a96b4332b17ec39426acc19f37bf3e5ad0f60fc02a85a",
+      "backend/routers/backup.py": "fc90ff202712e07c9ce5de42c6f0e164deebc53437d20578199c7a4226b3d1ab",
+      "frontend/package.json": "a60895d610c1363a51583112387bf61a19d875c5326b3476fcc9b700cbe6a685",
+      "frontend/src/components/M3ULinkedAccountsModal.tsx": "95d2f3ce91274db64c712b3cc600b26776b372e79644bd84cc1227baae07f73c",
+      "frontend/src/components/TaskEditorModal.tsx": "e7bcc05bb330fd6d3398964120c14351b9bf883da0dc4c1f1601adbf057bfd4b",
+      "frontend/src/components/tabs/M3UManagerTab.test.tsx": "da7b67e2907100b2271f2896ac8fec9b33918ffd3bdfa7ea42a39a60d05fa66b",
+      "frontend/src/components/tabs/M3UManagerTab.tsx": "84bca09c71a4f499d4a28033992c95bf43074d9de8a56380c7825f9904e83ca6",
+      "frontend/src/components/tabs/StatsTab.tsx": "3deedeeb2a15654abaa627bb2a0b24cb896961b867c74307e3eb422852aa6f59"
+    },
+    "previous_manifest_sha256": "72d41b6fc5c9509f276a5204761df454a1a4eecfff97d99dfc275d8c1b4ec453",
+    "scope": "Stop the M3U Manager empty state claiming zero accounts when accounts exist but are all hidden or filtered, offer Add M3U Account when only the hidden custom account exists, and share one displayable-account predicate, plus 0079 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0079"
   }
 }

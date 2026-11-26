@@ -108,7 +108,7 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     manifest = verifier.load_manifest(
         ROOT / "docker/alpine-native/application-source.json"
     )
-    assert len(manifest["files"]) == 1093
+    assert len(manifest["files"]) == 1095
     assert (
         manifest["baseline_application_commit"]
         == "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531"
@@ -146,8 +146,62 @@ MCP_TOOLS_HEADING_FILES = (
 )
 
 
+M3U_EMPTY_STATE_FILES = (
+    "frontend/src/components/M3ULinkedAccountsModal.tsx",
+    "frontend/src/components/TaskEditorModal.tsx",
+    "frontend/src/components/tabs/M3UManagerTab.test.tsx",
+    "frontend/src/components/tabs/M3UManagerTab.tsx",
+    "frontend/src/components/tabs/StatsTab.tsx",
+)
+M3U_EMPTY_STATE_ADDED_FILES = (
+    "frontend/src/utils/m3uAccountVisibility.test.ts",
+    "frontend/src/utils/m3uAccountVisibility.ts",
+)
+
+
+def _before_m3u_empty_state(manifest):
+    key = "m3u_empty_state_update"
+    update = manifest[key]
+    assert update["base_commit"] == "04587fc8033e2a7334529796819cdc282afde347"
+    assert update["bead"] == "enhancedchannelmanager-381gu"
+    assert update["version"] == "0.18.2-0079"
+    assert update["previous_manifest_sha256"] == (
+        "72d41b6fc5c9509f276a5204761df454a1a4eecfff97d99dfc275d8c1b4ec453"
+    )
+    assert set(update["added_files"]) == set(M3U_EMPTY_STATE_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(M3U_EMPTY_STATE_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_m3u_empty_state_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_m3u_empty_state(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["m3u_empty_state_update"] == manifest["m3u_empty_state_update"]
+
+
 def _before_mcp_tools_heading(manifest):
     key = "mcp_tools_heading_update"
+    manifest = _before_m3u_empty_state(manifest)
     update = manifest[key]
     assert update["base_commit"] == "9744f7637945d11dbf7412db3e80f8e4f5292368"
     assert update["bead"] == "enhancedchannelmanager-xkk54"
