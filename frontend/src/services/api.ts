@@ -272,13 +272,26 @@ export async function reorderChannelStreams(channelId: number, streamIds: number
   });
 }
 
+/**
+ * Number `channelIds` in sequence from `startingNumber`.
+ *
+ * `expectedNumbers` is the number the caller last read for every channel in
+ * `channelIds` (`null` for none). The server refuses the whole range with 409,
+ * writing nothing, when any channel has moved since, and with 422 when a
+ * channel has no entry.
+ */
 export async function bulkAssignChannelNumbers(
   channelIds: number[],
-  startingNumber?: number
+  startingNumber: number | undefined,
+  expectedNumbers: Record<number, number | null>,
 ): Promise<void> {
   return fetchJson(`${API_BASE}/channels/assign-numbers`, {
     method: 'POST',
-    body: JSON.stringify({ channel_ids: channelIds, starting_number: startingNumber }),
+    body: JSON.stringify({
+      channel_ids: channelIds,
+      starting_number: startingNumber,
+      expected_numbers: expectedNumbers,
+    }),
   });
 }
 
@@ -457,10 +470,19 @@ export interface ValidationIssue {
   operationIndexes?: number[];
 }
 
+/** One channel a numbering write was refused for: it moved after the caller's read. */
+export interface ConcurrentNumberChange {
+  channelId: number;
+  baselineNumber: number | null;
+  serverNumber: number | null;
+}
+
 export interface BulkCommitError {
   operationId: string;
   operationType?: string;
   error: string;
+  /** Present when the operation was refused because these channels moved. */
+  concurrentNumberChanges?: ConcurrentNumberChange[];
   channelId?: number;
   channelName?: string;
   streamId?: number;
@@ -476,6 +498,8 @@ export interface BulkCommitResponse {
   operationsPartiallyApplied?: number;
   errors: BulkCommitError[];
   tempIdMap: Record<number, number>;
+  /** Real id of each created channel -> the number Dispatcharr created it on. */
+  createdChannelNumbers?: Record<number, number | null>;
   profileRecoveryBinding?: string;
   /** Submitted operation indexes whose complete effects are safe to retire. */
   settledOperationIndexes?: number[];

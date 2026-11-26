@@ -32,7 +32,10 @@ async def run(operations, **kwargs):
         return await _run_bulk_commit(request, batch_id="batch-1")
 
 
-RENUMBER = [{"type": "bulkAssignChannelNumbers", "channelIds": [1], "startingNumber": 7}]
+RENUMBER = [{
+    "type": "bulkAssignChannelNumbers", "channelIds": [1], "startingNumber": 7,
+    "expectedNumbers": {1: 50},
+}]
 MISSING = [{"type": "updateChannel", "channelId": 999, "data": {"name": "x"}}]
 
 
@@ -105,6 +108,7 @@ def test_every_envelope_key_the_executor_initialises_is_declared():
         "operationsPartiallyApplied", "errors", "tempIdMap", "groupIdMap",
         "validationIssues", "validationPassed", "partial",
         "normalizationFailures", "journalRowsUnwritten", "numberingRecovery",
+        "createdChannelNumbers",
     }
     conditional = {
         "profileRecoveryBinding", "settledOperationIndexes", "settledChannelNumbers",

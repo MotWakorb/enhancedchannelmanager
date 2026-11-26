@@ -250,7 +250,7 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="channels_assign_numbers",
         method="POST",
         path="/api/channels/assign-numbers",
-        request_fields=frozenset({"channel_ids", "starting_number"}),
+        request_fields=frozenset({"channel_ids", "starting_number", "expected_numbers"}),
     ),
     "channels_clear_auto_created": Endpoint(
         name="channels_clear_auto_created",

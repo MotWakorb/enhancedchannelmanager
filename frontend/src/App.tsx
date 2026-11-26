@@ -24,6 +24,7 @@ import { operatorLedgerKey, planLedgerRestore } from './utils/stagedLedgerStorag
 import type { DedupDropReport } from './hooks';
 import { StreamDedupModal } from './components/StreamDedupModal';
 import * as api from './services/api';
+import { HttpError } from './services/httpClient';
 import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress, CommitFailure, StagedProfileIntent } from './types';
 import packageJson from '../package.json';
 import { logger } from './utils/logger';
@@ -2830,7 +2831,12 @@ function App() {
       } else {
         // Normal mode - call API directly
         try {
-          await api.bulkAssignChannelNumbers(channelIds, startingNumber);
+          // The numbers this view loaded, so the server refuses the range
+          // rather than overwrite a change made since.
+          const expectedNumbers = Object.fromEntries(
+            beforeSnapshots.map((snapshot) => [snapshot.id, snapshot.channel_number ?? null]),
+          );
+          await api.bulkAssignChannelNumbers(channelIds, startingNumber, expectedNumbers);
 
           // Record the change
           recordChange({
@@ -2845,7 +2851,12 @@ function App() {
           loadChannels();
         } catch (err) {
           logger.error('Failed to reorder channels:', err);
-          setError('Failed to reorder channels');
+          // A 409 is the server refusing because a channel moved since this
+          // view loaded it. Its message, which HttpError already carries via
+          // extractDetail, names the channel; the generic text would not.
+          setError(err instanceof HttpError && err.status === 409
+            ? err.message
+            : 'Failed to reorder channels');
           // Reload to revert optimistic update
           loadChannels();
         }

@@ -947,23 +947,43 @@ def register(mcp: FastMCP):
     @mcp.tool()
     async def assign_channel_numbers(
         channel_ids: list[int],
+        expected_numbers: dict[int, float | None],
         starting_number: int | None = None,
     ) -> str:
         """Bulk-assign sequential channel numbers to a list of channels.
 
+        READ FIRST. Call list_channels or get_channel for these channels, then
+        pass the number you saw for each one in ``expected_numbers``. ECM
+        refuses the whole assignment, writing nothing, if any channel is no
+        longer on the number you saw: somebody else changed it after your read.
+        When that happens, read the channels again and decide before retrying.
+        Do not fill ``expected_numbers`` from a read made only to satisfy this
+        check; it protects the numbers you based your plan on.
+
         Args:
             channel_ids: List of channel IDs to number
+            expected_numbers: Map of channel ID to the channel number you last
+                read for it (null for a channel you saw with no number). Every
+                ID in ``channel_ids`` needs an entry, and no other ID may have
+                one.
             starting_number: Starting number (auto-assigned if omitted)
         """
         try:
             client = get_ecm_client()
-            payload = {"channel_ids": channel_ids}
+            payload = {"channel_ids": channel_ids, "expected_numbers": expected_numbers}
             if starting_number is not None:
                 payload["starting_number"] = starting_number
             await client.call_endpoint(ENDPOINTS["channels_assign_numbers"], body=payload)
             return f"Assigned numbers to {len(channel_ids)} channels starting from {starting_number or 'auto'}."
         except Exception as e:
             logger.error("[MCP] assign_channel_numbers failed: %s", e)
+            message = str(e)
+            if "HTTP 409" in message:
+                return (
+                    "Nothing was renumbered: a channel is no longer on the number in "
+                    "expected_numbers, so somebody else changed it after your read. "
+                    f"Re-read the channels and decide before retrying. Detail: {message}"
+                )
             return f"Error assigning channel numbers: {e}"
 
     @mcp.tool()
@@ -1323,7 +1343,18 @@ def register(mcp: FastMCP):
 
         Supported operation types: createChannel, updateChannel, deleteChannel,
         addStreamToChannel, removeStreamFromChannel, reorderChannelStreams,
-        createGroup, deleteChannelGroup, renameChannelGroup.
+        bulkAssignChannelNumbers, createGroup, deleteChannelGroup,
+        renameChannelGroup.
+
+        NUMBERING AN EXISTING CHANNEL NEEDS ITS BASELINE. Read the channels
+        first (list_channels / get_channel). An ``updateChannel`` whose
+        ``data`` sets ``channel_number`` on an existing channel must carry
+        ``"expectedNumber": {"number": <the number you saw>}``, and a
+        ``bulkAssignChannelNumbers`` must carry ``"expectedNumbers": {"<id>":
+        <number you saw>, ...}`` for every existing channel in
+        ``channelIds``. A missing baseline is rejected outright; a channel that
+        moved since your read fails its operation without writing. Channels
+        created earlier in the same batch (negative temp ids) take no baseline.
 
         Args:
             operations: List of operation dicts, each with a "type" key and type-specific fields.
