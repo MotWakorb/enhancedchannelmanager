@@ -236,9 +236,13 @@ builds and scans no longer wait on a polling job: a wedged test runner cannot
 hide image-build evidence. After its required test jobs succeed, the **Tests**
 workflow calls `publish-images.yml` as the reusable **Publish Verified Dev
 Images** job. That called workflow publishes only when the exact-SHA build
-evidence is successful and the SHA is still the current `dev` head. There is
-no separate **Publish Verified Images** Actions run on the dev path. Until
-publication succeeds, mutable tags retain their last known-good image.
+evidence is successful and the SHA is still the current `dev` head. Standalone
+**Publish Verified Images** runs still appear on the dev path, triggered when
+Tests or Build completes; they publish nothing and skip at **Authorize
+Exact-SHA Publication**. Each skipped run gets a concurrency group of its own,
+so it cannot cancel the reusable publisher (bead
+`enhancedchannelmanager-9iagf`). Until publication succeeds, mutable tags
+retain their last known-good image.
 
 The published `:dev` tag has silently lagged `dev` four times, from four unrelated causes:
 
