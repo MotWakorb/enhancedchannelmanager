@@ -244,6 +244,12 @@ describe('a restored Edit Mode session keeps its profile choices', () => {
       expect(request).toMatchObject({
         profileRecoveryOperator: 'local#7', profileRecoveryDestination: DESTINATION_A,
       });
+      for (const [sent] of testState.bulkCommit.mock.calls as Array<[BulkCommitRequest]>) {
+        expect(JSON.stringify(sent)).not.toContain('profileIntent');
+        const operations = JSON.stringify(sent.operations);
+        expect(operations).not.toContain('local#7');
+        expect(operations).not.toContain(DESTINATION_A);
+      }
       expect(await settledMembershipWrites()).toEqual(writes);
       expect(membership()).toEqual(final);
       expect(savedIntents()).toEqual([]);
