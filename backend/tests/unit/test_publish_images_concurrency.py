@@ -1,15 +1,13 @@
-"""Concurrency contract for ``publish-images.yml`` (enhancedchannelmanager-9iagf).
+"""Concurrency contract for ``publish-images.yml``.
 
 The workflow runs three ways: as the reusable **Publish Verified Dev Images**
 call from a dev ``push`` Tests run, and as a standalone ``workflow_run`` after
 either Tests or Build completes. Only the reusable dev call and the ``main``
 ``workflow_run`` can publish; every other run skips at the ``authorize`` job.
 
-The defect: the workflow-level concurrency group keyed only on the branch, so a
-skipped dev ``workflow_run`` entered ``publish-images-dev`` and, with
-``cancel-in-progress``, cancelled the active reusable publisher while it waited
-for the slower exact-SHA Build. Dev then never published without a manual
-rerun.
+A standalone ``workflow_run`` executes the default branch's copy of this file,
+not the copy on the branch that triggered it, so the reusable dev lane must be
+a name no branch-derived group (``publish-images-<branch>``) can produce.
 
 GitHub Actions concurrency cannot be executed locally. These tests evaluate the
 real group and ``if`` expressions with a small resolver over the GitHub
@@ -17,8 +15,10 @@ expression subset the file uses (case-insensitive ``==``, value-returning
 ``&&``/``||``, ``format``), across every trigger context, and assert:
 
 * a run that cannot publish never shares a group with any other run;
-* both publishing paths keep their existing group names and the cancel-older
+* both publishing paths keep one stable lane each, and the cancel-older
   behaviour between same-path runs;
+* the reusable dev lane can never equal a group the default branch's copy
+  derives from a branch name;
 * the jobs, their gates, and the triggers are unchanged.
 """
 
@@ -228,6 +228,11 @@ def _workflow_run(run_id: int, workflow: str, branch: str, event: str = "push") 
     }
 
 
+# The two publisher lanes. REUSABLE_DEV_LANE is deliberately not a
+# `publish-images-<branch>` shape; see test_reusable_dev_lane_is_not_a_branch_group.
+REUSABLE_DEV_LANE = "publish-images-dev:reusable"
+MAIN_LANE = "publish-images-main"
+
 TESTS = "Tests"
 BUILD = "Build and Push Docker Image"
 
@@ -247,8 +252,12 @@ CONTEXTS = {
     "pr-workflow_run-head-dev": _workflow_run(4002, BUILD, "dev", "pull_request"),
     "pr-workflow_run-feature": _workflow_run(4003, TESTS, "fix/x", "pull_request"),
     "dispatch-workflow_run-dev": _workflow_run(4004, TESTS, "dev", "workflow_dispatch"),
-    # No caller does this today; it pins the group's mirror of the gate's
-    # `inputs.tests_attested` and `== 'dev'` clauses.
+    # No caller does either today. Each pins one clause of the group's mirror
+    # of the gate: the first `inputs.tests_attested`, the second `== 'dev'`.
+    "reusable-unattested-dev": {
+        "inputs": {"candidate_sha": "4" * 40, "candidate_branch": "dev", "tests_attested": False},
+        "github": {"event_name": "push", "run_id": 5002, "event": {}},
+    },
     "reusable-unattested-main": {
         "inputs": {"candidate_sha": "3" * 40, "candidate_branch": "main", "tests_attested": False},
         "github": {"event_name": "push", "run_id": 5001, "event": {}},
@@ -286,14 +295,14 @@ def test_only_the_reusable_dev_call_and_main_workflow_run_can_publish(workflow):
 def test_skipped_dev_workflow_run_cannot_enter_the_reusable_publisher_group(
     workflow, skipped
 ):
-    """The 9iagf defect, for both Build-after-Tests and Tests-after-Build order."""
+    """Holds for both Build-after-Tests and Tests-after-Build order."""
     publisher = _group(workflow, CONTEXTS["reusable-dev-sha1"])
     assert not _publishes(workflow, CONTEXTS[skipped])
     assert _group(workflow, CONTEXTS[skipped]) != publisher
 
 
 def test_a_run_that_cannot_publish_never_shares_a_concurrency_group(workflow):
-    """Generalises 9iagf: with cancel-in-progress, a shared group can cancel.
+    """With cancel-in-progress, a shared group can cancel.
 
     Any run whose authorize gate is false must resolve to a group no other run
     resolves to, so it can neither cancel nor be cancelled by a publisher.
@@ -309,10 +318,10 @@ def test_a_run_that_cannot_publish_never_shares_a_concurrency_group(workflow):
 def test_publishing_paths_keep_their_groups_and_cancel_older_runs(workflow):
     """Successive dev SHAs and both main orderings still serialise, newest wins."""
     assert workflow["concurrency"]["cancel-in-progress"] is True
-    assert _group(workflow, CONTEXTS["reusable-dev-sha1"]) == "publish-images-dev"
-    assert _group(workflow, CONTEXTS["reusable-dev-sha2"]) == "publish-images-dev"
-    assert _group(workflow, CONTEXTS["main-workflow_run-after-tests"]) == "publish-images-main"
-    assert _group(workflow, CONTEXTS["main-workflow_run-after-build"]) == "publish-images-main"
+    assert _group(workflow, CONTEXTS["reusable-dev-sha1"]) == REUSABLE_DEV_LANE
+    assert _group(workflow, CONTEXTS["reusable-dev-sha2"]) == REUSABLE_DEV_LANE
+    assert _group(workflow, CONTEXTS["main-workflow_run-after-tests"]) == MAIN_LANE
+    assert _group(workflow, CONTEXTS["main-workflow_run-after-build"]) == MAIN_LANE
 
 
 def test_group_eligibility_mirrors_the_authorize_gate(workflow):
@@ -321,14 +330,75 @@ def test_group_eligibility_mirrors_the_authorize_gate(workflow):
     Both expressions are derived from the same predicate; if one changes
     without the other, a skipped run could re-enter a publisher lane.
     """
-    lanes = {"publish-images-dev", "publish-images-main"}
+    lanes = {REUSABLE_DEV_LANE, MAIN_LANE}
     for name, ctx in CONTEXTS.items():
         assert (_group(workflow, ctx) in lanes) == _publishes(workflow, ctx), name
 
 
+def test_unattested_dev_call_is_ineligible_and_skips(workflow):
+    """Pins the group's `inputs.tests_attested` clause on the dev branch."""
+    context = CONTEXTS["reusable-unattested-dev"]
+    assert not _publishes(workflow, context)
+    assert _group(workflow, context) == "publish-images-ineligible-5002"
+
+
+# ─── Default-branch copy: workflow_run runs never read this branch's file ────
+
+# The group expression of the default branch's copy of this file, read with
+# `git show origin/main:.github/workflows/publish-images.yml` (origin/main
+# d5e91a37). A standalone workflow_run evaluates the default branch's
+# expression, never the one in this branch's copy.
+DEFAULT_BRANCH_GROUP = (
+    "publish-images-${{ inputs.candidate_branch || github.event.workflow_run.head_branch }}"
+)
+
+# Characters git-check-ref-format(1) forbids anywhere in a ref name: rule 4
+# (control characters, DEL, space, `~`, `^`, `:`), rule 5 (`?`, `*`, `[`) and
+# rule 10 (`\`).
+_FORBIDDEN_IN_REFS = set(" ~^:?*[\\") | {chr(c) for c in range(0x20)} | {"\x7f"}
+
+
+def test_reusable_dev_lane_is_not_a_branch_group():
+    """No valid branch x gives `publish-images-<x>` equal to the reusable lane.
+
+    The lane equals `publish-images-<x>` (case-insensitively, as GitHub
+    compares groups) only if x is the lane's suffix, ignoring case. That
+    suffix holds a character git forbids in every ref name, in any case, so
+    no branch, tag or PR head can be that x.
+    """
+    prefix = "publish-images-"
+    assert REUSABLE_DEV_LANE.startswith(prefix)
+    suffix = REUSABLE_DEV_LANE[len(prefix):]
+    assert set(suffix) & _FORBIDDEN_IN_REFS, suffix
+    assert set(suffix.lower()) & _FORBIDDEN_IN_REFS
+    assert set(suffix.upper()) & _FORBIDDEN_IN_REFS
+
+
+def test_default_branch_copy_cannot_cancel_the_reusable_dev_publisher(workflow):
+    """A dev push's standalone workflow_run runs the default branch's group."""
+    publisher = _group(workflow, CONTEXTS["reusable-dev-sha1"])
+    for name, context in CONTEXTS.items():
+        if context["github"]["event_name"] != "workflow_run":
+            continue
+        group = interpolate(DEFAULT_BRANCH_GROUP, context)
+        assert group.lower() != publisher.lower(), name
+    # Under that expression a dev push's workflow_runs take `publish-images-dev`,
+    # so the reusable lane must not be that name.
+    for name in ("dev-workflow_run-after-build", "dev-workflow_run-after-tests"):
+        assert interpolate(DEFAULT_BRANCH_GROUP, CONTEXTS[name]) == "publish-images-dev"
+
+
+def test_main_lane_matches_the_default_branch_copy(workflow):
+    """Main pushes serialise in one lane whichever copy of the file runs."""
+    for name in ("main-workflow_run-after-tests", "main-workflow_run-after-build"):
+        assert interpolate(DEFAULT_BRANCH_GROUP, CONTEXTS[name]) == MAIN_LANE
+        assert _group(workflow, CONTEXTS[name]) == MAIN_LANE
+
+
 # ─── Preservation: everything but the concurrency group is unchanged ─────────
 
-# The authorize gate exactly as it stood before 9iagf (origin/dev 04587fc8).
+# The authorize gate. Changing it changes who can publish: re-review the
+# exact-SHA, attestation, scan and digest contracts before editing this copy.
 AUTHORIZE_IF = (
     "(inputs.tests_attested && inputs.candidate_branch == 'dev')"
     " || (github.event_name == 'workflow_run'"
@@ -336,8 +406,7 @@ AUTHORIZE_IF = (
     " && github.event.workflow_run.head_branch == 'main')"
 )
 
-# sha256 of the canonical JSON of `on` and `jobs` at origin/dev 04587fc8. The
-# 9iagf fix touches only `concurrency.group`; any other edit to the triggers,
+# sha256 of the canonical JSON of `on` and `jobs`. Any edit to the triggers,
 # job graph, gates, steps or permissions must be reviewed against the
 # exact-SHA, attestation, scan and digest contracts before re-pinning these.
 TRIGGERS_SHA256 = "ef2ba0aca9d2b8589ea4d01812edbc8dc131b8f0f1b739a1f0f14ffdc1aeefd6"
@@ -354,7 +423,7 @@ def test_authorize_gate_is_unchanged(workflow):
     assert workflow["jobs"]["authorize"]["if"] == AUTHORIZE_IF
 
 
-def test_triggers_and_jobs_are_byte_identical_to_the_pre_fix_workflow(workflow):
+def test_triggers_and_jobs_match_their_reviewed_hashes(workflow):
     # PyYAML reads the bare key `on` as boolean True.
     assert _canonical_sha256(workflow[True]) == TRIGGERS_SHA256
     assert _canonical_sha256(workflow["jobs"]) == JOBS_SHA256

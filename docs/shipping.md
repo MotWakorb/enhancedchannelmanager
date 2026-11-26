@@ -240,7 +240,11 @@ evidence is successful and the SHA is still the current `dev` head. Standalone
 **Publish Verified Images** runs still appear on the dev path, triggered when
 Tests or Build completes; they publish nothing and skip at **Authorize
 Exact-SHA Publication**. Each skipped run gets a concurrency group of its own,
-so it cannot cancel the reusable publisher (bead
+so it cannot cancel the reusable publisher. Standalone `workflow_run` runs
+execute the default branch's copy of `publish-images.yml`, which may key its
+group on the branch name, so the reusable dev lane is named
+`publish-images-dev:reusable`: `:` is not allowed in git ref names, so no
+branch-derived group can match it (bead
 `enhancedchannelmanager-9iagf`). Until publication succeeds, mutable tags
 retain their last known-good image.
 
