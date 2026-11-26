@@ -11,6 +11,7 @@ steps) may cite the number the range would have had starting from 1.
 Every case also pins the exact outgoing ``assign_channel_numbers`` call, so
 the journal change provably leaves the mutation alone.
 """
+import asyncio
 from unittest.mock import AsyncMock, call, patch
 
 import pytest
@@ -323,3 +324,134 @@ class TestExplicitOrConsolidatedStart:
             "Changed channel number from 50 to 10",
             "Changed channel number from 51 to 11",
         ]
+
+
+def script_read_back(client, outcomes):
+    """Make the post-assign ``get_channel`` calls follow ``outcomes`` in order.
+
+    Each outcome is a dict (returned), or an exception instance (raised). Reads
+    before the assign are untouched.
+    """
+    original = client.get_channel.side_effect
+    assigned = {"done": False}
+    remaining = list(outcomes)
+    assign = client.assign_channel_numbers.side_effect
+
+    async def assign_then_mark(ids, start):
+        result = await assign(ids, start)
+        assigned["done"] = True
+        return result
+
+    async def get_channel(cid):
+        if not assigned["done"]:
+            return await original(cid)
+        outcome = remaining.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    client.assign_channel_numbers.side_effect = assign_then_mark
+    client.get_channel.side_effect = get_channel
+
+
+class TestReadBackInterrupted:
+    """Rows are queued before the read-back awaits, so what is true is journaled."""
+
+    @pytest.mark.asyncio
+    async def test_cancellation_mid_read_back_still_journals_both_rows(self):
+        client = make_client(catalog(), chosen={1: 7, 2: 8})
+        script_read_back(client, [
+            {"id": 1, "name": "Alpha", "channel_number": 7},
+            asyncio.CancelledError(),
+        ])
+        request = BulkCommitRequest(operations=[NO_START], consolidate=False)
+        with patch("routers.channels.get_client", return_value=client), \
+             patch("routers.channels.journal") as mock_journal:
+            with pytest.raises(asyncio.CancelledError):
+                await _run_bulk_commit(request, batch_id="batch-1")
+        rows = rows_from(mock_journal)
+
+        assert client.assign_channel_numbers.call_args_list == [call([1, 2], None)]
+        # The first read succeeded, but rows are only finalised after the whole
+        # loop, so both honestly say they were not read back.
+        assert [r["description"] for r in rows] == [
+            f"Changed channel number from 50; {UNREAD}",
+            f"Changed channel number from 51; {UNREAD}",
+        ]
+        assert [r["entity_id"] for r in rows] == [1, 2]
+        assert rows[0]["after_value"] == {"name": "Alpha"}
+        assert rows[1]["after_value"] == {"name": "Bravo"}
+        for row in rows:
+            assert "channel_number" not in row["after_value"]
+
+    @pytest.mark.asyncio
+    async def test_channel_without_a_starting_number_names_no_previous_number(self):
+        # A truly missing channel is rejected by validation before any write,
+        # so the reachable shape is a channel the lineup listed WITHOUT a
+        # channel_number: ECM never observed its number before the range ran.
+        client = make_client([{"id": 1, "name": "Alpha", "channel_number": 50},
+                              {"id": 2, "name": "Bravo"}],
+                             chosen={1: 7, 2: 8})
+        script_read_back(client, [RuntimeError("busy"), RuntimeError("busy")])
+        _result, rows = await run(client, [NO_START], consolidate=False)
+
+        absent = next(r for r in rows if r["entity_id"] == 2)
+        assert absent["description"] == (
+            "Changed channel number; Dispatcharr chose the new number and ECM "
+            "has not read it back"
+        )
+        assert BEFORE_STATE_UNKNOWN_KEY in absent["before_value"]
+        assert absent["before_value"][BEFORE_STATE_UNKNOWN_KEY] == ["channel_number"]
+        assert "channel_number" not in absent["before_value"]
+        assert "channel_number" not in absent["after_value"]
+        assert "from " not in absent["description"]
+
+    @pytest.mark.asyncio
+    async def test_channel_without_a_starting_number_but_read_back_names_only_the_new_number(self):
+        client = make_client([{"id": 1, "name": "Alpha", "channel_number": 50},
+                              {"id": 2, "name": "Bravo"}],
+                             chosen={1: 7, 2: 8})
+        _result, rows = await run(client, [NO_START], consolidate=False)
+
+        absent = next(r for r in rows if r["entity_id"] == 2)
+        assert absent["description"] == (
+            "Changed channel number to 8; ECM had not read the previous number"
+        )
+        assert absent["before_value"][BEFORE_STATE_UNKNOWN_KEY] == ["channel_number"]
+        assert "channel_number" not in absent["before_value"]
+        assert absent["after_value"]["channel_number"] == 8
+
+    @pytest.mark.asyncio
+    async def test_partial_read_back_finalises_only_the_row_it_observed(self):
+        client = make_client(catalog(), chosen={1: 7, 2: 8})
+        script_read_back(client, [
+            {"id": 1, "name": "Alpha", "channel_number": 7},
+            RuntimeError("upstream is busy"),
+        ])
+        result, rows = await run(client, [NO_START], consolidate=False)
+
+        assert result["success"] is True
+        assert [r["description"] for r in rows] == [
+            "Changed channel number from 50 to 7",
+            f"Changed channel number from 51; {UNREAD}",
+        ]
+        assert rows[0]["after_value"] == {"channel_number": 7, "name": "Alpha"}
+        assert rows[1]["after_value"] == {"name": "Bravo"}
+        assert_names_no_unobserved_number(rows[1], 1, 2)
+
+    @pytest.mark.asyncio
+    async def test_response_without_a_channel_number_key_stays_unobserved(self):
+        client = make_client(catalog(), chosen={1: 7, 2: 8})
+        script_read_back(client, [
+            {"id": 1, "name": "Alpha"},
+            {"id": 2, "name": "Bravo", "channel_number": 8},
+        ])
+        _result, rows = await run(client, [NO_START], consolidate=False)
+
+        assert [r["description"] for r in rows] == [
+            f"Changed channel number from 50; {UNREAD}",
+            "Changed channel number from 51 to 8",
+        ]
+        assert rows[0]["after_value"] == {"name": "Alpha"}
+        assert "channel_number" not in rows[0]["after_value"]
+        assert None not in rows[0]["after_value"].values()
