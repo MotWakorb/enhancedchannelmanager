@@ -421,3 +421,160 @@ class TestCreatedChannelNumbersAreReported:
             {"type": "updateChannel", "channelId": 1, "data": {"name": "ESPN HD"}},
         ])
         assert result["createdChannelNumbers"] == {}
+
+
+# ---------------------------------------------------------------------------
+# A baseline is a number somebody READ, so it is not held to the write contract
+# ---------------------------------------------------------------------------
+
+
+OFF_GRID_LINEUP = [
+    {"id": 1, "name": "ESPN", "channel_number": 8.25, "streams": []},
+    {"id": 2, "name": "TNT", "channel_number": 6, "streams": []},
+]
+
+
+def _nan_body(body: dict) -> str:
+    """``body`` as JSON with the literal ``NaN`` Python's parser accepts."""
+    import json
+
+    return json.dumps(body).replace('"__NAN__"', "NaN")
+
+
+class TestBaselinesAcceptAnyFiniteNumber:
+    """A number set outside ECM (8.25, say) can be read back, so a caller has
+    to be able to say it read it. The one-decimal, non-negative contract binds
+    what ECM WRITES and stays exactly as it was."""
+
+    @pytest.mark.asyncio
+    async def test_bulk_range_baseline_off_the_grid_that_matches_is_accepted(self):
+        client = make_client(OFF_GRID_LINEUP)
+        result = await run_ops(
+            client, [assign_range([1, 2], 100, expected={"1": 8.25, "2": 6})],
+        )
+        assert result["success"] is True, result["errors"]
+        client.assign_channel_numbers.assert_awaited_once_with([1, 2], 100)
+
+    @pytest.mark.asyncio
+    async def test_bulk_range_baseline_off_the_grid_that_moved_is_refused(self):
+        client = make_client([
+            {"id": 1, "name": "ESPN", "channel_number": 8.3, "streams": []},
+        ])
+        result = await run_ops(client, [assign_range([1], 100, expected={"1": 8.25})])
+        assert result["operationsFailed"] == 1
+        client.assign_channel_numbers.assert_not_awaited()
+        assert result["errors"][0]["concurrentNumberChanges"] == [
+            {"channelId": 1, "baselineNumber": 8.25, "serverNumber": 8.3},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_bulk_update_expected_number_off_the_grid_that_matches_is_accepted(self):
+        # ExpectedChannelNumber.number is the single-channel baseline, so the
+        # same loosening covers the pre-existing updateChannel expectation.
+        client = make_client(OFF_GRID_LINEUP)
+        result = await run_ops(client, [renumber(1, 20, expected=8.25)])
+        assert result["success"] is True, result["errors"]
+
+    @pytest.mark.asyncio
+    async def test_bulk_update_expected_number_off_the_grid_that_moved_is_refused(self):
+        client = make_client([
+            {"id": 1, "name": "ESPN", "channel_number": 8.3, "streams": []},
+        ])
+        result = await run_ops(client, [renumber(1, 20, expected=8.25)])
+        assert result["operationsFailed"] == 1
+        client.update_channel.assert_not_awaited()
+
+    def test_a_negative_baseline_is_accepted(self):
+        request = BulkCommitRequest(operations=[
+            assign_range([1], 100, expected={"1": -3}),
+            renumber(2, 20, expected=-1.5),
+        ])
+        assert request.operations[0].expectedNumbers == {1: -3.0}
+        assert request.operations[1].expectedNumber.number == -1.5
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_a_non_finite_baseline_is_refused(self, bad):
+        with pytest.raises(ValidationError):
+            BulkCommitRequest(operations=[assign_range([1], 100, expected={"1": bad})])
+        with pytest.raises(ValidationError):
+            BulkCommitRequest(operations=[renumber(1, 20, expected=bad)])
+        with pytest.raises(ValidationError):
+            AssignNumbersRequest(channel_ids=[1], expected_numbers={1: bad})
+
+    @pytest.mark.asyncio
+    async def test_a_nan_baseline_is_a_422_over_http(self, async_client):
+        client = make_client()
+        body = {
+            "operations": [assign_range([1], 100, expected={"1": "__NAN__"})],
+        }
+        with patch("routers.channels.get_client", return_value=client):
+            response = await async_client.post(
+                "/api/channels/bulk-commit", content=_nan_body(body),
+                headers={"Content-Type": "application/json"},
+            )
+        assert response.status_code == 422, response.text
+        client.assign_channel_numbers.assert_not_awaited()
+
+    def test_the_write_side_still_refuses_an_off_grid_target(self):
+        with pytest.raises(ValidationError):
+            BulkCommitRequest(operations=[renumber(1, 8.25, expected=5)])
+        with pytest.raises(ValidationError):
+            BulkCommitRequest(operations=[assign_range([1], 8.25, expected={"1": 5})])
+        with pytest.raises(ValidationError):
+            AssignNumbersRequest(
+                channel_ids=[1], starting_number=8.25, expected_numbers={1: 5},
+            )
+
+    @pytest.mark.asyncio
+    async def test_direct_baseline_off_the_grid_that_matches_is_accepted(self, async_client):
+        client = make_client(OFF_GRID_LINEUP)
+        response = await post_assign(async_client, client, {
+            "channel_ids": [1, 2], "starting_number": 100,
+            "expected_numbers": {"1": 8.25, "2": 6},
+        })
+        assert response.status_code == 200, response.text
+        client.assign_channel_numbers.assert_awaited_once_with([1, 2], 100)
+
+    @pytest.mark.asyncio
+    async def test_direct_baseline_off_the_grid_that_moved_is_a_409(self, async_client):
+        client = make_client([
+            {"id": 1, "name": "ESPN", "channel_number": 8.3, "streams": []},
+        ])
+        response = await post_assign(async_client, client, {
+            "channel_ids": [1], "starting_number": 100, "expected_numbers": {"1": 8.25},
+        })
+        assert response.status_code == 409, response.text
+        client.assign_channel_numbers.assert_not_awaited()
+        assert response.json()["detail"]["concurrentNumberChanges"] == [
+            {"channelId": 1, "baselineNumber": 8.25, "serverNumber": 8.3},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_direct_nan_baseline_is_a_422(self, async_client):
+        client = make_client()
+        with patch("routers.channels.get_client", return_value=client):
+            response = await async_client.post(
+                "/api/channels/assign-numbers",
+                content=_nan_body({"channel_ids": [1], "expected_numbers": {"1": "__NAN__"}}),
+                headers={"Content-Type": "application/json"},
+            )
+        assert response.status_code == 422, response.text
+        client.assign_channel_numbers.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_direct_write_side_still_refuses_an_off_grid_start(self, async_client):
+        client = make_client()
+        response = await post_assign(async_client, client, {
+            "channel_ids": [1], "starting_number": 8.25, "expected_numbers": {"1": 5},
+        })
+        assert response.status_code == 422, response.text
+        client.assign_channel_numbers.assert_not_awaited()
+
+
+class TestMissingBaselineWording:
+    def test_the_422_asks_for_the_number_the_change_was_based_on(self):
+        with pytest.raises(ValidationError) as excinfo:
+            BulkCommitRequest(operations=[assign_range([1], 100)])
+        message = error_text(excinfo)
+        assert "the number your change was based on" in message
+        assert "Read the channels first" not in message

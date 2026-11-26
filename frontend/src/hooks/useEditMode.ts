@@ -2452,9 +2452,35 @@ export function useEditMode({
         result.errors.push(...unresolvedGroupOps);
       }
 
+      // A plan that spans several requests is checked request by request: the
+      // server compares each one against the lineup as it stands when THAT
+      // request arrives. So a channel an earlier request of this Apply settled
+      // is now on the number it settled on, and a later write to it has to be
+      // based on that number, not the session baseline. A channel no earlier
+      // request settled keeps its session baseline, which is what lets the
+      // server still catch somebody else moving it in between.
+      const multiBatch = resolvedOps.length > BATCH_SIZE;
+      const settledThisApply = new Map<number, number | null>();
+      const withSettledBaselines = (op: api.BulkOperation) => {
+        if (settledThisApply.size === 0) return;
+        if (op.type === 'updateChannel' && op.expectedNumber
+          && typeof op.channelId === 'number' && settledThisApply.has(op.channelId)) {
+          op.expectedNumber = { number: settledThisApply.get(op.channelId)! };
+        } else if (op.type === 'bulkAssignChannelNumbers' && op.expectedNumbers) {
+          const current = op.expectedNumbers as Record<number, number | null>;
+          op.expectedNumbers = Object.fromEntries(Object.keys(current).map((key) => {
+            const channelId = Number(key);
+            return [channelId, settledThisApply.has(channelId) ? settledThisApply.get(channelId)! : current[channelId]];
+          }));
+        }
+      };
+
       // Process in batches
       for (let i = 0; i < resolvedOps.length; i += BATCH_SIZE) {
         const batch = resolvedOps.slice(i, i + BATCH_SIZE);
+        // In place, not copied: `operationIds` and the settled bookkeeping key
+        // on these very objects.
+        batch.forEach(withSettledBaselines);
         const batchNum = Math.floor(i / BATCH_SIZE) + 1;
         const batchEnd = Math.min(i + BATCH_SIZE, resolvedOps.length);
 
@@ -2469,8 +2495,11 @@ export function useEditMode({
           continueOnError: options?.continueOnError,
           consolidate: true,
           ...recoveryScope,
-          ...(trackSettled && { returnSettledOperationIndexes: true }),
+          ...((trackSettled || multiBatch) && { returnSettledOperationIndexes: true }),
         }, commitBatchId);
+        for (const [channel, number] of Object.entries(batchResponse.settledChannelNumbers ?? {})) {
+          settledThisApply.set(Number(channel), number);
+        }
 
         // Check for validation failures
         if (!batchResponse.success && batchResponse.validationIssues?.length) {

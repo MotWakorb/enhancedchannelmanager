@@ -6,6 +6,7 @@ import type { BulkCommitRequest, BulkCommitResponse, ResolvedCreateChannelNames 
 import type { Channel, EditModeSummary, Stream } from './types';
 import { STAGED_LEDGER_STORAGE_KEY, type PersistedStagedLedger } from './utils/stagedLedgerStorage';
 import * as api from './services/api';
+import { HttpError } from './services/httpClient';
 import recordedProfiles from '../../backend/tests/fixtures/y3m6o1/dispatcharr_channel_profiles_mixed_membership.json';
 
 const testState = vi.hoisted(() => ({
@@ -274,6 +275,34 @@ describe('App bulk-create staging', () => {
     });
 
     expect(api.bulkAssignChannelNumbers).toHaveBeenCalledWith([44, 45], 100, { 44: 80, 45: null });
+  });
+
+  it('outside Edit Mode, a refused range renumber shows why the server refused it', async () => {
+    const template: Channel = {
+      id: 44, name: 'Original', channel_number: 80, streams: [],
+      channel_group_id: null, tvg_id: null, tvc_guide_stationid: null, epg_data_id: null,
+      stream_profile_id: null, uuid: 'existing-44', logo_id: null,
+      auto_created: false, auto_created_by: null, auto_created_by_name: null,
+    };
+    vi.mocked(api.getChannels).mockResolvedValue({ results: [template], count: 1, next: null, previous: null });
+    const message = 'Channel was not renumbered: channel 44 is on channel number 81, and this '
+      + 'request expected 80. Somebody else changed it.';
+    vi.mocked(api.bulkAssignChannelNumbers).mockRejectedValueOnce(new HttpError(message, 409, {
+      message,
+      concurrentNumberChanges: [{ channelId: 44, baselineNumber: 80, serverNumber: 81 }],
+    }));
+
+    const { container } = render(<App />);
+    await waitFor(() => expect(testState.channelManagerProps?.channels.map(ch => ch.id)).toEqual([44]));
+    await act(async () => {
+      await testState.channelManagerProps!.onChannelReorder([44], 100);
+    });
+
+    await waitFor(() => {
+      const status = container.querySelector('.service-status');
+      expect(status?.getAttribute('title')).toContain('Somebody else changed it');
+    });
+    expect(container.querySelector('.service-status')?.getAttribute('title')).toContain('channel 44');
   });
 
   it('numbers mixed mapped and unmapped Create groups by visible natural name', async () => {

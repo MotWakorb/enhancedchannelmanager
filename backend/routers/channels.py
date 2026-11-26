@@ -31,6 +31,7 @@ from channel_group_delete import group_delete_failure_detail, hide_associated_gr
 from channel_number import (
     CHANNEL_NUMBER_RULE_MESSAGE,
     ChannelNumber,
+    ChannelNumberBaseline,
     InvalidChannelNumberError,
     format_channel_number,
     parse_channel_number_text,
@@ -505,7 +506,9 @@ class AssignNumbersRequest(BaseModel):
     #: refuses with 409 rather than overwrite a number that has moved since.
     #: Optional at the type level only so that a missing map gets the same
     #: 422 naming the channels as a partial one.
-    expected_numbers: Optional[dict[int, Optional[ChannelNumber]]] = None
+    #: A baseline is a number READ, so any finite value is accepted; see
+    #: :data:`ChannelNumberBaseline`. ``starting_number`` keeps the write contract.
+    expected_numbers: Optional[dict[int, Optional[ChannelNumberBaseline]]] = None
 
     @model_validator(mode="after")
     def _require_a_baseline_per_channel(self):
@@ -652,7 +655,10 @@ class ExpectedChannelNumber(BaseModel):
     the UI.
     """
 
-    number: Optional[ChannelNumber] = None
+    #: The number READ, so any finite value: a number set outside ECM, such as
+    #: ``8.25``, must still be expressible as what the caller saw. The write
+    #: contract stays on ``data.channel_number`` (:data:`ChannelNumberBaseline`).
+    number: Optional[ChannelNumberBaseline] = None
 
 
 # Bulk commit operation types
@@ -711,7 +717,8 @@ class BulkAssignNumbersOp(BaseModel):
     #: upstream call places every channel in the range. Required for every
     #: non-negative id and forbidden for a negative one; ``BulkCommitRequest``
     #: enforces both, so the type stays optional only for that error's sake.
-    expectedNumbers: Optional[dict[int, Optional[ChannelNumber]]] = None
+    #: Any finite number, like every baseline (:data:`ChannelNumberBaseline`).
+    expectedNumbers: Optional[dict[int, Optional[ChannelNumberBaseline]]] = None
 
 
 class BulkCreateChannelOp(BaseModel):
@@ -887,7 +894,7 @@ def _baseline_map_problem(
     if missing:
         problems.append(
             f"{field} has no baseline for channel(s) {_format_channel_ids(missing)}. "
-            "Read the channels first and send the number each one is on now "
+            "Send, for each channel, the number your change was based on "
             "(null for no number)"
         )
     temp = [cid for cid in supplied if cid in set(temp_ids)]

@@ -108,3 +108,45 @@ async def test_a_refusal_is_reported_with_the_backend_detail():
 
 def test_the_endpoint_contract_names_the_new_field():
     assert "expected_numbers" in ENDPOINTS["channels_assign_numbers"].request_fields
+
+
+@pytest.mark.asyncio
+async def test_an_off_grid_baseline_reaches_the_backend_unrounded():
+    # A number set outside ECM (8.25) is a number the agent can read. The tool
+    # must hand it on exactly; the backend decides whether it still holds.
+    mcp = _mcp()
+    client = AsyncMock()
+    client.call_endpoint.return_value = {"success": True}
+
+    with patch("tools.channels.get_ecm_client", return_value=client):
+        await mcp.call_tool("assign_channel_numbers", {
+            "channel_ids": [1, 2], "starting_number": 100,
+            "expected_numbers": {"1": 8.25, "2": -1.75},
+        })
+
+    assert client.call_endpoint.await_args.kwargs["body"]["expected_numbers"] == {
+        1: 8.25, 2: -1.75,
+    }
+
+
+@pytest.mark.asyncio
+async def test_bulk_commit_passes_off_grid_baselines_through_unchanged():
+    mcp = _mcp()
+    client = AsyncMock()
+    client.call_endpoint.return_value = {
+        "success": True, "operationsApplied": 2, "operationsFailed": 0,
+        "errors": [], "tempIdMap": {}, "groupIdMap": {},
+    }
+    operations = [
+        {"type": "bulkAssignChannelNumbers", "channelIds": [1], "startingNumber": 100,
+         "expectedNumbers": {"1": 8.25}},
+        {"type": "updateChannel", "channelId": 2, "data": {"channel_number": 40},
+         "expectedNumber": {"number": 8.25}},
+    ]
+
+    with patch("tools.channels.get_ecm_client", return_value=client):
+        await mcp.call_tool("bulk_commit_channels", {"operations": operations})
+
+    sent = client.call_endpoint.await_args.kwargs["body"]["operations"]
+    assert sent[0]["expectedNumbers"] == {"1": 8.25}
+    assert sent[1]["expectedNumber"] == {"number": 8.25}
