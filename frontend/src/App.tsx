@@ -2095,12 +2095,9 @@ function App() {
           // logoUrl is used as fallback if logoId is not found - the commit will create/find the logo
           const tempId = stageCreateChannel(name, channelNumber, groupId, undefined, logoId, logoUrl, tvgId);
 
-          // Track profile assignments for after commit
-          // Use passed profileIds if provided, otherwise fall back to default profiles
-          // ALWAYS add assignment even if profileIds is empty - this triggers disable on all profiles
-          const profilesToAssign = profileIds && profileIds.length > 0
-            ? profileIds
-            : defaultChannelProfileIds;
+          // Omitted means the defaults; an explicit `[]` means no profiles,
+          // which still stages an intent so every profile is disabled.
+          const profilesToAssign = profileIds ?? defaultChannelProfileIds;
 
           stageProfileIntent([tempId], profilesToAssign, !!profileIds?.length);
 
@@ -2133,10 +2130,8 @@ function App() {
           });
           setChannels((prev) => [...prev, newChannel]);
 
-          // Apply profile assignments - use passed profileIds if provided, otherwise fall back to defaults
-          const profilesToAssign = profileIds && profileIds.length > 0
-            ? profileIds
-            : defaultChannelProfileIds;
+          // Omitted means the defaults; an explicit `[]` means no profiles.
+          const profilesToAssign = profileIds ?? defaultChannelProfileIds;
 
           for (const profileId of profilesToAssign) {
             try {
@@ -2218,6 +2213,7 @@ function App() {
       groupId?: number,
       newGroupName?: string,
       pushDownOnConflict?: boolean,
+      profileIds?: number[],
     ) => {
       try {
         if (!isEditMode && pushDownOnConflict) {
@@ -2265,8 +2261,11 @@ function App() {
             undefined      // tvcGuideStationId
           );
 
-          // Track profile assignments (use default profiles for manual creation)
-          if (defaultChannelProfileIds.length > 0) {
+          // Omitted with no configured defaults leaves membership to
+          // Dispatcharr. An explicit `[]` is an intent to disable every profile.
+          if (profileIds !== undefined) {
+            stageProfileIntent([tempId], profileIds, profileIds.length > 0);
+          } else if (defaultChannelProfileIds.length > 0) {
             stageProfileIntent([tempId], defaultChannelProfileIds);
           }
 
@@ -2667,12 +2666,9 @@ function App() {
           });
         }
 
-        // Store pending profile assignments to be applied after commit
-        // Use explicit profileIds if provided, otherwise fall back to default profiles
-        // ALWAYS add assignment even if profileIds is empty - this triggers disable on all profiles
-        const profileIdsToApply = (profileIds && profileIds.length > 0)
-          ? profileIds
-          : defaultChannelProfileIds;
+        // Omitted means the defaults; an explicit `[]` means no profiles.
+        // Either way an intent is staged, so an empty one disables every profile.
+        const profileIdsToApply = profileIds ?? defaultChannelProfileIds;
 
         stageProfileIntent(createdTempIds, profileIdsToApply, !!profileIds?.length);
 
