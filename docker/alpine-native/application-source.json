@@ -1476,7 +1476,7 @@
     {
       "executable": false,
       "path": "backend/services/notification_service.py",
-      "sha256": "330219e2b02fc3adbf884edbe87d216cce3977bfdd293f99da6333cd93a0f64d",
+      "sha256": "331072514b47538a5042c2150da991a336d8b89232c9a6a22d726aa6ed979f94",
       "type": "file"
     },
     {
