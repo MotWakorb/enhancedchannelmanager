@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "22e405dc83abe3847a95cf37c184c9fd4039f15b82aaae8944a526b133443f66",
+      "sha256": "b25fe4ae8692c8eafff24e7c86f10c7781c4b19bdd333b5a2644d0b9a6d52026",
       "type": "file"
     },
     {
@@ -1128,7 +1128,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "1552ffce1dad8a637655a192e8fe44a876cc7051ac6e9279da582acedc680804",
+      "sha256": "0802938d0d9e27c5c42d72b6e92b2a66736333c9a5b9c9aa73f0a15a6ee3ef10",
       "type": "file"
     },
     {
@@ -1830,7 +1830,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "4a0806fba8e19685303a651663bb606a7f30ac867ef19c3e4a5306d8fa4bbee6",
+      "sha256": "89b356687cbbdb82aacc70fb5cf729d9955a6ab986d7f95b46f811b8a35f9d91",
       "type": "file"
     },
     {
@@ -6967,5 +6967,18 @@
     "previous_manifest_sha256": "1516a70b57babe921c3256c8a953a7da1646d13d550561286694e077107c4c00",
     "scope": "Keep each staged channel create's profile selection, including an explicit empty selection, through an Edit Mode session saved before Apply and restored after a reload, withdraw a selection bound to a different operator or Dispatcharr destination on restore, and carry it through Undo, Redo and Discard with its create, plus 0084 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0084"
+  },
+  "restore_drill_link_update": {
+    "added_files": [],
+    "base_commit": "a950c3ef70b1f975544940fa9a976bfe2a2d6c2b",
+    "bead": "enhancedchannelmanager-nupa7",
+    "changed_files": {
+      "backend/main.py": "22e405dc83abe3847a95cf37c184c9fd4039f15b82aaae8944a526b133443f66",
+      "backend/routers/backup.py": "1552ffce1dad8a637655a192e8fe44a876cc7051ac6e9279da582acedc680804",
+      "frontend/package.json": "4a0806fba8e19685303a651663bb606a7f30ac867ef19c3e4a5306d8fa4bbee6"
+    },
+    "previous_manifest_sha256": "afe7345d4e06cb57642ae5e7fd1bfcebb60696c9200e2348f74908420cbb7001",
+    "scope": "Repoint one historical CHANGELOG link from a removed restore-drill page to the current operator-guide section on renaming and deleting channel groups, plus 0085 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0085"
   }
 }

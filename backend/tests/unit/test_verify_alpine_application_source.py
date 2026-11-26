@@ -163,6 +163,52 @@ SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
 SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
 
+RESTORE_DRILL_LINK_FILES = ()
+RESTORE_DRILL_LINK_ADDED_FILES = ()
+
+
+def _before_restore_drill_link(manifest):
+    key = "restore_drill_link_update"
+    update = manifest[key]
+    assert update["base_commit"] == "a950c3ef70b1f975544940fa9a976bfe2a2d6c2b"
+    assert update["bead"] == "enhancedchannelmanager-nupa7"
+    assert update["version"] == "0.18.2-0085"
+    assert update["previous_manifest_sha256"] == (
+        "afe7345d4e06cb57642ae5e7fd1bfcebb60696c9200e2348f74908420cbb7001"
+    )
+    assert set(update["added_files"]) == set(RESTORE_DRILL_LINK_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(RESTORE_DRILL_LINK_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_restore_drill_link_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_restore_drill_link(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert (
+        result["restore_drill_link_update"] == manifest["restore_drill_link_update"]
+    )
+
+
 RESTORED_PROFILE_INTENT_FILES = (
     "frontend/src/App.tsx",
     "frontend/src/components/EditModeRestoreDialog.tsx",
@@ -178,6 +224,7 @@ RESTORED_PROFILE_INTENT_ADDED_FILES = (
 
 def _before_restored_profile_intent(manifest):
     key = "restored_profile_intent_update"
+    manifest = _before_restore_drill_link(manifest)
     update = manifest[key]
     assert update["base_commit"] == "e17442485237c17509d24fa2037dd3eb9c7e81d4"
     assert update["bead"] == "enhancedchannelmanager-0m06f.3.4.3"
