@@ -163,8 +163,48 @@ SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
 SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
 
+DUAL_FAILURE_ALERT_FILES = ("backend/task_engine.py",)
+
+
+def _before_dual_failure_alert(manifest):
+    key = "dual_failure_alert_update"
+    update = manifest[key]
+    assert update["base_commit"] == "56ee16259892e9e0a8cd988c4ec9e77c903735b9"
+    assert update["bead"] == "enhancedchannelmanager-75j5q"
+    assert update["version"] == "0.18.2-0082"
+    assert update["previous_manifest_sha256"] == (
+        "e030c75249276dbcf499991c338a3e34ad88e252108a823bdf7b0573fcb7fd0f"
+    )
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(DUAL_FAILURE_ALERT_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_dual_failure_alert_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_dual_failure_alert(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["dual_failure_alert_update"] == manifest["dual_failure_alert_update"]
+
+
 def _before_search_reload_mount(manifest):
     key = "search_reload_mount_update"
+    manifest = _before_dual_failure_alert(manifest)
     update = manifest[key]
     assert update["base_commit"] == "e0f7781da6e9b870f8317d9c544a3532600ce0c2"
     assert update["bead"] == "enhancedchannelmanager-bv8n7"

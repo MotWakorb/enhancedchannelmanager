@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **A DBAS backup alert now names the degraded categories as well as the cloud error (build 0.18.2-0082; `enhancedchannelmanager-75j5q`).** When a DBAS backup both fails its cloud upload and has degraded categories, the pushed alert now names the degraded categories as well as the cloud error, so fixing the upload alone no longer hides a missing category. Other tasks' alerts are unchanged.
+
 - **Channel Manager no longer reloads the whole channel list about half a second after opening (build 0.18.2-0081; `enhancedchannelmanager-bv8n7`).** That second load blanked the list and closed any channel or group menu the operator had just opened. Searching still reloads once per change after the debounce.
 
 - **Dev image publication is no longer cancelled by the standalone "Publish Verified Images" runs (build 0.18.2-0080; `enhancedchannelmanager-9iagf`).** The standalone `workflow_run` runs that start when Build or Tests finish execute the default branch's copy of the workflow and can only skip, but they shared the dev publisher's concurrency group and cancelled it while it waited for exact-SHA Build evidence, so `:dev` stopped updating until someone re-ran publication by hand. The reusable dev publisher now uses its own lane, `publish-images-dev:reusable`, which no branch-derived group can equal, and every run that cannot publish gets a lane of its own. Main publication and all exact-SHA, attestation, scan and digest gates are unchanged.
