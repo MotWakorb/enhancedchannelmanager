@@ -12,7 +12,33 @@ M3U Changes is ECM's read-only log of what each provider added or removed on the
 
 ![M3U Changes with the Time Range, Account, Type, and Status filters, the four change-count summary tiles, and the change list below them](../../images/user_guide/m3u-changes/1-m3u-changes-overview.png)
 
-**Result:** The table and the summary tiles both scope to your Time Range and any other filters you set. The page footer's total, by contrast, is unbounded by time and only respects the Account/Type/Status filters. As a result, it's normal for the footer's "N total changes" to be larger than the summary tiles above it.
+**Result:** The summary tiles use your Time Range and Account selection. The table and its footer are unbounded by time and respect the Account/Type/Status filters. Saved group exclusions apply to both the table and summary. It is normal for the footer's "N total changes" to differ from the summary above it.
+
+### Hide noisy groups without losing their history
+
+1. On a change row, open **⋮ → Exclude this group**.
+2. For several groups, open **Excluded groups (N)** in the toolbar. Search for a name such as "Sports" and choose **Select All Visible**, or check individual groups. The account appears beside each name.
+3. Uncheck a group to show it again. **Clear exclusions** restores every hidden group.
+
+Selections save on the server and survive reloads. They are shared by this ECM instance, not private to one browser or login. When authentication is enabled, administrators can change them; other viewers see the filtered history.
+
+Each exclusion matches the **exact group name within one M3U account**. The same name on another provider stays visible. The checklist includes recorded groups and saved exclusions, including groups whose history has since expired. Search narrows the checklist, not the table. Save at most 1000 additions or removals at once; narrow a larger selection with search.
+
+Exclusions filter the table, totals, pagination and summary. They **do not** stop collection, delete history, disable provider groups, or change digest notifications. Normal history-retention settings still apply. After changing exclusions through MCP or another browser, use **Refresh** to reload the saved list and results.
+
+#### Use MCP
+
+- `list_m3u_change_groups`: discover exact account/name identities; supports account, literal search and pagination.
+- `get_m3u_change_exclusions`: inspect the same saved list as the tab.
+- `update_m3u_change_exclusions`: add/remove identities, or pass `clear: true` alone.
+
+Example arguments for excluding one group:
+
+```json
+{"add": [{"m3u_account_id": 1, "group_name": "Sports"}]}
+```
+
+Use `remove` with the same identity to restore it. These are reversible display preferences, not the regex rules in M3U Digest settings.
 
 ### Decide whether a change needs your attention
 

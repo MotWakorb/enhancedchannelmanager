@@ -10,7 +10,6 @@ from types import SimpleNamespace
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "scripts" / "build_resdet.py"
 MANIFEST = ROOT / "sbom" / "native-dependencies.json"
@@ -31,7 +30,31 @@ def builder():
 
 def test_cli_accepts_locations_only(builder):
     actions = {action.dest for action in builder._parser()._actions}
-    assert actions == {"help", "manifest", "work_dir", "output_dir"}
+    assert actions == {"help", "manifest", "work_dir", "output_dir", "cache_dir"}
+
+
+def test_offline_cache_identity_is_checked_before_copy_or_extract(
+    builder, tmp_path, monkeypatch
+):
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    data = b"original source archive bytes"
+    digest = hashlib.sha256(data).hexdigest()
+    (cache / digest).write_bytes(data)
+    destination = tmp_path / "archive.tar.gz"
+    monkeypatch.setattr(
+        builder, "_download", lambda *a: pytest.fail("offline source attempted network")
+    )
+    builder._acquire_archive(
+        "https://example.invalid/source", digest, destination, cache
+    )
+    assert destination.read_bytes() == data
+    (cache / digest).write_bytes(b"changed original source")
+    with pytest.raises(builder.BuildError, match="cache"):
+        builder._acquire_archive(
+            "https://example.invalid/source", digest, tmp_path / "bad.tar.gz", cache
+        )
+    assert not (tmp_path / "bad.tar.gz").exists()
 
 
 def test_checksum_precedes_extract_and_recipe_is_exact_without_network(
@@ -61,8 +84,11 @@ def test_checksum_precedes_extract_and_recipe_is_exact_without_network(
             "resdet_dims_exceed_limit(*width,*height,4,unsigned char)", encoding="utf-8"
         )
         for relative in (
-            "COPYING", "COPYING.LGPL.txt", "COPYING.MIT.txt",
-            "lib/kissfft/COPYING", "lib/kissfft/LICENSES/BSD-3-Clause",
+            "COPYING",
+            "COPYING.LGPL.txt",
+            "COPYING.MIT.txt",
+            "lib/kissfft/COPYING",
+            "lib/kissfft/LICENSES/BSD-3-Clause",
         ):
             path = source / relative
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -105,8 +131,12 @@ def test_checksum_precedes_extract_and_recipe_is_exact_without_network(
 
     assert events == ["download", "checksum", "extract"]
     assert commands[0][0] == (
-        "./configure", "--disable-everything", "--disable-ffmpeg",
-        "--omit-pgm-reader", "--omit-pfm-reader", "--pixel-max=8847360",
+        "./configure",
+        "--disable-everything",
+        "--disable-ffmpeg",
+        "--omit-pgm-reader",
+        "--omit-pfm-reader",
+        "--pixel-max=8847360",
     )
     assert commands[1][0] == ("make", "resdet")
     for _command, _cwd, env in commands:
@@ -124,7 +154,9 @@ def test_checksum_mismatch_never_extracts(builder, tmp_path: Path, monkeypatch):
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     manifest_path = tmp_path / "native-dependencies.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    monkeypatch.setattr(builder, "_download", lambda _url, path: path.write_bytes(b"bad"))
+    monkeypatch.setattr(
+        builder, "_download", lambda _url, path: path.write_bytes(b"bad")
+    )
     monkeypatch.setattr(builder, "sha256_file", lambda _path: "0" * 64)
     extracted = False
 
@@ -171,8 +203,7 @@ def test_safe_extract_rejects_traversal_and_links(builder, tmp_path: Path):
     ("version", "symbols", "linkage"),
     [
         (
-            "resdet version 2.4.3\nlibresdet version 3.2.0\n"
-            "Built with image readers: Y4M PGM\n",
+            "resdet version 2.4.3\nlibresdet version 3.2.0\nBuilt with image readers: Y4M PGM\n",
             "kiss_fft",
             "libc.so",
         ),
@@ -182,25 +213,28 @@ def test_safe_extract_rejects_traversal_and_links(builder, tmp_path: Path):
             "libc.so",
         ),
         (
-            "resdet version 2.4.3\nlibresdet version 2.4.3\n"
-            "Built with image readers: Y4M\n",
+            "resdet version 2.4.3\nlibresdet version 2.4.3\nBuilt with image readers: Y4M\n",
             "kiss_fft",
             "libc.so",
         ),
         (
-            "resdet version 2.4.3\nlibresdet version 3.2.0\n"
-            "Built with image readers: Y4M\n",
+            "resdet version 2.4.3\nlibresdet version 3.2.0\nBuilt with image readers: Y4M\n",
             "other_symbol",
             "libc.so",
         ),
         (
-            "resdet version 2.4.3\nlibresdet version 3.2.0\n"
-            "Built with image readers: Y4M\n",
+            "resdet version 2.4.3\nlibresdet version 3.2.0\nBuilt with image readers: Y4M\n",
             "kiss_fft",
             "libkissfft.so",
         ),
     ],
-    ids=["wrong-reader", "wrong-cli-version", "wrong-library-version", "wrong-fft-backend", "dynamic-fft"],
+    ids=[
+        "wrong-reader",
+        "wrong-cli-version",
+        "wrong-library-version",
+        "wrong-fft-backend",
+        "dynamic-fft",
+    ],
 )
 def test_wrong_reader_or_fft_artifact_is_rejected(
     builder, tmp_path: Path, monkeypatch, version, symbols, linkage

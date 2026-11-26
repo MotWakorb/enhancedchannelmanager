@@ -1,0 +1,24 @@
+ECM-owned upstream defect correction, separate from the decoder math change.
+These accumulators are read by quantise() before their previous initialization.
+Decode-only reproduction establishes this is not the cause of the PCM delta.
+
+--- a/src/quantise.c
++++ b/src/quantise.c
+@@ -127,7 +127,7 @@
+   float dlsp_[order];
+   float wt[order];
+   const float *cb;
+-  float se;
++  float se = 0.0f;
+ 
+   for (i = 0; i < order; i++) {
+     wt[i] = 1.0;
+@@ -708,7 +708,7 @@
+   float wt[1];
+   float lsp_hz[order];
+   const float *cb;
+-  float se;
++  float se = 0.0f;
+ 
+   /* convert from radians to Hz so we can use human readable
+      frequencies */

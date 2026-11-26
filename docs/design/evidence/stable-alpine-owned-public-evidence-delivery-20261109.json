@@ -1,0 +1,71 @@
+{
+  "status": "ORIGINAL_OWNED_PUBLIC_EVIDENCE_DELIVERY_AND_BOUNDED_SIGNATURE_LIVE_JOINS_ONLY",
+  "bead": "enhancedchannelmanager-g3vd3",
+  "helper_sha256": "1c124b8451483cd7eee81d657d23b712ca5383a306ebd95f6accec2f81d1e7b1",
+  "delivery": {
+    "candidate_path": "/usr/share/ecm/provenance/owned-signatures",
+    "namespaces": ["native", "busybox", "recipe"],
+    "original_signed_apks": 4,
+    "original_public_keys": 2,
+    "original_raw_receipts_and_check_log": 4,
+    "trusted_copier_source_files": 1,
+    "inventory_files_excluding_index": 11,
+    "key_names": ["native/ecm-build.pub", "busybox/ecm-busybox.rsa.pub"],
+    "private_keys_or_runtime_key_import": false,
+    "separate_source_tree_duplicate": false,
+    "scope": "Original signed archives may contain their existing source payloads; this does not create another BusyBox sources/ tree. Fixed original public-key basenames and public-only PEM envelopes, canonical bounded regular inputs, duplicate-key-free receipt JSON, original source/check loaders and copied-byte SHA checks. Output must be fresh. The envelope check is not cryptographic authentication; native verification remains mandatory."
+  },
+  "paired_original_dataset_replay": {
+    "original_native_run": 42681901847,
+    "architecture_datasets": ["amd64", "arm64"],
+    "execution_architecture": "amd64",
+    "independent_native_signatures_and_full_original_installed_record_joins_per_dataset": 4,
+    "separate_original_busybox_source_files_verified_per_dataset": 110,
+    "original_busybox_static_provider_source_graphs_per_dataset": 2,
+    "original_check_log_pass_lines_joined_per_dataset": 913,
+    "receipt_sha256": "f365e657c1f3795ad1fecb4fa2ef4522d6ea8c3135eb4e457fce3448c238b5b9",
+    "scope": "Real original archives/keys/raw receipts/check log copied to a fresh namespace, then native APK verification and complete installed-record binding on those copied archives. Original readonly source roots reused, no source/target/compiler/test execution or package installation. ARM dataset is data here, not native ARM execution. APKv3 SHA256-160 installed-token and APKv2 BusyBox SHA1 control/file semantics remain separate and unchanged."
+  },
+  "actual_candidate_runtime_base": {
+    "architecture": "amd64",
+    "image_id": "sha256:d626bb11a5eb79052c64ab45b292ca8e291ca5d0621b64de780799379aec6f8b",
+    "build_target": "runtime-base",
+    "dockerfile": "docker/alpine-native/Dockerfile.candidate",
+    "actual_candidate_cli_and_install_chain": "PASS",
+    "build_log_sha256": "7937cf218ed342af8036dd764b4efeff0a4d0df7c52bd4d14b026554d92f524f",
+    "independent_post_build_check": {
+      "live_native_apk_regular_files": 559,
+      "live_native_apk_raw_symlinks": 32,
+      "live_native_apk_directories": 72,
+      "live_busybox_regular_files": 7,
+      "live_busybox_binsh_raw_symlinks": 1,
+      "live_ssl_client_regular_files": 1,
+      "busybox_database_directory_checks_by_package": [17, 1, 2],
+      "installed_busybox_control_scripts": 3,
+      "original_component_source_files": 506,
+      "original_components": 6,
+      "default_runtime_untrusted_signature_denials": 4,
+      "runtime_keys_and_repositories_unchanged": true,
+      "receipt_sha256": "ec43cc85c4ed1d87949808224ce970cac595b50d309c4aa86335d14f0e41a503"
+    },
+    "scope": "Actual candidate target runtime-base builds with the original paired evidence contexts and approved stable feed. Existing installers perform native signature-gated package installs and the bounded BusyBox runtime probe in a disposable builder. A separate read-only/networkless post-build container verifies all four delivered original signed archives and full actual installed DB records, live owned bytes/raw link text/identities/modes, native component/source joins, three installed BusyBox control scripts and four default-trust denials. The source of /bin/sh's referent digest is the separately signed BusyBox regular file, not a hash computed from an untrusted live referent. This is NOT the full application-candidate, native ARM image execution, historical compiler linkage or aggregate acceptance."
+  },
+  "negative_controls": {
+    "cases": "Existing output/operator file, input/output-parent aliases, symlinked public key, private/trailing-private key envelopes, wrong public-key basename, copied corruption, oversized or duplicate-key receipt JSON, and rejected original BusyBox source/check validation",
+    "dangerous_mutants": "Disabling copied-SHA comparison, public-only PEM check or duplicate-key rejection makes eight regression cases fail with DID NOT RAISE",
+    "mutant_log_sha256": "dbe73189a586a4b4fe9b6d740dbe49aa6f69ba7df644b2b2a9a106dac94ca78b"
+  },
+  "regression_tests": {
+    "layer": "Native AMD64 Alpine source/component/transport/native-builder/SBOM/workflow/classifier and delivery-copy unit subsets, not full backend or whole final image acceptance",
+    "modules": 56,
+    "passed": 1723,
+    "unchanged_existing_skip": 1,
+    "log_sha256": "595e48fd11b16dda431701f14c6090bf3a401e6b5e1c9fff7d9cf38fe2b086c9"
+  },
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/{owned-public-evidence-delivery-paired-02,owned-public-evidence-runtime-base-amd64-01,owned-public-evidence-broad-green-01.log,owned-evidence-copy-mutant-red-01.log}",
+  "remaining": "Automated immutable full application-candidate verification using the delivered evidence, native ARM image verification, all owned source/patch/compiler/language/static joins, GNU-wheel integration, frontend/MCP composition and independent unsuppressed advisory/aggregate acceptance. Raw historical check logs still do not prove reproduced tests or compiler linkage. Original corresponding-source proof assets do not change builder patch inputs. Existing OWNED_PENDING set and aggregate RPM dispatch remain unchanged; original strict failures stay retained.",
+  "scope": "Automated original evidence delivery, not a new runtime provider/signing trust/repository or source waiver. One command is added after the two existing installers in the same candidate RUN; no workflow-step/control-fixture movement. Production Dockerfiles, application/74 pins, FFmpeg flags/patch, gosu/Go, versions, test/numerical goldens, source/advisory gates and publication policy remain unchanged. No merge, publication or deployment.",
+  "full_runtime_source_acceptance": false,
+  "signature_verification_required": true,
+  "historical_compiler_linkage_established": false
+}

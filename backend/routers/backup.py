@@ -133,7 +133,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.2-0056"
+APP_VERSION = "0.18.2-0087"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -397,6 +397,10 @@ _STANDARD_ARTIFACT_TABLES: dict[str, str] = {
     "hidden_channel_groups": (
         "A small operator display preference (group id, group name, hidden_at). "
         "No identity, no credential, and it is annoying to re-establish by hand."
+    ),
+    "m3u_change_exclusions": (
+        "Account/group display preferences for Insights / M3U Changes; no "
+        "credentials. Uses the standard free-text credential scrub."
     ),
 }
 

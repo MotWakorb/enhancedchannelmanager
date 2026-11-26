@@ -1,0 +1,104 @@
+{
+  "actual_source_commit": "f06ce0f61b628bcdff5704a698c354a96866a057",
+  "artifact": {
+    "id": 13690384263,
+    "sha256": "598dec24271dfb82135e170e89a1146113530530cc6432cc5feddb8cae44b61c"
+  },
+  "bootstrap": {
+    "architecture": "arm64",
+    "bootstrap": [
+      {
+        "gid": 1000,
+        "phase": "create",
+        "recreation_persistence": true,
+        "restart_persistence": true,
+        "status": "PASS",
+        "uid": 1000
+      },
+      {
+        "gid": 1572,
+        "phase": "create",
+        "recreation_persistence": true,
+        "restart_persistence": true,
+        "status": "PASS",
+        "uid": 1571
+      }
+    ],
+    "duration_seconds": 47.408,
+    "image_id": "sha256:d5e8db8c0d325d52f1cd3885368031eac59cad94a8db2c7528011bc3d7e99e12",
+    "os": "linux",
+    "phase": "bootstrap",
+    "security_scope": "Compatibility only; requires a separate whole-image vulnerability scan.",
+    "status": "PASS"
+  },
+  "head_sha": "61eb5630a4697e5330775ab74c85726bf2860c08",
+  "image": {
+    "architecture": "arm64",
+    "id": "sha256:d5e8db8c0d325d52f1cd3885368031eac59cad94a8db2c7528011bc3d7e99e12",
+    "os": "linux",
+    "rootfs": {
+      "Layers": [
+        "sha256:3d971ddbca237031066ab6609a11ae2e9e5b109da24d5c5d94d2e584dd94bd54",
+        "sha256:80ce6170869755f9af780dcee266e41c69777e2f5490a9ce9cbb54ef02389472",
+        "sha256:54bd471a9e9ec2037d32b36508aed1fe01291750d38003f88c74d5f039d02848",
+        "sha256:14da22cf4ffebc76ec91ac73bab91073358ec1d8afe5032207baa417c8371348",
+        "sha256:2a0ec0db111c8cc90bbdb834f8c0c3c4224c8fe68ecd9b19afcfaf2b1c364244",
+        "sha256:311e46387ac825664a6c519225e0e9c5edbcf49e8b669b63bda0bc2d4cfbda44",
+        "sha256:37f3ba7ad97a2ce120a75b809cf721f930a2de449283346cf0191e5451989be5",
+        "sha256:ea86951788b3197bdc24c830f9a6856dab3ae8a7d997e0c5e98fc023d54ea482",
+        "sha256:b7bfba2da1399c5d44d00fabd2c0c023d1913713c425b011eebbdbe5f63f0a60",
+        "sha256:340c3884a3f5fe29c8f59a60fe127d8d7d0002d9b0946eaffdc532ee32da1086",
+        "sha256:40b36ac7528c4c78ed6093e641cb1dae266659f7bba7c110a738f85027b4eb1c",
+        "sha256:b85d5bbd0942e2a407f635b8defa9561dfad3a3d477e54566152574586248e29",
+        "sha256:b33c19a15e85a90a7874cdc7109312ba171d9994a009e839fbb5bc22f0cc891f",
+        "sha256:e8a2add92e310be06ab4a331ba56c54257dab7f3c28a6483cf4f7eb51022b15d",
+        "sha256:144f3cc22a0172eb63a60a231440709074f6b0f4220722d17c5532a7d10aa375",
+        "sha256:5e1a44de84d5a1264ca5dacb0fd4b67120593d03d1f16bd47717c8bcdacf41eb",
+        "sha256:d51921a64d5006195ff149a5fd0d96788806c291b78f8429b3e0a2ce5347fecb",
+        "sha256:0d072de88c6becb08c59c3df91a3a14ee8a45b5b848ae3d7d8e9de1bbbc16139",
+        "sha256:a27002d49adef14d6f0010f8887fc08184e23ac10adb0a105f6d3e0771832aa9"
+      ],
+      "Type": "layers"
+    }
+  },
+  "raw_receipt_sha256": {
+    "application/bootstrap.json": "c5cd5f05f7b9b033388bfec979579ac7932fd69e0364beee4d714c1b7e3f7fd7",
+    "application/image-inspect.json": "4b288750b3098bb4634e45128ea9f94fd3b0bd4ac5cb62bc5f9d62b6f7592ffc",
+    "application/runtime.json": "0294c41a7078dd0ae0f4b7785ecc5ea52d6a184bc4b5e43323a9527845f03966"
+  },
+  "run_id": 42649078033,
+  "runtime_failures": {
+    "getent_identity_tools": "AssertionError: getent exited 1: getent: Unknown database `--version': No error information\nUsage: getent database [key ...]\n\tdatabase may be one of:\n\t\tethers group hosts ahosts ahostsv4 ahostsv6 networks\n\t\tpasswd protocols services shadow shells\n",
+    "native_source_and_artifact_integrity": "AssertionError: missing regular file: index.json",
+    "native_versions_readers_licenses": "FileNotFoundError: [Errno 2] No such file or directory: '/usr/bin/rpm'"
+  },
+  "runtime_passed_checks": [
+    "native_python_wheel_imports",
+    "native_python_operations",
+    "system_default_ca_trust",
+    "certifi_ca_trust",
+    "sqlite_wal_foreign_keys_transaction",
+    "named_timezone_dst_transition",
+    "gnu_timeout_kills_child",
+    "software_input_format_support",
+    "synthetic_rare_input_decode",
+    "generated_h264_aac_mpegts",
+    "http_probe",
+    "aes_encrypted_hls_probe",
+    "production_prober_ts",
+    "production_prober_aes_hls",
+    "production_prober_cancellation",
+    "dash_probe",
+    "bounded_y4m_resdet",
+    "resdet_pixel_ceiling",
+    "signalstats_black_screen_filter",
+    "mpegts_preview_transcode",
+    "mpegts_preview_video_only",
+    "aes_hls_backend_relay_probe",
+    "aes_hls_backend_relay_previews",
+    "verified_https_probe",
+    "https_untrusted_certificate_refused"
+  ],
+  "scope": "Actual first native ARM64 full application candidate. Identity/restart/recreation and 25 runtime checks passed, but distribution metadata and complete source gate failed. Not final compatibility, source, security, MCP or publication approval.",
+  "status": "FAILED_FULL_RUNTIME_GATE_RETAINED"
+}

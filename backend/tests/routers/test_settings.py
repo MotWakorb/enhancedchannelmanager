@@ -72,6 +72,7 @@ def _mock_settings(**overrides):
         "bitrate_sample_duration": 5,
         "parallel_probing_enabled": False,
         "max_concurrent_probes": 5,
+        "probe_capacity_wait_timeout": 300,
         "profile_distribution_strategy": "round_robin",
         "skip_recently_probed_hours": 24,
         "refresh_m3us_before_probe": True,
@@ -204,6 +205,9 @@ class TestGetSettings:
         assert data["url"] == "http://dispatcharr:8000"
         assert data["configured"] is True
         assert "password" not in data
+        from profile_recovery import recovery_destination
+
+        assert data["profile_recovery_destination"] == recovery_destination(mock)
 
     @pytest.mark.asyncio
     async def test_exposes_resdet_resolution_setting(self, async_client):

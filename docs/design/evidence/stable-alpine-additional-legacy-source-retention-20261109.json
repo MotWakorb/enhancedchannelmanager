@@ -1,0 +1,75 @@
+{
+  "status": "EXACT_GCC_SQLITE_ORIGINAL_SOURCES_RETAINED_NATIVE_FOUR_SOURCE_COLLECTOR_SUBSET_PASS",
+  "bead": "enhancedchannelmanager-d9xhw",
+  "extends": "stable-alpine-legacy-source-retention-20261109.json",
+  "availability_survey": {
+    "remaining_original_suse_urls": 151,
+    "http_200": 149,
+    "http_404": 2,
+    "receipt_sha256": "92a79b685d3a9f494f41d2d295b1bf4811f0ae2b27340e3d372b5d5be2b09c87",
+    "scope": "HEAD-only bounded four-worker survey of original baseline remaining source URLs, not authentication or a fresh runtime inventory. The two additional expired identities independently occur in failed85b8 CI native-builder/runtime package-query records (libgcc_s1/libstdc++6 and libsqlite3-0). The e2fs-only3564cb58 recovery therefore cannot yet be called a complete legacy build fix."
+  },
+  "exact_sources": [
+    {
+      "filename": "gcc16-16.2.1+git9713-1.1.src.rpm",
+      "sha256": "e0eb6f15a65dec740af17424092d643806a00f40d9da227fea8825066efe87fa",
+      "size": 108898703,
+      "license": "GPL-3.0-or-later",
+      "header_arch": "x86_64",
+      "regular_payload_members": 21,
+      "spec_files": 1,
+      "source_inputs": 6,
+      "patch_inputs": 14,
+      "parts": [
+        {"sha256": "1fb48b10a9fad6e9ce3da8571c3278ca1d53ea5e614e8a0f321061b6f39a0289", "size": 67108864},
+        {"sha256": "f5fc9ab689b3e5069bcc23cf19c498d90b6c0f523b60cfd6594b595d92aa6339", "size": 41789839}
+      ]
+    },
+    {
+      "filename": "sqlite3-3.54.1-1.1.src.rpm",
+      "sha256": "f42c07f564efc29fa6b7f8edbbfaa2636d00682c50bc2d3893984d211374e629",
+      "size": 26630164,
+      "license": "LicenseRef-SUSE-Public-Domain",
+      "header_arch": "x86_64",
+      "regular_payload_members": 7,
+      "spec_files": 1,
+      "source_inputs": 4,
+      "patch_inputs": 2
+    }
+  ],
+  "recovery_and_authentication": {
+    "same_original_oci_manifest": "sha256:57d1c4a05b9c5604cd02264ce40891438438da3d81a2a62cd214310f73e71d59",
+    "same_original_source_layer": "sha256:30e8bf6aaa1cef4a3733abd9b777f72ae83ef06723f4dd82e505a6deb383ee47",
+    "recovered_bytes_match_original_source_index": true,
+    "recovery_receipt_sha256": "93707f9b8b009c75fcb594b7774742e438bbf3945425d1715f7a778eb6889835",
+    "native_authentication_receipt_sha256": "305229de21c64ffbd4a7075079c6eff0776254c0222c1a73dbb4ce645cad47b5",
+    "unchanged_vendor_fingerprint": "AD485664E901B867051AB15F35A2F86E29B700A4",
+    "diagnostic_image": "sha256:c80c6c337aef65b102231fd64d0a04da495245effb95a14c1d556b7a8d076698",
+    "method": "Same independently verified original OCI chain, data-only extraction. Fresh native prepare_key/verify_source against complete original SRPMs, pinned SUSE full fingerprint, signature/digests, exact header and complete Source/Patch payload. Offline/nonroot/read-only source/key mounts, isolated task-owned RPM/GPG DB. No source/SPEC/compiler/target/test execution."
+  },
+  "transport": {
+    "reason": "Original GCC SRPM is larger than GitHub's100MiB single-blob limit",
+    "method": "Two fixed ordered content-addressed byte segments, not recompression or changed source format. Segment SHA/size/canonical nonsymlink checks precede concatenation; original whole SRPM SHA is required before key import, then ordinary native signature/header/complete payload authentication. Delivered source filename/archive bytes remain the identical original SRPM, never transport segments.",
+    "selection": "All three companions require the existing explicitly supplied and verified branding anchor plus exact openSUSE/x86_64 installed origin. No directory scan, ARM reuse, alternate URL, arbitrary cache subset or network fallback. Generic cache still requires the complete expected index.",
+    "cache_objects": 19,
+    "cache_bytes": 156197839,
+    "original_packman_objects_unchanged": 14,
+    "suse_sources": 4
+  },
+  "verification": {
+    "real_offline_native_collector_main": "PASS for all four actual signed SRPMs from six unchanged original baseline inventory rows, including GCC exact-part reassembly and whole archive verification before native trust import",
+    "actual_index_sha256": "7c3a9f022672488b8a1984c0832c3ce91e6ea6286bb670edc66341af43168433",
+    "real_fixture": "backend/tests/fixtures/native_sources/retained-four-amd-sources.json.gz",
+    "independent_consumer_unit_boundary": "Real recorded index/raw inventory/all four original SRPMs, mocking only the live RPM query; successful _rpm_sources pass plus changed GCC bytes/SQLite retained provenance rejected",
+    "negative_controls": "Missing/corrupt/symlinked/swapped part and changed joined output rejected; original part hashes/whole reconstructed hash checked; corrupt join fails before any trust import. Existing exact-origin/arch/alias/signature/cache guards retained.",
+    "native_alpine_regression_tests_passed": 890,
+    "unchanged_existing_skip": 1,
+    "modules": 9,
+    "log_sha256": "86c372f9a1771d52853344c316479e34590be8217c33f17a6989badd353d0a83",
+    "dev_sbom_rerender_review_sha256": "40b6a6b3717cef2b1645aaef2381358b54b67b736bba2f0d3a1353078363c8fa",
+    "sbom_change": "Only transient collector fingerprint93604e3e0447c21fff960affe945ce49e6490f4460b38779079a605570fb1cd2; original ECM/MCP SPDX bytes, timestamps/version and every other index value unchanged"
+  },
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/{legacy-remaining-amd-source-url-survey-01.json,legacy-gcc-sqlite-retained-subject-01,legacy-gcc-sqlite-authentication-01,legacy-four-srpm-collector-integration-01,four-source-retention-broad-green-01.log}",
+  "scope": "Bounded exact legacy-source recovery, not a replaced compiler/runtime package or complete source acceptance. Existing independent RPM consumer adds only two exact canonical URL/SHA tuples, no weakened inventory/source/payload/live checks or aggregate dispatch changes. Production Dockerfiles, application pins/provider/library/feed/trust choices, security tests and advisory policy remain unchanged. Fresh whole AMD build and MCP isolation CI remain required; Alpine owned/compiler/static/GNU-wheel/aggregate source/security closure remains unfinished. No source omission/substitution, release, merge, image publication or deployment.",
+  "full_runtime_source_acceptance": false
+}

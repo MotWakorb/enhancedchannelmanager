@@ -461,10 +461,10 @@ export function MCPSettingsSection({ isAdmin }: Props) {
 
       {/* Available Tools */}
       {keyConfigured && (
-        <div className="settings-section">
+        <div className="settings-section" data-section-id="settings-mcp-settings-section-available-tools">
           <div className="settings-section-header">
             <span className="material-icons">build</span>
-            <h3>Available Tools (80)</h3>
+            <h3>Available Tools</h3>
           </div>
           <div className="mcp-tools-grid">
             {MCP_TOOL_CATEGORIES.map(t => (

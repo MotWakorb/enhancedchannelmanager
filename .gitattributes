@@ -1,3 +1,20 @@
 
 # Use bd merge for beads JSONL files
 .beads/issues.jsonl merge=beads
+
+# Authenticated vendor patch has mixed CRLF; preserve its exact source bytes.
+docker/alpine-native/patches/libshine-gcc15-fixes.patch -text -diff
+# Source patch artifacts retain their exact upstream/context bytes; manifest
+# SHA256 and complete pre/post witnesses are reviewed and verified by the builder.
+docker/alpine-native/patches/security/** -text -diff
+docker/alpine-native/patches/codec2-portable-numeric.patch -text -diff
+docker/alpine-native/patches/codec2-initialize-quantizer-error.patch -text -diff
+docker/alpine-native/patches/libjxl-notail.patch -text -diff
+# Verbatim GCC license/exception payloads include upstream trailing whitespace
+# and blank lines. Keep exact bytes; the GNU source inventory rehashes them.
+docker/python-third-party/gnu-source-assets/notices/* -text -diff
+# Verbatim pinned GNU config input; never normalize its manifest-bound bytes.
+docker/python-third-party/gnu-source-assets/config.sub -text -diff
+# Literal corresponding-source proof diffs retain exact context bytes. They are
+# not build inputs; sealed original/full pre/post hashes independently bind them.
+docker/alpine-busybox/source-replay/patches/*.patch -text -diff

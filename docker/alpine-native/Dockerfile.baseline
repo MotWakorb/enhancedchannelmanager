@@ -1,0 +1,11 @@
+# Exact already-verified native APK, installed for paired old-image comparison.
+# Not an ECM runtime image and never published by this workflow.
+FROM python:3.12-alpine3.24@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7
+COPY scripts/alpine_repository_policy.py /proof/scripts/alpine_repository_policy.py
+RUN python /proof/scripts/alpine_repository_policy.py && apk upgrade --no-cache
+COPY scripts/build_native_runtime.py scripts/build_alpine_*.py scripts/build_resdet.py scripts/generate_sbom.py scripts/package_alpine_native.py scripts/install_alpine_native.py /proof/scripts/
+COPY --from=paired-packages / /proof/packages/
+RUN python -c 'import json, subprocess; from pathlib import Path; p=json.loads(Path("/proof/packages/package-output.json").read_text()); subprocess.run(["/sbin/apk", "add", "--no-cache", *p["external_dependencies"]], check=True)'
+RUN --network=none case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \
+    && python /proof/scripts/install_alpine_native.py --arch "$arch" \
+        --packages-dir /proof/packages --evidence-file /proof/install-output.json

@@ -15,6 +15,7 @@ import type {
   ApiCallSpec,
   StagedSideEffects,
   StageUpdateChannelOptions,
+  StagedProfileIntent,
 } from '../types';
 import { EMPTY_STAGED_SIDE_EFFECTS, profileMembershipKey } from '../types/editMode';
 import {
@@ -37,6 +38,7 @@ import { logger } from '../utils/logger';
 import {
   clearStagedLedger,
   readStagedLedger,
+  retireStagedLedgerOperations,
   saveStagedLedger,
   type PersistedStagedLedger,
   type RestoreStagedLedgerInput,
@@ -284,6 +286,7 @@ export function useEditMode({
 }: UseEditModeOptions): UseEditModeReturn {
   const [state, setState] = useState<EditModeState>(createInitialState);
   const [isCommitting, setIsCommitting] = useState(false);
+  const partialCreateSession = useRef<{ enteredAt: number | null; operator: string; destination?: string } | undefined>(undefined);
 
   // Track real channels for conflict detection
   const realChannelsRef = useRef<Channel[]>(channels);
@@ -375,6 +378,7 @@ export function useEditMode({
 
   // Enter edit mode - snapshot current state
   const enterEditMode = useCallback(() => {
+    partialCreateSession.current = undefined;
     const snapshot = channels.map(createSnapshot);
     const workingCopy = channels.map((ch) => ({ ...ch, streams: [...ch.streams] }));
 
@@ -662,6 +666,7 @@ export function useEditMode({
     nextTempIdRef.current = lowestTempChannelId - 1;
     nextTempGroupIdRef.current = lowestTempGroupId - 1;
     stagedGroupIdByNameRef.current = groupIdByName;
+    partialCreateSession.current = undefined;
     setPendingRestore(null);
 
     setState({
@@ -900,13 +905,16 @@ export function useEditMode({
   );
 
   const stageCreateChannel = useCallback(
-    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string, tvgId?: string, tvcGuideStationId?: string): number => {
+    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string, tvgId?: string, tvcGuideStationId?: string, profileIntent?: StagedProfileIntent): number => {
       // Use ref to get unique temp ID even when called in a loop (React batching issue)
       const tempId = nextTempIdRef.current;
       nextTempIdRef.current -= 1; // Decrement immediately for next call
       const stagedGroupId = newGroupName ? ensureStagedGroupId(newGroupName) : undefined;
       stageOperations([{
-        apiCall: { type: 'createChannel', name, channelNumber, groupId, newGroupName, stagedGroupId, logoId, logoUrl, tvgId, tvcGuideStationId },
+        apiCall: {
+          type: 'createChannel', name, channelNumber, groupId, newGroupName, stagedGroupId, logoId, logoUrl, tvgId, tvcGuideStationId,
+          ...(profileIntent && { profileIntent: { ...profileIntent, profileIds: [...profileIntent.profileIds] } }),
+        },
         description: `Create channel "${name}"`,
         tempChannelId: tempId,
       }]);
@@ -925,6 +933,7 @@ export function useEditMode({
     logoUrl,
     tvgId,
     tvcGuideStationId,
+    profileIntent,
   }: Parameters<UseEditModeReturn['stageCreateChannelWithStreams']>[0]): number => {
     const uniqueStreamIds = [...new Set(streamIds)];
     if (uniqueStreamIds.length === 0) {
@@ -947,6 +956,7 @@ export function useEditMode({
           tvgId,
           tvcGuideStationId,
           expectedStreamIds: uniqueStreamIds,
+          ...(profileIntent && { profileIntent: { ...profileIntent, profileIds: [...profileIntent.profileIds] } }),
         },
         description: `Create channel "${name}"`,
         tempChannelId,
@@ -1494,6 +1504,7 @@ export function useEditMode({
     baselineNumbers: Map<number, number | null> = new Map(),
   ) => {
     const bulkOperations: api.BulkOperation[] = [];
+    const operationIds = new Map<api.BulkOperation, string>();
     const newGroupNames = new Set<string>();
     const unresolvedGroupRefs: { description: string; groupId: number }[] = [];
 
@@ -1530,6 +1541,7 @@ export function useEditMode({
     // Build operations
     for (const operation of consolidatedOps) {
       const { apiCall } = operation;
+      const before = bulkOperations.length;
 
       switch (apiCall.type) {
         case 'updateChannel':
@@ -1671,10 +1683,11 @@ export function useEditMode({
           });
           break;
       }
+      if (bulkOperations.length > before) operationIds.set(bulkOperations[before], operation.id);
     }
 
     const groupsToCreate = Array.from(newGroupNames).map((name) => ({ name }));
-    return { bulkOperations, groupsToCreate, newGroupNames, unresolvedGroupRefs };
+    return { bulkOperations, operationIds, groupsToCreate, newGroupNames, unresolvedGroupRefs };
   }, []);
 
   // Validate staged operations without executing
@@ -1744,6 +1757,26 @@ export function useEditMode({
       errors: [],
       updatedChannels: [],
     };
+
+    const continued = partialCreateSession.current?.enteredAt === state.enteredAt ? partialCreateSession.current : undefined;
+    const profileIntents = new Map<number, StagedProfileIntent>();
+    for (const op of state.stagedOperations) {
+      if (op.apiCall.type === 'createChannel' && op.apiCall.profileIntent) {
+        profileIntents.set(op.afterSnapshot[0]?.id, op.apiCall.profileIntent);
+      }
+    }
+    const selectedScopes: Array<{ operator: string; destination?: string }> = [...profileIntents.values()];
+    if (continued?.destination) selectedScopes.push(continued);
+    const destination = selectedScopes[0]?.destination;
+    if (selectedScopes.length && (!destination || destination !== options?.currentProfileDestination
+        || selectedScopes.some(scope => scope.operator !== operatorKey || scope.destination !== destination))) {
+      const error = 'The original operator or Dispatcharr destination for the staged profiles is not available. Nothing was applied; return to the original connection or restage the selections.';
+      onError?.(error);
+      return { ...result, success: false, keepEditing: true, errors: [{ operationId: 'profile-recovery-destination', error }] };
+    }
+    const recoveryScope = destination ? {
+      profileRecoveryOperator: operatorKey, profileRecoveryDestination: destination,
+    } : {};
 
     const assignmentsByTempId = new Map<number, number[]>();
     const expectedCreates = new Map<number, StagedOperation>();
@@ -2016,7 +2049,7 @@ export function useEditMode({
 
     try {
       // Build bulk operations using helper
-      const { bulkOperations, groupsToCreate, unresolvedGroupRefs } =
+      const { bulkOperations, operationIds, groupsToCreate, unresolvedGroupRefs } =
         buildBulkOperations(
           consolidatedOps,
           stagedGroupsMap,
@@ -2075,6 +2108,126 @@ export function useEditMode({
         op.type !== 'createChannel'
         && !isTempChannelStreamOp(op)
       );
+      const trackSettled = channelCreateOps.length > 0 || continued !== undefined;
+      const retired = new Set<string>();
+      const submittedIds = new Set(consolidatedOps.map(op => op.id));
+      // A later batch can settle more of an earlier, already split range.
+      // Resolve its fragments to the submitted operation for this Apply.
+      const sourceId = (id: string) => {
+        let candidate = id;
+        while (!submittedIds.has(candidate)) {
+          const split = candidate.lastIndexOf(':range:');
+          if (split < 0) return id;
+          candidate = candidate.slice(0, split);
+        }
+        return candidate;
+      };
+      const numbersByOperation = new Map<string, Map<number, number | null | 'deleted'>>();
+      const confirmedNumbers = new Map<number, number | null>();
+      const groupIds = new Map<number, number>();
+      const remapChannel = (id: number) => tempIdMap.get(id) ?? id;
+      const remapGroup = (id: number | null | undefined) => typeof id === 'number' ? groupIds.get(id) ?? id : id;
+      const rewriteOperation = (op: StagedOperation): StagedOperation[] => {
+        const source = sourceId(op.id);
+        if (retired.has(source)) return [];
+        if (!submittedIds.has(source)) return [op];
+        let { apiCall } = op;
+        if ('channelId' in apiCall && remapChannel(apiCall.channelId) !== apiCall.channelId) {
+          apiCall = { ...apiCall, channelId: remapChannel(apiCall.channelId) };
+        } else if (apiCall.type === 'bulkAssignChannelNumbers' && apiCall.channelIds.some(id => tempIdMap.has(id))) {
+          apiCall = { ...apiCall, channelIds: apiCall.channelIds.map(remapChannel) };
+        }
+        if (apiCall.type === 'updateChannel' && remapGroup(apiCall.data.channel_group_id) !== apiCall.data.channel_group_id) {
+          apiCall = { ...apiCall, data: { ...apiCall.data, channel_group_id: remapGroup(apiCall.data.channel_group_id) } };
+        } else if (apiCall.type === 'createChannel') {
+          const createdGroupId = apiCall.newGroupName ? newGroupIdMap.get(apiCall.newGroupName) : undefined;
+          const groupId = createdGroupId ?? remapGroup(apiCall.groupId) ?? undefined;
+          if (groupId !== apiCall.groupId) apiCall = { ...apiCall, groupId, newGroupName: undefined, stagedGroupId: undefined };
+        }
+        const remapSnapshot = (ch: ChannelSnapshot) => ({
+          ...ch, id: remapChannel(ch.id), channel_group_id: remapGroup(ch.channel_group_id) ?? null,
+        });
+        const rewritten = apiCall === op.apiCall ? op : {
+          ...op, apiCall, beforeSnapshot: op.beforeSnapshot.map(remapSnapshot), afterSnapshot: op.afterSnapshot.map(remapSnapshot),
+        };
+        const confirmed = numbersByOperation.get(source);
+        if (!confirmed) return [rewritten];
+        if (apiCall.type === 'updateChannel' && confirmed.get(apiCall.channelId) === 'deleted') return [];
+        if (apiCall.type === 'updateChannel' && confirmed.has(apiCall.channelId) && apiCall.data.channel_number !== undefined) {
+          const number = confirmed.get(apiCall.channelId)!;
+          const data = { ...apiCall.data };
+          delete data.channel_number;
+          if (Object.keys(data).length === 0 || number === 'deleted') return [];
+          const repairNumber = (ch: ChannelSnapshot) => ({ ...ch, channel_number: number });
+          return [{
+            ...rewritten, apiCall: { type: 'updateChannel', channelId: apiCall.channelId, data },
+            beforeSnapshot: rewritten.beforeSnapshot.map(repairNumber),
+            afterSnapshot: rewritten.afterSnapshot.map(repairNumber),
+          }];
+        }
+        if (apiCall.type !== 'bulkAssignChannelNumbers' || !apiCall.channelIds.some(id => confirmed.has(id))) return [rewritten];
+
+        // A range is positional. Split around confirmed placements instead of
+        // compacting its remaining channels onto different numbers.
+        const ranges: StagedOperation[] = [];
+        for (let start = 0; start < apiCall.channelIds.length;) {
+          if (confirmed.has(apiCall.channelIds[start])) { start++; continue; }
+          let end = start + 1;
+          while (end < apiCall.channelIds.length && !confirmed.has(apiCall.channelIds[end])) end++;
+          const channelIds = apiCall.channelIds.slice(start, end);
+          const included = new Set(channelIds);
+          const id = ranges.length === 0 ? op.id : `${op.id}:range:${start}`;
+          const acknowledgedConcurrentChanges = apiCall.acknowledgedConcurrentChanges?.filter(entry => included.has(entry.channelId));
+          ranges.push({
+            ...rewritten, id,
+            apiCall: {
+              type: 'bulkAssignChannelNumbers', channelIds, startingNumber: (apiCall.startingNumber ?? 1) + start,
+              ...(acknowledgedConcurrentChanges?.length && { acknowledgedConcurrentChanges }),
+            },
+            beforeSnapshot: rewritten.beforeSnapshot.filter(ch => included.has(ch.id)),
+            afterSnapshot: rewritten.afterSnapshot.filter(ch => included.has(ch.id)),
+          });
+          start = end;
+        }
+        return ranges;
+      };
+      const rememberSettled = (response: api.BulkCommitResponse, batch: api.BulkOperation[]) => {
+        // Never infer partial success from aggregate counts or consolidated error indexes.
+        const positions = response.settledOperationIndexes ?? (response.success ? batch.map((_, i) => i) : []);
+        for (const position of positions) {
+          const id = operationIds.get(batch[position]);
+          if (id !== undefined) retired.add(id);
+        }
+      };
+      const persistSettled = () => {
+        if (!retired.size && !newGroupIdMap.size && !numbersByOperation.size) return;
+        const ids = new Set(retired);
+        retireStagedLedgerOperations(operatorKey, ids, rewriteOperation);
+        setState(prev => {
+          if (!prev.stagedOperations.some(op => submittedIds.has(sourceId(op.id)))) return prev;
+          const keep = (op: StagedOperation) => !ids.has(sourceId(op.id))
+            && !(op.apiCall.type === 'createChannel' && tempIdMap.has(op.afterSnapshot[0]?.id));
+          const prune = (entries: UndoEntry[]) => entries
+            .map(entry => ({ ...entry, operations: entry.operations.filter(keep).flatMap(rewriteOperation) }))
+            .filter(entry => entry.operations.length > 0);
+          const workingCopy = prev.workingCopy.map(ch => {
+            const id = remapChannel(ch.id);
+            const groupId = remapGroup(ch.channel_group_id) ?? null;
+            return id === ch.id && groupId === ch.channel_group_id ? ch : { ...ch, id, channel_group_id: groupId };
+          });
+          const baselineSnapshot = prev.baselineSnapshot.map(ch => confirmedNumbers.has(ch.id)
+            ? { ...ch, channel_number: confirmedNumbers.get(ch.id)! } : ch);
+          return {
+            ...prev, workingCopy, baselineSnapshot, stagedOperations: prev.stagedOperations.filter(keep).flatMap(rewriteOperation),
+            localUndoStack: prune(prev.localUndoStack),
+            // Redo entries were not submitted; do not revive a former temp-channel plan.
+            localRedoStack: prune(prev.localRedoStack.map(entry => ({
+              ...entry, operations: entry.operations.filter(op => !affectedChannelIdsOf(op.apiCall).some(id => tempIdMap.has(id))),
+            }))),
+            modifiedChannelIds: computeModifiedChannelIds(workingCopy, baselineSnapshot),
+          };
+        });
+      };
 
       // Calculate total batches for other operations
       const numBatches = Math.ceil(otherOps.length / BATCH_SIZE);
@@ -2082,8 +2235,6 @@ export function useEditMode({
       // Total steps: 1 (creates) + batches + fetch pages
       const totalSteps = 1 + numBatches + estimatedFetchPages;
       let completedSteps = 0;
-      let totalApplied = 0;
-      let totalFailed = 0;
       /**
        * True when any bulk-commit response reported an unclean outcome that its
        * own failure count does not describe.
@@ -2134,29 +2285,63 @@ export function useEditMode({
           groupsToCreate: groupsToCreate.length > 0 ? groupsToCreate : undefined,
           continueOnError: options?.continueOnError,
           consolidate: true,
+          ...recoveryScope,
+          ...(trackSettled && { returnSettledOperationIndexes: true }),
         }, commitBatchId);
-
-        // Check for validation failures
-        if (!createResponse.success && createResponse.validationIssues?.length) {
-          result.success = false;
-          result.validationIssues = createResponse.validationIssues;
-          result.validationPassed = false;
-          throw new Error('Validation failed');
-        }
 
         // Store temp ID mappings
         for (const [tempIdStr, realId] of Object.entries(createResponse.tempIdMap)) {
-          tempIdMap.set(Number(tempIdStr), realId);
+          const tempId = Number(tempIdStr);
+          if (assignmentsByTempId.has(tempId) && Number.isSafeInteger(realId) && realId > 0) {
+            tempIdMap.set(tempId, realId);
+          }
         }
         for (const [groupName, groupId] of Object.entries(createResponse.groupIdMap)) {
           newGroupIdMap.set(groupName, groupId);
         }
+        for (const [tempId, group] of stagedGroupsMap) {
+          const groupId = newGroupIdMap.get(group.name);
+          if (groupId !== undefined) groupIds.set(tempId, groupId);
+        }
 
-        totalApplied += createResponse.operationsApplied;
-        totalFailed += createResponse.operationsFailed;
+        result.operationsApplied += createResponse.operationsApplied;
+        result.operationsFailed += createResponse.operationsFailed;
         if (!createResponse.success) sawUncleanResponse = true;
         result.errors.push(...createResponse.errors);
         collectRecoverySteps(createResponse);
+        if (createResponse.errors.some(error => error.operationId === 'profile-recovery-destination')) {
+          result.success = false;
+          result.keepEditing = true;
+          return result;
+        }
+
+        if (tempIdMap.size > 0) {
+          partialCreateSession.current = { enteredAt: state.enteredAt, operator: operatorKey, destination };
+          options?.onCreatesCommitted?.(tempIdMap, createResponse.profileRecoveryBinding,
+            [...tempIdMap].flatMap(([tempId, channelId]) => {
+              const intent = profileIntents.get(tempId);
+              return intent ? [{ channelId, profileIds: [...intent.profileIds] }] : [];
+            }));
+          for (const op of channelCreateOps) {
+            if (tempIdMap.has(Number(op.tempId))) retired.add(operationIds.get(op)!);
+          }
+        }
+        if (trackSettled) {
+          rememberSettled(createResponse, createPhaseOps);
+          for (const op of consolidatedOps) {
+            if (op.apiCall.type === 'createGroup' && newGroupIdMap.has(op.apiCall.name)) retired.add(op.id);
+          }
+          persistSettled();
+        }
+
+        // A continue-on-error create reply can carry both validation issues
+        // and a confirmed map. Disclose the issues without losing that map.
+        if (!createResponse.success && createResponse.validationIssues?.length) {
+          result.success = false;
+          result.validationIssues = createResponse.validationIssues;
+          result.validationPassed = false;
+          if (tempIdMap.size === 0 || !options?.continueOnError) throw new Error('Validation failed');
+        }
       }
 
       completedSteps = 1;
@@ -2168,11 +2353,15 @@ export function useEditMode({
       const resolvedOps: api.BulkOperation[] = [];
       for (const op of otherOps) {
         const resolved = { ...op };
+        operationIds.set(resolved, operationIds.get(op)!);
         if (resolved.channelId && (resolved.channelId as number) < 0) {
           const realId = tempIdMap.get(resolved.channelId as number);
           if (realId !== undefined) {
             resolved.channelId = realId;
           }
+        }
+        if (resolved.type === 'bulkAssignChannelNumbers' && Array.isArray(resolved.channelIds)) {
+          resolved.channelIds = resolved.channelIds.map(remapChannel);
         }
         // A channel moved into a group this batch created carries that group's
         // temp id. Step 1 has just returned the real ids by name; swap them in
@@ -2201,7 +2390,7 @@ export function useEditMode({
       }
       if (unresolvedGroupOps.length > 0) {
         logger.error('[EditMode] Dropped %d operation(s) targeting an uncreated group', unresolvedGroupOps.length);
-        totalFailed += unresolvedGroupOps.length;
+        result.operationsFailed += unresolvedGroupOps.length;
         result.errors.push(...unresolvedGroupOps);
       }
 
@@ -2221,6 +2410,8 @@ export function useEditMode({
           operations: batch,
           continueOnError: options?.continueOnError,
           consolidate: true,
+          ...recoveryScope,
+          ...(trackSettled && { returnSettledOperationIndexes: true }),
         }, commitBatchId);
 
         // Check for validation failures
@@ -2234,11 +2425,44 @@ export function useEditMode({
           }
         }
 
-        totalApplied += batchResponse.operationsApplied;
-        totalFailed += batchResponse.operationsFailed;
+        result.operationsApplied += batchResponse.operationsApplied;
+        result.operationsFailed += batchResponse.operationsFailed;
         if (!batchResponse.success) sawUncleanResponse = true;
         result.errors.push(...batchResponse.errors);
         collectRecoverySteps(batchResponse);
+        if (trackSettled) {
+          rememberSettled(batchResponse, batch);
+          const confirmed = new Map<number, number | null | 'deleted'>();
+          for (const [channel, number] of Object.entries(batchResponse.settledChannelNumbers ?? {})) {
+            confirmed.set(Number(channel), number);
+            confirmedNumbers.set(Number(channel), number);
+          }
+          for (const position of batchResponse.settledOperationIndexes ?? []) {
+            const op = batch[position];
+            if (op?.type === 'deleteChannel' && typeof op.channelId === 'number') confirmed.set(op.channelId, 'deleted');
+          }
+          if (confirmed.size) {
+            // Include older unresolved writes, but not later batches that may
+            // deliberately set a different number. No inference from counts.
+            for (const op of resolvedOps.slice(0, i + batch.length)) {
+              const channels = op.type === 'bulkAssignChannelNumbers' && Array.isArray(op.channelIds)
+                ? op.channelIds : op.type === 'updateChannel' ? [op.channelId] : [];
+              for (const channel of channels) {
+                if (typeof channel !== 'number' || !confirmed.has(channel)) continue;
+                const id = operationIds.get(op)!;
+                const components = numbersByOperation.get(id) ?? new Map();
+                components.set(channel, confirmed.get(channel)!);
+                numbersByOperation.set(id, components);
+              }
+            }
+          }
+          persistSettled();
+        }
+        if (batchResponse.errors.some(error => error.operationId === 'profile-recovery-destination')) {
+          result.success = false;
+          result.keepEditing = true;
+          return result;
+        }
 
         // If a batch completely fails and we're not continuing on error, stop
         if (!batchResponse.success && !options?.continueOnError) {
@@ -2249,30 +2473,9 @@ export function useEditMode({
 
       completedSteps = 1 + numBatches;
 
-      // Update result totals
-      result.operationsApplied = totalApplied;
-      result.operationsFailed = totalFailed;
-      result.success = totalFailed === 0 && !sawUncleanResponse;
+      result.success = result.operationsFailed === 0 && !sawUncleanResponse;
 
-      logger.info(`[EditMode] Bulk commit completed: ${totalApplied} applied, ${totalFailed} failed`);
-
-      // Fetch updated channels with per-page progress
-      const allChannels: Channel[] = [];
-      let page = 1;
-      let hasMore = true;
-
-      while (hasMore) {
-        reportProgress(completedSteps + page, totalSteps, `Fetching channels (page ${page})...`);
-        const response = await api.getChannels({ page, pageSize: 500 });
-        allChannels.push(...response.results);
-        hasMore = response.next !== null;
-        page++;
-      }
-
-      // Final progress
-      reportProgress(totalSteps, totalSteps, `Complete: ${totalApplied} operations applied`);
-
-      result.updatedChannels = allChannels;
+      logger.info(`[EditMode] Bulk commit completed: ${result.operationsApplied} applied, ${result.operationsFailed} failed`);
 
       // Determine if we had any success (partial or complete).
       //
@@ -2282,22 +2485,43 @@ export function useEditMode({
       // — therefore looked like a no-op, and edit mode would never stand down
       // even though the groups really had been created (bead
       // enhancedchannelmanager-vtapf).
-      const hadSuccess = result.operationsApplied > 0 || newGroupIdMap.size > 0;
+      const hadSuccess = result.operationsApplied > 0 || newGroupIdMap.size > 0 || tempIdMap.size > 0;
       const hadFailures = result.operationsFailed > 0 || (result.validationIssues && result.validationIssues.length > 0);
 
-      // Always update channels if any operations succeeded
-      // This ensures partial success is reflected in the UI
-      if (hadSuccess) {
-        onChannelsChange(allChannels);
-        // The staged queue is gone, so the ledger that mirrors it has to go in
-        // the same tick — Apply All from the exit dialog also completes a
-        // deferred sign-out, and a surviving ledger would offer these
-        // operations back to the operator's next session. Replaying a create
-        // is not idempotent (see `forgetStagedLedger`).
-        forgetStagedLedger();
+      const retireCompletedApply = () => {
+        retireStagedLedgerOperations(operatorKey, new Set(consolidatedOps.map(op => op.id)));
+        ledgerWrittenRef.current = false;
         setState(createInitialState());
-        const createdGroupIds = Array.from(newGroupIdMap.values());
-        onCommitComplete?.(createdGroupIds);
+      };
+      const hasKnownCreate = tempIdMap.size > 0 || continued !== undefined;
+      const keepPending = trackSettled && !result.success && consolidatedOps.some(op => rewriteOperation(op).length > 0);
+      result.keepEditing = keepPending;
+      if (hasKnownCreate && !keepPending) retireCompletedApply();
+
+      let refreshWarning = '';
+      const allChannels: Channel[] = [];
+      try {
+        let page = 1;
+        let hasMore = true;
+        while (hasMore) {
+          reportProgress(completedSteps + page, totalSteps, `Fetching channels (page ${page})...`);
+          const response = await api.getChannels({ page, pageSize: 500 });
+          allChannels.push(...response.results);
+          hasMore = response.next !== null;
+          page++;
+        }
+        result.updatedChannels = allChannels;
+      } catch (err) {
+        if (!hasKnownCreate) throw err;
+        logger.error('[EditMode] Channel refresh after Apply failed:', err);
+        refreshWarning = 'The channel list could not be refreshed after Apply. Reload to see the latest channels.';
+        result.updatedChannels = channels;
+      }
+      reportProgress(totalSteps, totalSteps, `Complete: ${result.operationsApplied} operations applied`);
+      if (hadSuccess) {
+        if (!hasKnownCreate && !keepPending) retireCompletedApply();
+        if (!refreshWarning) onChannelsChange(allChannels);
+        onCommitComplete?.(Array.from(newGroupIdMap.values()));
       }
 
       if (hadFailures) {
@@ -2347,12 +2571,19 @@ export function useEditMode({
         } else {
           errorMessage = `Failed to apply ${result.operationsFailed} operation(s)`;
         }
-        onError?.(errorMessage);
+        onError?.([errorMessage, refreshWarning].filter(Boolean).join(' '));
+      } else if (refreshWarning) {
+        onError?.(refreshWarning);
       }
     } catch (err) {
       logger.error('Commit failed:', err);
       result.success = false;
-      onError?.('Commit failed: ' + (err instanceof Error ? err.message : 'Unknown error'));
+      const error = err instanceof Error ? err.message : 'Unknown error';
+      if (tempIdMap.size > 0 || continued) {
+        result.keepEditing = true;
+        result.errors.push({ operationId: 'commit-interrupted', error: `Apply stopped after confirmed channel creation: ${error}. Check Dispatcharr before retrying work whose result is unknown.` });
+      }
+      onError?.('Commit failed: ' + error);
     } finally {
       setIsCommitting(false);
     }
@@ -2360,6 +2591,7 @@ export function useEditMode({
     return result;
   }, [
     state.isActive,
+    state.enteredAt,
     state.stagedOperations,
     state.baselineSnapshot,
     stagedGroupsMap,
@@ -2369,7 +2601,7 @@ export function useEditMode({
     onCommitComplete,
     onError,
     buildBulkOperations,
-    forgetStagedLedger,
+    operatorKey,
   ]);
 
   /**

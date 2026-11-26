@@ -138,9 +138,9 @@ This shape exists because an Apply All over a large lineup does not fit inside t
 
 `{ success, operationsApplied, operationsFailed, operationsPartiallyApplied, errors, tempIdMap, groupIdMap, validationIssues, validationPassed, partial, normalizationFailures, journalRowsUnwritten, numberingRecovery }`.
 
-All thirteen keys are initialised unconditionally, so **every one is always present** on every path that returns an envelope. Branch on values, never on key presence. Pre-validation (missing referenced channels or streams) surfaces in `validationIssues` on a success status. Only schema-shape failures produce a `422`.
+All thirteen keys are initialised unconditionally, so **every one is present** on every path that returns this envelope. Branch on values, never on key presence. One early return is shorter: a profile-recovery request whose Dispatcharr destination changed returns only `success`, `operationsApplied`, `operationsFailed`, `errors`, `tempIdMap`, `groupIdMap` and `settledOperationIndexes`, with nothing applied. Pre-validation (missing referenced channels or streams) surfaces in `validationIssues` on a success status. Only schema-shape failures produce a `422`.
 
-**Do not read `BulkCommitResponse` in `backend/routers/channels.py` as the schema.** That Pydantic model declares nine of these thirteen fields and is not wired as a `response_model` anywhere, because the handler returns a plain dict. It looks authoritative and is not.
+`BulkCommitResponse` in `backend/routers/channels.py` declares all thirteen, plus the three conditional fields (`profileRecoveryBinding`, `settledOperationIndexes`, `settledChannelNumbers`), and `backend/tests/routers/test_bulk_commit_response_contract.py` fails if the handler returns a field the model does not declare. It is still not wired as a `response_model`: the default path returns a 202 job envelope and the result arrives inside the poll response, so FastAPI never validates it.
 
 **`normalizationFailures`** is the batch counterpart of the [`normalization` block on `POST /api/channels`](#post-apichannels-the-normalization-disclosure-block). It is **always present** and is an empty list on a clean batch, so check its length rather than probing for the key. It carries one entry per `createChannel` operation that set `normalize: true` and did not get it:
 
@@ -276,7 +276,7 @@ Three properties worth knowing before you write a client against it:
 }
 ```
 
-`currentNumber` and `targetNumber` are `float | null`. The `bulk-commit-numbering-recovery` entry in `errors` carries no per-channel detail of its own; it points here and says not to retry the batch until these are fixed.
+`currentNumber` and `targetNumber` are `float | null`. `currentNumber` is left out when the channel sits on a number Dispatcharr chose and ECM did not read back (a range with no `startingNumber` under `consolidate: false`); the `step` then says so instead of naming a number. The `bulk-commit-numbering-recovery` entry in `errors` carries no per-channel detail of its own; it points here and says not to retry the batch until these are fixed.
 
 **Be clear about the guarantee.** ECM guarantees a compensating write is *attempted* for every numbering write that landed, replayed newest-first. It does **not** guarantee the compensating write succeeds, and it cannot: Dispatcharr 0.28.x offers no conditional update, so this is a best-effort repair rather than a rollback. Where the repair fails, `numberingRecovery` is the operator's instruction list. Two further limits worth knowing: compensation runs only when the plan is genuinely half-applied, and it does not run at all on the crash or cancellation paths, which sit outside the block that performs it.
 
@@ -292,8 +292,6 @@ Three properties worth knowing before you write a client against it:
 | `numbering_preflight_unavailable` | error | none |
 | `duplicate_channel_number` | error | `channelNumber`, `channelIds`, `operationIndex`, `operationIndexes`, `channelId` |
 | `invalid_channel_number` | error | same set as above |
-
-The frontend's own `ValidationIssue` union names only three of the six, so do not take it as the list.
 
 On the last two, `operationIndex` is simply the first element of `operationIndexes`, and `channelId` the first of `channelIds`. They are scalars kept for schema compatibility, not independent facts.
 
@@ -342,7 +340,7 @@ Range assignments deliberately send no `expectedNumber`, so a `bulkAssignChannel
 
 `bulkAssignChannelNumbers` has three edge cases worth stating exactly:
 
-- **`startingNumber` omitted defaults to `1`** in consolidation, in the final-state materialiser, and in the executor's journal and compensation bookkeeping. There is one gap: on the `consolidate: false` path the executor forwards the raw `None` upstream and lets Dispatcharr choose, while journaling as though the start were `1`. ECM's own UI always sends `consolidate: true`, which rewrites the range with an explicit `startingNumber`, so this is not reachable from the interface. Send `startingNumber` explicitly if you are not consolidating.
+- **`startingNumber` omitted means different things depending on `consolidate`.** Under `consolidate: true`, which ECM's own UI always sends, consolidation materialises it as `1`, and that is what is sent and journaled. Under `consolidate: false` the executor sends no starting number, so Dispatcharr chooses the numbers and returns none of them. ECM then reads each channel back, one GET per channel, as `POST /api/channels/assign-numbers` does, and journals the number it observed. A channel whose read fails keeps a row reading "Changed channel number from X; Dispatcharr chose the new number and ECM has not read it back", with no `channel_number` in `after_value`; the commit's result is unaffected. Later operations in the same batch, numbering compensation and `numberingRecovery` treat such a channel's number as unknown rather than assuming one. The final-state preflight still assumes `1` on that path. Send `startingNumber` explicitly if you are not consolidating.
 - **An explicit `0` is honoured.** Zero is in contract, and an earlier implementation that collapsed "omitted" and "explicitly zero" into one branch was fixed deliberately.
 - **An empty `channelIds` is a no-op only under `consolidate: true`.** With `consolidate: false` the executor still issues one upstream assign call with an empty id list and records the operation as applied. It changes no channel, but calling it a pure no-op overstates it.
 
@@ -955,9 +953,23 @@ MCP mirror: `list_event_sync_exclusions` / `create_event_sync_exclusion` / `dele
 |-|-|
 | `GET /api/m3u/changes` | Get M3U change history (paginated, filterable) |
 | `GET /api/m3u/changes/summary` | Get change summary for a time period |
+| `GET /api/m3u/changes/groups` | Paginated recorded group identities plus saved exclusions; `m3u_account_id`, literal `search`, `page`, `page_size` (max 200) |
+| `GET /api/m3u/changes/exclusions` | Read shared exact account/name view exclusions |
+| `PATCH /api/m3u/changes/exclusions` | Apply atomic `add`/`remove` identity deltas, or `clear: true` alone; admin required when auth is enabled; MCP permitted |
 | `GET /api/m3u/digest/settings` | Get digest email settings |
 | `PUT /api/m3u/digest/settings` | Update digest email settings |
 | `POST /api/m3u/digest/test` | Send a test digest email, over the stored SMTP credentials and Discord webhook. Admin-only when auth is enabled; the MCP service key is refused (bead 9kwzp.6). |
+
+Changes list/summary responses omit saved view exclusions by default; pass
+`include_excluded=true` to either endpoint for unfiltered retained history.
+Account-history and digest callers remain unfiltered. Exclusions use
+`{"m3u_account_id": 1, "group_name": "Sports"}` identities (positive integer,
+exact name of 1–255 characters), not regex patterns. GET/PATCH exclusions
+return `{"exclusions": [...]}`. PATCH accepts at most 1000 `add` and 1000
+`remove` identities; overlap or combining either with `clear: true` returns
+422 without changing the list. Independent deltas preserve unrelated saves.
+The list is instance-wide and affects the tab only, not collection, retention
+or digest notifications.
 
 **Auth-disabled instances (bead `enhancedchannelmanager-2u4e0`):** `POST /api/m3u/digest/test` is one of twelve connection-test routes that also require an authenticated human admin while `require_auth` is false, on any instance that already holds an operator identity. Only an instance that never created a user reaches them anonymously. See `docs/auth_middleware.md` → "What `require_auth: false` permits".
 
@@ -1531,8 +1543,8 @@ disabled, matching the existing run-now convention.
 | `POST /api/channel-pipeline/rules/{id}/toggle` | Toggle rule enabled state |
 | `POST /api/channel-pipeline/rules/{id}/duplicate` | Duplicate a rule |
 | `POST /api/channel-pipeline/rules/{id}/run` | Run a single rule (supports dry_run) |
-| `POST /api/channel-pipeline/run` | Run the full pipeline (execute or dry_run) |
-| `POST /api/channel-pipeline/run-selected` | Run exactly the submitted `rule_ids` as one execution. The selection is validated atomically; empty, duplicate, unknown, disabled, inactive, or invalid rules reject the whole request. |
+| `POST /api/channel-pipeline/run` | Run the full pipeline (execute or dry_run). Optional `preview_trigger: "m3u_refresh"` (dry run only; 422 otherwise) previews the M3U-refresh trigger's create-versus-defer decision; see note below |
+| `POST /api/channel-pipeline/run-selected` | Run exactly the submitted `rule_ids` as one execution. The selection is validated atomically; empty, duplicate, unknown, disabled, inactive, or invalid rules reject the whole request. Accepts the same dry-run-only `preview_trigger` |
 | `GET /api/channel-pipeline/executions` | Get execution history (paginated) |
 | `GET /api/channel-pipeline/executions/{id}` | Get execution details (optional log/entities) |
 | `POST /api/channel-pipeline/executions/{id}/rollback` | Rollback an execution. With a pre-run snapshot it requires `confirm=true` (409 otherwise); once confirmed, an event_sync attach run whose journal fully covers its attaches is reverted SURGICALLY (only the run-added stream ids removed, post-run Dispatcharr churn preserved; response carries `surgical_unmerge: true`), otherwise it delegates to the full snapshot restore |
@@ -1549,6 +1561,35 @@ disabled, matching the existing run-now convention.
 | `GET /api/channel-pipeline/debug-bundle/{job_id}` | Poll or download a bundle owned by the authenticated human admin who started it. Other principals receive `404`. Returns JSON status while running, JSON `{status: "failed", error}` on failure, or the `tar.gz` (`application/gzip`) attachment when ready (obfuscated channels, rules, normalization rules, streams, probe stats, settings, task schedules, logs). `logs.txt` contains the oldest-to-newest persistent window, bounded to the newest 50 MiB; it falls back to the ring when no persistent data is available. A degraded persistent snapshot also adds `logs-ring-fallback.txt`. `manifest.json.log_members` records sources, timestamps, counts, applied rotation settings, saturation and truncation. Completed artifacts use private temporary files rather than retained in-memory byte strings. A job is evicted after a successful read or by its independent 30-minute expiry timer. |
 | `GET /api/channel-pipeline/fuzzy-preview` | Paginated, write-free scored fuzzy match preview across given channel groups (bead jnzst, v0.17.3-0006). Admin-gated. See notes below. |
 | `POST /api/channel-pipeline/event-sync-preview` | Event Sync dry-run: match secondary-group streams against live master channels with ZERO writes (bead ti939.1.4). Admin-gated. See notes below and `docs/event_sync.md`. |
+
+**Previewing pending-merge deferrals (`preview_trigger`, GitHub #1018).** Only
+the unattended M3U-refresh run defers channel creation behind the Pending Merges
+queue, so a plain dry run (trigger `api`) predicts creation for those streams,
+correctly for a live API run. Send `{"dry_run": true, "preview_trigger":
+"m3u_refresh"}` to get the refresh's decision instead. The engine runs the same
+matcher, threshold and §D5 queue lookup as the live hook, read-only: no
+`pending_merges` or journal row is inserted, updated, dismissed or resolved. The
+execution is recorded with `mode: "dry_run"` and `triggered_by: "m3u_refresh"`.
+A predicted deferral appears as:
+
+- a `dry_run_results` entry with `would_create: false`, `would_defer: true`
+  and `pending_merge_id` set to the existing blocking row, or `null` when the
+  refresh would insert a new row. Its `action` text starts with `PREDICTED`.
+- `pending_merge_deferred: true` / `pending_merge_id` on the `create_channel`
+  action in the execution log. A live run writes the same two fields, so the
+  preview and the run can be compared stream by stream.
+- a `warnings` entry of type `pending_merge_deferral_predicted` carrying
+  `stream_count`, `action_count`, `pending_merge_ids`, `new_row_count` and an
+  operator-ready `message` that starts with `PREDICTED`.
+
+`preview_trigger` without `dry_run: true`, or with any value other than
+`m3u_refresh`, is rejected with 422.
+
+On a dry run, `pending_merges_added`, `pending_merge_stream_count` and
+`pending_merge_deferred` are **predicted** counts, not applied work: nothing was
+queued or deferred. Treat them as live-run counters only when `mode` is not
+`dry_run`. The prediction is advisory: a concurrent live run can insert the
+blocking row before the preview's answer is acted on.
 
 Execution history is ordered by newest `started_at`, then newest execution `id`
 when timestamps tie. `limit` defaults to 50 and accepts 1 through 500; `offset`

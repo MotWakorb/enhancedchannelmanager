@@ -8,6 +8,98 @@ Actual ARM notice text bytes match the shared x86 notice files. Exact ARM SBOM/s
 
 **Still unproved:** final ARM native execution/CI, final whole-image artifact selection/content, and recipient source delivery. Match actual final wheels/native files to these expected indexes and run final native ARM checks. No MCP, musllinux, new advisory clearance or architecture-runtime equivalence claim is made. Compiler archives and ARM wheel binaries are not shipped in this notice tree.
 
+**Historical dnspython update:** build 0064 used 2.9.0. Its pure-Python artifact,
+metadata and upstream ISC notice are recorded in `artifact-index/dnspython-2.9.0.json`
+and the refreshed shared index. The published wheel and sdist omit LICENSE;
+the exact release-commit notice was independently retrieved and Git-blob/hash
+checked, and its text matches the retained 2.8.0 notice. The old 2.8.0 entry in
+the historical x86 snapshot is not evidence for the new package. No native
+architecture evidence or final-image verification is silently refreshed.
+
+**Current security update (0069, w8h34):** dnspython 2.9.2 fixes
+CVE-2026-128089. `artifact-index/dnspython-2.9.2.json` records the actual
+PyPI download and its bundled ISC notice (identical to the retained notice).
+The recorded PyPI response is `dnspython-2.9.2.pypi.json`. Both musllinux
+inventories bind the new wheel's whole hash and every RECORD member; they retain
+all other 73 distribution rows byte-for-byte. Their `dependency_security_update`
+records the preceding inventory/lock/wheel identities. The GNU selection manifest
+remains historical provenance for the unchanged native payloads, not evidence
+for the new pure-Python wheel. The installed GNU consumer recognizes only the
+exact hash-bound, ELF-free DNS replacement; changed hashes, native payloads,
+or other unreviewed pure wheels still fail. The manylinux attribution indexes
+also bind the updated lock with explicit history, retaining all 22 native
+distribution rows per architecture unchanged. No native runtime acceptance is inferred.
+
 The proposed accompanying-image source path is `/usr/share/ecm/sources/python/`; integration and recipient access remain **not implemented or verified here**. Keep the source/notice files for components actually shipped and preserve ECM's separate CC0 root license.
 
 Details: `../../arm64-current/REPORT.md`; new tree integrity: `SHA256SUMS`.
+
+## Stable-Alpine GNU correspondence (bounded source proof)
+
+The separate `artifact-index/musllinux/` inventories bind the current
+74-package selection on each architecture: 96 distinct whole wheels, 48 AMD64
+and 45 ARM64 ELF members, every wheel RECORD member, notices and 16 raw embedded
+SBOM payloads. The 101 unique retained notice/SBOM files are content-addressed
+under `payloads/`. Raw producer PURLs are preserved, not normalized.
+`scripts/inventory_musllinux_wheels.py --verify --arch ... --wheels-dir ...`
+rehashes actual wheel archives, every RECORD entry, delivered payloads and
+reused shared notices. With `--site-packages` and `--installed-python`, it also
+checks installed bytes, the exact native ELF set and the two PEP427 header/script
+relocations. This installed consumer passed against the actual AMD64 Alpine
+74-package environment; ARM verification here is archive-only, not execution.
+Unit tests include payload/RECORD/notice/script-tampering denials.
+
+These indexes do **not** establish corresponding sources or advisory clearance
+from SBOM names/versions. Historical native artifact records remain unchanged;
+the current lock bindings record the pure-Python security update separately.
+
+`artifact-index/musllinux-gnu.json` is a separate, hash-pinned map for the
+unchanged musllinux selection. It does not replace or relabel the historical
+manylinux indexes above. It accounts for **14 wheels, 18 GNU member copies and
+12 distinct repaired ELF objects** on AMD64 and ARM64, covering GCC 14.2.0 and
+12.4.0. `scripts/verify_musllinux_gnu.py` checks all **96** selected whole-wheel
+hashes (including non-GNU wheels), complete GNU
+member coverage and full-byte replay of bounded SONAME/NEEDED/RPATH operations.
+`scripts/prepare_musllinux_gnu_inputs.py` extracts original bytes from hash-pinned
+APK/OCI cache blobs without installing packages, extracting filesystem paths or
+executing target ELFs. Comparison tools are pinned AMD64 binaries; this verifies
+ARM **artifact bytes**, not ARM execution.
+
+The explicit `--binary-only` result is `BINARY_ONLY_NO_SOURCE_CLEARANCE`, never
+source/advisory/final-image approval. Earlier default-source denials are retained.
+The GCC 12.4 publisher removed its unpinned source checkout/log; the exact
+original revision is still unknown. Corresponding source is now established
+independently: a pinned source/recipe build reproduces the complete AMD64 ELF;
+the ARM-target build also matches after upstream version-map generation uses
+mawk, not BusyBox awk or gawk. This is ARM artifact proof, not ARM execution.
+
+`scripts/collect_musllinux_gnu_sources.py` copies the 27 reviewed source archives,
+recipes, notices and proof files from an offline hash-named cache. The default
+GNU verifier rehashes the entire delivered source tree as well as all wheel and
+GNU ELF bindings. It passed on the actual complete delivery; changing only a
+runtime-exception notice in a separate negative copy is rejected. No status
+label substitutes for actual source bytes, and copying a candidate never upgrades
+its authentication status. This closes only the GNU subset, not other wheel
+components or production source/SBOM/advisory integration.
+
+The exact original GNU `config.sub` input is retained in
+`gnu-source-assets/config.sub` after Savannah returned HTTP 502 on all three
+attempts in native ARM run `42746663339`. Its original revision is
+`3d5db9ebe860` at
+<https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=config.sub;hb=3d5db9ebe860>.
+The unchanged source map binds all 36,159 bytes to SHA256
+`75d5d255a2a273b6e651f82eecfabf6cbcd8eaeae70e86b417384c8f4a58d8d3`.
+The preparer now selects it as a repository input, not a download fallback;
+missing, aliased or changed bytes fail before any network request (covered by
+`test_prepare_musllinux_gnu_sources.py`). This retains 27 deliveries from the
+same 21 inputs, now 13 repository assets and eight downloads. The embedded
+copyright/license notice is preserved; the existing GPLv3 notice remains in
+`gnu-source-assets/notices/COPYING3`. This source-only copy does not execute
+the script or establish new compiler, source or advisory clearance.
+
+Producer metadata remains raw, including cryptography ARM's
+`pkg:apk/NotpineForGHA/libgcc@14.2.0-r6`; it is not normalized into Alpine or
+used as corresponding-source authority.
+
+See [owned native design](../../docs/design/stable-alpine-owned-native.md) for
+verified receipts, offline reproduction and the remaining production gates.

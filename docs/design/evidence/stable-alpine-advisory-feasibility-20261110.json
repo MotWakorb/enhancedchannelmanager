@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "status": "ALL_ORIGINAL_ITEMS_INVESTIGATED_SOURCE_FEASIBILITY_NOT_RUNTIME_CLEARANCE",
+  "bead": "enhancedchannelmanager-4izbc",
+  "assessment_date": "2026-11-10",
+  "report": "docs/design/stable-alpine-advisory-feasibility.md",
+  "candidate": {
+    "run": 42753734801,
+    "pr_head": "e3457bf662713bc3e7ebfb88f9d3fdfe2a8abdd0",
+    "actual_merge_checkout": "c0f042545a721aa75f5bb267cda4ef83d9ca6ceb",
+    "amd64": {
+      "artifact_id": 13737043364,
+      "zip_sha256": "251aafefdd10f1e4de112f00e5cbe6f34e3a720db8509c70e73062025341f089",
+      "image_id": "sha256:4b99b91daa2ed23d294015515cdcf6088684298686626fdf60294770f1f9d5dd",
+      "runtime_inventory_sha256": "a332532df4487afa1e67ca9aec48304f686b5d3aee3d78150617627a9e47fc6c"
+    },
+    "arm64": {
+      "artifact_id": 13736578333,
+      "zip_sha256": "ec6c288b371c51e692ee1798d0a9458292048a73e9f12268db2aa266a2c760c5",
+      "image_id": "sha256:5264c7bb6c41bcf31c2210106f362143acdde43b0c8533423fe4d47306280e40",
+      "runtime_inventory_sha256": "6c69e0899adda960f4b319de0d106f450f4ed101746214b5c4816ad4b8014657"
+    },
+    "scope": "Original artifact ZIP digests and merge-parent binding checked; selected regular evidence only, no provider execution. Both actual candidate captures still match all19 historical tracker records and4 unresolved owned subjects. Both native builds now pass the previously failing GNU-source preparation; whole runtime source gate still FAILS."
+  },
+  "original_findings": [
+    {"cve": "CVE-2025-50422", "source": "cairo", "version": "1.18.4-r1", "disposition": "MATCHING_CORRECTION_NOT_ESTABLISHED", "reason": "Referenced MR621 is open/unmerged and fixes different tessellation/Poppler1579 code, not the reported font assertion. No Poppler package does not clear Cairo."},
+    {"cve": "CVE-2016-2781", "source": "coreutils", "version": "9.11-r0", "disposition": "SESSION_TTY_MITIGATION_AND_CONTRACT_REVIEW", "reason": "No direct application chroot call found; shared-terminal conditions remain an operator/runtime question. No universal package fix or host TIOCSTI policy assumed."},
+    {"cve": "CVE-2026-56391", "source": "coreutils", "version": "9.11-r0", "disposition": "UPSTREAM_CODE_FIX_AVAILABLE", "commits": ["d64e35a8a4c0e4608321433e0d84d917e4e36371"], "probe": "Code-only fuzz-zero application succeeds; full tests not ported/executed."},
+    {"cve": "CVE-2026-56392", "source": "coreutils", "version": "9.11-r0", "disposition": "UPSTREAM_CODE_FIX_AVAILABLE", "commits": ["b60a159fdc5bfcf9988d3a4cb6f53abe8ad5d35d", "4ade9cf77f6c7b39e3fdc5ce97a778f8e294694c", "52e5694f4136b34e12e5e7997949bbc63430cbba"], "probe": "Three code-only changes apply in sequence; retain wide/negative-width musl follow-ups and original tests."},
+    {"cve": "CVE-2026-58016", "source": "glib", "version": "2.88.1-r1", "disposition": "UPSTREAM_CODE_FIX_AVAILABLE", "commits": ["656ad4582cb1d7a7fa8bafe3ce8aec6aa3c17da0", "c9da977c178fbfc0e4caf99f9fdf5dc433d6fcc2"], "probe": "Source correction applies; complete patch has one upstream test-registration conflict. Assertions alone are not remediation."},
+    {"cve": "CVE-2026-119371", "source": "sqlite", "version": "3.53.4-r0", "disposition": "CORRECTION_PRESENT_IN_REVIEWED_3541_SOURCE", "commits": ["e6ff280c839fdfc7418fd5add12e8f32702a17fb"], "probe": "Old code accepts forward correction. New release has nesting checks plus later cursor-depth hardening; whole reverse patch is not claimed to pass."},
+    {"cve": "CVE-2026-119372", "source": "sqlite", "version": "3.53.4-r0", "disposition": "CORRECTION_PRESENT_IN_REVIEWED_3541_SOURCE", "commits": ["a87bd2471a9c0606e78d3c3678bcd9cecaa0e731"]},
+    {"cve": "CVE-2026-119373", "source": "sqlite", "version": "3.53.4-r0", "disposition": "CORRECTION_PRESENT_IN_REVIEWED_3541_SOURCE", "commits": ["e1c9934f9f11a499029abb020ea715a08970da80"]},
+    {"cve": "CVE-2026-119374", "source": "sqlite", "version": "3.53.4-r0", "disposition": "CORRECTION_PRESENT_IN_REVIEWED_3541_SOURCE", "commits": ["d9de6eedbe918c074c7556400fa21df5960704d9"]},
+    {"cve": "CVE-2026-119375", "source": "sqlite", "version": "3.53.4-r0", "disposition": "CORRECTION_PRESENT_IN_REVIEWED_3541_SOURCE", "commits": ["e5bf119821f25be1d7f10ef0a2edbe175289166e"]},
+    {"cve": "CVE-2026-119376", "source": "sqlite", "version": "3.53.4-r0", "disposition": "CORRECTION_PRESENT_IN_REVIEWED_3541_SOURCE", "commits": ["d54522a5b832422ab893a1e9fa7a99ab314ea4e2"]},
+    {"cve": "CVE-2026-119377", "source": "sqlite", "version": "3.53.4-r0", "disposition": "CORRECTION_PRESENT_IN_REVIEWED_3541_SOURCE", "commits": ["7ff247c5b9ead3ad8a69c26d3fd264878e127237", "5694c3bb2a6a40770ecd2f65910eea756734dfd8"], "probe": "Both initial and correcting follow-up reviewed. New source has complete per-column authorization; old version is not an unchanged one-hunk backport."},
+    {"cve": "CVE-2026-119378", "source": "sqlite", "version": "3.53.4-r0", "disposition": "CORRECTION_PRESENT_IN_REVIEWED_3541_SOURCE", "commits": ["d21bd37c7cfc1b85b17a6703555f0926b6236e04"]},
+    {"cve": "CVE-2026-119379", "source": "sqlite", "version": "3.53.4-r0", "disposition": "CORRECTION_PRESENT_IN_REVIEWED_3541_SOURCE", "commits": ["64459c87cc702d600704fb77ee40ca1782398a52"]},
+    {"cve": "CVE-2026-119586", "source": "sqlite", "version": "3.53.4-r0", "disposition": "CLI_NOT_DELIVERED_IN_BOUND_CANDIDATES_ONLY", "reason": "Both inventories contain sqlite-libs, not sqlite CLI; no owned replacement CLI. 3.54.1 must not be claimed to fix the CLI advisory. Existing operator recovery advice means external-tool workflows still need safety review."},
+    {"cve": "CVE-2026-119591", "source": "sqlite", "version": "3.53.4-r0", "disposition": "CORRECTION_PRESENT_IN_REVIEWED_3541_SOURCE", "commits": ["eff50a067c55f972909e7780e506e91382d08de2"]},
+    {"cve": "CVE-2025-45582", "source": "tar", "version": "1.35-r5", "disposition": "DOCUMENTED_USAGE_MITIGATION_NO_VALIDATED_BACKPORT", "reason": "Maintainer describes repeated untrusted extraction as misuse; that is not a waiver. Independent fresh destinations and complete confinement policy required."},
+    {"cve": "CVE-2026-18477", "source": "tar", "version": "1.35-r5", "disposition": "CONFINEMENT_BACKPORT_CHAIN_NOT_ESTABLISHED", "reason": "Incremental restore race needs more than fresh destination or prefix filtering. Upstream draft/revert history and failed patch acquisition retained."},
+    {"cve": "CVE-2026-18508", "source": "tar", "version": "1.35-r5", "disposition": "CONFINEMENT_BACKPORT_CHAIN_NOT_ESTABLISHED", "reason": "Do not use one-top-level as confinement. No final compatible upstream chain or source applicability proven."}
+  ],
+  "owned_subjects": [
+    {"package": "busybox", "disposition": "EXISTING_WGET_CORRECTION_REQUIRES_COMPONENT_RECONCILIATION", "cves": ["CVE-2025-60876"]},
+    {"package": "busybox-binsh", "disposition": "BIND_SIGNED_LINK_TO_SAME_BUSYBOX_SOURCE_AND_DISPOSITION"},
+    {"package": "ssl_client", "disposition": "BIND_COMPANION_PAYLOAD_SHARED_SOURCE_AND_REAL_TLS_DEPENDENCIES"},
+    {"package": "ecm-owned-native", "disposition": "EXPAND_SIX_REAL_COMPONENT_GROUPS_NOT_SYNTHETIC_PACKAGE_VERSION"}
+  ],
+  "owned_expansion": {
+    "ffmpeg_corrected_code_in_original_source": ["CVE-2022-3964", "CVE-2025-25468", "CVE-2025-25469", "CVE-2026-52295", "CVE-2026-52296", "CVE-2026-52297", "CVE-2026-70628", "CVE-2026-70629", "CVE-2026-70630", "CVE-2026-70631", "CVE-2026-70632"],
+    "ffmpeg_scope": "Ten unique records have reverse code-context proof; RPZA has later width/stride hardening and was manually checked instead of falsely claiming a whole reverse-patch pass. No target regression/compiled-feature/source closure is inferred.",
+    "libxml2_existing_reviewed_corrections": ["CVE-2026-86137", "CVE-2026-86138", "CVE-2026-86139", "CVE-2026-86140", "CVE-2026-86141", "CVE-2026-86142", "CVE-2026-86143", "CVE-2026-86144"],
+    "libxml2_additional_candidates": [
+      {"cve": "CVE-2025-8732", "commit": "ee9fdfcc244a5d06b5b087437f5cb3decd05d689", "scope": "Related deduplication fix references1064; old source lacks newer depth plumbing. Full patch does not apply; complete old-advisory correction not established by one related hunk."},
+      {"cve": "CVE-2026-0989", "commit": "19549c61590c1873468c53e0026a2fbffae428ef", "scope": "Include depth/error correction exists, with old source code/header/test conflicts. Adaptation and native limits/cleanup verification required."},
+      {"cve": "CVE-2026-11979", "commit": "c2e233fc1b341685fc99621b2768b503f777a72e", "scope": "Three code hunks fit old source, complete patch fails absent old test script. Tool absent from bound owned payloads, but source/harness/advisory obligations are not waived."}
+    ],
+    "coverage_limit": "No additional matching unfixed stable-tracker rows for inspected other owned source names does not prove absence of vulnerabilities in bundled crates/Go/static/compiler inputs. All four OWNED_PENDING subjects remain unchanged."
+  },
+  "sqlite": {
+    "signed_current_amd64_library_sha256": "4290ff1e86e8c9204789104aed2a2eb562d7292ed9544c5ba235759ea1ff3281",
+    "corrected_source_zip_sha256": "387e7f6cad4797b17848c07d453dc6606917bb356a6cfe5a3abafd38c240c71b",
+    "corrected_source_url": "https://sqlite.org/2026/sqlite-src-3540100.zip",
+    "corrected_source_version": "3.54.1",
+    "corrected_source_manifest_uuid": "555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76",
+    "source_id_matches_primary_release": true,
+    "scope": "Source/API fixes inspected, not a signed Alpine replacement or completed binary build. Existing candidate features FTS3/4/5, parentheses, RTREE and SESSION are enabled. Restore opens imported databases, so quick_check is not a parser memory-safety boundary. No feature removal or Python-pin upgrade authorized."
+  },
+  "risk": {
+    "alpine_snapshot": "18 unknown scores/vectors, one tar4.1; unknown is never low/safe",
+    "additional_primary_vendor_metadata": "GLib RedHat verified7.5; tar18477/18508 verified4.4. chroot has historical draft8.6 for other vendor releases, not an ECM score.",
+    "effective_runtime_risk": "Unquantified pending path/feature/mitigation proof; no fabricated CVSS or automatic source-name/non-use exemptions.",
+    "promotion_priority": "P1 unresolved security/source acceptance remains blocking"
+  },
+  "retention_root": "/tmp/opencode/ecm-advisory-assessment-20261110",
+  "committed_original_receipts": {
+    "file": "docs/design/evidence/stable-alpine-advisory-feasibility-20261110.receipts.json.gz",
+    "sha256": "824301a6c3f0d00d4eb3de77f197d4d561dc57ab1a5dd759451e7cbd58d732a0",
+    "bytes": 341282,
+    "raw_sha256": "10d1f1b78253150e656cd3d05dce981a4a9ebcd2dece18c5da39e46d28fccce5",
+    "raw_bytes": 1482710,
+    "records": 19,
+    "scope": "Original UTF8 evidence bytes, including both actual current query/database captures, source-context/backport outcomes and HTTP acquisition metadata. Not upstream source archives, source execution, current freshness, scanner or runtime acceptance."
+  },
+  "evidence_sha256": {
+    "paired-current-subject-binding.json": "e2331c526285c76b5eaa8961d24897ccf8f81dc300e298c49c87cf5c393701d1",
+    "native-merge-binding.json": "35ab7c83e7ef6c838202ccea2d110015c52818f2f67b7fd40571be136df86ff4",
+    "current-index-signatures.json": "e699bfd33de8faccba9f7a61b526eef168929c59427266e4506c85bb5f1a0fd9",
+    "sqlite-signed-byte-binding.json": "06b35f1f8ba2b4666267e10615044545bf9c7ee0193fac3e386953e71ebd5402",
+    "source-code-fix-contexts.json": "ad06407d9d97b8f0801d1549b95dedea96c706b0bd3c16d2a58d5f72aec26361",
+    "backport-probes.json": "98a2b34da99379ad820d15024d35e720d66e1a8192ac023e03f8620e775847a2",
+    "libxml2-source-replay-proof.json": "60fb756afb475aff52e0d7429e17848a80bc964340a484db9dc14120e8d68550",
+    "application-callsite-survey.json": "f5d4047f4a4be57eb6b89c3d0c128eae975c0ba4dab80c19bd7c8572d3d2fa7e",
+    "primary-http.json": "59ccbd514884b711b4cf41b20e98d92775b48eb11ab0105b1afce610078c1910",
+    "followup-http.json": "f70facf43535420138af073993f1a9ab36781d02ad3c251f8b14012eab693a9f",
+    "final-http.json": "14f27602ca44ce82b804cfa69f903c63e0d2107f27bbbd5f62487ba6d85e905a",
+    "additional-http.json": "821a0f59c08efb684a25d262f88f5c90a181d0499ee025f805aa820be36ffcb5",
+    "source-fix-http.json": "5fe25c8358e904dc034fdfd33a6e627f8ecb945b66f508b31de73f0f49942719",
+    "backport-http.json": "7021501af3e52ede86c48efd40775be3a19449e0046d07b49b9fa39e189be3f8"
+  },
+  "failure_retention": "Primary unexpand patch first returned404 then later succeeded; issue comment APIs returned401 and were not accessed with credentials; two tar patch acquisitions failed, not counted as proof no fixes exist. Maintained GLib whole-tree extractor rejects relative test symlinks and was not weakened; only positively selected regular patch targets were read. Whole GLib/libxml2 patch conflicts are retained, no tests silently dropped. No exploits downloaded from attachments or executed.",
+  "implemented_runtime_changes": false,
+  "new_owned_provider_authorized": false,
+  "full_runtime_advisory_acceptance": false,
+  "full_runtime_source_acceptance": false
+}

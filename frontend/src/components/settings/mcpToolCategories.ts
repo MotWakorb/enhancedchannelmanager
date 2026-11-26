@@ -27,5 +27,5 @@ export const MCP_TOOL_CATEGORIES: McpToolCategory[] = [
   { category: 'Normalize', count: 2, icon: 'text_format', desc: 'Test normalization, list rules' },
 ];
 
-/** Total tool count across all categories (the heading number). */
+/** Total tool count across all categories. */
 export const MCP_TOOL_TOTAL = MCP_TOOL_CATEGORIES.reduce((n, t) => n + t.count, 0);

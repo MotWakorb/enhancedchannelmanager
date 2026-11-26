@@ -138,6 +138,8 @@ class TestCompensationOnPartialFailure:
             client,
             [renumber(1, 21), renumber(2, 22), renumber(3, 23)],
             continueOnError=True,
+            consolidate=True,
+            returnSettledOperationIndexes=True,
         )
         assert result["success"] is False
         assert result["operationsFailed"] == 1
@@ -149,6 +151,8 @@ class TestCompensationOnPartialFailure:
         expected = {cid: prior[cid] for cid in (1, 2, 3) if cid != failing_channel}
         assert restored == expected
         assert result["numberingRecovery"] == []
+        assert result["settledOperationIndexes"] == []
+        assert result["settledChannelNumbers"] == {}
 
     @pytest.mark.asyncio
     async def test_a_run_where_every_numbering_write_lands_compensates_nothing(self):

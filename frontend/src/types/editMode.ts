@@ -112,7 +112,12 @@ export type ApiCallSpec =
    * {@link ConcurrentNumberAcknowledgement}.
    */
   | { type: 'bulkAssignChannelNumbers'; channelIds: number[]; startingNumber?: number; acknowledgedConcurrentChanges?: ConcurrentNumberAcknowledgement[] }
-  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string; stagedGroupId?: number; logoId?: number; logoUrl?: string; tvgId?: string; tvcGuideStationId?: string; acknowledgedDuplicate?: DuplicateNumberAcknowledgement; expectedStreamIds?: number[] }
+  /**
+   * `profileIntent` rides on the create so that Undo, Redo, Discard and a
+   * persisted-ledger restore carry it exactly as they carry the create. It is
+   * ECM bookkeeping and never part of the bulk-commit body.
+   */
+  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string; stagedGroupId?: number; logoId?: number; logoUrl?: string; tvgId?: string; tvcGuideStationId?: string; acknowledgedDuplicate?: DuplicateNumberAcknowledgement; expectedStreamIds?: number[]; profileIntent?: StagedProfileIntent }
   | { type: 'deleteChannel'; channelId: number }
   | { type: 'createGroup'; name: string; tempGroupId: number }
   | { type: 'deleteChannelGroup'; groupId: number }
@@ -126,6 +131,21 @@ export type ApiCallSpec =
   | { type: 'setProfileMembership'; profileId: number; channelId: number; enabled: boolean }
   | { type: 'restoreChannelGroup'; groupId: number }
   | { type: 'clearStreamStats'; streamIds: number[] };
+
+/**
+ * Profile membership to apply to a staged create once it has a real id.
+ *
+ * `profileIds: []` is an explicit "no profiles" (disable in every profile),
+ * not an absence. The scope is the operator and Dispatcharr destination the
+ * selection was made against; Apply refuses a scope that is not the current
+ * one, and a restore withdraws it rather than carrying it into another scope.
+ * An undefined `destination` means the scope was already unknown at staging.
+ */
+export interface StagedProfileIntent {
+  profileIds: number[];
+  operator: string;
+  destination?: string;
+}
 
 /**
  * Working-copy representation of the staged operations whose effect does NOT
@@ -330,21 +350,28 @@ export interface EditModeState {
 }
 
 /**
+ * Every `type` the bulk-commit endpoint puts in `validationIssues`.
+ *
+ * `duplicate_channel_number` and `invalid_channel_number` are raised by the
+ * final-state preflight (`channelNumberPlan.ts` in the browser,
+ * `backend/channel_number_plan.py` on the server) rather than by the
+ * per-operation checks, so they describe the COMBINED result of the staged
+ * plan rather than any one operation. `numbering_preflight_unavailable` means
+ * the server could not read the lineup, so that preflight did not run.
+ */
+export type ValidationIssueType =
+  | 'missing_channel'
+  | 'missing_stream'
+  | 'invalid_operation'
+  | 'duplicate_channel_number'
+  | 'invalid_channel_number'
+  | 'numbering_preflight_unavailable';
+
+/**
  * Validation issue found during pre-commit validation
  */
 export interface ValidationIssue {
-  /**
-   * The two numbering types are raised by the final-state preflight
-   * (`channelNumberPlan.ts` in the browser, `backend/channel_number_plan.py`
-   * on the server) rather than by the per-operation checks, so they describe
-   * the COMBINED result of the staged plan rather than any one operation.
-   */
-  type:
-    | 'missing_channel'
-    | 'missing_stream'
-    | 'invalid_operation'
-    | 'duplicate_channel_number'
-    | 'invalid_channel_number';
+  type: ValidationIssueType;
   severity: 'error' | 'warning';
   message: string;
   operationIndex?: number;
@@ -384,6 +411,16 @@ export interface CommitOptions {
   continueOnError?: boolean;
   /** Skip validation step (use when user already confirmed to proceed) */
   skipValidation?: boolean;
+  /**
+   * Synchronous handoff of confirmed creates, before any post-commit reads,
+   * with the staged profile intent of each create that carried one.
+   */
+  onCreatesCommitted?: (
+    tempIds: ReadonlyMap<number, number>,
+    binding: string | undefined,
+    profileAssignments: Array<{ channelId: number; profileIds: number[] }>,
+  ) => void;
+  currentProfileDestination?: string;
 }
 
 /**
@@ -391,6 +428,7 @@ export interface CommitOptions {
  */
 export interface CommitResult {
   success: boolean;
+  keepEditing?: boolean;
   operationsApplied: number;
   operationsFailed: number;
   errors: CommitError[];
@@ -477,7 +515,7 @@ export interface UseEditModeReturn {
   stageRemoveStream: (channelId: number, streamId: number, description: string) => void;
   stageReorderStreams: (channelId: number, streamIds: number[], description: string) => void;
   stageBulkAssignNumbers: (channelIds: number[], startingNumber: number, description: string) => void;
-  stageCreateChannel: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string, tvgId?: string, tvcGuideStationId?: string) => number; // returns temp ID
+  stageCreateChannel: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string, tvgId?: string, tvcGuideStationId?: string, profileIntent?: StagedProfileIntent) => number; // returns temp ID
   stageCreateChannelWithStreams: (input: {
     name: string;
     streamIds: number[];
@@ -488,6 +526,7 @@ export interface UseEditModeReturn {
     logoUrl?: string;
     tvgId?: string;
     tvcGuideStationId?: string;
+    profileIntent?: StagedProfileIntent;
   }) => number;
   stageDeleteChannel: (channelId: number, description: string) => void;
   /**
@@ -603,6 +642,7 @@ export interface EditModeExitDialogProps {
  * operator needs to read.
  */
 export interface CommitFailure {
+  keepEditing?: boolean;
   applied: number;
   failed: number;
   /** Deduplicated error lines, most useful first. */

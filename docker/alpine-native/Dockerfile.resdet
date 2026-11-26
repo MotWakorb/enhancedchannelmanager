@@ -1,0 +1,14 @@
+# Original resdet/KISS FFT recipe, built natively and offline on stable Alpine.
+FROM python:3.12-alpine3.24@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7 AS resdet-builder
+COPY scripts/alpine_repository_policy.py /proof/scripts/alpine_repository_policy.py
+RUN python /proof/scripts/alpine_repository_policy.py \
+    && apk upgrade --no-cache && apk add --no-cache build-base binutils gawk bash
+COPY scripts/build_native_runtime.py scripts/build_alpine_codecs.py scripts/build_alpine_resdet.py scripts/build_resdet.py scripts/generate_sbom.py /proof/scripts/
+COPY sbom/native-dependencies.json /proof/native-dependencies.json
+COPY --from=resdet-cache / /proof/cache/
+RUN --network=none case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \
+    && python /proof/scripts/build_alpine_resdet.py --manifest /proof/native-dependencies.json \
+        --arch "$arch" --work-dir /proof/work --output-dir /proof/output --cache-dir /proof/cache
+
+FROM scratch AS resdet-evidence
+COPY --from=resdet-builder /proof/output/ /

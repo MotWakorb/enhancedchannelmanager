@@ -1,0 +1,67 @@
+{
+  "source_commit": "dbe84402b822ff9cd5c9f1b35804136e3542f40e",
+  "build_run": 41579029152,
+  "projection": "Unmodified six-field projections of three OS findings from each actual architecture report; not complete image evidence.",
+  "architectures": {
+    "amd64": {
+      "report_sha256": "0da0d7dc8eb90ad4cb178c5ce72510b33310d60619a13ddd831aec120acfda02",
+      "config_digest": "sha256:fc1777c62d141fb5da7b25d9a93a2dc29cacab7310dbadaa8352aa0ce6e055ab",
+      "findings": [
+        {
+          "VulnerabilityID": "openSUSE-SU-2026:12232-1",
+          "PkgName": "libbrotlidec1",
+          "InstalledVersion": "1.2.0-2.4",
+          "FixedVersion": "1.2.1-1.1",
+          "Severity": "MEDIUM",
+          "Status": "fixed"
+        },
+        {
+          "VulnerabilityID": "openSUSE-SU-2026:12364-1",
+          "PkgName": "librsvg-2-2",
+          "InstalledVersion": "2.62.4-1.1",
+          "FixedVersion": "2.63.4-1.1",
+          "Severity": "MEDIUM",
+          "Status": "fixed"
+        },
+        {
+          "VulnerabilityID": "openSUSE-SU-2026:12336-1",
+          "PkgName": "libspeex1",
+          "InstalledVersion": "1.2.1-2.8",
+          "FixedVersion": "1.2.1-3.1",
+          "Severity": "MEDIUM",
+          "Status": "fixed"
+        }
+      ]
+    },
+    "arm64": {
+      "report_sha256": "7d7c749255da1291c820f158103ce24453a0e5f0fa24cc7db05042699b82de49",
+      "config_digest": "sha256:c3fefc10c8f2d10c9f2cdfc23a3f692ac1e0d5ed2714b9e6059736f757c385de",
+      "findings": [
+        {
+          "VulnerabilityID": "openSUSE-SU-2026:12232-1",
+          "PkgName": "libbrotlidec1",
+          "InstalledVersion": "1.2.0-2.3",
+          "FixedVersion": "1.2.1-1.1",
+          "Severity": "MEDIUM",
+          "Status": "fixed"
+        },
+        {
+          "VulnerabilityID": "openSUSE-SU-2026:12364-1",
+          "PkgName": "librsvg-2-2",
+          "InstalledVersion": "2.62.4-1.1",
+          "FixedVersion": "2.63.4-1.1",
+          "Severity": "MEDIUM",
+          "Status": "fixed"
+        },
+        {
+          "VulnerabilityID": "openSUSE-SU-2026:12336-1",
+          "PkgName": "libspeex1",
+          "InstalledVersion": "1.2.1-2.10",
+          "FixedVersion": "1.2.1-3.1",
+          "Severity": "MEDIUM",
+          "Status": "fixed"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,39 @@
+From: <jengelh@inai.de>
+Date: 2026-07-02 17:46:45.510543906 +0200
+
+Workaround unnecessary compile failure on i586.
+(clang-22 is fine, gcc-15/16 is not)
+
+```
+In file included from ~/jxl/third_party/skcms/src/skcms_TransformBaseline.cc:47:
+~/jxl/third_party/skcms/src/Transform_inl.h: In function ‘void skcms_private::baseline::Exec_swap_rb(StageList, const void**, const char*, char*, F, F, F, F, int)’:
+~/jxl/third_party/skcms/src/Transform_inl.h:818:71: error: cannot tail-call: tail call production failed
+  818 |         DECLARE_STAGE(name, arg, [[clang::musttail]] return (*list.fn)(list, ctx, src, dst, \
+      |                                                             ~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~
+  819 |                                                                        r, g, b, a, i))
+      |                                                                        ~~~~~~~~~~~~~~
+~/jxl/third_party/skcms/src/Transform_inl.h:812:13: note: in definition of macro ‘DECLARE_STAGE’
+  812 |             CALL_NEXT;                                                          \
+      |             ^~~~~~~~~
+~/jxl/third_party/skcms/src/Transform_inl.h:1082:1: note: in expansion of macro ‘STAGE’
+ 1082 | STAGE(swap_rb, NoCtx) {
+      | ^~~~~
+```
+
+---
+ third_party/skcms/src/Transform_inl.h |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Index: libjxl-0.12.0/third_party/skcms/src/Transform_inl.h
+===================================================================
+--- libjxl-0.12.0.orig/third_party/skcms/src/Transform_inl.h
++++ libjxl-0.12.0/third_party/skcms/src/Transform_inl.h
+@@ -815,7 +815,7 @@ struct Ctx {
+         SI void Exec_##name##_k(arg, STAGE_PARAMS(&))
+ 
+     #define STAGE(name, arg)                                                                \
+-        DECLARE_STAGE(name, arg, [[clang::musttail]] return (*list.fn)(list, ctx, src, dst, \
++        DECLARE_STAGE(name, arg, return (*list.fn)(list, ctx, src, dst, \
+                                                                        r, g, b, a, i))
+ 
+     #define FINAL_STAGE(name, arg) \

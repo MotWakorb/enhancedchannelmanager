@@ -257,7 +257,7 @@ export interface ChannelManagerTabProps {
   // creation). `pushDownOnConflict` moves whatever already occupies
   // `channelNumber` out of the way instead of creating a duplicate
   // (bead enhancedchannelmanager-fprsq).
-  onCreateChannelManual?: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, pushDownOnConflict?: boolean) => Promise<void>;
+  onCreateChannelManual?: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, pushDownOnConflict?: boolean, profileIds?: number[]) => Promise<void>;
   // Default value for normalization toggle (from settings)
   defaultNormalizeOnCreate?: boolean;
   // Callback to check for conflicts with existing channel numbers

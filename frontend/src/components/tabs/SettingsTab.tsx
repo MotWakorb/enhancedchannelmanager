@@ -56,6 +56,8 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import './SettingsTab.css';
 
+const PROBE_DEFERRED_MESSAGE = 'Probe deferred: provider capacity was unavailable or could not be verified; see skipped stream reasons';
+
 // Sort priority item configuration
 const SORT_CRITERION_CONFIG: Record<SortCriterion, { icon: string; label: string; description: string }> = {
   resolution: { icon: 'aspect_ratio', label: 'Resolution', description: '4K > 1080p > 720p' },
@@ -810,6 +812,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
   const [parallelProbingEnabled, setParallelProbingEnabled] = useState(true);
   const [maxConcurrentProbes, setMaxConcurrentProbes] = useState(8);
+  const [probeCapacityWaitTimeout, setProbeCapacityWaitTimeout] = useState(300);
   const [profileDistributionStrategy, setProfileDistributionStrategy] = useState('fill_first');
   const [skipRecentlyProbedHours, setSkipRecentlyProbedHours] = useState(0);
   const [refreshM3usBeforeProbe, setRefreshM3usBeforeProbe] = useState(true);
@@ -828,6 +831,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     total: number;
     current: number;
     status: string;
+    deferred_reason?: string | null;
     current_stream: string;
     success_count: number;
     failed_count: number;
@@ -942,7 +946,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     channelPipelineExcludedGroups, channelPipelineExcludeAutoSyncGroups,
     maxAutoCreatedChannelsPerRun, maxChannelPipelineLogEntries, linkedM3UAccounts,
     streamProbeTimeout, useResdetForResolution, bitrateSampleDuration, parallelProbingEnabled,
-    maxConcurrentProbes, profileDistributionStrategy, skipRecentlyProbedHours,
+    maxConcurrentProbes, probeCapacityWaitTimeout, profileDistributionStrategy, skipRecentlyProbedHours,
     refreshM3usBeforeProbe, autoReorderAfterProbe, pushStreamStatsToDispatcharr,
     probeRetryCount, probeRetryDelay, blackScreenDetectionEnabled,
     blackScreenSampleDuration, lowFpsThreshold, streamFetchPageLimit,
@@ -1149,6 +1153,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             notifications.error('Probe failed', 'Stream Probe');
           } else if (progress.status === 'cancelled') {
             notifications.warning('Probe was cancelled', 'Stream Probe');
+          } else if (progress.status === 'deferred') {
+            notifications.warning(progress.deferred_reason || PROBE_DEFERRED_MESSAGE, 'Stream Probe Deferred');
           }
         }
       } catch (err) {
@@ -1278,6 +1284,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
       setMaxConcurrentProbes(settings.max_concurrent_probes ?? 8);
+      setProbeCapacityWaitTimeout(settings.probe_capacity_wait_timeout ?? 300);
       setProfileDistributionStrategy(settings.profile_distribution_strategy ?? 'fill_first');
       setSkipRecentlyProbedHours(settings.skip_recently_probed_hours ?? 0);
       setRefreshM3usBeforeProbe(settings.refresh_m3us_before_probe ?? true);
@@ -1772,6 +1779,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         bitrate_sample_duration: bitrateSampleDuration,
         parallel_probing_enabled: parallelProbingEnabled,
         max_concurrent_probes: maxConcurrentProbes,
+        probe_capacity_wait_timeout: probeCapacityWaitTimeout,
         profile_distribution_strategy: profileDistributionStrategy,
         skip_recently_probed_hours: skipRecentlyProbedHours,
         refresh_m3us_before_probe: refreshM3usBeforeProbe,
@@ -2291,13 +2299,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       // background. The declared type is stale; see enhancedchannelmanager-n4g7g follow-up
       // bead for fixing it (and its two other ChannelsPane.tsx callers) at the source.
       const startResult = await api.probeBulkStreams(streamIds) as unknown as {
-        status: 'started' | 'already_running';
+        status: string;
         message?: string;
         total?: number;
       };
 
       if (startResult.status === 'already_running') {
         notifications.warning('A probe is already in progress; try again once it finishes.');
+        return;
+      }
+      if (startResult.status !== 'started') {
+        notifications.warning(startResult.message || 'The probe could not be started; try again.');
         return;
       }
 
@@ -2308,7 +2320,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       while (true) {
         await new Promise((resolve) => setTimeout(resolve, 1500));
         const progress = await api.getProbeProgress();
-        if (!progress.in_progress) break;
+        if (!progress.in_progress) {
+          if (progress.status === 'deferred') {
+            notifications.warning(progress.deferred_reason || PROBE_DEFERRED_MESSAGE, 'Stream Probe Deferred');
+            return;
+          }
+          if (progress.status !== 'completed') {
+            notifications.warning(`Probe stopped (${progress.status}).`, 'Stream Probe');
+            return;
+          }
+          break;
+        }
       }
 
       notifications.success(`Finished probing ${streamIds.length} stream(s).`);
@@ -5413,7 +5435,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                           <strong>{a.name}</strong>: {a.max_streams} streams
                         </span>
                       ))}
-                      . Set this to the lowest max_streams value to avoid rate limiting.
+                      . Probing automatically adjusts to each eligible profile's available capacity.
                     </>
                   )}
                 </span>
@@ -5437,11 +5459,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                     setMaxConcurrentProbes(isNaN(val) ? 8 : Math.max(1, Math.min(16, val)));
                   }}
                 />
-                {m3uAccountsMaxStreams.length > 0 && (
-                  <span className="form-hint">
-                    Recommended: {Math.min(...m3uAccountsMaxStreams.map(a => a.max_streams), 8)} (lowest provider limit)
-                  </span>
-                )}
               </div>
 
               {hasMultipleProfiles && (
@@ -5466,6 +5483,25 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               </div>
               )}
             </>)}
+
+            <div className="form-group-vertical">
+              <label htmlFor="probeCapacityWaitTimeout">Capacity wait timeout (seconds)</label>
+              <span className="form-description">
+                Wait up to this long for an eligible profile, then defer without marking the stream failed.
+                Other providers can continue. Default 300 seconds; 0 skips waiting. This is separate from the probe timeout.
+                Checks are best effort, not viewer reservations: a new viewer can compete for the last slot.
+                If live status is unavailable, ECM uses last verified connection counts for up to 30 seconds, then waits or defers.
+              </span>
+              <input
+                id="probeCapacityWaitTimeout"
+                type="number"
+                min="0"
+                max="3600"
+                value={probeCapacityWaitTimeout}
+                onChange={(e) => setProbeCapacityWaitTimeout(e.target.value === '' ? 0 : parseInt(e.target.value, 10))}
+                onBlur={() => setProbeCapacityWaitTimeout(Math.max(0, Math.min(3600, probeCapacityWaitTimeout || 0)))}
+              />
+            </div>
 
             <div className="form-group-vertical">
               <label htmlFor="skipRecentlyProbedHours">Skip recently probed streams (hours)</label>
@@ -5717,6 +5753,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       )}
 
+      {!probingAll && probeProgress?.status === 'deferred' && (
+        <p role="status" aria-label="Stream probe deferred" className="form-hint">
+          {probeProgress.deferred_reason || PROBE_DEFERRED_MESSAGE}
+        </p>
+      )}
+
       {/* Reset Probe State — rendered UNCONDITIONALLY, and that is the whole
           point (bead enhancedchannelmanager-xg9gp).
 
@@ -5827,6 +5869,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       {entry.total} streams in {formatDuration(entry.duration_seconds)}
                       {entry.error && <span style={{ color: '#e74c3c' }}> - {entry.error}</span>}
                     </div>
+                    {entry.status === 'deferred' && (
+                      <div className="form-hint">{entry.deferred_reason || PROBE_DEFERRED_MESSAGE}</div>
+                    )}
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -5886,7 +5931,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                         alignItems: 'center',
                         gap: '0.3rem'
                       }}
-                      title="View skipped streams (M3U at max connections)"
+                      title="View skipped streams"
                     >
                       <span className="material-icons" style={{ fontSize: '16px' }}>block</span>
                       {entry.skipped_count}

@@ -1,0 +1,37 @@
+{
+  "status": "PAIRED_OWNED_BUSYBOX_ORIGINAL_SOURCE_INPUT_APORTS_AND_DERIVED_RECIPE_JOINS_ONLY",
+  "source_native_run": 42681901847,
+  "helper_sha256": "232f0a5eda2cb2f227053155fe3ab7f6286ac976c44abd9c35c763a3f6510641",
+  "architecture_datasets": ["amd64", "arm64"],
+  "execution_architecture": "amd64",
+  "verified_per_dataset": {
+    "original_signed_owned_packages": 3,
+    "complete_original_source_files": 110,
+    "original_sha512_source_input_rows": 75,
+    "complete_original_aports_regular_members": 80,
+    "owned_patches": 2,
+    "exact_original_to_owned_apkbuild_derivations": 1,
+    "static_provider_source_graphs": 2,
+    "original_upstream_pass_lines_joined_to_log_and_binary": 913
+  },
+  "upstream_busybox_archive_sha256": "3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4",
+  "verification": "Pinned original source policy, original upstream archive SHA256/SHA512/size, every original APKBUILD SHA512 input, all retained apports archive member bytes against the delivered original tree, both owned patch hashes and exact deterministic APKBUILD derivation using trusted checker code. Combined independently with all three original native APK signatures/full actual installed records and the unduplicated source/static/check receipt checks. No delivered shell/Python is evaluated and no target executes.",
+  "checksum_block_distinction": "The 75-row original source checksum block is the upstream archive plus 74 local inputs. Six additional original apports members (APKBUILD, busybox-extras.post-install, busybox-extras.pre-deinstall, busybox.post-install, busybox.post-upgrade and busybox.trigger) are outside that block and are independently checked against all 80 original retained apports regular members. An initial test wrongly assumed busybox.post-install belonged to the 75-row checksum block; the observed failure was preserved and the real full field survey corrected that premise without modifying original data or omitting any member.",
+  "paired_consumer_receipt_sha256": "4c624773496d7b7c1863a77d09794ef63e7b68b25b4f13fe2cf084fa1b41959c",
+  "actual_negative_controls": {
+    "upstream_archive": "Same-size single-byte corruption rejected by original SHA512 input check",
+    "non_checksum_block_install_script": "Same-size single-byte corruption of original-aports/busybox.post-install rejected against original retained apports archive, despite that script being outside the 75-row source checksum block",
+    "receipt_sha256": "abf812ff01e965c54ebffac6e6761750091f63180aa7f0693f3f41abedd89370"
+  },
+  "regression_tests": {
+    "layer": "Native AMD64 Alpine component/source/workflow/native-builder subset plus full changed-path classifier/control-mutation suite; not full application acceptance",
+    "modules": 49,
+    "passed": 1271,
+    "log_sha256": "55dab3a2627a7425137dd67b6085cf625e2e4acc6c8027c98564021c55ad5173"
+  },
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/{busybox-original-input-source-replay-paired-01.json,busybox-original-source-mutations-01/,owned-busybox-source-evidence-{amd64,arm64}-42681901847-01/}",
+  "scope": "Original source graph/input/recipe correspondence only. Original-to-patched-source replay, full live file/control-script checks, authenticated historical compiler/static linkage, automated original signed evidence delivery/native immutable-image composition, complete attribution/advisory/aggregate source and MCP acceptance remain unfinished. Original source/target code and test scripts were not executed. Unsigned build/check logs do not prove reproduced builds or tests. Original inputs/failures intact; no missing-origin exemption or source/advisory waiver.",
+  "full_runtime_source_acceptance": false,
+  "source_patch_replay_established": false,
+  "historical_compiler_linkage_established": false
+}

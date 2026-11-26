@@ -1,0 +1,84 @@
+ECM-owned follow-up to the retained vendor CVE-2026-116741 correction.
+Independent review found negative truncation and signed-overflow bypasses.
+Preserve the existing pre-flush truncation policy; make bounds arithmetic safe.
+No ABI change. Native and allocation-failure sanitizer regressions are required.
+
+--- a/libspeex/bits.c
++++ b/libspeex/bits.c
+@@ -39,6 +39,7 @@
+ #include "speex/speex_bits.h"
+ #include "arch.h"
+ #include "os_support.h"
++#include <limits.h>
+ 
+ /* Maximum size of the bit-stream (for fixed-size allocation) */
+ #ifndef MAX_CHARS_PER_FRAME
+@@ -146,7 +147,8 @@
+ 
+ static void speex_bits_flush(SpeexBits *bits)
+ {
+-   int nchars = ((bits->nbBits+BITS_PER_CHAR-1)>>LOG2_BITS_PER_CHAR);
++   int nchars = (bits->nbBits>>LOG2_BITS_PER_CHAR)
++      + ((bits->nbBits & (BITS_PER_CHAR-1)) != 0);
+    if (bits->charPtr>0)
+       SPEEX_MOVE(bits->chars, &bits->chars[bits->charPtr], nchars-bits->charPtr);
+    bits->nbBits -= bits->charPtr<<LOG2_BITS_PER_CHAR;
+@@ -155,26 +157,43 @@
+ 
+ EXPORT void speex_bits_read_whole_bytes(SpeexBits *bits, const char *chars, int nbytes)
+ {
+-   int i,pos;
++   int i,pos,used,limit;
+    int nchars = nbytes/BYTES_PER_CHAR;
+ 
+-   if (((bits->nbBits+BITS_PER_CHAR-1)>>LOG2_BITS_PER_CHAR)+nchars > bits->buf_size)
++   /* Validate before shifts, rounding, allocation or flushing consumed bytes.
++      Keep the existing pre-flush capacity/truncation policy, but never let an
++      oversized request wrap the capacity test or the signed public bit count. */
++   if (nbytes < 0 || bits->nbBits < 0 || bits->buf_size < 0 ||
++       bits->charPtr < 0 || bits->charPtr > (bits->nbBits>>LOG2_BITS_PER_CHAR))
++      return;
++   pos = bits->nbBits>>LOG2_BITS_PER_CHAR;
++   used = pos + ((bits->nbBits & (BITS_PER_CHAR-1)) != 0);
++   if (used > bits->buf_size)
++      return;
++   limit = (INT_MAX-(bits->nbBits-bits->charPtr*BITS_PER_CHAR))/BITS_PER_CHAR;
++   if (nchars > limit)
++      nchars = limit;
++
++   if (nchars > bits->buf_size-used)
+    {
+       /* Packet is larger than allocated buffer */
+       if (bits->owner)
+       {
+-         char *tmp = (char*)speex_realloc(bits->chars, (bits->nbBits>>LOG2_BITS_PER_CHAR)+nchars+1);
++         /* pos+nchars+1 <= 2*(INT_MAX/BITS_PER_CHAR)+1, so fits int. */
++         char *tmp = (char*)speex_realloc(bits->chars, pos+nchars+1);
+          if (tmp)
+          {
+-            bits->buf_size=(bits->nbBits>>LOG2_BITS_PER_CHAR)+nchars+1;
++            bits->buf_size=pos+nchars+1;
+             bits->chars=tmp;
+          } else {
+-            nchars=bits->buf_size-(bits->nbBits>>LOG2_BITS_PER_CHAR)-1;
++            nchars=bits->buf_size-pos;
++            if (nchars > 0) --nchars;
+             speex_warning("Could not resize input buffer: truncating oversize input");
+          }
+       } else {
+          speex_warning("Do not own input buffer: truncating oversize input");
+-         nchars=bits->buf_size-(bits->nbBits>>LOG2_BITS_PER_CHAR)-1;
++         nchars=bits->buf_size-pos;
++         if (nchars > 0) --nchars;
+       }
+    }
+ 
+@@ -182,7 +201,7 @@
+    pos=bits->nbBits>>LOG2_BITS_PER_CHAR;
+    for (i=0;i<nchars;i++)
+       bits->chars[pos+i]=HTOLS(chars[i]);
+-   bits->nbBits+=nchars<<LOG2_BITS_PER_CHAR;
++   bits->nbBits+=nchars*BITS_PER_CHAR;
+ }
+ 
+ EXPORT int speex_bits_write(SpeexBits *bits, char *chars, int max_nbytes)

@@ -1,0 +1,382 @@
+{
+  "configuration_settings": 1084,
+  "installation": {
+    "changed_control_denial": "/tmp/ecm-install-trust-owxs28v8/damaged.apk: BAD signature\n",
+    "default_trust_denials": [
+      "/proof/packages/runtime-packages/busybox-1.37.0_p20261109-r0.apk: UNTRUSTED signature\n",
+      "/proof/packages/runtime-packages/busybox-binsh-1.37.0_p20261109-r0.apk: UNTRUSTED signature\n",
+      "/proof/packages/runtime-packages/ssl_client-1.37.0_p20261109-r0.apk: UNTRUSTED signature\n"
+    ],
+    "installed_control_scripts": [
+      {
+        "gid": 0,
+        "installed_name": "busybox-1.37.0_p20261109-r0.X18d9e155c2cb2bdbee4b96d04f9ae8d5dd660858c.post-install",
+        "mode": 493,
+        "path": ".post-install",
+        "sha256": "13c120a1c714ecafa7fe1fc748406a89dfffc549118ebce324b53d4bbb4ba75f",
+        "size": 335,
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "installed_name": "busybox-1.37.0_p20261109-r0.X18d9e155c2cb2bdbee4b96d04f9ae8d5dd660858c.post-upgrade",
+        "mode": 493,
+        "path": ".post-upgrade",
+        "sha256": "3cf0a22d2d6c6ed34be6b77ed3973b7c0b7434525744026c0159f5a76f827f49",
+        "size": 1640,
+        "uid": 0
+      },
+      {
+        "gid": 0,
+        "installed_name": "busybox-1.37.0_p20261109-r0.X18d9e155c2cb2bdbee4b96d04f9ae8d5dd660858c.trigger",
+        "mode": 493,
+        "path": ".trigger",
+        "sha256": "c7840b111dd82669de2074ea3c7e345c063928db2bbff650a81289777b3ff98f",
+        "size": 576,
+        "uid": 0
+      }
+    ],
+    "public_key": {
+      "file": "ecm-busybox.rsa.pub",
+      "sha256": "954387be475e8937cf2c6c373e8ac968d15248c05c7cbae80b95f90487be7aa7"
+    },
+    "repositories_sha256": "7b8b3e6fe030eeb4ee7619b42c9419aa846bff1c632442d3f00ed9fb97c6fa36",
+    "runtime_packages": [
+      {
+        "file": "busybox-1.37.0_p20261109-r0.apk",
+        "name": "busybox",
+        "sha256": "f8f75b54d76a550f52c020e072dfaf31385140fd1e40c2565474c4cb82631133"
+      },
+      {
+        "file": "busybox-binsh-1.37.0_p20261109-r0.apk",
+        "name": "busybox-binsh",
+        "sha256": "080c7c8cf8d03c3e78770da99f08cda41eb9403dee7a476161862944482bdceb"
+      },
+      {
+        "file": "ssl_client-1.37.0_p20261109-r0.apk",
+        "name": "ssl_client",
+        "sha256": "c0cabca1f15133574e9c1ff614a65cd16ed24ec27790410d17e4839185e9137b"
+      }
+    ],
+    "status": "SIGNED_BUSYBOX_INSTALLED_ONLY",
+    "temporary_trust_removed": true
+  },
+  "original_base_negative": {
+    "applet_count": 304,
+    "failures": [
+      "URL control/space byte not rejected before connection: 1",
+      "URL control/space byte not rejected before connection: 2",
+      "URL control/space byte not rejected before connection: 3",
+      "URL control/space byte not rejected before connection: 4",
+      "URL control/space byte not rejected before connection: 5",
+      "URL control/space byte not rejected before connection: 6",
+      "URL control/space byte not rejected before connection: 7",
+      "URL control/space byte not rejected before connection: 8",
+      "URL control/space byte not rejected before connection: 9",
+      "URL control/space byte not rejected before connection: 10",
+      "URL control/space byte not rejected before connection: 11",
+      "URL control/space byte not rejected before connection: 12",
+      "URL control/space byte not rejected before connection: 13",
+      "URL control/space byte not rejected before connection: 14",
+      "URL control/space byte not rejected before connection: 15",
+      "URL control/space byte not rejected before connection: 16",
+      "URL control/space byte not rejected before connection: 17",
+      "URL control/space byte not rejected before connection: 18",
+      "URL control/space byte not rejected before connection: 19",
+      "URL control/space byte not rejected before connection: 20",
+      "URL control/space byte not rejected before connection: 21",
+      "URL control/space byte not rejected before connection: 22",
+      "URL control/space byte not rejected before connection: 23",
+      "URL control/space byte not rejected before connection: 24",
+      "URL control/space byte not rejected before connection: 25",
+      "URL control/space byte not rejected before connection: 26",
+      "URL control/space byte not rejected before connection: 27",
+      "URL control/space byte not rejected before connection: 28",
+      "URL control/space byte not rejected before connection: 29",
+      "URL control/space byte not rejected before connection: 30",
+      "URL control/space byte not rejected before connection: 31",
+      "URL control/space byte not rejected before connection: 32",
+      "portable original date-timezone regression"
+    ],
+    "status": "FAILED"
+  },
+  "pending": [
+    "real native ARM and fresh native CI receipt",
+    "utmps/skalibs corresponding sources",
+    "complete rebuild/provenance delivery",
+    "unfixed-aware advisory and final unsuppressed scans",
+    "final ECM/MCP integration"
+  ],
+  "raw_evidence_sha256": {
+    "busybox-provider-canonical-03/build-output.json": "d7d306b89a6cbf92ed2e02d1ebfa4754c035724b158a75c2e249dae44b3b1e96",
+    "busybox-provider-canonical-03/check-output.json": "1691aa87e9b4e1f18a08a4a699009a73fa9ec38bc93de032b73c8a8f4c2fb7fe",
+    "busybox-provider-canonical-03/check.log": "0a2428f207fd60d9b1876cbd2a2435138aed712dde64bcb4cc2c1433cb6ee94c",
+    "busybox-runtime-canonical-05.log": "d4f6478035f9f7ab76917129b9d54b48be061d2c5a975be77cc3f9f589da8a74",
+    "busybox-runtime-canonical-05/install-output.json": "66ae6a39baf0f07216efef79fad89113247283adcbe349e569578807143f1186",
+    "busybox-runtime-canonical-05/runtime-output.json": "d9fd971eaad651ce7b0a5581043d865013350faefffbbcf8cb692aa24368a476"
+  },
+  "recipe_sha256": "fc2e13d620c9c8c339b4474ec72d27dc6943d5173986372dc53e421a7072d4ae",
+  "runtime": {
+    "applet_count": 304,
+    "applets_sha256": "ad43f2888aa6679930812faef33672c45e98021d3be0d0ed08d257c1d957a968",
+    "binary_sha256": "77dbb7d5a0398c0727aee1818c2080ae519e110fb385d7be5fa5c99caa1573b2",
+    "control_cases": [
+      {
+        "control_byte": 1,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 2,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 3,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 4,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 5,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 6,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 7,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 8,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 9,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 10,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 11,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 12,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 13,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 14,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 15,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 16,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 17,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 18,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 19,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 20,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 21,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 22,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 23,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 24,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 25,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 26,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 27,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 28,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 29,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 30,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 31,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      },
+      {
+        "control_byte": 32,
+        "exit": 1,
+        "stderr": "wget: Unencoded control character found in the URL!\n",
+        "stdout": ""
+      }
+    ],
+    "date": {
+      "exit": 0,
+      "stderr": "",
+      "stdout": "Sat Jan  2 03:04:05 UTC 1999\n"
+    },
+    "failures": [],
+    "machine": "x86_64",
+    "ordinary_and_encoded_cases": [
+      {
+        "exit": 0,
+        "requests": [
+          "GET /ordinary HTTP/1.1\r\nHost: 127.0.0.1:46063\r\nUser-Agent: Wget\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+        ],
+        "server_errors": [],
+        "stderr": "Connecting to 127.0.0.1:46063 (127.0.0.1:46063)\nwriting to stdout\n-                    100% |********************************|    37  0:00:00 ETA\nwritten to stdout\n",
+        "stdout_sha256": "a4f162efd316ac2629192e0f24138435b08d23267c9aceaa4056b4e5be65779c",
+        "target": "/ordinary"
+      },
+      {
+        "exit": 0,
+        "requests": [
+          "GET /has%20space HTTP/1.1\r\nHost: 127.0.0.1:56673\r\nUser-Agent: Wget\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+        ],
+        "server_errors": [],
+        "stderr": "Connecting to 127.0.0.1:56673 (127.0.0.1:56673)\nwriting to stdout\n-                    100% |********************************|    37  0:00:00 ETA\nwritten to stdout\n",
+        "stdout_sha256": "a4f162efd316ac2629192e0f24138435b08d23267c9aceaa4056b4e5be65779c",
+        "target": "/has%20space"
+      },
+      {
+        "exit": 0,
+        "requests": [
+          "GET /query?a=1&b=two HTTP/1.1\r\nHost: 127.0.0.1:46671\r\nUser-Agent: Wget\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+        ],
+        "server_errors": [],
+        "stderr": "Connecting to 127.0.0.1:46671 (127.0.0.1:46671)\nwriting to stdout\n-                    100% |********************************|    37  0:00:00 ETA\nwritten to stdout\n",
+        "stdout_sha256": "a4f162efd316ac2629192e0f24138435b08d23267c9aceaa4056b4e5be65779c",
+        "target": "/query?a=1&b=two"
+      },
+      {
+        "exit": 0,
+        "requests": [
+          "GET /%0D%0Aencoded HTTP/1.1\r\nHost: 127.0.0.1:46427\r\nUser-Agent: Wget\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+        ],
+        "server_errors": [],
+        "stderr": "Connecting to 127.0.0.1:46427 (127.0.0.1:46427)\nwriting to stdout\n-                    100% |********************************|    37  0:00:00 ETA\nwritten to stdout\n",
+        "stdout_sha256": "a4f162efd316ac2629192e0f24138435b08d23267c9aceaa4056b4e5be65779c",
+        "target": "/%0D%0Aencoded"
+      },
+      {
+        "exit": 0,
+        "requests": [
+          "GET /caf%C3%A9 HTTP/1.1\r\nHost: 127.0.0.1:56949\r\nUser-Agent: Wget\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+        ],
+        "server_errors": [],
+        "stderr": "Connecting to 127.0.0.1:56949 (127.0.0.1:56949)\nwriting to stdout\n-                    100% |********************************|    37  0:00:00 ETA\nwritten to stdout\n",
+        "stdout_sha256": "a4f162efd316ac2629192e0f24138435b08d23267c9aceaa4056b4e5be65779c",
+        "target": "/caf%C3%A9"
+      }
+    ],
+    "python_version": "3.12.16",
+    "scope": "32 representable C0/space URL rejections, five actual local HTTP transfers, original applet list and date-timezone case only. NUL cannot occur inside a C argv string. Not full source/advisory/image approval.",
+    "status": "PATCHED_BUSYBOX_BOUNDED_RUNTIME_ONLY"
+  },
+  "scope": "Actual local native AMD64 canonical provider build and disposable runtime proof only; not ARM native proof, static-source closure, advisory clearance or final ECM/MCP acceptance.",
+  "upstream_pass_lines": 913
+}

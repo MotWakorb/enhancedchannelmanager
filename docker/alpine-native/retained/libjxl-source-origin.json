@@ -1,0 +1,33 @@
+{
+  "input_sha256": "05285bd80dd9b88dc5b66e8171a7bd0b679dd43c6be19aa090059842a303163b",
+  "signature_output": "/source.rpm:\n    Header V3 RSA/SHA512 Signature, key ID 29b700a4: OK\n    Header SHA256 digest: OK\n    Header SHA1 digest: OK\n    Payload SHA256 digest: OK\n    V3 RSA/SHA512 Signature, key ID 29b700a4: OK\n    MD5 digest: OK\n",
+  "verifier_image": "sha256:904aaf96a17a11c8d9c90e833df6dc6ea65d8bcc90c39507090a400791401c8a",
+  "fingerprint": "AD485664E901B867051AB15F35A2F86E29B700A4",
+  "files": [
+    {
+      "name": "96d9171c94b937a1b5f0293de7309ac16311b722.tar.gz",
+      "size": 10058488,
+      "sha256": "d36e9192974fce70bf8b8b446f917469358c2f3889449e45bc84af509b174ad5"
+    },
+    {
+      "name": "baselibs.conf",
+      "size": 11,
+      "sha256": "4a7078af2cc9762fca39a4b6904367eca5e14a3b255b883c304961f2dcf73547"
+    },
+    {
+      "name": "libjxl.spec",
+      "size": 13039,
+      "sha256": "b1b079aab45439ec2c9748a35fdb0cdd90221e364bf72caaf6cc04246a9b7040"
+    },
+    {
+      "name": "notail.patch",
+      "size": 2097,
+      "sha256": "61fe9d986286ad1f5e7b9c49fd2de47a3500e3312490dda8460924dd523c65b2"
+    },
+    {
+      "name": "v0.12.0.tar.gz",
+      "size": 1698757,
+      "sha256": "03e9be69a30be4011f559da75328b6d7cea8ad921fabfbd551ce10bf45cdc992"
+    }
+  ]
+}
