@@ -159,8 +159,52 @@ M3U_EMPTY_STATE_ADDED_FILES = (
 )
 
 
+RENUMBER_JOURNAL_START_FILES = (
+    "backend/routers/channels.py",
+    "frontend/src/services/api.ts",
+    "frontend/src/types/editMode.ts",
+)
+
+
+def _before_renumber_journal_start(manifest):
+    key = "renumber_journal_start_update"
+    update = manifest[key]
+    assert update["base_commit"] == "e0f7781da6e9b870f8317d9c544a3532600ce0c2"
+    assert update["bead"] == "enhancedchannelmanager-0by9g"
+    assert update["version"] == "0.18.2-0081"
+    assert update["previous_manifest_sha256"] == (
+        "7bb86c07f81f057e0a55b9d8de2da275cc75bd5caecddfb33ad26deedd32493c"
+    )
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(RENUMBER_JOURNAL_START_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_renumber_journal_start_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_renumber_journal_start(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["renumber_journal_start_update"] == manifest["renumber_journal_start_update"]
+
+
 def _before_publish_concurrency(manifest):
     key = "publish_concurrency_update"
+    manifest = _before_renumber_journal_start(manifest)
     update = manifest[key]
     assert update["base_commit"] == "2b63af8eed785b231c93ad6d6aedd3eb38991779"
     assert update["bead"] == "enhancedchannelmanager-9iagf"
