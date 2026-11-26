@@ -495,7 +495,7 @@
     {
       "executable": false,
       "path": "backend/alert_methods_smtp.py",
-      "sha256": "ecb45f833d0fd9cd7370f3fe27873908f91d634a5c9ae4eb66988d16f818f310",
+      "sha256": "1aff260d68fec871fd7c59e76518a9a9fd09abd2992d32e99ea5a582c444394d",
       "type": "file"
     },
     {
@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "53ef6b995663a18a71523506733b5bb491c7d08c0e21811c7bb9e8a1bb5c2003",
+      "sha256": "67e0ac4fd1de790ca87fa9c29d771431e89002b9407a5d414c05176473d335e2",
       "type": "file"
     },
     {
@@ -1128,7 +1128,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "9f3be14021fe303e659aed1e45775cd956b41eaec6455b4ab503aa4f865fe345",
+      "sha256": "63d39ac35465beaeea14fdcc3aed3360316ac2c63db07c2337567c566a1583f5",
       "type": "file"
     },
     {
@@ -1830,7 +1830,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "accaf62780de3f85c876e4748304c82bae2b9d160bc7c44dd872a5ededfb0c06",
+      "sha256": "3c438c1294b0507a22c39ce9e925a7a5600d27466f35b4fdd663cc1880a93437",
       "type": "file"
     },
     {
@@ -6808,5 +6808,18 @@
     "previous_manifest_sha256": "d2f75cc8ef5015eaaf60070469bfc1ffc172452763db7a7bda3b816b720fe7dc",
     "scope": "Escape Telegram HTML-mode title, message and task name in scheduled-task alert dispatch by reusing the alert-method escaper, plus 0076 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0076"
+  },
+  "smtp_html_escape_update": {
+    "base_commit": "69c31168b4d77d92f9d526e65fbf8913b1314ade",
+    "bead": "enhancedchannelmanager-98k3b",
+    "changed_files": {
+      "backend/alert_methods_smtp.py": "ecb45f833d0fd9cd7370f3fe27873908f91d634a5c9ae4eb66988d16f818f310",
+      "backend/main.py": "53ef6b995663a18a71523506733b5bb491c7d08c0e21811c7bb9e8a1bb5c2003",
+      "backend/routers/backup.py": "9f3be14021fe303e659aed1e45775cd956b41eaec6455b4ab503aa4f865fe345",
+      "frontend/package.json": "accaf62780de3f85c876e4748304c82bae2b9d160bc7c44dd872a5ededfb0c06"
+    },
+    "previous_manifest_sha256": "8792a518b7f7cb097befa0ff3dd263e055c731893ba9362caa5bc89164455fa3",
+    "scope": "Escape alert title, message, source, metadata keys and values, and the digest class attribute in SMTP alert HTML email bodies, plus 0077 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0077"
   }
 }

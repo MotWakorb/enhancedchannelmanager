@@ -10,6 +10,7 @@ import smtplib
 import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from html import escape as _escape_html
 from typing import Any, Dict, List, Tuple
 
 import safe_regex  # bd-eio04.x: ReDoS-guarded wrapper for stdlib re
@@ -152,22 +153,24 @@ class SMTPMethod(AlertMethod):
         <body>
             <div class="container">
                 <div class="header">
-                    <h2>{self.get_emoji(message.notification_type)} {message.title or 'Notification'}</h2>
+                    <h2>{self.get_emoji(message.notification_type)} {_escape_html(message.title or 'Notification')}</h2>
                 </div>
                 <div class="body">
-                    <div class="message">{message.message.replace(chr(10), '<br>')}</div>
+                    <div class="message">{_escape_html(message.message).replace(chr(10), '<br>')}</div>
         """
 
         if message.metadata:
             html += '<div class="metadata">'
             for key, value in message.metadata.items():
                 if isinstance(value, (str, int, float, bool)):
-                    html += f'<div class="metadata-item"><strong>{key.replace("_", " ").title()}:</strong> {value}</div>'
+                    # Title-case before escaping: title() would corrupt entities such as &amp;.
+                    label = _escape_html(key.replace("_", " ").title())
+                    html += f'<div class="metadata-item"><strong>{label}:</strong> {_escape_html(str(value))}</div>'
             html += '</div>'
 
         html += f"""
                     <div class="footer">
-                        Sent from Enhanced Channel Manager{' - ' + message.source if message.source else ''}<br>
+                        Sent from Enhanced Channel Manager{' - ' + _escape_html(message.source) if message.source else ''}<br>
                         {message.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}
                     </div>
                 </div>
@@ -481,11 +484,11 @@ class SMTPMethod(AlertMethod):
 
         for message in messages:
             emoji = self.get_emoji(message.notification_type)
-            alert_class = f"alert-{message.notification_type}"
+            alert_class = _escape_html(f"alert-{message.notification_type}")
             html += f"""
                     <div class="alert-item {alert_class}">
-                        <div class="alert-title">{emoji} {message.title or 'Notification'}</div>
-                        <div class="alert-message">{message.message}</div>
+                        <div class="alert-title">{emoji} {_escape_html(message.title or 'Notification')}</div>
+                        <div class="alert-message">{_escape_html(message.message)}</div>
                     </div>
             """
 
