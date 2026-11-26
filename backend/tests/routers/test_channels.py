@@ -1207,6 +1207,7 @@ class TestAssignNumbers:
             response = await async_client.post("/api/channels/assign-numbers", json={
                 "channel_ids": [1],
                 "starting_number": 100,
+                "expected_numbers": {"1": 1},
             })
 
         assert response.status_code == 200
@@ -2137,8 +2138,10 @@ class TestBulkCommitPartialSuccess:
         client.get_streams.return_value = {"results": [], "count": 0, "next": None}
         client.update_channel.side_effect = ValueError("Synthetic rename rejected")
         operations = [
-            {"type": "updateChannel", "channelId": 44, "data": {"name": "New", "channel_number": 70}},
-            {"type": "bulkAssignChannelNumbers", "channelIds": [44], "startingNumber": 80},
+            {"type": "updateChannel", "channelId": 44, "data": {"name": "New", "channel_number": 70},
+             "expectedNumber": {"number": 80}},
+            {"type": "bulkAssignChannelNumbers", "channelIds": [44], "startingNumber": 80,
+             "expectedNumbers": {"44": 80}},
         ]
         with patch("routers.channels.get_client", return_value=client), patch("routers.channels.journal"):
             _, result = await _commit_and_wait(async_client, {
@@ -2167,8 +2170,10 @@ class TestBulkCommitPartialSuccess:
         with patch("routers.channels.get_client", return_value=client), patch("routers.channels.journal"):
             _, result = await _commit_and_wait(async_client, {
                 "operations": [
-                    {"type": "bulkAssignChannelNumbers", "channelIds": [44, 45, 46], "startingNumber": 70},
-                    {"type": "bulkAssignChannelNumbers", "channelIds": [45], "startingNumber": 81},
+                    {"type": "bulkAssignChannelNumbers", "channelIds": [44, 45, 46], "startingNumber": 70,
+                     "expectedNumbers": {"44": 80, "45": 81, "46": 82}},
+                    {"type": "bulkAssignChannelNumbers", "channelIds": [45], "startingNumber": 81,
+                     "expectedNumbers": {"45": 81}},
                 ],
                 "continueOnError": True, "consolidate": True, "returnSettledOperationIndexes": True,
             })
@@ -3371,7 +3376,8 @@ class TestBulkMergeChannelsStaleSourceIds:
 _GATED_CHANNEL_ENDPOINTS = [
     ("/api/channels/clear-auto-created", "post", {"json": {"group_ids": [1]}}),
     ("/api/channels/assign-numbers", "post",
-     {"json": {"channel_ids": [1, 2], "starting_number": 100}}),
+     {"json": {"channel_ids": [1, 2], "starting_number": 100,
+               "expected_numbers": {"1": 1, "2": 2}}}),
     ("/api/channels/bulk-commit", "post", {"json": {"operations": []}}),
     ("/api/channels/merge", "post",
      {"json": {"source_channel_ids": [1, 2], "target_name": "Merged"}}),

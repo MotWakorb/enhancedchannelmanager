@@ -85,7 +85,8 @@ class TestAssignNumbersJournalsTheRenumberBeforeTheRenames:
              patch("routers.channels.journal", journal_double):
             return await async_client.post(
                 "/api/channels/assign-numbers",
-                json={"channel_ids": [42, 43], "starting_number": 1},
+                json={"channel_ids": [42, 43], "starting_number": 1,
+                      "expected_numbers": {"42": 42, "43": 43}},
             )
 
     @pytest.mark.asyncio

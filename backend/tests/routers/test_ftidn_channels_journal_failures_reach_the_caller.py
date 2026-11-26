@@ -93,7 +93,8 @@ class TestEachChannelsEndpointReportsAnUnwrittenRow:
         response = await self._call(
             async_client, client, journal_double,
             "post", "/api/channels/assign-numbers",
-            json={"channel_ids": [42, 43], "starting_number": 1},
+            json={"channel_ids": [42, 43], "starting_number": 1,
+                  "expected_numbers": {"42": 42, "43": 42}},
         )
 
         client.assign_channel_numbers.assert_awaited_once()
@@ -329,7 +330,8 @@ class TestTheSharedWriterIsWhatRuns:
              patch("routers.channels.journal", journal_double):
             response = await async_client.post(
                 "/api/channels/assign-numbers",
-                json={"channel_ids": [42, 43], "starting_number": 1},
+                json={"channel_ids": [42, 43], "starting_number": 1,
+                  "expected_numbers": {"42": 42, "43": 42}},
             )
 
         assert response.status_code == 200, response.text
@@ -352,7 +354,8 @@ class TestTheSharedWriterIsWhatRuns:
              patch("routers.channels.journal", journal_double):
             await async_client.post(
                 "/api/channels/assign-numbers",
-                json={"channel_ids": [42, 43], "starting_number": 1},
+                json={"channel_ids": [42, 43], "starting_number": 1,
+                  "expected_numbers": {"42": 42, "43": 42}},
             )
 
         rows = journal_double.log_entries.call_args_list[0].args[0]
