@@ -73,7 +73,10 @@ Watchtower, and `docker compose up --force-recreate`.
 2. Start (or recreate) the container with that mount in place.
 3. If you're recreating a container that already holds data you care about,
    copy the whole `/config` directory out first (for example with
-   `docker cp`) before recreating without confirming the mount.
+   `docker cp`) before recreating without confirming the mount. Copy while
+   the container is still running, and do not stop or remove it first: a
+   container started with `--rm` is deleted when it stops, and its data goes
+   with it.
    A Configuration (DBAS) backup from **Settings → Backup & Restore**
    does not restore ECM's accounts, rules or schedules. The legacy Full
    Backup restores rules and schedules, but a current one carries no ECM
