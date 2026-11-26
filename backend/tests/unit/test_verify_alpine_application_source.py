@@ -164,6 +164,7 @@ SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
 
 RENUMBER_BASELINES_FILES = (
+    "backend/channel_number.py",
     "backend/routers/channels.py",
     "frontend/src/App.bulkCreateStaging.test.tsx",
     "frontend/src/App.tsx",

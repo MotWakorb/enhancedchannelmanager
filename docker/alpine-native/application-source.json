@@ -609,7 +609,7 @@
     {
       "executable": false,
       "path": "backend/channel_number.py",
-      "sha256": "77256c18d0226ee27fa65b4ab4c038e1d04bf55101d8ff147996df0d6460a5c0",
+      "sha256": "f0e3bdb5e34ce8a7f37f5b3dd44deb7d758ae4379ed6327ce35ce191d899c4f1",
       "type": "file"
     },
     {
@@ -1152,7 +1152,7 @@
     {
       "executable": false,
       "path": "backend/routers/channels.py",
-      "sha256": "3e50af6a4a82357ae2abc726cd945ac8815708148242d25d7f6161a8b4b04e37",
+      "sha256": "21bea404bcf5cd9d6c1c42c0a0e8fe94c5076d73fad4140cb8f19b323543c798",
       "type": "file"
     },
     {
@@ -1872,7 +1872,7 @@
     {
       "executable": false,
       "path": "frontend/src/App.bulkCreateStaging.test.tsx",
-      "sha256": "7ae08316ebfe5828f83c0fc435d0afd011e620a31cc01a54f14496cd6a49cc04",
+      "sha256": "a776bb5113cd77164e52805c62691c8b7ab38274cd42e9b6cbcc047372a3be15",
       "type": "file"
     },
     {
@@ -1902,7 +1902,7 @@
     {
       "executable": false,
       "path": "frontend/src/App.tsx",
-      "sha256": "ea84c02c3ffeb31dfc6890b6f2657c168389222bf6a3a2dc792e53dcd872a4d7",
+      "sha256": "92610ba8dba62fd5c39e1c464493c0e3c85aff9853b09e0d7f794cf1abf051de",
       "type": "file"
     },
     {
@@ -5232,7 +5232,7 @@
     {
       "executable": false,
       "path": "frontend/src/hooks/useEditMode.concurrentNumbering.test.ts",
-      "sha256": "4d1d86ae63fd27250de989c84b85aa11fafa1094bb2c7a9ae6179a66a39d3129",
+      "sha256": "5473b3a221cd635877b34920438b12426837bdda8a8ae435a31b18f1c7a5c9e4",
       "type": "file"
     },
     {
@@ -5274,7 +5274,7 @@
     {
       "executable": false,
       "path": "frontend/src/hooks/useEditMode.ts",
-      "sha256": "b09bda867a4666edca913810575acecdea902261c13c7960a2e8be6dfb1acae3",
+      "sha256": "8b253e186b1dfac23c3171bbb88572e16e44a1f3562cca53543d52ae17af1675",
       "type": "file"
     },
     {
@@ -6248,7 +6248,7 @@
     {
       "executable": false,
       "path": "mcp-server/tests/test_assign_numbers_baselines.py",
-      "sha256": "75db5de416779c74a15146bc7418327215d4a688bb87278c40b4e17142b480d7",
+      "sha256": "50afbad9a96f70f342669565e3b58a9568d7ee80d91c3998b86407a609c67bb8",
       "type": "file"
     },
     {
@@ -7024,6 +7024,7 @@
     "base_commit": "73d7e03c0b3e5d8de3d1c83ad314bbf7eb0d4725",
     "bead": "enhancedchannelmanager-jjjnh",
     "changed_files": {
+      "backend/channel_number.py": "77256c18d0226ee27fa65b4ab4c038e1d04bf55101d8ff147996df0d6460a5c0",
       "backend/main.py": "0839185df7cd657335764ce3136f9969cd3d447d2139b1168dcc37af463c066e",
       "backend/routers/backup.py": "2f22fcb3c80f472723c5265b1ee03e2e3b66abc8ae59a74848d234e1d53823c7",
       "backend/routers/channels.py": "e997719b91fc8f58d3b3baaf77b004150107ccbfb2162db306adcd75b1145e5b",
@@ -7038,7 +7039,7 @@
       "mcp-server/tools/channels.py": "ae5745447e93c4e7b0f1d5013edec1635e4f3e9c167926149957b1487368a4b1"
     },
     "previous_manifest_sha256": "67277c0b816e9227628c25d13c87aaf0e54d22321a5833c24c374393be386ed4",
-    "scope": "Require the caller's per-channel baseline on every numbering write to an existing channel: expectedNumbers on bulk-commit range assignments, a required expectedNumber on updateChannel renumbers, and expected_numbers on POST /api/channels/assign-numbers, refusing a stale baseline without writing and a missing one with 422; report createdChannelNumbers; send baselines from Edit Mode, the non-Edit-Mode renumber and the MCP assign_channel_numbers tool, plus 0088 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "scope": "Require the caller's per-channel baseline on every numbering write to an existing channel: expectedNumbers on bulk-commit range assignments, a required expectedNumber on updateChannel renumbers, and expected_numbers on POST /api/channels/assign-numbers, accepting any finite number read as a baseline while keeping the write contract, refusing a stale baseline without writing and a missing one with 422; rebase later Edit Mode requests of one Apply onto the numbers earlier requests settled; report createdChannelNumbers; send baselines from Edit Mode, the non-Edit-Mode renumber and the MCP assign_channel_numbers tool, plus 0088 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0088"
   }
 }
