@@ -139,8 +139,52 @@ PENDING_MERGE_PREVIEW_FILES = (
 )
 
 
+MCP_TOOLS_HEADING_FILES = (
+    "frontend/src/components/settings/MCPSettingsSection.test.tsx",
+    "frontend/src/components/settings/MCPSettingsSection.tsx",
+    "frontend/src/components/settings/mcpToolCategories.ts",
+)
+
+
+def _before_mcp_tools_heading(manifest):
+    key = "mcp_tools_heading_update"
+    update = manifest[key]
+    assert update["base_commit"] == "9744f7637945d11dbf7412db3e80f8e4f5292368"
+    assert update["bead"] == "enhancedchannelmanager-xkk54"
+    assert update["version"] == "0.18.2-0078"
+    assert update["previous_manifest_sha256"] == (
+        "ffdc3ae7983cd30e7ab326dd4448d9ba51269934753e415298dc86406316a2dc"
+    )
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(MCP_TOOLS_HEADING_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_mcp_tools_heading_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_mcp_tools_heading(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["mcp_tools_heading_update"] == manifest["mcp_tools_heading_update"]
+
+
 def _before_smtp_html_escape(manifest):
     key = "smtp_html_escape_update"
+    manifest = _before_mcp_tools_heading(manifest)
     update = manifest[key]
     assert update["base_commit"] == "69c31168b4d77d92f9d526e65fbf8913b1314ade"
     assert update["bead"] == "enhancedchannelmanager-98k3b"

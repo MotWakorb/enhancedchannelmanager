@@ -9,7 +9,9 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useRef } from 'react';
 import { MCPSettingsSection } from './MCPSettingsSection';
+import { StickySectionNav } from '../StickySectionNav';
 import { HttpError } from '../../services/httpClient';
 
 const notificationMocks = vi.hoisted(() => ({
@@ -28,6 +30,17 @@ vi.mock('../../services/api', () => ({
 
 vi.mock('../../contexts/NotificationContext', () => ({
   useNotifications: () => notificationMocks,
+}));
+
+// A catalog whose size is NOT the real one: if the Available Tools heading or
+// anchor tracked the catalog, the anchor assertions below would move.
+vi.mock('./mcpToolCategories', () => ({
+  MCP_TOOL_CATEGORIES: [
+    { category: 'Alpha', count: 7, icon: 'build', desc: 'a' },
+    { category: 'Beta', count: 11, icon: 'build', desc: 'b' },
+    { category: 'Gamma', count: 2, icon: 'build', desc: 'c' },
+  ],
+  MCP_TOOL_TOTAL: 20,
 }));
 
 import * as api from '../../services/api';
@@ -254,5 +267,69 @@ describe('MCPSettingsSection — key lifecycle confirmations (04c0u.12)', () => 
       'MCP Key Durability',
     );
     expect(notificationMocks.error).not.toHaveBeenCalled();
+  });
+});
+
+const PINNED_ID = 'settings-mcp-settings-section-available-tools';
+
+function Harness() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  return (
+    <div className="settings-content" ref={containerRef}>
+      <MCPSettingsSection isAdmin={true} />
+      <StickySectionNav
+        placement="rail"
+        containerRef={containerRef}
+        selector=".settings-section, [data-settings-section]"
+        routeKey="routekey-that-must-not-appear"
+      />
+    </div>
+  );
+}
+
+/**
+ * The "Available Tools" heading carries no count and its rail anchor is PINNED.
+ * `StickySectionNav.discover()` slugs an unpinned anchor from heading text, which made the count part of every shared
+ * deep link. The id is asserted literally, and the harness uses a `routeKey`
+ * that is not the real route, so a pass proves the pin and not the fallback.
+ */
+describe('MCPSettingsSection — Available Tools anchor', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} unobserve() {} });
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }));
+    vi.mocked(api.getSettings).mockResolvedValue(
+      { mcp_api_key_configured: true } as unknown as Awaited<ReturnType<typeof api.getSettings>>,
+    );
+    vi.mocked(api.getMCPStatus).mockResolvedValue({
+      reachable: true, api_key_configured: true, api_key_status: 'ok', tools_available: 197,
+    });
+  });
+
+  it('has a heading with no hard-coded number', async () => {
+    render(<Harness />);
+    const heading = await screen.findByRole('heading', { name: /Available Tools/ });
+    expect(heading.textContent).toBe('Available Tools');
+    expect(heading.textContent).not.toMatch(/\d/);
+  });
+
+  it('pins the section to a stable data-section-id the rail uses', async () => {
+    render(<Harness />);
+    const heading = await screen.findByRole('heading', { name: /Available Tools/ });
+    const section = heading.closest('.settings-section') as HTMLElement;
+    expect(section.dataset.sectionId).toBe(PINNED_ID);
+    expect(section.id).toBe(PINNED_ID);
+    expect(await screen.findByRole('button', { name: 'Available Tools' })).toBeInTheDocument();
+  });
+
+  it('keeps the same id whatever the catalog size', async () => {
+    // Mocked catalog totals 20; the real one differs. Neither the label nor
+    // the id may carry either number.
+    render(<Harness />);
+    const heading = await screen.findByRole('heading', { name: /Available Tools/ });
+    const section = heading.closest('.settings-section') as HTMLElement;
+    expect(section.id).toBe(PINNED_ID);
+    expect(section.id).not.toMatch(/\d/);
+    expect(document.querySelectorAll('.mcp-tool-card')).toHaveLength(3);
   });
 });

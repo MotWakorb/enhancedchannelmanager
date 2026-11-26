@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "67e0ac4fd1de790ca87fa9c29d771431e89002b9407a5d414c05176473d335e2",
+      "sha256": "10fbbe95b540339b806a96b4332b17ec39426acc19f37bf3e5ad0f60fc02a85a",
       "type": "file"
     },
     {
@@ -1128,7 +1128,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "63d39ac35465beaeea14fdcc3aed3360316ac2c63db07c2337567c566a1583f5",
+      "sha256": "fc90ff202712e07c9ce5de42c6f0e164deebc53437d20578199c7a4226b3d1ab",
       "type": "file"
     },
     {
@@ -1830,7 +1830,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "3c438c1294b0507a22c39ce9e925a7a5600d27466f35b4fdd663cc1880a93437",
+      "sha256": "a60895d610c1363a51583112387bf61a19d875c5326b3476fcc9b700cbe6a685",
       "type": "file"
     },
     {
@@ -4332,13 +4332,13 @@
     {
       "executable": false,
       "path": "frontend/src/components/settings/MCPSettingsSection.test.tsx",
-      "sha256": "ad5b24a8e1c627acb993a640208e0115301945b7567657f9824302c2ad3e1862",
+      "sha256": "b567c10470b3fb550d558700882be376d0d7f08a248db6b96c7405dbcf115103",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/components/settings/MCPSettingsSection.tsx",
-      "sha256": "72adebf0f714558ba10fe41cfdf2db7d2efbe5b7a2417d21c5a5da42b58d49f2",
+      "sha256": "d1cf1b8da9b20cb95a311f555802a18583f3378cd196ba21e04d9f213e9ab046",
       "type": "file"
     },
     {
@@ -4506,7 +4506,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/settings/mcpToolCategories.ts",
-      "sha256": "f3b5e987ecf6397e05af333be224c865113ac97370b5a30923defa2107b4b869",
+      "sha256": "a9547b6baa9341ce336eccd7035895d9e32d702a51ea0c1d6f81a4ef780ced32",
       "type": "file"
     },
     {
@@ -6821,5 +6821,20 @@
     "previous_manifest_sha256": "8792a518b7f7cb097befa0ff3dd263e055c731893ba9362caa5bc89164455fa3",
     "scope": "Escape alert title, message, source, metadata keys and values, and the digest class attribute in SMTP alert HTML email bodies, plus 0077 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0077"
+  },
+  "mcp_tools_heading_update": {
+    "base_commit": "9744f7637945d11dbf7412db3e80f8e4f5292368",
+    "bead": "enhancedchannelmanager-xkk54",
+    "changed_files": {
+      "backend/main.py": "67e0ac4fd1de790ca87fa9c29d771431e89002b9407a5d414c05176473d335e2",
+      "backend/routers/backup.py": "63d39ac35465beaeea14fdcc3aed3360316ac2c63db07c2337567c566a1583f5",
+      "frontend/package.json": "3c438c1294b0507a22c39ce9e925a7a5600d27466f35b4fdd663cc1880a93437",
+      "frontend/src/components/settings/MCPSettingsSection.test.tsx": "ad5b24a8e1c627acb993a640208e0115301945b7567657f9824302c2ad3e1862",
+      "frontend/src/components/settings/MCPSettingsSection.tsx": "72adebf0f714558ba10fe41cfdf2db7d2efbe5b7a2417d21c5a5da42b58d49f2",
+      "frontend/src/components/settings/mcpToolCategories.ts": "f3b5e987ecf6397e05af333be224c865113ac97370b5a30923defa2107b4b869"
+    },
+    "previous_manifest_sha256": "ffdc3ae7983cd30e7ab326dd4448d9ba51269934753e415298dc86406316a2dc",
+    "scope": "Remove the hard-coded tool count from the MCP Available Tools heading and pin its section anchor with data-section-id, plus 0078 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0078"
   }
 }
