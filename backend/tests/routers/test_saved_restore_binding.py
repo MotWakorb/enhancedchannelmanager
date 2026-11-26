@@ -250,3 +250,74 @@ async def test_cancel_before_first_step_cleans_snapshot_with_task_reference_reta
     assert all(task.cancelled() for task in retained)
     assert not list(private.iterdir())
     assert selected.read_bytes() == b"retained backup"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("loose_mode", [0o777, 0o775, 0o755])
+async def test_existing_loose_private_parent_is_tightened_before_snapshot(
+    async_client, storage, scheduled, loose_mode
+):
+    # A group/world-writable parent lets another writer rename the 0700
+    # snapshot directory and plant a replacement before the task reopens it.
+    saved, private = storage
+    private.mkdir()
+    private.chmod(loose_mode)
+    name = "ecm-backup-2026-01-01_000000.zip"
+    (saved / name).write_bytes(b"selected backup bytes")
+    parent_modes = []
+
+    async def consume(_task_id, *, parameters, run_id):
+        parent_modes.append(stat.S_IMODE(private.stat().st_mode))
+
+    engine = MagicMock(run_task=AsyncMock(side_effect=consume))
+    with patch("task_engine.get_engine", return_value=engine):
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+        await asyncio.gather(*scheduled)
+    assert response.status_code == 200
+    assert parent_modes == [0o700]
+
+
+@pytest.mark.asyncio
+async def test_symlinked_private_parent_is_refused_and_target_untouched(
+    async_client, storage, tmp_path
+):
+    saved, private = storage
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    elsewhere.chmod(0o755)
+    private.symlink_to(elsewhere, target_is_directory=True)
+    name = "ecm-backup-2026-01-01_000000.zip"
+    (saved / name).write_bytes(b"retained backup")
+    with patch("task_engine.get_engine") as engine:
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+    assert response.status_code == 500
+    engine.assert_not_called()
+    assert list(elsewhere.iterdir()) == []
+    assert stat.S_IMODE(elsewhere.stat().st_mode) == 0o755
+    assert (saved / name).read_bytes() == b"retained backup"
+
+
+@pytest.mark.asyncio
+async def test_foreign_owned_private_parent_is_refused(
+    async_client, storage, monkeypatch
+):
+    import restore_snapshot_storage
+
+    saved, private = storage
+    private.mkdir(mode=0o700)
+    name = "ecm-backup-2026-01-01_000000.zip"
+    (saved / name).write_bytes(b"retained backup")
+    real_uid = os.geteuid()
+    monkeypatch.setattr(restore_snapshot_storage.os, "geteuid", lambda: real_uid + 1)
+    with patch("task_engine.get_engine") as engine:
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+    assert response.status_code == 500
+    engine.assert_not_called()
+    assert list(private.iterdir()) == []
+    assert (saved / name).read_bytes() == b"retained backup"

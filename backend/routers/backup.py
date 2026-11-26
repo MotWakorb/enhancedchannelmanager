@@ -7361,10 +7361,17 @@ async def restore_dbas_saved(
     # in an owner-only directory outside the operator-writable backup listing.
     # Decrypt/header/manifest reads later all use these same snapshot bytes.
     with source:
-        _DBAS_RESTORE_TMP_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-        _sweep_stale_restore_temps(_DBAS_RESTORE_TMP_DIR)
-        from restore_snapshot_storage import PrivateRestoreSnapshot
+        from restore_snapshot_storage import (
+            PrivateRestoreSnapshot,
+            prepare_private_parent,
+        )
 
+        try:
+            prepare_private_parent(_DBAS_RESTORE_TMP_DIR)
+        except OSError as exc:
+            logger.error("[BACKUP] Refusing saved restore: unsafe snapshot parent: %s", exc)
+            raise HTTPException(status_code=500, detail="Failed to start restore")
+        _sweep_stale_restore_temps(_DBAS_RESTORE_TMP_DIR)
         snapshot = PrivateRestoreSnapshot(_DBAS_RESTORE_TMP_DIR)
         try:
             snapshot_path = await _stream_upload_to_temp(

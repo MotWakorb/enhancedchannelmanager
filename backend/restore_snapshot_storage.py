@@ -18,6 +18,29 @@ _ARTIFACT_RE = re.compile(r"ecm-restore-[a-z0-9_]{8}\.zip\Z")
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
 
+def prepare_private_parent(parent: Path) -> None:
+    """Create or tighten the snapshot parent to an owned, no-follow 0700 directory.
+
+    ``mkdir(mode=0o700, exist_ok=True)`` leaves an EXISTING parent's mode alone.
+    A group/world-writable parent would let another writer rename a 0700
+    snapshot directory and plant a replacement before the task reopens it by
+    path, so an owned parent is tightened in place and a symlinked or
+    foreign-owned parent is refused (``OSError``/``PermissionError``).
+    Regression coverage: tests/routers/test_saved_restore_binding.py
+    (``*_private_parent_*``). Ancestors above ``parent`` remain trusted config.
+    """
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor = os.open(parent, _DIRECTORY_FLAGS)
+    try:
+        info = os.fstat(descriptor)
+        if info.st_uid != os.geteuid():
+            raise PermissionError("restore snapshot parent is not owned by ECM")
+        if stat.S_IMODE(info.st_mode) & 0o077:
+            os.fchmod(descriptor, 0o700)
+    finally:
+        os.close(descriptor)
+
+
 class PrivateRestoreSnapshot(AbstractContextManager):
     """Keep an advisory directory lease until wrapper/callback cleanup finishes."""
 
