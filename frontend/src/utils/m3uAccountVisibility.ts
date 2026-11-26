@@ -1,11 +1,9 @@
 /**
- * Shared "is this M3U account displayable" predicate (bead 381gu).
+ * Shared "is this M3U account displayable" predicate.
  *
  * Dispatcharr seeds a provider-internal pseudo-account named "custom" (any
- * casing) that must never surface to the operator. The check used to be
- * copy-pasted across M3UManagerTab, TaskEditorModal, M3ULinkedAccountsModal
- * and StatsTab, and the copies drifted through four repair commits. Every
- * consumer now goes through these helpers so there is exactly one definition.
+ * casing) that must never surface to the operator. Every consumer goes
+ * through these helpers so there is exactly one definition.
  */
 
 /** Name of the hidden pseudo-account, compared case-insensitively. */

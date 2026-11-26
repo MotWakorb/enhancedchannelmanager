@@ -743,13 +743,6 @@ export function StatsTab() {
   //      payload where the backend resolver didn't populate the field.
   //   3. Otherwise → "Unknown" bucket.
   const m3uConnectionStats = (() => {
-    // Predicate: an M3U account that should appear as its own badge.
-    // Active accounts with the name "custom" are provider-internal
-    // pseudo-accounts that should never surface to the operator as a
-    // first-class capacity badge. Extracting the predicate once prevents
-    // silent divergence between the displayedAccountIds set and the
-    // result filter below (bd-ib3c9).
-
     // Build a map of profile ID -> account ID for the legacy fallback.
     const profileToAccountMap = new Map<number, number>();
     for (const account of m3uAccounts) {

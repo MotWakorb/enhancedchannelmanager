@@ -808,7 +808,7 @@ export function M3UManagerTab({
   }, [accounts, filterServerGroup]);
   // Empty-state copy keys off whether ANY account exists, never off the
   // filtered set: a hidden "custom" account or a server-group filter can empty
-  // filteredAccounts while accounts still exist (bead 381gu).
+  // filteredAccounts while accounts still exist.
   const hasAccounts = accounts.length > 0;
 
   // Setup/admin actions surfaced through the header kebab (bead 09x38.2).
@@ -972,16 +972,18 @@ export function M3UManagerTab({
       {filteredAccounts.length === 0 ? (
         <div className="empty-state">
           <span className="material-icons">playlist_play</span>
-          <h3>{hasAccounts ? 'No matching M3U accounts' : 'No M3U Accounts'}</h3>
+          <h3>{!hasAccounts
+            ? 'No M3U Accounts'
+            : filterServerGroup !== null
+              ? 'No matching M3U accounts'
+              : 'No M3U accounts to display'}</h3>
           <p>{!hasAccounts
             ? 'Add an M3U account to start importing streams.'
             : filterServerGroup !== null
               ? 'No accounts belong to the selected server group.'
-              : 'No M3U accounts are available to display.'}</p>
-          {hasAccounts
-            ? (filterServerGroup !== null
-                ? <button className="btn-secondary" onClick={() => setFilterServerGroup(null)}>Clear filters</button>
-                : null)
+              : "The only account present is Dispatcharr's hidden custom account. Add an M3U account to start importing streams."}</p>
+          {hasAccounts && filterServerGroup !== null
+            ? <button className="btn-secondary" onClick={() => setFilterServerGroup(null)}>Clear filters</button>
             : <button className="btn-primary" onClick={handleAddAccount}>
                 <span className="material-icons">add</span>
                 Add M3U Account
