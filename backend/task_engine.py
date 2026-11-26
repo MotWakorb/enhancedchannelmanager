@@ -477,15 +477,15 @@ def _error_task_completion_message(task_id: str, result: TaskResult) -> str:
     The error code stays the primary signal. A DBAS backup that failed its cloud
     upload AND stubbed Dispatcharr categories also names those categories,
     because the error code alone would let the operator fix the upload and never
-    learn the artifact is missing data. Plain text only: category names are
-    code-defined section keys and the channel formatters escape the body.
+    learn the artifact is missing data. The body is plain text with no markup,
+    and bounded, because it is pushed to Telegram, Discord, email and ntfy.
     """
     body = result.error or result.message or "Unknown error"
     if task_id != "dbas_backup":
         return body
     details = result.details if isinstance(result.details, dict) else {}
-    degraded = details.get("degraded_categories") or []
-    if not degraded:
+    degraded = details.get("degraded_categories")
+    if not isinstance(degraded, list) or not degraded:
         return body
     names = [str(name) for name in degraded[:_DEGRADED_NAMES_IN_ALERT]]
     if len(degraded) > _DEGRADED_NAMES_IN_ALERT:

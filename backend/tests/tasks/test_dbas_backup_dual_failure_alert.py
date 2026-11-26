@@ -193,3 +193,14 @@ async def test_another_task_carrying_the_same_details_key_is_unchanged(_wire_db)
         _result(success=False, error="BOOM", degraded=["dvr_rules"]),
     )
     assert kwargs["message"] == "BOOM"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", [{"dvr_rules": "x"}, "dvr_rules"])
+async def test_non_list_degraded_categories_keeps_plain_error_alert(_wire_db, bad):
+    result = _result(success=False, error="CLOUD_UPLOAD_FAILED")
+    result.details["degraded_categories"] = bad
+    kwargs = await _run(_wire_db, _Backup, result)
+    assert kwargs["notification_type"] == "error"
+    assert kwargs["title"] == "Task Failed: DBAS Backup"
+    assert kwargs["message"] == "CLOUD_UPLOAD_FAILED"
