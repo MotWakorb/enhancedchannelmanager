@@ -217,9 +217,18 @@ recovery instruction that works on a pinned browser. Use one of these instead:
 **Volumes:**
 - `/config` — Persistent storage for database, settings, logos, TLS certificates, and backups
 
+#### Startup and interpreter variables (advanced)
+
+Most installs never set these. They matter when the container refuses to start
+or when you build a custom image.
+
+- **CONFIG_DIR** (default: `/config`, which the image sets for you): The directory ECM's application code treats as its durable data location: `settings.json`, `journal.db`, `backups/`, uploaded logos, TLS files and the credential files it writes. **Leave it at `/config` and mount your volume there.** The application honors the variable, but the container's startup script does not honor it end to end. It reads `CONFIG_DIR` for the "is this directory on a mounted volume" warning and compares `MCP_SECRETS_DIR` against it. Creating the directory, fixing its ownership, the write test and the TLS status check are hard-coded to `/config`, and so is the image build's own setup of that directory. The migration tooling also defaults to `/config`. Pointing `CONFIG_DIR` somewhere else therefore leaves that other directory unprepared and unchecked, and the persistence warning then describes a directory the startup checks never touched. Changing it is not a supported way to relocate data.
+- **ECM_PYTHON** (default: `/opt/venv/bin/python`): The interpreter the startup preflight checks run with (the Python version, package and application-import checks). ECM's Python packages live in the image's virtualenv at `/opt/venv`. If the default is not executable, the script falls back to `python3` found on `PATH`. If you set `ECM_PYTHON` to a path that is not executable, startup prints a warning naming the value and falls back the same way. That fallback can land on a system interpreter without ECM's packages, and preflight then fails with the interpreter diagnostics. Set it only in a custom image whose virtualenv is not at `/opt/venv`.
+- **ECM_UVICORN** (default: `/opt/venv/bin/uvicorn`): The `uvicorn` launcher the container execs to start ECM. It follows the same rule as `ECM_PYTHON`: if it is not executable, startup falls back to `uvicorn` on `PATH`, and a non-executable explicit value is reported by name. Preflight fails if the launcher it ends up with is not executable. Set it together with `ECM_PYTHON` when you point at a different virtualenv.
+
 ### Backup & Restore
 
-ECM supports full backup and restore of all configuration. You can create backups from Settings, or restore from a backup during the first-run setup wizard.
+ECM has two in-app backup types, on **Settings → Backup & Restore**. A Configuration (DBAS) backup, manual or scheduled, restores the Dispatcharr-side configuration, logos and ECM's own settings; it does not apply ECM's login accounts, rules or schedules. The legacy Full Backup restores ECM's rules, schedules and other configuration tables plus its settings, with credentials removed, and is also what the first-run setup wizard accepts. A backup taken on a current build restores neither ECM's login accounts nor its TLS private key, and no backup restores the key for stored cloud credentials. To keep everything, back up the whole `/config` directory. See the [backup overview](docs/user_guide/backup-restore/backup-overview.md).
 
 ### Development Setup
 
