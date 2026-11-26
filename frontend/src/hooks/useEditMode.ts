@@ -15,6 +15,7 @@ import type {
   ApiCallSpec,
   StagedSideEffects,
   StageUpdateChannelOptions,
+  StagedProfileIntent,
 } from '../types';
 import { EMPTY_STAGED_SIDE_EFFECTS, profileMembershipKey } from '../types/editMode';
 import {
@@ -904,13 +905,16 @@ export function useEditMode({
   );
 
   const stageCreateChannel = useCallback(
-    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string, tvgId?: string, tvcGuideStationId?: string): number => {
+    (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string, tvgId?: string, tvcGuideStationId?: string, profileIntent?: StagedProfileIntent): number => {
       // Use ref to get unique temp ID even when called in a loop (React batching issue)
       const tempId = nextTempIdRef.current;
       nextTempIdRef.current -= 1; // Decrement immediately for next call
       const stagedGroupId = newGroupName ? ensureStagedGroupId(newGroupName) : undefined;
       stageOperations([{
-        apiCall: { type: 'createChannel', name, channelNumber, groupId, newGroupName, stagedGroupId, logoId, logoUrl, tvgId, tvcGuideStationId },
+        apiCall: {
+          type: 'createChannel', name, channelNumber, groupId, newGroupName, stagedGroupId, logoId, logoUrl, tvgId, tvcGuideStationId,
+          ...(profileIntent && { profileIntent: { ...profileIntent, profileIds: [...profileIntent.profileIds] } }),
+        },
         description: `Create channel "${name}"`,
         tempChannelId: tempId,
       }]);
@@ -929,6 +933,7 @@ export function useEditMode({
     logoUrl,
     tvgId,
     tvcGuideStationId,
+    profileIntent,
   }: Parameters<UseEditModeReturn['stageCreateChannelWithStreams']>[0]): number => {
     const uniqueStreamIds = [...new Set(streamIds)];
     if (uniqueStreamIds.length === 0) {
@@ -951,6 +956,7 @@ export function useEditMode({
           tvgId,
           tvcGuideStationId,
           expectedStreamIds: uniqueStreamIds,
+          ...(profileIntent && { profileIntent: { ...profileIntent, profileIds: [...profileIntent.profileIds] } }),
         },
         description: `Create channel "${name}"`,
         tempChannelId,
@@ -1753,11 +1759,13 @@ export function useEditMode({
     };
 
     const continued = partialCreateSession.current?.enteredAt === state.enteredAt ? partialCreateSession.current : undefined;
-    const selectedScopes = state.stagedOperations.flatMap(op => {
-      if (op.apiCall.type !== 'createChannel') return [];
-      const scope = options?.createProfileScopes?.get(op.afterSnapshot[0]?.id);
-      return scope ? [scope] : [];
-    });
+    const profileIntents = new Map<number, StagedProfileIntent>();
+    for (const op of state.stagedOperations) {
+      if (op.apiCall.type === 'createChannel' && op.apiCall.profileIntent) {
+        profileIntents.set(op.afterSnapshot[0]?.id, op.apiCall.profileIntent);
+      }
+    }
+    const selectedScopes: Array<{ operator: string; destination?: string }> = [...profileIntents.values()];
     if (continued?.destination) selectedScopes.push(continued);
     const destination = selectedScopes[0]?.destination;
     if (selectedScopes.length && (!destination || destination !== options?.currentProfileDestination
@@ -2309,7 +2317,11 @@ export function useEditMode({
 
         if (tempIdMap.size > 0) {
           partialCreateSession.current = { enteredAt: state.enteredAt, operator: operatorKey, destination };
-          options?.onCreatesCommitted?.(tempIdMap, createResponse.profileRecoveryBinding);
+          options?.onCreatesCommitted?.(tempIdMap, createResponse.profileRecoveryBinding,
+            [...tempIdMap].flatMap(([tempId, channelId]) => {
+              const intent = profileIntents.get(tempId);
+              return intent ? [{ channelId, profileIds: [...intent.profileIds] }] : [];
+            }));
           for (const op of channelCreateOps) {
             if (tempIdMap.has(Number(op.tempId))) retired.add(operationIds.get(op)!);
           }

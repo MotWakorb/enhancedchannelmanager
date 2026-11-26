@@ -24,7 +24,7 @@ import { operatorLedgerKey, planLedgerRestore } from './utils/stagedLedgerStorag
 import type { DedupDropReport } from './hooks';
 import { StreamDedupModal } from './components/StreamDedupModal';
 import * as api from './services/api';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress, CommitFailure } from './types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress, CommitFailure, StagedProfileIntent } from './types';
 import packageJson from '../package.json';
 import { logger } from './utils/logger';
 import { setDateFormatLocale } from './utils/formatting';
@@ -314,10 +314,6 @@ function App() {
   // Track newly created group IDs in this session
   const [newlyCreatedGroupIds, setNewlyCreatedGroupIds] = useState<Set<number>>(new Set());
 
-  // Staged identities are resolved only from the commit's authoritative map.
-  const pendingProfileAssignmentsRef = useRef<Array<{
-    tempIds: number[]; profileIds: number[]; operator: string; destination?: string;
-  }>>([]);
   const editProfileScope = useRef<{ operator: string; destination?: string } | null>(null);
 
   // Track if baseline has been initialized
@@ -532,21 +528,19 @@ function App() {
   });
 
   useLayoutEffect(() => {
-    if (isEditMode) editProfileScope.current = { operator: operatorKey, destination: profileDestination };
-    else {
-      editProfileScope.current = null;
-      pendingProfileAssignmentsRef.current = [];
-    }
+    editProfileScope.current = isEditMode ? { operator: operatorKey, destination: profileDestination } : null;
     // Pin the session, not a later settings refresh while a picker is open.
   }, [isEditMode, editModeEnteredAt]);
 
-  const stageProfileIntent = useCallback((tempIds: number[], profileIds: number[], fromCatalog = false) => {
+  // Staged identities are resolved only from the commit's authoritative map,
+  // so the intent travels on the staged create rather than beside it.
+  const profileIntentFor = useCallback((profileIds: number[], fromCatalog = false): StagedProfileIntent => {
     const source = fromCatalog ? profileCatalogDestination : profileDestination;
     const opened = editProfileScope.current;
-    pendingProfileAssignmentsRef.current.push({
-      tempIds, profileIds: [...profileIds], operator: operatorKey,
+    return {
+      profileIds: [...profileIds], operator: operatorKey,
       destination: opened?.operator === operatorKey && opened.destination === source ? source : undefined,
-    });
+    };
   }, [operatorKey, profileDestination, profileCatalogDestination]);
 
   // Auto-add staged groups to the channel group filter so they're visible
@@ -642,10 +636,8 @@ function App() {
 
   // Handle dialog actions
   const handleApplyChanges = useCallback(async () => {
-    // Capture both intent and its local scope before waiting for the create
-    // job. A late result must neither consume another session's intent nor
-    // start recovery using its generation.
-    const assignments = [...pendingProfileAssignmentsRef.current];
+    // Capture the recovery queue's scope before waiting for the create job. A
+    // late result must not start recovery using another session's generation.
     const enqueue = createdChannelProfiles.enqueue;
     let startRecovery: (() => void) | undefined;
     setCommitProgress({ current: 0, total: 1, currentOperation: 'Starting...' });
@@ -653,17 +645,10 @@ function App() {
       setCommitProgress(progress);
     }, {
       continueOnError: true,
-      ...(assignments.length > 0 && {
-        currentProfileDestination: profileDestination,
-        createProfileScopes: new Map(assignments.flatMap(assignment =>
-          assignment.tempIds.map(tempId => [tempId, assignment] as const))),
-        onCreatesCommitted: (tempIds, binding) => {
-          startRecovery = enqueue(assignments.flatMap(assignment => assignment.tempIds.flatMap(tempId => {
-            const channelId = tempIds.get(tempId);
-            return channelId === undefined ? [] : [{ channelId, profileIds: assignment.profileIds }];
-          })), binding, true);
-        },
-      }),
+      currentProfileDestination: profileDestination,
+      onCreatesCommitted: (_tempIds, binding, profileAssignments) => {
+        startRecovery = enqueue(profileAssignments, binding, true);
+      },
     });
     // Do not race staged profile edits from later Apply batches. The intent is
     // already saved; only the automatic attempt waits for the commit to settle.
@@ -1747,14 +1732,27 @@ function App() {
     rememberSeenStreams,
   ]);
 
-  // Reload channels when search changes
+  // Reload channels when the search changes.
+  //
+  // The mount load already fetched the initial term, so skip the term that was
+  // last loaded: loadChannels() flips loadingStates.channels, and ChannelsPane
+  // then unmounts the whole list, destroying any open menu. loadedSearchRef is
+  // null after a load we started is cancelled, so reverting to that term reloads.
+  const loadedSearchRef = useRef<string | null>(channelFilters.search);
   useEffect(() => {
+    const search = channelFilters.search;
+    if (search === loadedSearchRef.current) return;
     const abortController = new AbortController();
+    let started = false;
     const timer = setTimeout(() => {
+      started = true;
+      loadedSearchRef.current = search;
       loadChannels(abortController.signal);
     }, 500); // Debounce: 500ms for less frequent API requests
     return () => {
       clearTimeout(timer);
+      // Cannot tell a finished load from an aborted one, so forget either; the cost is one redundant reload on revert.
+      if (started) loadedSearchRef.current = null;
       abortController.abort(); // Cancel in-flight request when search changes
     };
   }, [channelFilters.search]);
@@ -2080,16 +2078,11 @@ function App() {
           // In edit mode, stage the creation without calling Dispatcharr API
           // Pass logoId, logoUrl, and tvgId so the staged channel has the metadata
           // logoUrl is used as fallback if logoId is not found - the commit will create/find the logo
-          const tempId = stageCreateChannel(name, channelNumber, groupId, undefined, logoId, logoUrl, tvgId);
-
-          // Track profile assignments for after commit
-          // Use passed profileIds if provided, otherwise fall back to default profiles
-          // ALWAYS add assignment even if profileIds is empty - this triggers disable on all profiles
-          const profilesToAssign = profileIds && profileIds.length > 0
-            ? profileIds
-            : defaultChannelProfileIds;
-
-          stageProfileIntent([tempId], profilesToAssign, !!profileIds?.length);
+          // Omitted means the defaults; an explicit `[]` means no profiles,
+          // which still stages an intent so every profile is disabled.
+          const profilesToAssign = profileIds ?? defaultChannelProfileIds;
+          const tempId = stageCreateChannel(name, channelNumber, groupId, undefined, logoId, logoUrl, tvgId, undefined,
+            profileIntentFor(profilesToAssign, !!profileIds?.length));
 
           // Create a temporary channel object to return (for compatibility)
           const tempChannel: Channel = {
@@ -2120,10 +2113,8 @@ function App() {
           });
           setChannels((prev) => [...prev, newChannel]);
 
-          // Apply profile assignments - use passed profileIds if provided, otherwise fall back to defaults
-          const profilesToAssign = profileIds && profileIds.length > 0
-            ? profileIds
-            : defaultChannelProfileIds;
+          // Omitted means the defaults; an explicit `[]` means no profiles.
+          const profilesToAssign = profileIds ?? defaultChannelProfileIds;
 
           for (const profileId of profilesToAssign) {
             try {
@@ -2141,7 +2132,7 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, defaultChannelProfileIds, stageProfileIntent]
+    [isEditMode, stageCreateChannel, defaultChannelProfileIds, profileIntentFor]
   );
 
   /**
@@ -2205,6 +2196,7 @@ function App() {
       groupId?: number,
       newGroupName?: string,
       pushDownOnConflict?: boolean,
+      profileIds?: number[],
     ) => {
       try {
         if (!isEditMode && pushDownOnConflict) {
@@ -2239,6 +2231,12 @@ function App() {
             stagePushDownShifts(shifts);
           }
 
+          // Omitted with no configured defaults leaves membership to
+          // Dispatcharr. An explicit `[]` is an intent to disable every profile.
+          const profileIntent = profileIds !== undefined
+            ? profileIntentFor(profileIds, profileIds.length > 0)
+            : defaultChannelProfileIds.length > 0 ? profileIntentFor(defaultChannelProfileIds) : undefined;
+
           // In edit mode, stage the creation
           // stageCreateChannel handles newGroupName internally
           const tempId = stageCreateChannel(
@@ -2249,13 +2247,9 @@ function App() {
             undefined,     // logoId
             undefined,     // logoUrl
             undefined,     // tvgId
-            undefined      // tvcGuideStationId
+            undefined,     // tvcGuideStationId
+            profileIntent,
           );
-
-          // Track profile assignments (use default profiles for manual creation)
-          if (defaultChannelProfileIds.length > 0) {
-            stageProfileIntent([tempId], defaultChannelProfileIds);
-          }
 
           // Track the newly created group so it appears in the filter
           if (newGroupName) {
@@ -2301,7 +2295,7 @@ function App() {
       endBatch,
       displayChannels,
       defaultChannelProfileIds,
-      stageProfileIntent,
+      profileIntentFor,
       loadChannels,
       loadChannelGroups,
       trackNewlyCreatedGroup,
@@ -2538,7 +2532,9 @@ function App() {
         const increment = hasDecimal ? 0.1 : 1;
 
         let channelIndex = 0;
-        const createdTempIds: number[] = [];
+        // Omitted means the defaults; an explicit `[]` means no profiles.
+        // Either way an intent is staged, so an empty one disables every profile.
+        const bulkProfileIntent = profileIntentFor(profileIds ?? defaultChannelProfileIds, !!profileIds?.length);
         for (const [_groupingKey, { normalizedName, streams: groupedStreams }] of sortedEntries) {
           // Calculate channel number with proper decimal handling
           const rawChannelNumber = startingNumber + channelIndex * increment;
@@ -2619,7 +2615,7 @@ function App() {
           // normalize flag travels with the staged operation: a backend-side
           // pass would normalize an already-normalized name a second time
           // (bead enhancedchannelmanager-e9e5o).
-          createdTempIds.push(stageCreateChannelWithStreams({
+          stageCreateChannelWithStreams({
             name: channelName,
             streamIds: groupedStreams.map((stream) => stream.id),
             channelNumber,
@@ -2628,7 +2624,8 @@ function App() {
             logoUrl,
             tvgId,
             tvcGuideStationId,
-          }));
+            profileIntent: bulkProfileIntent,
+          });
         }
 
         // End the batch
@@ -2654,15 +2651,6 @@ function App() {
           });
         }
 
-        // Store pending profile assignments to be applied after commit
-        // Use explicit profileIds if provided, otherwise fall back to default profiles
-        // ALWAYS add assignment even if profileIds is empty - this triggers disable on all profiles
-        const profileIdsToApply = (profileIds && profileIds.length > 0)
-          ? profileIds
-          : defaultChannelProfileIds;
-
-        stageProfileIntent(createdTempIds, profileIdsToApply, !!profileIds?.length);
-
         // The caller owns the operator-facing message: StreamsPane sits inside
         // the notification provider, App renders it (bead
         // enhancedchannelmanager-e9e5o).
@@ -2673,7 +2661,7 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannelWithStreams, stageUpdateChannel, stagePushDownShifts, startBatch, endBatch, displayChannels, defaultChannelProfileIds, stageProfileIntent]
+    [isEditMode, stageCreateChannelWithStreams, stageUpdateChannel, stagePushDownShifts, startBatch, endBatch, displayChannels, defaultChannelProfileIds, profileIntentFor]
   );
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
@@ -2919,8 +2907,10 @@ function App() {
       channels,
       channelGroups,
       profileIds: channelProfiles.map((profile) => profile.id),
+      profileScope: { operator: operatorKey, destination: profileDestination },
     });
-  }, [pendingRestore, workspaceEditUnavailable, workspacePermissionDenied, channels, channelGroups, channelProfiles]);
+  }, [pendingRestore, workspaceEditUnavailable, workspacePermissionDenied, channels, channelGroups, channelProfiles,
+    operatorKey, profileDestination]);
 
   const channelManagerPageAction = activeTab === 'channel-manager'
     && !workspacePermissionDenied && (
@@ -3086,6 +3076,7 @@ function App() {
         restorable={restorePlan?.restorable ?? []}
         dropped={restorePlan?.dropped ?? []}
         withdrawnAcknowledgements={restorePlan?.withdrawnAcknowledgements ?? []}
+        withdrawnProfileIntents={restorePlan?.withdrawnProfileIntents ?? []}
         onRestore={() => {
           if (pendingRestore === null || restorePlan === null) return;
           restoreStagedLedger({

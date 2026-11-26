@@ -20,7 +20,7 @@ Almost everything in Edit Mode is now staged, including setting logos in bulk, c
 ### Create a channel (a staged change)
 
 1. With Edit Mode on, click **Create new channel** (the + icon).
-2. Enter a **Channel Name** and, optionally, a **Starting Channel Number**, **Channel Group**, and channel profiles.
+2. Enter a **Channel Name** and, optionally, a **Starting Channel Number**, **Channel Group**, and channel profiles. **Channel Profiles** opens with your default profiles ticked. If you leave it as it is, the channel gets the default profiles. If you change it, the channel gets exactly the profiles you ticked. If you clear it, the channel is hidden from every profile. The bulk create dialog works the same way.
 3. Expand **Normalization Rules** if you want your normalization rules applied to the name you typed. The panel previews what the rules will make of the name as you type it. Leave the toggle off to create the channel under the literal text you entered. Its starting position comes from **Settings → Channel Normalization → "Apply normalization by default when creating channels"**.
 4. Click **Create Channel**.
 

@@ -4,6 +4,7 @@ import type { StagedOperation } from '../types';
 import type {
   DroppedLedgerOperation,
   WithdrawnAcknowledgement,
+  WithdrawnProfileIntent,
 } from '../utils/stagedLedgerStorage';
 import './EditMode.css';
 
@@ -21,6 +22,12 @@ export interface EditModeRestoreDialogProps {
    * was dead. The change itself is coming back; only the consent is not.
    */
   withdrawnAcknowledgements: WithdrawnAcknowledgement[];
+  /**
+   * Creates restored WITHOUT their profile selection, because it was made for
+   * a different operator or Dispatcharr connection. Optional so existing
+   * callers that never stage profile intents need not pass it.
+   */
+  withdrawnProfileIntents?: WithdrawnProfileIntent[];
   onRestore: () => void;
   onDiscard: () => void;
 }
@@ -67,6 +74,7 @@ export function EditModeRestoreDialog({
   restorable,
   dropped,
   withdrawnAcknowledgements,
+  withdrawnProfileIntents = [],
   onRestore,
   onDiscard,
 }: EditModeRestoreDialogProps) {
@@ -150,6 +158,24 @@ export function EditModeRestoreDialog({
               </p>
               <ul data-testid="edit-mode-restore-withdrawn">
                 {withdrawnAcknowledgements.map((entry) => (
+                  <li key={entry.id}>
+                    <strong>{entry.description}</strong> — {entry.detail}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {withdrawnProfileIntents.length > 0 && (
+            <div className="edit-mode-restore-dropped">
+              <p role="alert">
+                <span className="material-icons" aria-hidden="true">error_outline</span>
+                {withdrawnProfileIntents.length} new channel
+                {withdrawnProfileIntents.length !== 1 ? 's' : ''} will be restored without
+                {withdrawnProfileIntents.length !== 1 ? ' their' : ' its'} channel profile selection:
+              </p>
+              <ul data-testid="edit-mode-restore-withdrawn-profiles">
+                {withdrawnProfileIntents.map((entry) => (
                   <li key={entry.id}>
                     <strong>{entry.description}</strong> — {entry.detail}
                   </li>

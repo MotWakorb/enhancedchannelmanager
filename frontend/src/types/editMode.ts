@@ -112,7 +112,12 @@ export type ApiCallSpec =
    * {@link ConcurrentNumberAcknowledgement}.
    */
   | { type: 'bulkAssignChannelNumbers'; channelIds: number[]; startingNumber?: number; acknowledgedConcurrentChanges?: ConcurrentNumberAcknowledgement[] }
-  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string; stagedGroupId?: number; logoId?: number; logoUrl?: string; tvgId?: string; tvcGuideStationId?: string; acknowledgedDuplicate?: DuplicateNumberAcknowledgement; expectedStreamIds?: number[] }
+  /**
+   * `profileIntent` rides on the create so that Undo, Redo, Discard and a
+   * persisted-ledger restore carry it exactly as they carry the create. It is
+   * ECM bookkeeping and never part of the bulk-commit body.
+   */
+  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string; stagedGroupId?: number; logoId?: number; logoUrl?: string; tvgId?: string; tvcGuideStationId?: string; acknowledgedDuplicate?: DuplicateNumberAcknowledgement; expectedStreamIds?: number[]; profileIntent?: StagedProfileIntent }
   | { type: 'deleteChannel'; channelId: number }
   | { type: 'createGroup'; name: string; tempGroupId: number }
   | { type: 'deleteChannelGroup'; groupId: number }
@@ -126,6 +131,21 @@ export type ApiCallSpec =
   | { type: 'setProfileMembership'; profileId: number; channelId: number; enabled: boolean }
   | { type: 'restoreChannelGroup'; groupId: number }
   | { type: 'clearStreamStats'; streamIds: number[] };
+
+/**
+ * Profile membership to apply to a staged create once it has a real id.
+ *
+ * `profileIds: []` is an explicit "no profiles" (disable in every profile),
+ * not an absence. The scope is the operator and Dispatcharr destination the
+ * selection was made against; Apply refuses a scope that is not the current
+ * one, and a restore withdraws it rather than carrying it into another scope.
+ * An undefined `destination` means the scope was already unknown at staging.
+ */
+export interface StagedProfileIntent {
+  profileIds: number[];
+  operator: string;
+  destination?: string;
+}
 
 /**
  * Working-copy representation of the staged operations whose effect does NOT
@@ -391,10 +411,15 @@ export interface CommitOptions {
   continueOnError?: boolean;
   /** Skip validation step (use when user already confirmed to proceed) */
   skipValidation?: boolean;
-  /** Synchronous handoff of confirmed creates, before any post-commit reads. */
-  onCreatesCommitted?: (tempIds: ReadonlyMap<number, number>, binding?: string) => void;
-  /** Connection and operator captured with each staged profile selection. */
-  createProfileScopes?: ReadonlyMap<number, { operator: string; destination?: string }>;
+  /**
+   * Synchronous handoff of confirmed creates, before any post-commit reads,
+   * with the staged profile intent of each create that carried one.
+   */
+  onCreatesCommitted?: (
+    tempIds: ReadonlyMap<number, number>,
+    binding: string | undefined,
+    profileAssignments: Array<{ channelId: number; profileIds: number[] }>,
+  ) => void;
   currentProfileDestination?: string;
 }
 
@@ -490,7 +515,7 @@ export interface UseEditModeReturn {
   stageRemoveStream: (channelId: number, streamId: number, description: string) => void;
   stageReorderStreams: (channelId: number, streamIds: number[], description: string) => void;
   stageBulkAssignNumbers: (channelIds: number[], startingNumber: number, description: string) => void;
-  stageCreateChannel: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string, tvgId?: string, tvcGuideStationId?: string) => number; // returns temp ID
+  stageCreateChannel: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string, tvgId?: string, tvcGuideStationId?: string, profileIntent?: StagedProfileIntent) => number; // returns temp ID
   stageCreateChannelWithStreams: (input: {
     name: string;
     streamIds: number[];
@@ -501,6 +526,7 @@ export interface UseEditModeReturn {
     logoUrl?: string;
     tvgId?: string;
     tvcGuideStationId?: string;
+    profileIntent?: StagedProfileIntent;
   }) => number;
   stageDeleteChannel: (channelId: number, description: string) => void;
   /**

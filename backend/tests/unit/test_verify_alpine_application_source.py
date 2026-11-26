@@ -108,7 +108,7 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     manifest = verifier.load_manifest(
         ROOT / "docker/alpine-native/application-source.json"
     )
-    assert len(manifest["files"]) == 1095
+    assert len(manifest["files"]) == 1098
     assert (
         manifest["baseline_application_commit"]
         == "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531"
@@ -159,25 +159,230 @@ M3U_EMPTY_STATE_ADDED_FILES = (
 )
 
 
-RENUMBER_JOURNAL_START_FILES = (
-    "backend/channel_number_apply.py",
-    "backend/routers/channels.py",
-    "frontend/src/services/api.ts",
+SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
+SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
+
+
+STARTUP_ENV_CONTRACT_DOCS_FILES = ()
+STARTUP_ENV_CONTRACT_DOCS_ADDED_FILES = ()
+
+
+def _before_startup_env_contract_docs(manifest):
+    key = "startup_env_contract_docs_update"
+    update = manifest[key]
+    assert update["base_commit"] == "eef60af0965748af7bc3fb983589190e26ad07f4"
+    assert update["bead"] == "enhancedchannelmanager-mevqr"
+    assert update["version"] == "0.18.2-0086"
+    assert update["previous_manifest_sha256"] == (
+        "0e8a11085dfe55b602a3bed8b64912818ec9c3703b7ce4735d56a5e520bb064b"
+    )
+    assert set(update["added_files"]) == set(STARTUP_ENV_CONTRACT_DOCS_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(STARTUP_ENV_CONTRACT_DOCS_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_startup_env_contract_docs_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_startup_env_contract_docs(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert (
+        result["startup_env_contract_docs_update"]
+        == manifest["startup_env_contract_docs_update"]
+    )
+
+
+RESTORE_DRILL_LINK_FILES = ()
+RESTORE_DRILL_LINK_ADDED_FILES = ()
+
+
+def _before_restore_drill_link(manifest):
+    key = "restore_drill_link_update"
+    manifest = _before_startup_env_contract_docs(manifest)
+    update = manifest[key]
+    assert update["base_commit"] == "a950c3ef70b1f975544940fa9a976bfe2a2d6c2b"
+    assert update["bead"] == "enhancedchannelmanager-nupa7"
+    assert update["version"] == "0.18.2-0085"
+    assert update["previous_manifest_sha256"] == (
+        "afe7345d4e06cb57642ae5e7fd1bfcebb60696c9200e2348f74908420cbb7001"
+    )
+    assert set(update["added_files"]) == set(RESTORE_DRILL_LINK_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(RESTORE_DRILL_LINK_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_restore_drill_link_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_restore_drill_link(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert (
+        result["restore_drill_link_update"] == manifest["restore_drill_link_update"]
+    )
+
+
+RESTORED_PROFILE_INTENT_FILES = (
+    "frontend/src/App.tsx",
+    "frontend/src/components/EditModeRestoreDialog.tsx",
+    "frontend/src/hooks/useEditMode.ts",
     "frontend/src/types/editMode.ts",
+    "frontend/src/utils/stagedLedgerStorage.ts",
+    "frontend/src/utils/stagedLedgerStorage.test.ts",
+)
+RESTORED_PROFILE_INTENT_ADDED_FILES = (
+    "frontend/src/App.restoreProfileIntent.test.tsx",
 )
 
 
-def _before_renumber_journal_start(manifest):
-    key = "renumber_journal_start_update"
+def _before_restored_profile_intent(manifest):
+    key = "restored_profile_intent_update"
+    manifest = _before_restore_drill_link(manifest)
     update = manifest[key]
-    assert update["base_commit"] == "e0f7781da6e9b870f8317d9c544a3532600ce0c2"
-    assert update["bead"] == "enhancedchannelmanager-0by9g"
-    assert update["version"] == "0.18.2-0081"
+    assert update["base_commit"] == "e17442485237c17509d24fa2037dd3eb9c7e81d4"
+    assert update["bead"] == "enhancedchannelmanager-0m06f.3.4.3"
+    assert update["version"] == "0.18.2-0084"
     assert update["previous_manifest_sha256"] == (
-        "7bb86c07f81f057e0a55b9d8de2da275cc75bd5caecddfb33ad26deedd32493c"
+        "1516a70b57babe921c3256c8a953a7da1646d13d550561286694e077107c4c00"
+    )
+    assert set(update["added_files"]) == set(RESTORED_PROFILE_INTENT_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(RESTORED_PROFILE_INTENT_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_restored_profile_intent_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_restored_profile_intent(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert (
+        result["restored_profile_intent_update"]
+        == manifest["restored_profile_intent_update"]
+    )
+
+
+EXPLICIT_PROFILE_SELECTION_FILES = (
+    "frontend/src/App.tsx",
+    "frontend/src/components/StreamsPane.tsx",
+    "frontend/src/components/tabs/ChannelManagerTab.tsx",
+)
+EXPLICIT_PROFILE_SELECTION_ADDED_FILES = (
+    "frontend/src/App.createProfileSelection.test.tsx",
+)
+
+
+def _before_explicit_profile_selection(manifest):
+    key = "explicit_profile_selection_update"
+    manifest = _before_restored_profile_intent(manifest)
+    update = manifest[key]
+    assert update["base_commit"] == "2d33a086d5b86dcbf6a1b7ba192184b59d1ef20b"
+    assert update["bead"] == "enhancedchannelmanager-0m06f.3.4.2"
+    assert update["version"] == "0.18.2-0083"
+    assert update["previous_manifest_sha256"] == (
+        "a3fa9c5672c7fca1ca83e3df0a668092a18e70d38b4f9b85f1af51b2a14c842a"
+    )
+    assert set(update["added_files"]) == set(EXPLICIT_PROFILE_SELECTION_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(EXPLICIT_PROFILE_SELECTION_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_explicit_profile_selection_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_explicit_profile_selection(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert (
+        result["explicit_profile_selection_update"]
+        == manifest["explicit_profile_selection_update"]
+    )
+
+
+DUAL_FAILURE_ALERT_FILES = ("backend/task_engine.py",)
+
+
+def _before_dual_failure_alert(manifest):
+    key = "dual_failure_alert_update"
+    manifest = _before_explicit_profile_selection(manifest)
+    update = manifest[key]
+    assert update["base_commit"] == "56ee16259892e9e0a8cd988c4ec9e77c903735b9"
+    assert update["bead"] == "enhancedchannelmanager-75j5q"
+    assert update["version"] == "0.18.2-0082"
+    assert update["previous_manifest_sha256"] == (
+        "e030c75249276dbcf499991c338a3e34ad88e252108a823bdf7b0573fcb7fd0f"
     )
     assert set(update["changed_files"]) == (
-        set(VERSION_TOUCHPOINTS) | set(RENUMBER_JOURNAL_START_FILES)
+        set(VERSION_TOUCHPOINTS) | set(DUAL_FAILURE_ALERT_FILES)
     )
     previous = {name: value for name, value in manifest.items() if name != key}
     previous["files"] = []
@@ -194,18 +399,59 @@ def _before_renumber_journal_start(manifest):
     return previous
 
 
-def test_renumber_journal_start_update_preserves_exact_prior_manifest(verifier):
+def test_dual_failure_alert_update_preserves_exact_prior_manifest(verifier):
     manifest = verifier.load_manifest(
         ROOT / "docker/alpine-native/application-source.json"
     )
-    _before_renumber_journal_start(manifest)
+    _before_dual_failure_alert(manifest)
     result = verifier.verify(ROOT, manifest)
-    assert result["renumber_journal_start_update"] == manifest["renumber_journal_start_update"]
+    assert result["dual_failure_alert_update"] == manifest["dual_failure_alert_update"]
+
+
+def _before_search_reload_mount(manifest):
+    key = "search_reload_mount_update"
+    manifest = _before_dual_failure_alert(manifest)
+    update = manifest[key]
+    assert update["base_commit"] == "e0f7781da6e9b870f8317d9c544a3532600ce0c2"
+    assert update["bead"] == "enhancedchannelmanager-bv8n7"
+    assert update["version"] == "0.18.2-0081"
+    assert update["previous_manifest_sha256"] == (
+        "7bb86c07f81f057e0a55b9d8de2da275cc75bd5caecddfb33ad26deedd32493c"
+    )
+    assert set(update["added_files"]) == set(SEARCH_RELOAD_MOUNT_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(SEARCH_RELOAD_MOUNT_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_search_reload_mount_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_search_reload_mount(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["search_reload_mount_update"] == manifest["search_reload_mount_update"]
 
 
 def _before_publish_concurrency(manifest):
     key = "publish_concurrency_update"
-    manifest = _before_renumber_journal_start(manifest)
+    manifest = _before_search_reload_mount(manifest)
     update = manifest[key]
     assert update["base_commit"] == "2b63af8eed785b231c93ad6d6aedd3eb38991779"
     assert update["bead"] == "enhancedchannelmanager-9iagf"

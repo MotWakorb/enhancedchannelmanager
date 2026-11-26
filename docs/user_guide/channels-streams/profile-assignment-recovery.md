@@ -49,6 +49,14 @@ assignments and set visibility manually.
 changed since staging. Return to the original connection or discard and restage
 the affected selection. Profile names and numeric IDs can overlap between servers.
 
+If your session ends before **Apply All** and you restore the unsaved Edit Mode
+changes, each new channel keeps its profile selection, including an explicit
+"no profiles". Restoring writes nothing to Dispatcharr; the selection is applied
+after **Apply All**, as above. Unsaved changes from a different ECM sign-in are
+never offered. A selection made for a different Dispatcharr connection is not
+restored: the restore dialog lists those channels, which are then created
+without a profile selection, so set their visibility after applying.
+
 This notice covers only channels whose committed IDs reached ECM's browser.
 If Apply reports that the channel list could not refresh, reload to see what
 already committed. In a partial Apply that confirmed creates, rejected edits
