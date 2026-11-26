@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **The create dialogs now honor the Channel Profiles picker (build 0.18.2-0083; `enhancedchannelmanager-0m06f.3.4.2`).** The manual create dialog showed a profile picker but ignored it, and clearing the picker in either dialog fell back to the default profiles. Now, in both the manual and bulk create dialogs, an untouched picker still applies the configured default profiles, a changed picker assigns exactly the profiles ticked, and a cleared picker hides the new channel from every profile. Profile assignment recovery after a create keeps the operator's choice rather than the defaults.
+
 - **A DBAS backup alert now names the degraded categories as well as the cloud error (build 0.18.2-0082; `enhancedchannelmanager-75j5q`).** When a DBAS backup both fails its cloud upload and has degraded categories, the pushed alert now names the degraded categories as well as the cloud error, so fixing the upload alone no longer hides a missing category. Other tasks' alerts are unchanged.
 
 - **Channel Manager no longer reloads the whole channel list about half a second after opening (build 0.18.2-0081; `enhancedchannelmanager-bv8n7`).** That second load blanked the list and closed any channel or group menu the operator had just opened. Searching still reloads once per change after the debounce.
