@@ -68,8 +68,11 @@ The line that matters most on a first run is the config-persistence check:
 **Result:** the container logs "All preflight checks passed!" and starts
 listening. If a check fails instead (not just the config-persistence
 warning, but an actual `✗` line), the container exits and does not start; see
-[Troubleshooting](../troubleshooting/index.md) once the dedicated
-container-won't-start article is published.
+[The container won't start](../troubleshooting/common-issues.md#the-container-wont-start)
+and the [container preflight failure runbook](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/container-preflight-failure.md).
+If the warning appeared on a container that already holds data, do not
+recreate it yet: follow
+[Recover data from a container with no config mount](../backup-restore/recover-an-unmounted-container.md).
 
 ### Create the admin account
 

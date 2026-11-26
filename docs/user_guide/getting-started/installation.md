@@ -74,7 +74,9 @@ Watchtower, and `docker compose up --force-recreate`.
 3. If you're recreating a container that already holds data you care about,
    take a backup first (**Settings → Backup & Restore**) before recreating
    without confirming the mount. ECM's own startup check (next section)
-   only warns after the fact.
+   only warns after the fact. If the container is already running without
+   a mount, follow
+   [Recover data from a container with no config mount](../backup-restore/recover-an-unmounted-container.md).
 
 **Result:** the container's own preflight output confirms the mount. See
 [What the preflight checks tell you](first-run.md#what-the-preflight-checks-tell-you)

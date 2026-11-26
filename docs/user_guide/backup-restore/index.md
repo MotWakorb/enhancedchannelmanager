@@ -13,6 +13,7 @@ The UX label for this feature is **Backup & Restore**. The internal acronym DBAS
 | Confirm a backup is valid before I need it | [Verify a backup](verify-a-backup.md) |
 | Restore from a backup | [Restore a backup](restore-a-backup.md) |
 | Move to a new host | [Migrate to a new install](migrate-to-a-new-install.md) |
+| Rescue the data in a container that has no `/config` mount | [Recover an unmounted container](recover-an-unmounted-container.md) |
 | Upload backups to S3, WebDAV, or Google Drive | [Configure cloud destinations](configure-cloud-destinations.md) |
 | Diagnose a failed restore | [Troubleshoot a restore](troubleshoot-restore.md) |
 | Keep a standby instance automatically in sync | [Cross-Instance Sync](cross-instance-sync.md) |
@@ -30,6 +31,7 @@ The UX label for this feature is **Backup & Restore**. The internal acronym DBAS
 | [Configure Cloud Destinations](configure-cloud-destinations.md) | Per-provider setup: S3/S3-compatible (shipped), WebDAV (shipped), Google Drive (shipped), OneDrive (deferred), Dropbox (deferred). |
 | [Troubleshoot a Restore](troubleshoot-restore.md) | Failure modes, log patterns, rollback-incomplete recovery, logo misses. |
 | [Migrate to a New Install](migrate-to-a-new-install.md) | End-to-end migration: backup on old install, install on new host, restore, verify. |
+| [Recover an Unmounted Container](recover-an-unmounted-container.md) | Copy a backup out of a container with no `/config` mount, add the mount, recreate, restore, and verify. |
 | [Cross-Instance Sync](cross-instance-sync.md) | One-way A→B config replication for DR standbys and multi-instance setups. |
 
 ---

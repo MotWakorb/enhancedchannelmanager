@@ -137,6 +137,10 @@ The DBAS path runs a compensating rollback if the restore itself fails partway,
 which is not the same thing as being able to undo a restore that succeeded.
 There is no undo for a successful restore.
 
+If the reason you need a backup is a container with no `/config` mount, follow
+[Recover data from a container with no config mount](../backup-restore/recover-an-unmounted-container.md)
+instead; it sequences the backup, the copy out, the mount and the restore.
+
 See [Restore a Backup](../backup-restore/restore-a-backup.md) for the full
 walkthrough, and [Troubleshoot a Restore](../backup-restore/troubleshoot-restore.md)
 when one refuses.
