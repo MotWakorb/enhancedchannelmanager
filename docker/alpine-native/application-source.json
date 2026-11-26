@@ -627,7 +627,7 @@
     {
       "executable": false,
       "path": "backend/channel_pipeline_engine.py",
-      "sha256": "0f14829faa2dbcad09a4e3f9e7f09b0d33e6090fa93e79e5766d41ba2a1ad9d3",
+      "sha256": "b3e5710dc5730c7ac4918aac190870e65a5660f67dab73aa9970d0fa89bc13f7",
       "type": "file"
     },
     {
@@ -639,7 +639,7 @@
     {
       "executable": false,
       "path": "backend/channel_pipeline_executor.py",
-      "sha256": "12acf1c3e9e39bfe35281388c3bab3ea77f44684cfde8e5abe5f6856b2316524",
+      "sha256": "75e4675b769fce50d90f6d51c39c4d83840f0e36b932fe84f6360c88fbf32842",
       "type": "file"
     },
     {
@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "472f516dfe910891921e0a90ab0613a5e1d8d10718c218df71a41a1169b657d7",
+      "sha256": "4f8e1e269e35ffd60a6cf9504e329e4013761b373114d5c37f960f58a4ba5f68",
       "type": "file"
     },
     {
@@ -1128,7 +1128,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "4eb350b46c83f459c5009d109ffd7a91a636d79268dc3b45562bab593191b56f",
+      "sha256": "8235119232ed28857e3226bd6ec96a4e3afa1689a6ec1d7f1bd735df4b8849bc",
       "type": "file"
     },
     {
@@ -1146,7 +1146,7 @@
     {
       "executable": false,
       "path": "backend/routers/channel_pipeline.py",
-      "sha256": "9884eaabc83226c439bebbfb95a749b274b649a8737fb834bcff93127cdc5be9",
+      "sha256": "9bfcbbbc4a9662f4eead4a45ee4f0723683d14c4ce6df63177b1d04ce07fa3ca",
       "type": "file"
     },
     {
@@ -1458,7 +1458,7 @@
     {
       "executable": false,
       "path": "backend/services/m3u_dedup_hook.py",
-      "sha256": "180774ed1a184a22dc37d0fddf5f9fed0df25a117c30e03756c2ed8666955aa1",
+      "sha256": "96b9e2fac193e66515a89f487d837317db40c59a11e5e9538232942c4347b9de",
       "type": "file"
     },
     {
@@ -1830,7 +1830,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "ce9eeca7756d63aa51316ccee50615bb28a8ec24b98f4bcfa441f29d963bf049",
+      "sha256": "c93e3b32c6a5887e8870cf8a5878f00dcfc7cb3d088178d8a2b3c6ed6961fe0a",
       "type": "file"
     },
     {
@@ -3684,13 +3684,13 @@
     {
       "executable": false,
       "path": "frontend/src/components/channelPipeline/ChannelPipelineTab.test.tsx",
-      "sha256": "130529a35eccbc836bda68b7e935efddb7318497337369d438def206597a5ffd",
+      "sha256": "c6cd2bfa354c31fe1b7fb2ad318a2498a2001b167572738cfdc6be1feba1d5ab",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/components/channelPipeline/ChannelPipelineTab.tsx",
-      "sha256": "8b321b1b7c22e94c857d975f8b29730b5766895c669087525dd39ecb8f1f5173",
+      "sha256": "2782d308ff64be97f318067d912ea1bd4a502a8a207d860ee22e37e33984b183",
       "type": "file"
     },
     {
@@ -5550,7 +5550,7 @@
     {
       "executable": false,
       "path": "frontend/src/test/mocks/handlers.ts",
-      "sha256": "f831cfa4e247c7129bfc9031691a5213d81586988c803e6091179be7249de63f",
+      "sha256": "da568e361285c68771812a2549f14d93df09a2a65bfd21988cd027c0ab1a5f3f",
       "type": "file"
     },
     {
@@ -5586,7 +5586,7 @@
     {
       "executable": false,
       "path": "frontend/src/types/channelPipeline.ts",
-      "sha256": "3234b4b81b5793f17d58c626fc8bc102e46cb49a397fbf76ea904df247107e64",
+      "sha256": "7ea609f0a95eb21655767ffb3984aceeeb00f74f220cdb2ec58f54ae93f8df1e",
       "type": "file"
     },
     {
@@ -6775,5 +6775,25 @@
     "previous_manifest_sha256": "cd0ca696817566b4281c9c41e6016d43c64db4c9a1f5fd45173596a6de5757b1",
     "scope": "Umask-independent Alpine owned-evidence tests and copier index.json mode, plus 0074 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0074"
+  },
+  "pending_merge_preview_update": {
+    "base_commit": "ed610cced3c0a8e0b36b80adc88b91a57c534bc2",
+    "bead": "enhancedchannelmanager-rtst2.13",
+    "changed_files": {
+      "backend/channel_pipeline_engine.py": "0f14829faa2dbcad09a4e3f9e7f09b0d33e6090fa93e79e5766d41ba2a1ad9d3",
+      "backend/channel_pipeline_executor.py": "12acf1c3e9e39bfe35281388c3bab3ea77f44684cfde8e5abe5f6856b2316524",
+      "backend/main.py": "472f516dfe910891921e0a90ab0613a5e1d8d10718c218df71a41a1169b657d7",
+      "backend/routers/backup.py": "4eb350b46c83f459c5009d109ffd7a91a636d79268dc3b45562bab593191b56f",
+      "backend/routers/channel_pipeline.py": "9884eaabc83226c439bebbfb95a749b274b649a8737fb834bcff93127cdc5be9",
+      "backend/services/m3u_dedup_hook.py": "180774ed1a184a22dc37d0fddf5f9fed0df25a117c30e03756c2ed8666955aa1",
+      "frontend/package.json": "ce9eeca7756d63aa51316ccee50615bb28a8ec24b98f4bcfa441f29d963bf049",
+      "frontend/src/components/channelPipeline/ChannelPipelineTab.test.tsx": "130529a35eccbc836bda68b7e935efddb7318497337369d438def206597a5ffd",
+      "frontend/src/components/channelPipeline/ChannelPipelineTab.tsx": "8b321b1b7c22e94c857d975f8b29730b5766895c669087525dd39ecb8f1f5173",
+      "frontend/src/test/mocks/handlers.ts": "f831cfa4e247c7129bfc9031691a5213d81586988c803e6091179be7249de63f",
+      "frontend/src/types/channelPipeline.ts": "3234b4b81b5793f17d58c626fc8bc102e46cb49a397fbf76ea904df247107e64"
+    },
+    "previous_manifest_sha256": "e37d92a70050109cde870320c2e389ad2a70d951b00b1833893c8969edfd9070",
+    "scope": "GH #1018 mutation-free dry-run prediction of pending-merge deferrals (shared live/preview decision, preview_trigger, predicted wording and UI surfacing), plus 0075 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0075"
   }
 }

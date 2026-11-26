@@ -1545,8 +1545,8 @@ disabled, matching the existing run-now convention.
 | `POST /api/channel-pipeline/rules/{id}/toggle` | Toggle rule enabled state |
 | `POST /api/channel-pipeline/rules/{id}/duplicate` | Duplicate a rule |
 | `POST /api/channel-pipeline/rules/{id}/run` | Run a single rule (supports dry_run) |
-| `POST /api/channel-pipeline/run` | Run the full pipeline (execute or dry_run) |
-| `POST /api/channel-pipeline/run-selected` | Run exactly the submitted `rule_ids` as one execution. The selection is validated atomically; empty, duplicate, unknown, disabled, inactive, or invalid rules reject the whole request. |
+| `POST /api/channel-pipeline/run` | Run the full pipeline (execute or dry_run). Optional `preview_trigger: "m3u_refresh"` (dry run only; 422 otherwise) previews the M3U-refresh trigger's create-versus-defer decision; see note below |
+| `POST /api/channel-pipeline/run-selected` | Run exactly the submitted `rule_ids` as one execution. The selection is validated atomically; empty, duplicate, unknown, disabled, inactive, or invalid rules reject the whole request. Accepts the same dry-run-only `preview_trigger` |
 | `GET /api/channel-pipeline/executions` | Get execution history (paginated) |
 | `GET /api/channel-pipeline/executions/{id}` | Get execution details (optional log/entities) |
 | `POST /api/channel-pipeline/executions/{id}/rollback` | Rollback an execution. With a pre-run snapshot it requires `confirm=true` (409 otherwise); once confirmed, an event_sync attach run whose journal fully covers its attaches is reverted SURGICALLY (only the run-added stream ids removed, post-run Dispatcharr churn preserved; response carries `surgical_unmerge: true`), otherwise it delegates to the full snapshot restore |
@@ -1563,6 +1563,35 @@ disabled, matching the existing run-now convention.
 | `GET /api/channel-pipeline/debug-bundle/{job_id}` | Poll or download a bundle owned by the authenticated human admin who started it. Other principals receive `404`. Returns JSON status while running, JSON `{status: "failed", error}` on failure, or the `tar.gz` (`application/gzip`) attachment when ready (obfuscated channels, rules, normalization rules, streams, probe stats, settings, task schedules, logs). `logs.txt` contains the oldest-to-newest persistent window, bounded to the newest 50 MiB; it falls back to the ring when no persistent data is available. A degraded persistent snapshot also adds `logs-ring-fallback.txt`. `manifest.json.log_members` records sources, timestamps, counts, applied rotation settings, saturation and truncation. Completed artifacts use private temporary files rather than retained in-memory byte strings. A job is evicted after a successful read or by its independent 30-minute expiry timer. |
 | `GET /api/channel-pipeline/fuzzy-preview` | Paginated, write-free scored fuzzy match preview across given channel groups (bead jnzst, v0.17.3-0006). Admin-gated. See notes below. |
 | `POST /api/channel-pipeline/event-sync-preview` | Event Sync dry-run: match secondary-group streams against live master channels with ZERO writes (bead ti939.1.4). Admin-gated. See notes below and `docs/event_sync.md`. |
+
+**Previewing pending-merge deferrals (`preview_trigger`, GitHub #1018).** Only
+the unattended M3U-refresh run defers channel creation behind the Pending Merges
+queue, so a plain dry run (trigger `api`) predicts creation for those streams,
+correctly for a live API run. Send `{"dry_run": true, "preview_trigger":
+"m3u_refresh"}` to get the refresh's decision instead. The engine runs the same
+matcher, threshold and §D5 queue lookup as the live hook, read-only: no
+`pending_merges` or journal row is inserted, updated, dismissed or resolved. The
+execution is recorded with `mode: "dry_run"` and `triggered_by: "m3u_refresh"`.
+A predicted deferral appears as:
+
+- a `dry_run_results` entry with `would_create: false`, `would_defer: true`
+  and `pending_merge_id` set to the existing blocking row, or `null` when the
+  refresh would insert a new row. Its `action` text starts with `PREDICTED`.
+- `pending_merge_deferred: true` / `pending_merge_id` on the `create_channel`
+  action in the execution log. A live run writes the same two fields, so the
+  preview and the run can be compared stream by stream.
+- a `warnings` entry of type `pending_merge_deferral_predicted` carrying
+  `stream_count`, `action_count`, `pending_merge_ids`, `new_row_count` and an
+  operator-ready `message` that starts with `PREDICTED`.
+
+`preview_trigger` without `dry_run: true`, or with any value other than
+`m3u_refresh`, is rejected with 422.
+
+On a dry run, `pending_merges_added`, `pending_merge_stream_count` and
+`pending_merge_deferred` are **predicted** counts, not applied work: nothing was
+queued or deferred. Treat them as live-run counters only when `mode` is not
+`dry_run`. The prediction is advisory: a concurrent live run can insert the
+blocking row before the preview's answer is acted on.
 
 Execution history is ordered by newest `started_at`, then newest execution `id`
 when timestamps tie. `limit` defaults to 50 and accepts 1 through 500; `offset`

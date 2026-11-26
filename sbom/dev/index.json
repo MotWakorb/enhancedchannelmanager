@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": "0.18.2-0074",
+  "version": "0.18.2-0075",
   "created": "2026-11-18T20:52:32Z",
   "kind": "source-manifest",
   "channel": "dev",
@@ -75,7 +75,7 @@
     "docker/alpine-native/Dockerfile.resdet": "sha256:9faead49870765cdac2c0f0050be6d88cf2ba9effc0b1abf3ac454972e8d41ce",
     "docker/alpine-native/Dockerfile.security-libraries": "sha256:d071e8f07fa14b1678d5d4269506140c118a6e2150bce6aae467c670b337a44c",
     "docker/alpine-native/README.md": "sha256:1d47aa3089cd5ef8841523a40383b91175f1496e5d0e5d33ae50d5ab224f9d85",
-    "docker/alpine-native/application-source.json": "sha256:e37d92a70050109cde870320c2e389ad2a70d951b00b1833893c8969edfd9070",
+    "docker/alpine-native/application-source.json": "sha256:d2f75cc8ef5015eaaf60070469bfc1ffc172452763db7a7bda3b816b720fe7dc",
     "docker/alpine-native/codec-smoke.c": "sha256:ab0a0b4f68141f69a2ad340683d55e329e2ce0f067cd5e1ace898991917f8186",
     "docker/alpine-native/codec2-exports.txt": "sha256:df951fc24bdfcc6c611e35432eec4eb72ef0d2269b6b1132bbfd1da39011b717",
     "docker/alpine-native/codec2_numeric.c": "sha256:b26c5ed3ef94cee03b004ea6bf89e0d0cfa6af4d8df4d927f999f52de0f4ceda",
@@ -203,7 +203,7 @@
     "scripts/retain_alpine_owned_evidence.py": "sha256:4b23c6b321f861a54ddd8f37a0758d7488c5ef35871b603c129c9e8618bf78fc",
     "scripts/retained/package_alpine_native-v1.py.gz": "sha256:fc139f8955cd75e7ee18241e0089074df3db3e259ab4e2497ce4f2da5d030404",
     "scripts/run_alpine_codec_matrix.py": "sha256:10866bb4847123e702646801e68934186a4af01e7af1f5a9778a0ab8e951c3db",
-    "scripts/verify_alpine_application_source.py": "sha256:8895b3e5fa104a4527bf4cfbaf1af41222ffb02de5dfc46f816fe2ab9e450f3c",
+    "scripts/verify_alpine_application_source.py": "sha256:e14693afae05be07c64aef7f15406719e2a37eb306cb37f741e2a1924c23b56c",
     "scripts/verify_alpine_external_sources.py": "sha256:fc19460fe6181f3980f05e29455ccc24798cbbbd94ef9563613e8ddc4addd811",
     "scripts/verify_alpine_ffmpeg.py": "sha256:c358af66b7b0704d95461b9413abc74c0717a976af86c7a9752bd8c6d1438e1e",
     "scripts/verify_alpine_owned_sources.py": "sha256:7c463cf8da24f06cea22e7972182ea674029d358990e37c1d652a46e164b8fa3",
@@ -303,7 +303,7 @@
           ]
         ]
       },
-      "sha256": "89428d1359f7848f226d50463adc070e63f80d2d51e0566d97d1599d199be508"
+      "sha256": "97ba8db52230d71e0368c5f3a791b1dd6494bf9049ef77b1915458c13dc36374"
     },
     {
       "path": "mcp.spdx.json",
@@ -314,7 +314,7 @@
         "packages": [],
         "relationships": []
       },
-      "sha256": "a717cb98329bf881a1c992adafc811a963ed607aa93939a3a0bee3cad8731a0f"
+      "sha256": "a8700f00c8563b5a68c6c4f635bfcb9aa38b2a538874bdfd89ac6c36472dcad0"
     }
   ]
 }

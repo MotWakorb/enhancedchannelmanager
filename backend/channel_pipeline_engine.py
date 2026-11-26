@@ -265,7 +265,9 @@ class BoundedExecutionLog(list):
 
 
 
-def describe_pending_merge_deferral(result: dict, *, prefix: str = "; ", max_rows: int = 10) -> str:
+def describe_pending_merge_deferral(
+    result: dict, *, prefix: str = "; ", max_rows: int = 10, predicted: bool = False,
+) -> str:
     """One bounded phrase naming what the pending-merges queue deferred.
 
     GH #1015 / PR #1016 review item 4: units are kept distinct — the number
@@ -275,10 +277,33 @@ def describe_pending_merge_deferral(result: dict, *, prefix: str = "; ", max_row
     string when nothing was deferred. Shared by the engine completion log,
     the M3U-refresh task summary and the task engine's warning payload so
     the three surfaces cannot disagree.
+
+    GH #1018: ``predicted=True`` renders the dry-run preview of the same
+    result in the same units, worded as a prediction ("PREDICTED: … would
+    be deferred …; no channel would be created"), and adds the count of new
+    rows a live run would queue — rows that have no id until it does.
     """
-    actions = int(result.get("pending_merges_added") or 0)
+    if predicted:
+        return _describe_predicted_pending_merge_deferral(
+            result, prefix=prefix, max_rows=max_rows,
+        )
+    actions, streams, shown = _deferral_units(result, max_rows)
     if not actions:
         return ""
+    text = (
+        f"{prefix}{streams} stream{'s' if streams != 1 else ''} deferred by pending "
+        f"merges (no channel created"
+    )
+    if actions != streams:
+        text += f"; {actions} deferred create action{'s' if actions != 1 else ''}"
+    text += ")"
+    if shown:
+        text += f" — rows: {shown}"
+    return text
+
+
+def _deferral_units(result: dict, max_rows: int) -> tuple[int, int, str]:
+    actions = int(result.get("pending_merges_added") or 0)
     streams = result.get("pending_merge_stream_count")
     if streams is None:
         streams = len(set(result.get("pending_merge_stream_ids") or [])) or actions
@@ -289,15 +314,31 @@ def describe_pending_merge_deferral(result: dict, *, prefix: str = "; ", max_row
     shown = ", ".join(str(i) for i in row_ids[:max_rows])
     if len(row_ids) > max_rows:
         shown += f", … (+{len(row_ids) - max_rows} more)"
+    return actions, streams, shown
+
+
+def _describe_predicted_pending_merge_deferral(
+    result: dict, *, prefix: str, max_rows: int,
+) -> str:
+    """GH #1018: the dry-run wording of :func:`describe_pending_merge_deferral`."""
+    actions, streams, shown = _deferral_units(result, max_rows)
+    if not actions:
+        return ""
     text = (
-        f"{prefix}{streams} stream{'s' if streams != 1 else ''} deferred by pending "
-        f"merges (no channel created"
+        f"{prefix}PREDICTED: {streams} stream{'s' if streams != 1 else ''} would "
+        f"be deferred by pending merges (no channel would be created"
     )
     if actions != streams:
         text += f"; {actions} deferred create action{'s' if actions != 1 else ''}"
     text += ")"
     if shown:
         text += f" — rows: {shown}"
+    new_rows = int(result.get("pending_merge_new_row_count") or 0)
+    if new_rows:
+        text += (
+            f"{';' if shown else ' —'} {new_rows} new pending-merge "
+            f"row{'s' if new_rows != 1 else ''} would be queued"
+        )
     return text
 
 
@@ -846,6 +887,25 @@ class ChannelPipelineEngine:
                     f"re-stamps them."
                 ),
             })
+        # GH #1018: a dry run that predicts pending-merge deferrals says so on
+        # the persisted record, in the live report's units and in PREDICTED
+        # wording, so the executions UI and API callers can show it without
+        # reading it as work that was done. Nothing was queued.
+        if dry_run and results.get("pending_merges_added"):
+            run_warnings.append({
+                "type": "pending_merge_deferral_predicted",
+                "predicted": True,
+                "stream_count": results.get("pending_merge_stream_count", 0),
+                "action_count": results.get("pending_merges_added", 0),
+                "pending_merge_ids": list(results.get("pending_merge_ids") or []),
+                "new_row_count": results.get("pending_merge_new_row_count", 0),
+                "message": describe_pending_merge_deferral(
+                    results, prefix="", predicted=True,
+                ) + ". Nothing was queued; a live M3U-refresh run with the "
+                    "same rules, streams, channels and queue would defer "
+                    "these streams until the rows are resolved in Pending "
+                    "Merges.",
+            })
         execution.set_warnings(run_warnings)
 
         # enhancedchannelmanager-7wuhd: persist the structured event_sync
@@ -893,7 +953,9 @@ class ChannelPipelineEngine:
         # queue stopped it. Name the count (and the rows) in the completion
         # line so a postmortem can tell the two cases apart without a DB
         # query.
-        deferred_info = describe_pending_merge_deferral(results, prefix=", ")
+        deferred_info = describe_pending_merge_deferral(
+            results, prefix=", ", predicted=dry_run,
+        )
         logger.info(
             "[AUTO-CREATE-ENGINE] Pipeline completed: %s/%s streams matched, "
             "%s channels created, %s updated%s%s",
@@ -3083,6 +3145,10 @@ class ChannelPipelineEngine:
             # ``pending_merge_stream_count`` before the result is returned,
             # same treatment as probe_stream_ids).
             "pending_merge_stream_ids": set(),
+            # GH #1018: dry-run only — the distinct (stream_name, candidate)
+            # pairs a live run would insert a NEW pending row for. Folded into
+            # ``pending_merge_new_row_count`` before the result is returned.
+            "predicted_new_pending_merge_keys": set(),
             "created_entities": [],
             "modified_entities": [],
             "dry_run_results": [],
@@ -3567,6 +3633,12 @@ class ChannelPipelineEngine:
                     }
                     if action_result.details:
                         action_entry["details"] = action_result.details
+                    # GH #1018: the create-versus-defer decision in structured
+                    # form, written identically by live runs and dry runs so
+                    # the two can be compared stream by stream.
+                    if action_result.pending_merge_deferred:
+                        action_entry["pending_merge_deferred"] = True
+                        action_entry["pending_merge_id"] = action_result.pending_merge_id
                     actions_log.append(action_entry)
 
                     # y3m6o.1 (0152): aggregate any FAILED action at run level so
@@ -3597,7 +3669,7 @@ class ChannelPipelineEngine:
 
                     # Record dry-run result
                     if dry_run:
-                        results["dry_run_results"].append({
+                        dry_entry = {
                             "stream_id": stream.stream_id,
                             "stream_name": stream.stream_name,
                             "rule_id": winning_rule.id,
@@ -3605,7 +3677,14 @@ class ChannelPipelineEngine:
                             "action": action_result.description,
                             "would_create": action_result.created,
                             "would_modify": action_result.modified
-                        })
+                        }
+                        # GH #1018: a predicted pending-merge deferral, with
+                        # the existing row it would be blocked behind (None
+                        # when a live run would insert a new row).
+                        if action_result.pending_merge_deferred:
+                            dry_entry["would_defer"] = True
+                            dry_entry["pending_merge_id"] = action_result.pending_merge_id
+                        results["dry_run_results"].append(dry_entry)
 
                 # Add stream log entry (only for matched streams)
                 results["execution_log"].append({
@@ -3637,6 +3716,9 @@ class ChannelPipelineEngine:
                     if merge_id not in results["pending_merge_ids"]:
                         results["pending_merge_ids"].append(merge_id)
                 results["pending_merge_stream_ids"].update(exec_ctx.pending_merge_stream_ids)
+                results["predicted_new_pending_merge_keys"].update(
+                    exec_ctx.predicted_new_pending_merge_keys
+                )
                 results["created_entities"].extend(exec_ctx.created_entities)
                 results["modified_entities"].extend(exec_ctx.modified_entities)
                 results["probe_stream_ids"].update(exec_ctx.probe_stream_ids)
@@ -3953,6 +4035,10 @@ class ChannelPipelineEngine:
             # PR #1016 review item 4: fold the distinct-stream set into a
             # JSON-safe count before the result leaves the engine.
             results["pending_merge_stream_count"] = len(results.pop("pending_merge_stream_ids", set()))
+            # GH #1018: likewise for the rows a previewed run would insert.
+            results["pending_merge_new_row_count"] = len(
+                results.pop("predicted_new_pending_merge_keys", set())
+            )
 
             if results["probe_stream_ids"]:
                 await self._batch_probe_streams(

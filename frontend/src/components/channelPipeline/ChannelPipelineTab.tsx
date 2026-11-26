@@ -17,6 +17,7 @@ import type {
 import {
   isNormalizationWarning,
   isNonReversibleProfileChangesWarning,
+  isPendingMergeDeferralPredictedWarning,
 } from '../../types/channelPipeline';
 import type { CircuitBreakerState } from '../../services/channelPipelineApi';
 import { useAuth } from '../../hooks/useAuth';
@@ -2247,8 +2248,34 @@ export function ChannelPipelineTab() {
                 const nonReversible = warns.filter(
                   isNonReversibleProfileChangesWarning,
                 );
+                const predictedDeferrals = warns.filter(
+                  isPendingMergeDeferralPredictedWarning,
+                );
                 return (
                   <>
+                    {/* GH #1018: predicted (dry-run) pending-merge deferrals.
+                        Worded as a prediction — nothing was queued. */}
+                    {predictedDeferrals.map((w, i) => (
+                      <div
+                        className="norm-warning-banner"
+                        role="status"
+                        key={`predicted-deferral-${i}`}
+                      >
+                        <span className="material-icons norm-warning-icon" aria-hidden="true">schedule</span>
+                        <div className="norm-warning-content">
+                          <p className="norm-warning-title">
+                            Predicted: {w.stream_count} stream{w.stream_count !== 1 ? 's' : ''}{' '}
+                            would be deferred by pending merges
+                          </p>
+                          <p className="norm-warning-detail">{w.message}</p>
+                          {w.pending_merge_ids.length > 0 && (
+                            <p className="norm-warning-detail">
+                              Blocking pending-merge rows: {w.pending_merge_ids.join(', ')}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                     {/* Disabled-normalization-group warning
                         (enhancedchannelmanager-e8p1h). Surfaced prominently
                         because these rules silently normalize nothing — the run

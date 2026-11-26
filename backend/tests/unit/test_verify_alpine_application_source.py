@@ -127,8 +127,57 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     }
 
 
+PENDING_MERGE_PREVIEW_FILES = (
+    "backend/channel_pipeline_engine.py",
+    "backend/channel_pipeline_executor.py",
+    "backend/routers/channel_pipeline.py",
+    "backend/services/m3u_dedup_hook.py",
+    "frontend/src/components/channelPipeline/ChannelPipelineTab.test.tsx",
+    "frontend/src/components/channelPipeline/ChannelPipelineTab.tsx",
+    "frontend/src/test/mocks/handlers.ts",
+    "frontend/src/types/channelPipeline.ts",
+)
+
+
+def _before_pending_merge_preview(manifest):
+    key = "pending_merge_preview_update"
+    update = manifest[key]
+    assert update["base_commit"] == "ed610cced3c0a8e0b36b80adc88b91a57c534bc2"
+    assert update["bead"] == "enhancedchannelmanager-rtst2.13"
+    assert update["version"] == "0.18.2-0075"
+    assert update["previous_manifest_sha256"] == (
+        "e37d92a70050109cde870320c2e389ad2a70d951b00b1833893c8969edfd9070"
+    )
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(PENDING_MERGE_PREVIEW_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_pending_merge_preview_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_pending_merge_preview(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["pending_merge_preview_update"] == manifest["pending_merge_preview_update"]
+
+
 def _before_owned_evidence_mode(manifest):
     key = "owned_evidence_mode_update"
+    manifest = _before_pending_merge_preview(manifest)
     update = manifest[key]
     assert update["base_commit"] == "43a821c107a556aad117e2ff6af7d87646cf2e07"
     assert update["bead"] == "enhancedchannelmanager-7fzq0"
