@@ -74,8 +74,10 @@ Watchtower, and `docker compose up --force-recreate`.
 3. If you're recreating a container that already holds data you care about,
    copy the whole `/config` directory out first (`docker cp`, see the
    recovery page below) before recreating without confirming the mount.
-   A backup from **Settings → Backup & Restore** does not carry ECM's
-   accounts, rules or schedules. ECM's own startup check (next section)
+   A Configuration (DBAS) backup from **Settings → Backup & Restore**
+   does not restore ECM's accounts, rules or schedules. The legacy Full
+   Backup restores rules and schedules, but a current one carries no ECM
+   accounts. ECM's own startup check (next section)
    only warns after the fact. If the container is already running without
    a mount, follow
    [Recover data from a container with no config mount](../backup-restore/recover-an-unmounted-container.md).

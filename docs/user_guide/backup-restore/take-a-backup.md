@@ -22,7 +22,7 @@ ECM builds the artifact in the background via the `dbas_backup` task. A notifica
 
 This is a **configuration-only** backup. ECM replaces recognized M3U and EPG provider credential fields and credential-bearing URL values, and it removes your ECM login accounts. On a fresh install, you must create an ECM admin account and re-enter every provider credential after restoring it. Operator-authored free text, such as source names and rule notes, may travel verbatim and could contain a secret ECM cannot recognize. Credential-free provider addresses remain. Inspect that content before sharing the artifact outside your control.
 
-If you need provider credentials to travel with the artifact for a migration, use the Encrypted Backup card described below and enable **Include credentials**. ECM accounts do not come back from either artifact: even the encrypted one carries them in the archive, but no current restore path applies them.
+If you need provider credentials to travel with the artifact for a migration, use the Encrypted Backup card described below and enable **Include credentials**. ECM accounts do not come back from either artifact: even the encrypted one carries them in the archive, but no current restore path applies them. Restoring either artifact also applies none of ECM's rules, schedules or alert methods; it applies the Dispatcharr-side configuration, logos and ECM's settings. See [What a backup contains](backup-overview.md#what-a-backup-contains-13-categories), and copy the whole `/config` directory when you need everything ECM holds.
 
 ### Taking an encrypted backup
 

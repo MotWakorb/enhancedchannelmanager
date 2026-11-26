@@ -231,7 +231,7 @@ if the startup log says `DATA IS NOT PERSISTENT`.
 
 ### Backup & Restore
 
-ECM supports full backup and restore of all configuration. You can create backups from Settings, or restore from a backup during the first-run setup wizard.
+ECM has two in-app backup types, on **Settings → Backup & Restore**. A Configuration (DBAS) backup, manual or scheduled, restores the Dispatcharr-side configuration, logos and ECM's own settings; it does not apply ECM's login accounts, rules or schedules. The legacy Full Backup restores ECM's rules, schedules and other configuration tables plus its settings, with credentials removed, and is also what the first-run setup wizard accepts. A backup taken on a current build restores neither ECM's login accounts nor its TLS private key, and no backup restores the key for stored cloud credentials. To keep everything, back up the whole `/config` directory. See the [backup overview](docs/user_guide/backup-restore/backup-overview.md) and, for a container with no `/config` mount, [Recover data from a container with no config mount](docs/user_guide/backup-restore/recover-an-unmounted-container.md).
 
 ### Development Setup
 

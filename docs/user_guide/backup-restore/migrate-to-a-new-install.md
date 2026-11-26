@@ -23,10 +23,15 @@ This walkthrough assumes:
       standard artifact now removes the provider **username** as well as
       the password, so Step 6 re-enters both.
 
-    - **A backup does not migrate your ECM accounts.** An encrypted backup
-      with **Include credentials** holds them in the archive, but no current
-      restore path applies them. In either case, the new install starts at first-run setup and you create an
-      admin account there. See
+    - **A Configuration (DBAS) backup does not migrate your ECM accounts,
+      rules or schedules.** The restore on this page applies Dispatcharr-side
+      configuration, logos and ECM's settings, and never reads the
+      artifact's `journal.db`, which is where ECM keeps its accounts, rules
+      and schedules. An encrypted backup with **Include credentials** holds
+      the accounts in the archive, but no current restore path applies them.
+      Either way, the new install starts at first-run setup and you create an
+      admin account there. To move everything ECM holds, copy its whole
+      `/config` directory instead. See
       [What a standard backup does not carry](backup-overview.md#what-a-standard-backup-does-not-carry).
 
     EPG links round-trip correctly (9 of 9 seeded links survived on
