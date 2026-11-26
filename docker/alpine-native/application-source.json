@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "c9d05f796a9783dcc05c907da2d2cb31ce8a7d5cad4850095806210b4beba887",
+      "sha256": "64fa6fe53878a3e934f7a865bbcdb77bd50892a26b83df48af6510f6b259ea66",
       "type": "file"
     },
     {
@@ -1128,7 +1128,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "fbaf044c5a1f848d97dba7e300808ad98d29ace51c11ea27e02ca7d6851672bb",
+      "sha256": "58b2ae7816a5578a87904c28718ab6dec639993778b27d256b589a573341a9b4",
       "type": "file"
     },
     {
@@ -1548,7 +1548,7 @@
     {
       "executable": false,
       "path": "backend/task_engine.py",
-      "sha256": "928cfe73fcbfd12e76b6f5f9bad9e32bf88f3780b015252769c1510bded3101f",
+      "sha256": "ecdc03882b60c64aa7cdc212fcc83f22d4173adc342902722999e62f55481a31",
       "type": "file"
     },
     {
@@ -1830,7 +1830,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "5a2125865345c2e46e42b35c491e2d245706988e173b1e4a1c88089a2b5a6330",
+      "sha256": "fee90718caac579979a71be3faf2977ae11749f3101ef306f5025d1fcaa77710",
       "type": "file"
     },
     {
@@ -6903,5 +6903,18 @@
     "previous_manifest_sha256": "7bb86c07f81f057e0a55b9d8de2da275cc75bd5caecddfb33ad26deedd32493c",
     "scope": "Stop the Channel Manager search-reload effect from firing a second full channel load about 500ms after mount when the search term has not changed, so the channel list is no longer blanked and open menus are no longer destroyed, plus 0081 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0081"
+  },
+  "dual_failure_alert_update": {
+    "base_commit": "56ee16259892e9e0a8cd988c4ec9e77c903735b9",
+    "bead": "enhancedchannelmanager-75j5q",
+    "changed_files": {
+      "backend/main.py": "c9d05f796a9783dcc05c907da2d2cb31ce8a7d5cad4850095806210b4beba887",
+      "backend/routers/backup.py": "fbaf044c5a1f848d97dba7e300808ad98d29ace51c11ea27e02ca7d6851672bb",
+      "backend/task_engine.py": "928cfe73fcbfd12e76b6f5f9bad9e32bf88f3780b015252769c1510bded3101f",
+      "frontend/package.json": "5a2125865345c2e46e42b35c491e2d245706988e173b1e4a1c88089a2b5a6330"
+    },
+    "previous_manifest_sha256": "e030c75249276dbcf499991c338a3e34ad88e252108a823bdf7b0573fcb7fd0f",
+    "scope": "Make the DBAS backup error alert name the degraded categories as well as the cloud error when a run both fails its cloud upload and has degraded categories, plus 0082 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0082"
   }
 }
