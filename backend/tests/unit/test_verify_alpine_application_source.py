@@ -163,12 +163,65 @@ SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
 SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
 
+RENUMBER_JOURNAL_START_FILES = (
+    "backend/channel_number_apply.py",
+    "backend/routers/channels.py",
+    "frontend/src/services/api.ts",
+    "frontend/src/types/editMode.ts",
+)
+RENUMBER_JOURNAL_START_ADDED_FILES = ()
+
+
+def _before_renumber_journal_start(manifest):
+    key = "renumber_journal_start_update"
+    update = manifest[key]
+    assert update["base_commit"] == "1f9bab15914d0233db3f25f83754163357f31109"
+    assert update["bead"] == "enhancedchannelmanager-0by9g"
+    assert update["version"] == "0.18.2-0087"
+    assert update["previous_manifest_sha256"] == (
+        "fefb1086c0d41cccc42fd35f68b64317ecc319ea35b6d7cbc3db1fa642a19a37"
+    )
+    assert set(update["added_files"]) == set(RENUMBER_JOURNAL_START_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(RENUMBER_JOURNAL_START_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_renumber_journal_start_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_renumber_journal_start(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert (
+        result["renumber_journal_start_update"]
+        == manifest["renumber_journal_start_update"]
+    )
+
+
 STARTUP_ENV_CONTRACT_DOCS_FILES = ()
 STARTUP_ENV_CONTRACT_DOCS_ADDED_FILES = ()
 
 
 def _before_startup_env_contract_docs(manifest):
     key = "startup_env_contract_docs_update"
+    manifest = _before_renumber_journal_start(manifest)
     update = manifest[key]
     assert update["base_commit"] == "eef60af0965748af7bc3fb983589190e26ad07f4"
     assert update["bead"] == "enhancedchannelmanager-mevqr"
