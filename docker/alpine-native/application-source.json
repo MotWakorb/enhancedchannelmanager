@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "977f4ff67c85d757ae19b6c2bda6e90772e28f94823fca459eb83aaa2bca56a5",
+      "sha256": "1d117454cc88f15d2a07827d630e7f5906930f9310776d5e412e29b6c95a0494",
       "type": "file"
     },
     {
@@ -1115,6 +1115,12 @@
     },
     {
       "executable": false,
+      "path": "backend/restore_snapshot_storage.py",
+      "sha256": "c757efb79029af780029c4a8893699999ffafcc4c5c8050fbbdd9ea7123a2822",
+      "type": "file"
+    },
+    {
+      "executable": false,
       "path": "backend/routers/__init__.py",
       "sha256": "cecfadda09f099dcc8361ac0d05a3188981cff19ddeb2537de280d99c601d00b",
       "type": "file"
@@ -1128,7 +1134,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "28d9ad414c60d0f6bce01effdab672a402c96c6aebc194e1c38942e511c78a96",
+      "sha256": "b89ff0633d131daf5f154f82c4712dd1898e5b5bab6153920788019a8754edc9",
       "type": "file"
     },
     {
@@ -1596,7 +1602,7 @@
     {
       "executable": false,
       "path": "backend/tasks/dbas_restore.py",
-      "sha256": "36cec63939712ec8ea922b7115e8b49bbebadcb14cd52ff4158451d11ea91f08",
+      "sha256": "a4ad06c815a0c33eea02c3c6c396fd32c7ef5dbe13fb8b31616610b6987e3ace",
       "type": "file"
     },
     {
@@ -1830,7 +1836,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "348ee8e63b243c61f10ef717f5deeecf8dabc29f2cedefa86618facecb08008d",
+      "sha256": "2ca4ae67eb938ef3ca1864f391e4c78e6a7413f9a8f7ecdef25b0e4fd891debe",
       "type": "file"
     },
     {
@@ -7041,5 +7047,21 @@
     "previous_manifest_sha256": "67277c0b816e9227628c25d13c87aaf0e54d22321a5833c24c374393be386ed4",
     "scope": "Require the caller's per-channel baseline on every numbering write to an existing channel: expectedNumbers on bulk-commit range assignments, a required expectedNumber on updateChannel renumbers, and expected_numbers on POST /api/channels/assign-numbers, accepting any finite number read as a baseline while keeping the write contract, refusing a stale baseline without writing and a missing one with 422; rebase later Edit Mode requests of one Apply onto the numbers earlier requests settled; report createdChannelNumbers; send baselines from Edit Mode, the non-Edit-Mode renumber and the MCP assign_channel_numbers tool, plus 0088 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0088"
+  },
+  "saved_restore_snapshot_update": {
+    "added_files": [
+      "backend/restore_snapshot_storage.py"
+    ],
+    "base_commit": "deda80c438b3cade69c4a03f20810c9a7f17a3a9",
+    "bead": "enhancedchannelmanager-0m06f.3.3",
+    "changed_files": {
+      "backend/main.py": "977f4ff67c85d757ae19b6c2bda6e90772e28f94823fca459eb83aaa2bca56a5",
+      "backend/routers/backup.py": "28d9ad414c60d0f6bce01effdab672a402c96c6aebc194e1c38942e511c78a96",
+      "backend/tasks/dbas_restore.py": "36cec63939712ec8ea922b7115e8b49bbebadcb14cd52ff4158451d11ea91f08",
+      "frontend/package.json": "348ee8e63b243c61f10ef717f5deeecf8dabc29f2cedefa86618facecb08008d"
+    },
+    "previous_manifest_sha256": "6fe42a80de57ec12e50da581ff98a840c8826e3ed784b525c36dbb8d0ffa457c",
+    "scope": "Bind saved DBAS restores to a private owner-only snapshot opened without following symlinks, with cleanup on every exit path, and reclaim abandoned private snapshots under cross-process leases (beads enhancedchannelmanager-0m06f.3.3 and enhancedchannelmanager-sumq7), harden an existing snapshot parent to 0700 or refuse a symlinked or foreign-owned one, plus 0089 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0089"
   }
 }
