@@ -23,6 +23,7 @@ from config import (
     validate_url_scheme,
 )
 from database import get_session
+from channel_group_delete import group_delete_failure_detail
 from dispatcharr_client import get_client, upstream_http_exception
 from log_utils import redact_exception, redact_log_diagnostic
 from alert_methods import send_alert
@@ -584,6 +585,13 @@ async def get_m3u_stream_metadata(account_id: int):
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001 - router boundary; log the scrubbed chain
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning(
+                "[M3U] Stream metadata account %s rejected by Dispatcharr: %s",
+                account_id, redact_log_diagnostic(str(e)),
+            )
+            raise mapped
         logger.error("[M3U] Failed to parse M3U metadata for account %s: %s", account_id, redact_exception(e))
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -842,7 +850,7 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
                     # Group might have channels or other issues - log but don't fail
                     failed_groups.append({
                         "id": group_id,
-                        "error": "Channel group was not deleted; check server logs for details.",
+                        "error": group_delete_failure_detail(group_err, group_id),
                     })
                     logger.warning(
                         "[M3U] Failed to delete channel group %s: %s",
@@ -1559,7 +1567,7 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                 profile_apply_summary.append({
                     "status": "error", "group_id": None,
                     "error": (
-                        f"Profile selection was saved on this account but could NOT be "
+                        f"the profile selection was saved on this account but could NOT be "
                         f"propagated to all M3U accounts ({propagation_error}). Re-save "
                         f"from the listed account(s) to complete the change."
                     ),

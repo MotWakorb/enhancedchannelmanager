@@ -26,7 +26,7 @@ Profile-apply summary entries (`ecm_profile_apply[].error`) carry fixed
 lower-case reasons that end in the recovery step, because the UI renders them
 as "Saved, but <reason>". The setup read, the per-group reconcile and the outer
 reconcile each have their own reason, with the same status and group identity
-as before. Account-list failures no longer interpolate exception text into the
+as before. The propagation warning starts lower case for the same reason. Account-list failures no longer interpolate exception text into the
 propagation warning or the clear's 503 detail. Existing partial sibling-clear
 journals, primary-preservation rules, per-group continuation and service-produced
 degraded/partial categories remain intact. The post-refresh note also uses fixed
@@ -40,15 +40,20 @@ Other M3U changes:
   auto-sync toggle.
 - Stream metadata: the fetched M3U URL can carry Xtream Codes credentials,
   and httpx error text quotes the URL. The 502 detail now names only the
-  provider's HTTP status, or says the provider could not be reached. Account
-  read failures in that route now answer the generic 500 instead of a
-  misleading "Failed to fetch M3U file" 502, and the "no server URL" 400 is no
-  longer swallowed into a 500.
+  provider's HTTP status, or says the provider could not be reached. An
+  upstream 4xx on that route's account read maps through
+  `upstream_http_exception` (a missing account answers 404), other account
+  read failures answer the generic 500 instead of a misleading "Failed to
+  fetch M3U file" 502, and the "no server URL" 400 is no longer swallowed into
+  a 500. The log test uses unregistered Xtream Codes credentials, so it proves
+  the URL rules rather than the registered-value sweep.
 - Profile get/update/delete and upload answered `detail=str(e)` on a 500. The
   app-wide 500 handler already replaced that text on the wire; the source now
   states "Internal server error" directly.
-- Account delete: `failed_groups[].error` (response and journal) is a fixed
-  message instead of the upstream text.
+- Account delete: `failed_groups[].error` (response and journal) uses the
+  shared `channel_group_delete.group_delete_failure_detail`, which keeps the
+  known Dispatcharr validation reasons as fixed prose and otherwise gives fixed
+  guidance, instead of the upstream text.
 - A failed refresh trigger's notification message and metadata no longer
   carry the exception text.
 - The guided auto-sync toggle no longer raises `None` (a TypeError) when an

@@ -170,6 +170,11 @@ class _FailingHttpClient:
         raise self._error(url)
 
 
+# Deliberately unregistered: only the URL rules can remove them from a log line.
+XC_USERNAME = "unregistered-xc-user-3f81c2"
+XC_PASSWORD = "unregistered-xc-pass-a94d07"
+
+
 def _status_error(url):
     request = httpx.Request("GET", url)
     response = httpx.Response(404, request=request)
@@ -200,8 +205,8 @@ async def test_stream_metadata_fetch_failure_keeps_provider_credentials_private(
         "id": 11,
         "account_type": "XC",
         "server_url": f"http://{HOST}",
-        "username": "synthetic-user",
-        "password": SECRET,
+        "username": XC_USERNAME,
+        "password": XC_PASSWORD,
     }
     with (
         patch("routers.m3u.get_client", return_value=client),
@@ -214,8 +219,32 @@ async def test_stream_metadata_fetch_failure_keeps_provider_credentials_private(
     assert response.status_code == 502
     assert response.json()["detail"] == detail
     assert_body_safe(response.text)
+    assert XC_USERNAME not in response.text
+    assert XC_PASSWORD not in response.text
     for text in log_outputs():
         assert "[M3U] Failed to fetch M3U file for account 11" in text
+        assert XC_USERNAME not in text
+        assert XC_PASSWORD not in text
+
+
+@pytest.mark.asyncio
+async def test_stream_metadata_account_rejection_keeps_the_upstream_status(
+    async_client, log_outputs
+):
+    request = httpx.Request("GET", f"http://{HOST}/api/m3u/accounts/11/?api_key={SECRET}")
+    response = httpx.Response(404, request=request, json={"detail": "Not found."})
+    client = AsyncMock()
+    client.get_m3u_account.side_effect = httpx.HTTPStatusError(
+        f"Client error '404 Not Found' for url '{request.url}'",
+        request=request, response=response,
+    )
+    with patch("routers.m3u.get_client", return_value=client):
+        answer = await async_client.get("/api/m3u/accounts/11/stream-metadata")
+    assert answer.status_code == 404
+    assert answer.json()["detail"] == "Not found."
+    assert_body_safe(answer.text)
+    for text in log_outputs():
+        assert "[M3U] Stream metadata account 11 rejected by Dispatcharr" in text
         assert SECRET not in text
 
 
@@ -242,14 +271,38 @@ async def test_upload_failure_answers_fixed_detail(async_client, log_outputs, tm
     assert_safe_logs(log_outputs, "[M3U] Failed to upload M3U file")
 
 
+def _group_has_channels_error():
+    request = httpx.Request("DELETE", f"http://{HOST}/api/channels/groups/1304/?api_key={SECRET}")
+    response = httpx.Response(
+        400, request=request,
+        json={"error": f"Cannot delete group with associated channels ({HOST})"},
+    )
+    return httpx.HTTPStatusError(
+        f"Client error '400 Bad Request' for url '{request.url}'",
+        request=request, response=response,
+    )
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "make,error",
+    [
+        (lambda: upstream_error("runtime"),
+         "Group 1304: Could not complete group deletion. Check Dispatcharr and the "
+         "group associations."),
+        (_group_has_channels_error,
+         "Group 1304: Dispatcharr returned HTTP 400: Cannot delete group with "
+         "associated channels. Refresh the group and check its channels and M3U "
+         "account associations before making further changes."),
+    ],
+)
 async def test_account_delete_reports_failed_group_without_upstream_text(
-    async_client, log_outputs
+    async_client, log_outputs, make, error
 ):
     client = AsyncMock()
     client.get_m3u_account.return_value = _account(11, 1304, [12])
     client.get_m3u_accounts.return_value = [_account(11, 1304, [12])]
-    client.delete_channel_group.side_effect = upstream_error("runtime")
+    client.delete_channel_group.side_effect = make()
     with (
         patch("routers.m3u.get_client", return_value=client),
         patch("routers.m3u.journal") as journal,
@@ -260,13 +313,13 @@ async def test_account_delete_reports_failed_group_without_upstream_text(
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "deleted"
-    assert body["failed_groups"] == [{
-        "id": 1304,
-        "error": "Channel group was not deleted; check server logs for details.",
-    }]
+    assert body["failed_groups"] == [{"id": 1304, "error": error}]
     assert_body_safe(response.text)
     assert_body_safe(str(journal.log_entry.call_args))
-    assert_safe_logs(log_outputs, "[M3U] Failed to delete channel group 1304")
+    for text in log_outputs():
+        assert "[M3U] Failed to delete channel group 1304" in text
+        assert SECRET not in text
+        assert CAUSE not in text
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +544,7 @@ async def test_enforced_global_set_account_list_failure_is_safe(async_client, lo
     assert response.status_code == 200
     errors = [o["error"] for o in response.json()["ecm_profile_apply"] if o["status"] == "error"]
     assert errors == [
-        "Profile selection was saved on this account but could NOT be propagated "
+        "the profile selection was saved on this account but could NOT be propagated "
         "to all M3U accounts (account list unavailable). Re-save from the listed "
         "account(s) to complete the change."
     ]
