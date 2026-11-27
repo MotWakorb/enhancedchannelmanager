@@ -338,7 +338,11 @@ class DbasRestoreTask(TaskScheduler):
         from dispatcharr_client import get_client
         from dbas.destination_read import ReadObservingClient, destination_read_reason
         from routers.backup import validate_artifact_manifest
-        from dbas.restore_artifact import decode_artifact_to_plan, logo_content_provider
+        from dbas.restore_artifact import (
+            ArtifactCategoryRefused,
+            decode_artifact_to_plan,
+            logo_content_provider,
+        )
         from dbas.restore_orchestrator import run_dry_run, run_restore, new_restore_id
         from dbas.restore_contracts import IdRemapTable, RestoreReport, RollbackLedger
         from dbas.restore_orchestrator import default_importer_steps
@@ -368,6 +372,12 @@ class DbasRestoreTask(TaskScheduler):
             # .17 refused (version/integrity). NO importer ran. Surface the
             # sanitized message; never leak schema internals.
             return self._fail(started_at, str(exc.detail))
+        except ArtifactCategoryRefused as exc:
+            if zf is not None:
+                zf.close()
+            # A category over the structure budget. NO destination call or
+            # importer ran.
+            return self._fail(started_at, str(exc))
         except Exception:
             if zf is not None:
                 zf.close()

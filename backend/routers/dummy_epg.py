@@ -18,6 +18,13 @@ from regex_lint import (
     lint_substitution_pairs,
     violations_to_http_detail,
 )
+from yaml_safety import (
+    IMPORT_MAX_CHARS,
+    IMPORT_MAX_NODES,
+    YamlSafetyError,
+    limit_message,
+    safe_load_bounded,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +129,7 @@ class ProfileUpdateRequest(BaseModel):
 
 class ImportYAMLRequest(BaseModel):
     """Request to import profiles from YAML."""
-    yaml_content: str
+    yaml_content: str = Field(max_length=IMPORT_MAX_CHARS)
     overwrite: bool = False
 
 
@@ -822,8 +829,12 @@ async def import_dummy_epg_profiles_yaml(request: ImportYAMLRequest):
     try:
         # Parse YAML
         try:
-            from yaml_safety import safe_load_bounded
-            data = safe_load_bounded(request.yaml_content)
+            data = safe_load_bounded(request.yaml_content, max_nodes=IMPORT_MAX_NODES)
+        except YamlSafetyError as e:
+            logger.warning("[DUMMY-EPG] Import refused: %s", e)
+            raise HTTPException(
+                status_code=400, detail=limit_message("Dummy EPG import", "import", e)
+            )
         except yaml.YAMLError as e:
             raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
 

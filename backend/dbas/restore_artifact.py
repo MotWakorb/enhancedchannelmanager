@@ -52,8 +52,39 @@ import yaml
 
 from dbas.preflight import ImportPlan, PlanCategory
 from dbas.restore_contracts import EntityType
+from yaml_safety import BACKUP_MAX_NODES, YamlSafetyError, limit_message, safe_load_bounded
 
 logger = logging.getLogger(__name__)
+
+
+class ArtifactCategoryRefused(Exception):
+    """A well-formed category member exceeds the backup structure budget.
+
+    Unlike a malformed member, which decodes as an empty category, this stops
+    the whole restore before any destination call: an operator must not get a
+    silently partial restore of a category that was really there.
+
+    Attributes:
+        category: The artifact section name, e.g. ``"channels"``.
+    """
+
+    def __init__(self, category: str, exc: YamlSafetyError):
+        self.category = category
+        super().__init__(limit_message("Backup category '%s'" % category, "backup", exc))
+
+
+def _load_category_member(zf: zipfile.ZipFile, member: str, section_key: str) -> object:
+    """Parse one category member within the backup structure budget.
+
+    Raises:
+        ArtifactCategoryRefused: The member exceeds a structure budget.
+        yaml.YAMLError, UnicodeDecodeError: The member is malformed.
+    """
+    try:
+        return safe_load_bounded(zf.read(member).decode("utf-8"), max_nodes=BACKUP_MAX_NODES)
+    except YamlSafetyError as exc:
+        logger.warning("[DBAS-RESTORE] Category %s refused: %s", section_key, exc)
+        raise ArtifactCategoryRefused(section_key, exc) from exc
 
 # Artifact layout constants mirror routers.backup (the builder). Kept here as a
 # local copy so the decoder does not import the heavy backup router module at
@@ -185,12 +216,7 @@ def _decode_categories(zf: zipfile.ZipFile) -> list[PlanCategory]:
         entities: list[dict] = []
         if member in names and _is_safe_member(member):
             try:
-                from yaml_safety import YamlSafetyError, safe_load_bounded
-
-                parsed = safe_load_bounded(zf.read(member).decode("utf-8"))
-            except YamlSafetyError as exc:
-                from fastapi import HTTPException
-                raise HTTPException(status_code=400, detail="Backup YAML exceeds the safety limit") from exc
+                parsed = _load_category_member(zf, member, section_key)
             except (yaml.YAMLError, UnicodeDecodeError) as exc:
                 # A malformed category YAML is a per-category empty (logged), not
                 # a whole-restore crash. Pre-flight still sees a consistent plan.
@@ -238,12 +264,7 @@ def _decode_settings_category(zf: zipfile.ZipFile) -> PlanCategory:
         if member not in names or not _is_safe_member(member):
             continue
         try:
-            from yaml_safety import YamlSafetyError, safe_load_bounded
-
-            parsed = safe_load_bounded(zf.read(member).decode("utf-8"))
-        except YamlSafetyError as exc:
-            from fastapi import HTTPException
-            raise HTTPException(status_code=400, detail="Backup YAML exceeds the safety limit") from exc
+            parsed = _load_category_member(zf, member, section_key)
         except (yaml.YAMLError, UnicodeDecodeError) as exc:
             logger.warning(
                 "[DBAS-RESTORE] Settings section %s YAML unreadable; treating as empty: %s",
@@ -266,12 +287,7 @@ def _read_category_yaml(zf: zipfile.ZipFile, section_key: str) -> object:
     if member not in set(zf.namelist()) or not _is_safe_member(member):
         return None
     try:
-        from yaml_safety import YamlSafetyError, safe_load_bounded
-
-        return safe_load_bounded(zf.read(member).decode("utf-8"))
-    except YamlSafetyError as exc:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Backup YAML exceeds the safety limit") from exc
+        return _load_category_member(zf, member, section_key)
     except (yaml.YAMLError, UnicodeDecodeError) as exc:
         logger.warning(
             "[DBAS-RESTORE] Category %s YAML unreadable; treating as empty: %s",

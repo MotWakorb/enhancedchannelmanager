@@ -34,6 +34,13 @@ from regex_lint import (
     lint_pattern,
     violations_to_http_detail,
 )
+from yaml_safety import (
+    IMPORT_MAX_CHARS,
+    IMPORT_MAX_NODES,
+    YamlSafetyError,
+    limit_message,
+    safe_load_bounded,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1033,7 +1040,7 @@ async def export_normalization_rules():
 
 
 class ImportRulesRequest(BaseModel):
-    yaml_content: str
+    yaml_content: str = Field(max_length=IMPORT_MAX_CHARS)
     overwrite: bool = False  # If true, delete existing non-builtin groups first
 
 
@@ -1042,8 +1049,12 @@ async def import_normalization_rules(request: ImportRulesRequest):
     """Import normalization rules and groups from YAML."""
     logger.debug("[NORMALIZE] POST /import - overwrite=%s", request.overwrite)
     try:
-        from yaml_safety import safe_load_bounded
-        data = safe_load_bounded(request.yaml_content)
+        data = safe_load_bounded(request.yaml_content, max_nodes=IMPORT_MAX_NODES)
+    except YamlSafetyError as e:
+        logger.warning("[NORMALIZE] Import refused: %s", e)
+        raise HTTPException(
+            status_code=400, detail=limit_message("Normalization import", "import", e)
+        )
     except yaml.YAMLError as e:
         raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
 

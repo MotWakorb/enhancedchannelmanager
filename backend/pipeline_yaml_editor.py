@@ -37,7 +37,7 @@ class _EditorLoader(BoundedSafeLoader):
     max_depth = _MAX_DEPTH
     allow_aliases = False
 
-    def structure_limit_error(self, mark):
+    def structure_limit_error(self, mark, reason, limit):
         return yaml.MarkedYAMLError(
             problem="YAML structure exceeds the editor safety limit",
             problem_mark=mark,

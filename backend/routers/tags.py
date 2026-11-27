@@ -9,9 +9,16 @@ from typing import Optional
 import yaml
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from database import get_session
+from yaml_safety import (
+    IMPORT_MAX_CHARS,
+    IMPORT_MAX_NODES,
+    YamlSafetyError,
+    limit_message,
+    safe_load_bounded,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -440,7 +447,7 @@ async def export_tags():
 
 
 class ImportTagsRequest(BaseModel):
-    yaml_content: str
+    yaml_content: str = Field(max_length=IMPORT_MAX_CHARS)
     overwrite: bool = False  # If true, delete existing non-builtin groups first
 
 
@@ -449,8 +456,10 @@ async def import_tags(request: ImportTagsRequest):
     """Import tag groups and tags from YAML."""
     logger.debug("[TAGS] POST /import - overwrite=%s", request.overwrite)
     try:
-        from yaml_safety import safe_load_bounded
-        data = safe_load_bounded(request.yaml_content)
+        data = safe_load_bounded(request.yaml_content, max_nodes=IMPORT_MAX_NODES)
+    except YamlSafetyError as e:
+        logger.warning("[TAGS] Import refused: %s", e)
+        raise HTTPException(status_code=400, detail=limit_message("Tag import", "import", e))
     except yaml.YAMLError as e:
         raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
 
