@@ -108,7 +108,7 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     manifest = verifier.load_manifest(
         ROOT / "docker/alpine-native/application-source.json"
     )
-    assert len(manifest["files"]) == 1102
+    assert len(manifest["files"]) == 1103
     assert (
         manifest["baseline_application_commit"]
         == "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531"
@@ -163,6 +163,59 @@ SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
 SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
 
+YAML_BUDGETS_FILES = (
+    "backend/dbas/restore_artifact.py",
+    "backend/pipeline_yaml_editor.py",
+    "backend/routers/backup.py",
+    "backend/routers/channel_pipeline.py",
+    "backend/routers/dummy_epg.py",
+    "backend/routers/normalization.py",
+    "backend/routers/tags.py",
+    "backend/tasks/dbas_restore.py",
+)
+YAML_BUDGETS_ADDED_FILES = ("backend/yaml_safety.py",)
+
+
+def _before_yaml_budgets(manifest):
+    key = "yaml_budgets_update"
+    update = manifest[key]
+    assert update["base_commit"] == "3f701e314cea41b8e35057540220c8e51a894023"
+    assert update["bead"] == "enhancedchannelmanager-10tln"
+    assert update["version"] == "0.18.2-0091"
+    assert update["previous_manifest_sha256"] == (
+        "e553c70116f59779c3276cc1cfe49dbee9e590f2743618c4f29fab9d0105ea16"
+    )
+    assert set(update["added_files"]) == set(YAML_BUDGETS_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(YAML_BUDGETS_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_yaml_budgets_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_yaml_budgets(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["yaml_budgets_update"] == manifest["yaml_budgets_update"]
+
+
 PATCH_NUMBER_BASELINES_FILES = (
     "backend/routers/channels.py",
     "frontend/src/App.bulkCreateStaging.test.tsx",
@@ -186,6 +239,7 @@ PATCH_NUMBER_BASELINES_ADDED_FILES = (
 
 def _before_patch_number_baselines(manifest):
     key = "patch_number_baselines_update"
+    manifest = _before_yaml_budgets(manifest)
     update = manifest[key]
     assert update["base_commit"] == "af5a40011bfc73f2cfc29bbfb23ed13bda191269"
     assert update["bead"] == "enhancedchannelmanager-dtv8p"
