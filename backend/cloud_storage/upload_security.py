@@ -109,6 +109,12 @@ _AWS_AKID_RE = re.compile(r"\b((?:AKIA|ASIA)[A-Z0-9]{8,})\b")
 # so the scan never backtracks and stays linear. An unquoted value still stops
 # at whitespace, a quote, ``,``, ``}`` or ``&``. Lists nested more than one
 # level deep end the mask at the first inner ``]``.
+#
+# The SEPARATOR alone may span any whitespace, line breaks and non-breaking
+# spaces included, so pretty-printed JSON (``"password":\n  "x"``) is caught.
+# Accepted cost: a key with no value on its line masks the first word of the
+# next line (``password:\nChannel 100 moved`` loses ``Channel``); the value
+# branches still stop at ``\n``, so the rest of that line survives.
 _KV_KEYS = (
     r"secret_access_key|aws_secret_access_key|access_key_id|client_secret|"
     r"access_token|secret|password|passwd|api_key|x-api-key|api-key|apikey|token"
@@ -117,7 +123,7 @@ _KV_DQ = r"\"(?:[^\"\\\n]|\\[^\n])*\"?"
 _KV_SQ = r"'(?:[^'\\\n]|\\[^\n])*'?"
 _KV_INNER_LIST = r"\[(?:[^\[\]\"'\\\n]|\\[^\n]|" + _KV_DQ + r"|" + _KV_SQ + r")*\]?"
 _SECRET_KV_RE = re.compile(
-    r"(?i)((?:" + _KV_KEYS + r")\\?['\"]?[ \t]*[:=][ \t]*)"
+    r"(?i)((?:" + _KV_KEYS + r")\\?['\"]?\s*[:=]\s*)"
     r"(?:"
     r"(?P<list>\[)(?:[^\[\]\"'\\\n]|\\[^\n]|" + _KV_DQ + r"|" + _KV_SQ + r"|"
     + _KV_INNER_LIST + r")*(?P<list_end>\])?"

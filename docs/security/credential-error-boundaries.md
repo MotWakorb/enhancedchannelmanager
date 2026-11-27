@@ -17,7 +17,9 @@ layer masks JSON and repr'd-dict credential keys, `token` and API-key header
 forms, masking the whole value at any length: a quoted value to its matching
 unescaped quote and a list to its closing bracket (one level of nesting), but
 never past the end of its line, so an unclosed value cannot swallow the
-following log lines. A secret containing a literal newline is out of scope. An
+following log lines. The key/value separator may span a line break, so a key
+with no value masks the first word of the next line. A secret containing a
+literal newline is out of scope. An
 escaped-JSON value ends only at its own escaped quote. The scan never
 backtracks and stays linear. A
 registered credential equal to a channel number or id can still appear as that
