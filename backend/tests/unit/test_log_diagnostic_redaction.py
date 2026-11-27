@@ -195,3 +195,64 @@ def test_short_registered_value_in_url_is_still_caught_structurally():
 def test_four_character_registered_values_are_swept():
     register_sensitive_values("Zq9x")
     assert "Zq9x" not in redact_log_diagnostic("auth rejected for Zq9x")
+
+
+# ---------------------------------------------------------------------------
+# Pattern layer: the whole value goes, whatever its quoting or list shape.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (f'{{"password": ["{PW}"]}}', '{"password": [***REDACTED***]}'),
+        (
+            f'{{"password": ["{PW}", "second {PW}x", \'{PW}y\']}}',
+            '{"password": [***REDACTED***]}',
+        ),
+        ('{"password": "S3cret Pw two", "detail": "x"}',
+         '{"password": "***REDACTED***", "detail": "x"}'),
+        ("password='S3c\\'retPw' next", "password='***REDACTED***' next"),
+        ('{"token": "a \\"nested\\" quote", "ok": 1}',
+         '{"token": "***REDACTED***", "ok": 1}'),
+        ('{\\"password\\": \\"S3cret Pw\\", \\"ok\\": 1}',
+         '{\\"password\\": \\"***REDACTED***\\", \\"ok\\": 1}'),
+        (f"password=[{PW}, other] tail", "password=[***REDACTED***] tail"),
+    ],
+    ids=[
+        "drf-list", "multi-element-list", "spaced-value", "escaped-single-quote",
+        "nested-quote", "escaped-json-spaced", "bare-list",
+    ],
+)
+def test_pattern_layer_masks_the_whole_quoted_or_list_value(text, expected):
+    assert redact_secrets(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"password": ["S3cretPw-unclosed',
+        "password='S3cretPw-unclosed and more",
+        '{"password": "S3cretPw-unclosed',
+    ],
+    ids=["unclosed-list", "unclosed-single", "unclosed-double"],
+)
+def test_pattern_layer_masks_unclosed_values(text):
+    assert "S3cretPw" not in redact_secrets(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "token: expired, refresh failed",
+        "tokenizer=bert and max_tokens: 4096",
+        'Upload of "backup [2026-11-26].zip" finished in 3 parts',
+        "Group [Sports, News] synced; 12 channels",
+    ],
+)
+def test_pattern_layer_leaves_ordinary_bracketed_and_quoted_text(text):
+    out = redact_secrets(text)
+    if text.startswith("token:"):
+        # A bare token header value is still a value; the rest of the line stays.
+        assert out == "token: ***REDACTED***, refresh failed"
+    else:
+        assert out == text

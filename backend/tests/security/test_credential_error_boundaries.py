@@ -1009,3 +1009,39 @@ async def test_guidance_passes_through_even_for_long_registered_numbers(async_cl
         "request expected 999. Somebody else changed it. Re-read the channel and "
         "decide before sending this again."
     )
+
+
+@pytest.mark.asyncio
+async def test_non_numeric_server_number_is_not_echoed_in_guidance(async_client):
+    from tests.routers.test_renumber_baselines import make_client
+
+    odd = f"odd-number {SECRET}"
+    client = make_client([{"id": 1, "name": "ESPN", "channel_number": odd, "streams": []}])
+    result = await poll_numbering(async_client, client, [renumber_op(1, 40, 5)])
+    error = result["errors"][0]
+    assert error["error"] == (
+        "Channel 1 was not renumbered: it is on an unreadable channel number, and "
+        "this request expected 5. Somebody else changed it. Re-read the channel "
+        "and decide before sending this again."
+    )
+    # The structured payload is the server's value as read, unchanged.
+    assert error["concurrentNumberChanges"] == [
+        {"channelId": 1, "baselineNumber": 5, "serverNumber": odd},
+    ]
+
+
+def test_range_and_patch_guidance_render_non_numeric_server_numbers():
+    from routers.channels import _stale_baselines_message
+
+    message = _stale_baselines_message(
+        [
+            {"channelId": 1, "baselineNumber": 5, "serverNumber": "x-" + SECRET},
+            {"channelId": 2, "baselineNumber": 6, "serverNumber": 7.5},
+            {"channelId": 3, "baselineNumber": 8, "serverNumber": None},
+        ],
+        subject="Channels were",
+    )
+    assert SECRET not in message
+    assert "channel 1 is on an unreadable channel number, and this request expected 5" in message
+    assert "channel 2 is on channel number 7.5, and this request expected 6" in message
+    assert "channel 3 is on channel number None, and this request expected 8" in message
