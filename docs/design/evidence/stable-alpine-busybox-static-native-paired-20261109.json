@@ -1,0 +1,453 @@
+{
+  "architectures": {
+    "amd64": {
+      "actual_source_commit": "e7bcc21481b1e8ee806a8bd666281ce4000472b4",
+      "applet_count": 304,
+      "artifact": {
+        "id": 13647454174,
+        "sha256": "163c9ea803062dfa04ec1190468b87a69505955bf0b502d3cc99e600a17be082"
+      },
+      "configuration_settings": 1084,
+      "installed_status": "SIGNED_BUSYBOX_INSTALLED_ONLY",
+      "local_transfers": 5,
+      "runtime_status": "PATCHED_BUSYBOX_BOUNDED_RUNTIME_ONLY",
+      "source_binding": {
+        "machine": "x86_64",
+        "packages": [
+          {
+            "A": "x86_64",
+            "C": "Q1ueHSl7ZNB/YCc7E3DP1WzhSjYvw=",
+            "D": "skalibs-libs=2.15.0.0-r0 pkgconfig",
+            "I": "214199",
+            "L": "ISC",
+            "P": "skalibs-dev",
+            "S": "47508",
+            "T": "Set of general-purpose C programming libraries for skarnet.org software. (development files)",
+            "U": "https://skarnet.org/software/skalibs/",
+            "V": "2.15.0.0-r0",
+            "c": "f148233038fa9b35932a7996df29f110b32c2160",
+            "m": "Laurent Bercot <ska-devel@skarnet.org>",
+            "o": "skalibs",
+            "p": "pc:libskarnet=2.15.0.0",
+            "t": "1778384706"
+          },
+          {
+            "A": "x86_64",
+            "C": "Q1xUTOvok8tGSwnqNIUmfnp0f9VIk=",
+            "D": "skalibs-dev",
+            "I": "1375456",
+            "L": "ISC",
+            "P": "skalibs-static",
+            "S": "167018",
+            "T": "Set of general-purpose C programming libraries for skarnet.org software. (static library)",
+            "U": "https://skarnet.org/software/skalibs/",
+            "V": "2.15.0.0-r0",
+            "c": "f148233038fa9b35932a7996df29f110b32c2160",
+            "m": "Laurent Bercot <ska-devel@skarnet.org>",
+            "o": "skalibs",
+            "t": "1778384706"
+          },
+          {
+            "A": "x86_64",
+            "C": "Q1oy8PkKeEz0Fj/cuUMgRvFEwH/Hs=",
+            "D": "utmps-libs=0.1.3.3-r0 pc:libskarnet>=2.15.0.0 pkgconfig",
+            "I": "5394",
+            "L": "ISC",
+            "P": "utmps-dev",
+            "S": "3725",
+            "T": "A secure utmp/wtmp implementation (development files)",
+            "U": "https://skarnet.org/software/utmps/",
+            "V": "0.1.3.3-r0",
+            "c": "900a4ecef77ae677eab8243b99f2c40cbf8ea35b",
+            "m": "Laurent Bercot <ska-devel@skarnet.org>",
+            "o": "utmps",
+            "p": "pc:libutmps=0.1.3.3",
+            "t": "1778384706"
+          },
+          {
+            "A": "x86_64",
+            "C": "Q13ukk2cVO4o/s8DgeMa1voMpdHcc=",
+            "D": "skalibs-static",
+            "I": "38594",
+            "L": "ISC",
+            "P": "utmps-static",
+            "S": "6341",
+            "T": "A secure utmp/wtmp implementation (static library)",
+            "U": "https://skarnet.org/software/utmps/",
+            "V": "0.1.3.3-r0",
+            "c": "900a4ecef77ae677eab8243b99f2c40cbf8ea35b",
+            "m": "Laurent Bercot <ska-devel@skarnet.org>",
+            "o": "utmps",
+            "t": "1778384706"
+          }
+        ],
+        "scope": "Signed official utmps/skalibs SDK and static-archive bytes bound to corresponding sources/notices. Not independent rebuild equivalence, compiler-support source closure or advisory clearance.",
+        "source_files": [
+          {
+            "mode": 420,
+            "path": "skalibs/COPYING",
+            "sha256": "26bee3a3c78ae6a29c81c18832cadb1a4433cf8a786624312f11667d93fcce41",
+            "size": 760,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "skalibs/aports/APKBUILD",
+            "sha256": "7878dd8832e4248e5ad535f7b8beabc9c962cdfc059b1c732d30742d57adc027",
+            "size": 1318,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "skalibs/skalibs-2.15.0.0.tar.gz",
+            "sha256": "7fde96e8afb4191593a15328883e9c7726c96891cf071222146821e8c87f8007",
+            "size": 267454,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "static-sources.json",
+            "sha256": "4b7bda7103059c19fad7d84a054a6b234eedb3db0d875976f969534af3b55887",
+            "size": 89648,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/COPYING",
+            "sha256": "babe23e98a17858e1a8163a1f223848842f1cc2939ef69c91dbdec294f77ea6e",
+            "size": 760,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/APKBUILD",
+            "sha256": "40e59c8bf91709421c237776b427d95aed192ee8d7453ba31bde751230f06fa4",
+            "size": 3080,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/btmpd.initd",
+            "sha256": "3b477a5d8e96f4412edd297c03a17f56dcf136ebd1b54a0a3af414a94e5a1155",
+            "size": 559,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/btmpd.logrotate",
+            "sha256": "63d3aa8a3ea6a37876466319a9120bd98deb30794151649287c65ba7db49e5da",
+            "size": 89,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/setup-utmp",
+            "sha256": "fcc0cb6edf1ae6a121da1257a2a7ce764b995fbf7fa00dec1df12510312bb372",
+            "size": 1827,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/utmp-init.initd",
+            "sha256": "137f25ee4bef1b45664ec85aabd2e500d69747d425f58b5b24d9565fca1da6fb",
+            "size": 627,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/utmp-prepare.initd",
+            "sha256": "810272fa8649a943fb873b7e2da2cb43d525dd6cc3caaca06663bf2049acb4f0",
+            "size": 674,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/utmpd.initd",
+            "sha256": "f71d782481a9ff677b927effb19c293484248357f2a3356f051cd6aa758fb34d",
+            "size": 491,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/utmps.pre-install",
+            "sha256": "07747f8481583b5da297332eb578784ab46d808cefb26e91663d955c195d2d04",
+            "size": 114,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/wtmpd.initd",
+            "sha256": "856eb9f7ea94a1e6d9b34ca3a65cd002ea9d53118feccdd94ce3749342c72062",
+            "size": 559,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/wtmpd.logrotate",
+            "sha256": "267f3f47ea67c069caf353e9e533d08347216ae666e71200acfb467168c60543",
+            "size": 89,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/utmps-0.1.3.3.tar.gz",
+            "sha256": "e2212bd02fe17730424f7f5e30a4dde71d0862a52b23d8b729eed74420a349a2",
+            "size": 35679,
+            "type": "file"
+          }
+        ],
+        "static_archives": [
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/libskarnet.a",
+            "sha256": "4a7b26ba6e78749d286295153706faab977952b79b4d96852e9c3ab649e6c3a0",
+            "size": 1375456,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/libutmps.a",
+            "sha256": "d88866df1679446da3c7e81137a10e10752aac1444d610efb5d30d341c8e9b49",
+            "size": 38594,
+            "type": "file",
+            "uid": 0
+          }
+        ],
+        "static_sources_sha256": "4b7bda7103059c19fad7d84a054a6b234eedb3db0d875976f969534af3b55887",
+        "status": "TWO_OFFICIAL_STATIC_PROVIDERS_SOURCE_BOUND"
+      },
+      "temporary_trust_removed": true,
+      "upstream_pass_lines": 913,
+      "url_rejections": 32
+    },
+    "arm64": {
+      "actual_source_commit": "e7bcc21481b1e8ee806a8bd666281ce4000472b4",
+      "applet_count": 304,
+      "artifact": {
+        "id": 13647721759,
+        "sha256": "249f7c99146fab133d8cb326f0df77f0edee3c315b58316ea5adbe8594d32b4e"
+      },
+      "configuration_settings": 1084,
+      "installed_status": "SIGNED_BUSYBOX_INSTALLED_ONLY",
+      "local_transfers": 5,
+      "runtime_status": "PATCHED_BUSYBOX_BOUNDED_RUNTIME_ONLY",
+      "source_binding": {
+        "machine": "aarch64",
+        "packages": [
+          {
+            "A": "aarch64",
+            "C": "Q1MwjoFckaEe0DpvGmsjGaret9ZcM=",
+            "D": "skalibs-libs=2.15.0.0-r0 pkgconfig",
+            "I": "214233",
+            "L": "ISC",
+            "P": "skalibs-dev",
+            "S": "47496",
+            "T": "Set of general-purpose C programming libraries for skarnet.org software. (development files)",
+            "U": "https://skarnet.org/software/skalibs/",
+            "V": "2.15.0.0-r0",
+            "c": "f148233038fa9b35932a7996df29f110b32c2160",
+            "m": "Laurent Bercot <ska-devel@skarnet.org>",
+            "o": "skalibs",
+            "p": "pc:libskarnet=2.15.0.0",
+            "t": "1778384706"
+          },
+          {
+            "A": "aarch64",
+            "C": "Q12IwUfVAKEoK2on8soUvhO7sKloY=",
+            "D": "skalibs-dev",
+            "I": "1447960",
+            "L": "ISC",
+            "P": "skalibs-static",
+            "S": "177981",
+            "T": "Set of general-purpose C programming libraries for skarnet.org software. (static library)",
+            "U": "https://skarnet.org/software/skalibs/",
+            "V": "2.15.0.0-r0",
+            "c": "f148233038fa9b35932a7996df29f110b32c2160",
+            "m": "Laurent Bercot <ska-devel@skarnet.org>",
+            "o": "skalibs",
+            "t": "1778384706"
+          },
+          {
+            "A": "aarch64",
+            "C": "Q17WfUWq+QeSaKsUegkBnD1VPQ3D4=",
+            "D": "utmps-libs=0.1.3.3-r0 pc:libskarnet>=2.15.0.0 pkgconfig",
+            "I": "5394",
+            "L": "ISC",
+            "P": "utmps-dev",
+            "S": "3705",
+            "T": "A secure utmp/wtmp implementation (development files)",
+            "U": "https://skarnet.org/software/utmps/",
+            "V": "0.1.3.3-r0",
+            "c": "900a4ecef77ae677eab8243b99f2c40cbf8ea35b",
+            "m": "Laurent Bercot <ska-devel@skarnet.org>",
+            "o": "utmps",
+            "p": "pc:libutmps=0.1.3.3",
+            "t": "1778384706"
+          },
+          {
+            "A": "aarch64",
+            "C": "Q1KPe9d/2CRhNlANBlxLwhZVqyYoQ=",
+            "D": "skalibs-static",
+            "I": "41002",
+            "L": "ISC",
+            "P": "utmps-static",
+            "S": "6555",
+            "T": "A secure utmp/wtmp implementation (static library)",
+            "U": "https://skarnet.org/software/utmps/",
+            "V": "0.1.3.3-r0",
+            "c": "900a4ecef77ae677eab8243b99f2c40cbf8ea35b",
+            "m": "Laurent Bercot <ska-devel@skarnet.org>",
+            "o": "utmps",
+            "t": "1778384706"
+          }
+        ],
+        "scope": "Signed official utmps/skalibs SDK and static-archive bytes bound to corresponding sources/notices. Not independent rebuild equivalence, compiler-support source closure or advisory clearance.",
+        "source_files": [
+          {
+            "mode": 420,
+            "path": "skalibs/COPYING",
+            "sha256": "26bee3a3c78ae6a29c81c18832cadb1a4433cf8a786624312f11667d93fcce41",
+            "size": 760,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "skalibs/aports/APKBUILD",
+            "sha256": "7878dd8832e4248e5ad535f7b8beabc9c962cdfc059b1c732d30742d57adc027",
+            "size": 1318,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "skalibs/skalibs-2.15.0.0.tar.gz",
+            "sha256": "7fde96e8afb4191593a15328883e9c7726c96891cf071222146821e8c87f8007",
+            "size": 267454,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "static-sources.json",
+            "sha256": "4b7bda7103059c19fad7d84a054a6b234eedb3db0d875976f969534af3b55887",
+            "size": 89648,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/COPYING",
+            "sha256": "babe23e98a17858e1a8163a1f223848842f1cc2939ef69c91dbdec294f77ea6e",
+            "size": 760,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/APKBUILD",
+            "sha256": "40e59c8bf91709421c237776b427d95aed192ee8d7453ba31bde751230f06fa4",
+            "size": 3080,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/btmpd.initd",
+            "sha256": "3b477a5d8e96f4412edd297c03a17f56dcf136ebd1b54a0a3af414a94e5a1155",
+            "size": 559,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/btmpd.logrotate",
+            "sha256": "63d3aa8a3ea6a37876466319a9120bd98deb30794151649287c65ba7db49e5da",
+            "size": 89,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/setup-utmp",
+            "sha256": "fcc0cb6edf1ae6a121da1257a2a7ce764b995fbf7fa00dec1df12510312bb372",
+            "size": 1827,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/utmp-init.initd",
+            "sha256": "137f25ee4bef1b45664ec85aabd2e500d69747d425f58b5b24d9565fca1da6fb",
+            "size": 627,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/utmp-prepare.initd",
+            "sha256": "810272fa8649a943fb873b7e2da2cb43d525dd6cc3caaca06663bf2049acb4f0",
+            "size": 674,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/utmpd.initd",
+            "sha256": "f71d782481a9ff677b927effb19c293484248357f2a3356f051cd6aa758fb34d",
+            "size": 491,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/utmps.pre-install",
+            "sha256": "07747f8481583b5da297332eb578784ab46d808cefb26e91663d955c195d2d04",
+            "size": 114,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/wtmpd.initd",
+            "sha256": "856eb9f7ea94a1e6d9b34ca3a65cd002ea9d53118feccdd94ce3749342c72062",
+            "size": 559,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/aports/wtmpd.logrotate",
+            "sha256": "267f3f47ea67c069caf353e9e533d08347216ae666e71200acfb467168c60543",
+            "size": 89,
+            "type": "file"
+          },
+          {
+            "mode": 420,
+            "path": "utmps/utmps-0.1.3.3.tar.gz",
+            "sha256": "e2212bd02fe17730424f7f5e30a4dde71d0862a52b23d8b729eed74420a349a2",
+            "size": 35679,
+            "type": "file"
+          }
+        ],
+        "static_archives": [
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/libskarnet.a",
+            "sha256": "305f236c06a98aba782a8bd0cd8de6edd0615dcdf4717ef8c6d7ea6fe2909a36",
+            "size": 1447960,
+            "type": "file",
+            "uid": 0
+          },
+          {
+            "gid": 0,
+            "mode": 420,
+            "path": "usr/lib/libutmps.a",
+            "sha256": "a3505c4a591ffe7433c524676f36c34c2c5a09214919c342e134bf3a394a7b17",
+            "size": 41002,
+            "type": "file",
+            "uid": 0
+          }
+        ],
+        "static_sources_sha256": "4b7bda7103059c19fad7d84a054a6b234eedb3db0d875976f969534af3b55887",
+        "status": "TWO_OFFICIAL_STATIC_PROVIDERS_SOURCE_BOUND"
+      },
+      "temporary_trust_removed": true,
+      "upstream_pass_lines": 913,
+      "url_rejections": 32
+    }
+  },
+  "run_id": 42556901641,
+  "scope": "Actual native two-architecture BusyBox build, source-bound official SDK/static providers and installed behavior only. Compiler-support source closure, source rebuild equivalence, complete advisory and full ECM/MCP acceptance remain separate.",
+  "source_head": "3fd8fe9f93a82769ecb7362bd3e6b2a3262acfa2"
+}

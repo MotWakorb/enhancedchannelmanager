@@ -100,7 +100,9 @@ handler that happened to fail, and a pass is proved to have reached the
 handler rather than to have been short-circuited somewhere else. That is the
 pattern bead 9kwzp.11 established.
 """
+from contextlib import contextmanager, ExitStack
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Callable, Dict, NamedTuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -177,14 +179,13 @@ def _engine_mock() -> MagicMock:
     return MagicMock(return_value=engine)
 
 
-def _saved_backups_dir() -> MagicMock:
-    """A ``BACKUPS_DIR`` whose ``iterdir`` yields exactly one saved artifact."""
-    entry = MagicMock()
-    entry.is_file.return_value = True
-    entry.name = SAVED_ARTIFACT
-    backups_dir = MagicMock()
-    backups_dir.iterdir.return_value = [entry]
-    return backups_dir
+@contextmanager
+def _saved_backups_dir():
+    """Real saved storage so descriptor validation cannot mask admission."""
+    with TemporaryDirectory(prefix="ecm-auth-saved-") as directory:
+        root = Path(directory)
+        (root / SAVED_ARTIFACT).write_bytes(b"synthetic-saved-artifact")
+        yield root
 
 
 def _method_types() -> MagicMock:
@@ -388,20 +389,19 @@ class _Gate:
             self.witness = _method_types()
         if case.witness == "task_engine.get_engine":
             self.witness = _engine_mock()
-        self._contexts = [patch(case.witness, new=self.witness)]
-        self._contexts += [
-            patch(target, new=factory()) for target, factory in case.extra
-        ]
+        self._stack = ExitStack()
 
     def __enter__(self):
-        for ctx in self._contexts:
-            ctx.__enter__()
+        self._stack.enter_context(patch(self._case.witness, new=self.witness))
+        for target, factory in self._case.extra:
+            value = factory()
+            if target == "routers.backup.BACKUPS_DIR":
+                value = self._stack.enter_context(value)
+            self._stack.enter_context(patch(target, new=value))
         return self
 
     def __exit__(self, *exc):
-        for ctx in reversed(self._contexts):
-            ctx.__exit__(*exc)
-        return False
+        return self._stack.__exit__(*exc)
 
     async def request(self, **kwargs):
         return await self._client.request(

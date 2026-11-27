@@ -3,7 +3,6 @@ Stream stats router — stream probe stats, probe operations, sort, dismiss/clea
 
 Extracted from main.py (Phase 3 of v0.13.0 backend refactor).
 """
-import asyncio
 import logging
 import time
 from datetime import datetime, timedelta
@@ -566,30 +565,13 @@ async def probe_bulk_streams(request: BulkProbeRequest):
         logger.error("[STREAM-STATS-PROBE] Stream prober not available - returning 503")
         raise HTTPException(status_code=503, detail="Stream prober not available")
 
-    # Single-probe-at-a-time guard: do NOT start a second probe over a running
-    # one (it would clobber the shared progress/results envelope). Report that a
-    # probe is already in progress so the caller can poll the existing run.
-    if prober._probing_in_progress:
-        logger.info("[STREAM-STATS-PROBE] Probe already in progress - rejecting bulk start")
-        return {
-            "status": "already_running",
-            "message": "A probe is already in progress; check /probe/progress",
-        }
-
     # The "probe started" alert is info-level; a manual probe should only push it
     # externally when the stream_probe task opted into info alerts (GH #462).
     start_send_alerts = task_start_alerts_enabled("stream_probe")
 
-    async def run_bulk_probe_with_logging():
-        """Wrapper to catch and log any errors from the background bulk probe."""
-        try:
-            logger.info("[STREAM-STATS-PROBE] Background bulk probe task starting (%d streams)...", len(request.stream_ids))
-            await prober.probe_streams_by_ids(request.stream_ids, start_send_alerts=start_send_alerts)
-            logger.info("[STREAM-STATS-PROBE] Background bulk probe task completed successfully")
-        except Exception as e:
-            logger.exception("[STREAM-STATS-PROBE] Background bulk probe task failed: %s", e)
-
-    asyncio.create_task(run_bulk_probe_with_logging())
+    result = prober.schedule_probe(stream_ids=request.stream_ids, start_send_alerts=start_send_alerts)
+    if result["status"] != "started":
+        return result
     logger.debug("[STREAM-STATS-PROBE] Background bulk probe task created, returning response")
     return {
         "status": "started",
@@ -615,33 +597,22 @@ async def probe_all_streams_endpoint(request: ProbeAllRequest = ProbeAllRequest(
         logger.error("[STREAM-STATS-PROBE] Stream prober not available - returning 503")
         raise HTTPException(status_code=503, detail="Stream prober not available")
 
-    # If a probe is already "in progress" (possibly stuck), reset it first
-    if prober._probing_in_progress:
-        logger.warning("[STREAM-STATS-PROBE] Probe state shows in_progress - resetting before starting new probe")
-        prober.force_reset_probe_state()
-
     # Info-level "probe started" alert: gate external dispatch on the stream_probe
     # task's (send_alerts AND alert_on_info), even for this manual trigger (GH #462).
     start_send_alerts = task_start_alerts_enabled("stream_probe")
 
-    async def run_probe_with_logging():
-        """Wrapper to catch and log any errors from the probe task."""
-        try:
-            logger.info("[STREAM-STATS-PROBE] Background probe task starting...")
-            await prober.probe_all_streams(
-                channel_groups_override=request.channel_groups or None,
-                skip_m3u_refresh=request.skip_m3u_refresh,
-                stream_ids_filter=request.stream_ids or None,
-                start_send_alerts=start_send_alerts,
-            )
-            logger.info("[STREAM-STATS-PROBE] Background probe task completed successfully")
-        except Exception as e:
-            logger.exception("[STREAM-STATS-PROBE] Background probe task failed with error: %s", e)
-
-    # Start background task with optional group filter
+    # Both endpoints use the same synchronous owner claim, including queued
+    # workers and a reset owner still draining. Starting never resets another run.
+    result = prober.schedule_probe(
+        channel_groups_override=request.channel_groups or None,
+        skip_m3u_refresh=request.skip_m3u_refresh,
+        stream_ids_filter=request.stream_ids or None,
+        start_send_alerts=start_send_alerts,
+    )
+    if result["status"] != "started":
+        return result
     stream_ids_msg = ", stream_ids: %s" % len(request.stream_ids) if request.stream_ids else ""
     logger.info("[STREAM-STATS-PROBE] Starting background probe task (groups: %s, skip_m3u_refresh: %s%s)", request.channel_groups or 'all', request.skip_m3u_refresh, stream_ids_msg)
-    asyncio.create_task(run_probe_with_logging())
     logger.debug("[STREAM-STATS-PROBE] Background task created, returning response")
     return {"status": "started", "message": "Background probe started"}
 
@@ -838,7 +809,7 @@ async def probe_single_stream(stream_id: int):
 
         logger.debug("[STREAM-STATS-PROBE] Probing single stream %s", stream_id)
         result = await prober.probe_stream(
-            stream_id, stream.get("url"), stream.get("name")
+            stream_id, stream.get("url"), stream.get("name"), stream=stream
         )
     except HTTPException:
         raise

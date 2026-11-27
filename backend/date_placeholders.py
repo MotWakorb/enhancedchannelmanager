@@ -38,8 +38,11 @@ the runtime ``safe_regex.search`` call would. That is correct: a pattern
 that would never successfully match at runtime should not be
 save-able either.
 """
+
 from __future__ import annotations
 
+import re
+import time
 from datetime import datetime, timedelta
 
 import safe_regex
@@ -56,6 +59,117 @@ _DATE_TOKEN_PATTERN = r"\{(?:date|today)([+-]\d+[dw]?)?(:[^}]+)?\}"
 # into, to prevent unbounded regex-alternation generation. Also
 # documented in USER_GUIDE.md § "Date Expansion in Regex".
 MAX_DATE_RANGE_DAYS = 90
+
+
+def _has_gnu_strftime() -> bool:
+    try:
+        return datetime(2000, 1, 2, 13).strftime("%Q|%k|%P|%^B") == "%Q|13|pm|JANUARY"
+    except ValueError:
+        return False
+
+
+_GNU_STRFTIME = _has_gnu_strftime()
+# Disjoint repetitions, with no user-supplied regex or backtracking alternatives.
+_FORMAT_DIRECTIVE = re.compile(r"%([-_0^#]*)([0-9]*)([EO]?)(.)?", re.DOTALL)
+_ERA_DIRECTIVES = frozenset("%CPRTXYZcnprstuxyz")
+_ALTERNATE_DIRECTIVES = frozenset("%BCGHIMPRSTUVWZbdeghjklmnprstuwyz")
+
+
+def _format_date(value: datetime, fmt: str) -> str:
+    """Retain GNU date-format semantics on musl, including literal unknown codes.
+
+    Keep the existing native path on GNU libc. Musl rejects unknown directives
+    (and GNU extensions) by discarding the entire format, even its literal text.
+    Render directives individually there: portable fields still use datetime,
+    while GNU aliases, flags, padding and invalid-code literals are explicit.
+    Recorded same-source baseline vectors cover this path in
+    test_date_strftime_compat.py, including legitimate empty %z/%Z values.
+    """
+    if _GNU_STRFTIME:
+        return value.strftime(fmt)
+
+    iso = value.isocalendar()
+    # (number, default width, default padding). GNU leaves early years/centuries
+    # unpadded unless an explicit width is supplied; musl defaults differ.
+    numbers = {
+        "C": (value.year // 100, 1, "0"),
+        "d": (value.day, 2, "0"),
+        "e": (value.day, 2, " "),
+        "g": (iso.year % 100, 2, "0"),
+        "G": (iso.year, 1, "0"),
+        "H": (value.hour, 2, "0"),
+        "I": (value.hour % 12 or 12, 2, "0"),
+        "j": (value.timetuple().tm_yday, 3, "0"),
+        "k": (value.hour, 2, " "),
+        "l": (value.hour % 12 or 12, 2, " "),
+        "m": (value.month, 2, "0"),
+        "M": (value.minute, 2, "0"),
+        "S": (value.second, 2, "0"),
+        "u": (iso.weekday, 1, "0"),
+        "U": (int(value.strftime("%U")), 2, "0"),
+        "V": (iso.week, 2, "0"),
+        "w": ((value.weekday() + 1) % 7, 1, "0"),
+        "W": (int(value.strftime("%W")), 2, "0"),
+        "y": (value.year % 100, 2, "0"),
+        "Y": (value.year, 1, "0"),
+    }
+
+    def render(match):
+        flags, width_text, modifier, code = match.groups()
+        width = int(width_text) if width_text else 0
+        padding_flag = next((flag for flag in reversed(flags) if flag in "_-0"), "")
+        known = code is not None and (
+            code in numbers or code in "%aAbBhcDdnprRstTxXzZPF"
+        )
+        if modifier == "E" and code not in _ERA_DIRECTIVES:
+            known = False
+        if modifier == "O" and code not in _ALTERNATE_DIRECTIVES:
+            known = False
+        # Python substitutes only bare %f before invoking libc; flagged or
+        # modified forms are literal unknown directives in the baseline.
+        if match.group(0) == "%f":
+            return value.strftime("%f")
+        if not known:
+            literal = match.group(0).upper() if "^" in flags else match.group(0)
+            return literal.rjust(width, "0" if padding_flag == "0" else " ")
+        if code in numbers or code == "s":
+            if code == "s":
+                number, default_width, padding = (
+                    int(time.mktime(value.timetuple())),
+                    1,
+                    "0",
+                )
+            else:
+                number, default_width, padding = numbers[code]
+            if padding_flag == "-":
+                default_width, padding = 0, " "
+            elif padding_flag:
+                padding = " " if padding_flag == "_" else "0"
+            return str(number).rjust(width or default_width, padding)
+        if code == "%":
+            result = "%"
+        elif code == "P":
+            result = value.strftime("%p").lower()
+        elif code == "F":
+            result = f"{value.year}-{value.month:02d}-{value.day:02d}"
+        elif code == "c":
+            result = value.strftime("%c")
+            if value.year < 1000 and result.endswith(f"{value.year:04d}"):
+                result = result[:-4] + str(value.year)
+        else:
+            result = value.strftime("%" + code)
+        if "^" in flags and code != "P":
+            result = result.upper()
+        if "#" in flags:
+            if code in "aAbBh":
+                result = result.upper()
+            elif code in "pZ":
+                result = result.lower()
+        if code == "z" or (not result and padding_flag == "-"):
+            return result
+        return result.rjust(width, "0" if padding_flag == "0" else " ")
+
+    return _FORMAT_DIRECTIVE.sub(render, fmt)
 
 
 def expand_date_placeholders(text: str, allow_ranges: bool = True) -> str:
@@ -119,7 +233,7 @@ def expand_date_placeholders(text: str, allow_ranges: bool = True) -> str:
 
         if val == 0:
             try:
-                return base_date.strftime(fmt)
+                return _format_date(base_date, fmt)
             except ValueError:
                 return match.group(0)
 
@@ -142,7 +256,7 @@ def expand_date_placeholders(text: str, allow_ranges: bool = True) -> str:
         try:
             for i in range(0, end, step):
                 d = base_date + timedelta(days=i)
-                dates.append(d.strftime(fmt))
+                dates.append(_format_date(d, fmt))
             return f"({'|'.join(dates)})"
         except ValueError:
             return match.group(0)

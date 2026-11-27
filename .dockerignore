@@ -18,6 +18,7 @@
 **/__pycache__
 **/*.pyc
 **/.pytest_cache
+**/.hypothesis
 **/.mypy_cache
 **/.ruff_cache
 frontend/dist
@@ -26,3 +27,4 @@ frontend/playwright-report
 frontend/test-results
 .beads
 .vite-temp
+.native-ci-inputs.*

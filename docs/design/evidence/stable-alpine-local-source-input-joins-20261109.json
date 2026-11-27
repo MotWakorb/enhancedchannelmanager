@@ -1,0 +1,1047 @@
+{
+  "actual_counts": {
+    "checksummed_inputs": 347,
+    "external_source_bytes": 390245458,
+    "external_source_inputs": 82,
+    "installed_packages": 94,
+    "local_recipe_inputs": 265,
+    "native_control_architecture": 83,
+    "noarch_control_with_repository_architecture": 10,
+    "recipe_regular_files": 359,
+    "recipe_symlinks": 3,
+    "signed_nonvirtual_apks": 93,
+    "source_groups": 68,
+    "virtual_zero_payload": 1
+  },
+  "local_test_image": "sha256:0c5586b42b0da040b974f5e87b80c6075374216186f28ad3833eb4cab704fc2f",
+  "raw_receipts": {
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-complete-local-source-join-02.json": "5b3f809d988ceaaf321a27ba1a1c3dfdff0ad685fb7ac6fe6d7434e29b5a0116",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-aports-recipe-survey-01/survey.json": "020e8cecf55d7e59944327f67cc40b443d3da5f2e7c05b6913d80efdc961be7c",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-distfiles-survey-01/receipts.json": "c1f52c884c878e10692825ad299b6a491d6246edb9529930a8638b4c4f0a7e75",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-signed-source-inputs-01/package-receipts.json": "740a94563933364eca11feb2cc057ca6693e58209452955451f6d5a18b8d2648",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-signed-source-inputs-01/selection.json": "4c65640952b52220afdbc8436bfe28009a85bd181bbdb07dfa9574ba36548dda",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-source-graph-local-02/recipe-source-graph.json": "eaa9ffab2e88ae53459b2a5a8c212bd278e46f154bb2af8b10040265ac14bf78",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-source-signature-join-03.json": "9a70251eb46607c36587570b27fe3a73739d24c1fda7be3b387fd18d30561bb1"
+  },
+  "scope": "Actual offline local pinned test-environment signature/control/datahash -> complete signed origin/commit -> raw commit/path Git objects -> entire original recipe trees -> all checksummed source inputs. No installed full-candidate selection/delivery/consumer, Python-base, owned-provider/compiler-support closure, rebuild, complete license/advisory, native ARM package execution, ECM/MCP or publication approval. APK/source artifacts remain externally retained; this summary is not a replacement for delivered source bytes.",
+  "signature_control_mutation": {
+    "exit": 1,
+    "stderr": "",
+    "stdout": "/tmp/busybox-authenticated-control-mutant.apk: BAD signature\n"
+  },
+  "signed_indexes": [
+    {
+      "file": "x86_64-main-APKINDEX.tar.gz",
+      "key_sha256": "207e4696d3c05f7cb05966aee557307151f1f00217af4143c1bcaf33b8df733f",
+      "sha256": "5877a29726f2100b48066aa8aa83a23cd0508431e4e9eb7dfad744ee675ec2fd",
+      "signer": "alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub",
+      "stderr": "",
+      "stdout": "/proof/inputs/x86_64-main-APKINDEX.tar.gz: OK\n"
+    },
+    {
+      "file": "x86_64-community-APKINDEX.tar.gz",
+      "key_sha256": "207e4696d3c05f7cb05966aee557307151f1f00217af4143c1bcaf33b8df733f",
+      "sha256": "790e245a606e63fed2e9a35086be867f42109984a404791abcd64cbcce511162",
+      "signer": "alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub",
+      "stderr": "",
+      "stdout": "/proof/inputs/x86_64-community-APKINDEX.tar.gz: OK\n"
+    },
+    {
+      "file": "aarch64-main-APKINDEX.tar.gz",
+      "key_sha256": "d11f6b21c61b4274e182eb888883a8ba8acdbf820dcc7a6d82a7d9fc2fd2836d",
+      "sha256": "d879b8c45e287770800e8fe7dc56435f407a914da55afa74dcb9f7833ce05e9b",
+      "signer": "alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub",
+      "stderr": "",
+      "stdout": "/proof/inputs/aarch64-main-APKINDEX.tar.gz: OK\n"
+    },
+    {
+      "file": "aarch64-community-APKINDEX.tar.gz",
+      "key_sha256": "d11f6b21c61b4274e182eb888883a8ba8acdbf820dcc7a6d82a7d9fc2fd2836d",
+      "sha256": "9650ebb0dde1fd02c90b475a1a2525796ed739f1287bc8f02391164305ae3681",
+      "signer": "alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub",
+      "stderr": "",
+      "stdout": "/proof/inputs/aarch64-community-APKINDEX.tar.gz: OK\n"
+    }
+  ],
+  "source_capture_sha256": "fa84def3df9b9e43d310e8562d200f466c1aec00a85142f4539de7fb60ec2e2c",
+  "source_groups": [
+    {
+      "commit": "8bac74716d06c84627ab02d101fd9d2bafd0a34c",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/acl",
+      "git_tree": "9ee24d3cc6865741528b647649e79beba273bdf1",
+      "origin": "acl",
+      "package_version": "2.3.2-r1",
+      "packages": [
+        "acl-libs"
+      ],
+      "recipe_sha256": "4e199158fd86f7db8dd1f60c2d5195de6f90c3ae99b08c94d7de48084ac096ae",
+      "source_input_count": 1
+    },
+    {
+      "commit": "105b835acd9971b9770fb61f5a1ddcc133c180dc",
+      "external_input_count": 0,
+      "generated_payload_recipe": true,
+      "git_path": "main/alpine-base",
+      "git_tree": "a3af2bd7d397d1907757514932ee7896f4fe63cd",
+      "origin": "alpine-base",
+      "package_version": "3.24.4-r0",
+      "packages": [
+        "alpine-release"
+      ],
+      "recipe_sha256": "dd9dbeb82fe510aadd75305f9999dc7c0fc81c4b4476db0bbb73da3e167b3b05",
+      "source_input_count": 0
+    },
+    {
+      "commit": "60a7585bbab2fa0f762504eb617dbca90216e31f",
+      "external_input_count": 2,
+      "generated_payload_recipe": false,
+      "git_path": "main/alpine-baselayout",
+      "git_tree": "09b8f57d1c2c06a9360f84c6aa1f7cc1076e9ae6",
+      "origin": "alpine-baselayout",
+      "package_version": "3.7.2-r1",
+      "packages": [
+        "alpine-baselayout",
+        "alpine-baselayout-data"
+      ],
+      "recipe_sha256": "aef255516b71e39109860b92eb027a0986d90197427fb93ec91ebcd04bf59763",
+      "source_input_count": 14
+    },
+    {
+      "commit": "b9f23becced4d7b3ccc0fa0f28530243ccd314a0",
+      "external_input_count": 0,
+      "generated_payload_recipe": false,
+      "git_path": "main/alpine-keys",
+      "git_tree": "ce77b3572b098dcdd3ce7a81e24aa4454f5448a5",
+      "origin": "alpine-keys",
+      "package_version": "2.6-r0",
+      "packages": [
+        "alpine-keys"
+      ],
+      "recipe_sha256": "cb352e13b9e481b424763bd36d3afdb81ac308e508abed15eb7175530050bd3f",
+      "source_input_count": 18
+    },
+    {
+      "commit": "13685e8f2cf1c103cbba2fb9efcfcf19f4918df0",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/apk-tools",
+      "git_tree": "673ba2e9b8e6af2836712927054e750015130b4f",
+      "origin": "apk-tools",
+      "package_version": "3.0.9-r0",
+      "packages": [
+        "apk-tools",
+        "libapk"
+      ],
+      "recipe_sha256": "092d5c1a4957bf585a4c9d27a7c68cfa07e54cffeac57b1eec154675d54d50b0",
+      "source_input_count": 2
+    },
+    {
+      "commit": "40760f1909b662e8b9065217452a1782bad3dab1",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/attr",
+      "git_tree": "a79b02db19eaea2699f513764af9184cfdf3d38d",
+      "origin": "attr",
+      "package_version": "2.5.2-r2",
+      "packages": [
+        "libattr"
+      ],
+      "recipe_sha256": "656772445f50699f800aff5be95af2223f2c7d1c85dc427730c750d162686076",
+      "source_input_count": 2
+    },
+    {
+      "commit": "1522c3193610902d8493f9790a2755c11f21f26d",
+      "external_input_count": 10,
+      "generated_payload_recipe": false,
+      "git_path": "main/bash",
+      "git_tree": "d6e649ca5daeddd606b0b782f0de01cc1ce993db",
+      "origin": "bash",
+      "package_version": "5.3.9-r1",
+      "packages": [
+        "bash"
+      ],
+      "recipe_sha256": "4dbeb2dcbde454870383a81c79d04a63aed951bc9ec7c3ecdc7e9f251d7a55bb",
+      "source_input_count": 13
+    },
+    {
+      "commit": "673df4f3ce2e71e9bcfbf64939332917a35795fc",
+      "external_input_count": 2,
+      "generated_payload_recipe": false,
+      "git_path": "main/binutils",
+      "git_tree": "ee307a767d64b062b0abe9ec4885c38107ac7b54",
+      "origin": "binutils",
+      "package_version": "2.45.1-r1",
+      "packages": [
+        "binutils"
+      ],
+      "recipe_sha256": "75923014197b25434dd79490dd35f098c4aa599c213e6bfb5a5cafefa8ffa3f1",
+      "source_input_count": 5
+    },
+    {
+      "commit": "8313352127992a9d82e2c2024494f6c38a4dffb4",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/brotli",
+      "git_tree": "2db8e3a4ce0dd70b5bef311282777c64f93c44bd",
+      "origin": "brotli",
+      "package_version": "1.2.1-r0",
+      "packages": [
+        "brotli-libs"
+      ],
+      "recipe_sha256": "f9a8f0e7a72518e32c90098916a889a18469aa0148fa0c088be4e4c5d9473f29",
+      "source_input_count": 3
+    },
+    {
+      "commit": "c3ef5d10e6ef6528852c51f0564963e2f8c1be19",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/busybox",
+      "git_tree": "873d57bf7455f5634d3ddf2731ab13062986771d",
+      "origin": "busybox",
+      "package_version": "1.37.0-r31",
+      "packages": [
+        "busybox",
+        "busybox-binsh",
+        "ssl_client"
+      ],
+      "recipe_sha256": "98f019f62291aff63cb798f046fb59dfd43340885de63ca2f127651fc21d0450",
+      "source_input_count": 75
+    },
+    {
+      "commit": "33283848034c9885d984c8e8697c645c57324938",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/bzip2",
+      "git_tree": "34aca0f780b66f10e5d064c6e4bef1d07b60a147",
+      "origin": "bzip2",
+      "package_version": "1.0.8-r6",
+      "packages": [
+        "libbz2"
+      ],
+      "recipe_sha256": "7e046e9c4b1c265af9791a790049ed864c361c0949b9cd68564a48bc0f672de2",
+      "source_input_count": 7
+    },
+    {
+      "commit": "50f178d7a4c30ea44b54b7d4731ab58558c38b14",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/c-ares",
+      "git_tree": "5524f91b9819947f19b68326d26574576a036795",
+      "origin": "c-ares",
+      "package_version": "1.34.9-r0",
+      "packages": [
+        "c-ares"
+      ],
+      "recipe_sha256": "c15c4c8efe5fad0961f612cffb05f8ab8848ce1e3c108b65af25377b86807c40",
+      "source_input_count": 1
+    },
+    {
+      "commit": "e78f5987166c6ffbe23f6472e2e8f040298fe2da",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/ca-certificates",
+      "git_tree": "cf049142e972ade53e9a4d9afbdaeb6b0a2cf277",
+      "origin": "ca-certificates",
+      "package_version": "20261020-r0",
+      "packages": [
+        "ca-certificates",
+        "ca-certificates-bundle"
+      ],
+      "recipe_sha256": "7b35fb8e11790105578f47d57a3b22831227b0d8ad7d064e575bad146023f3da",
+      "source_input_count": 1
+    },
+    {
+      "commit": "8e261cdab4fd1bc77881cbff73b9ea962e9bd49f",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/coreutils",
+      "git_tree": "1465468dd0fde2011b1d73b9c38d04242a0f984e",
+      "origin": "coreutils",
+      "package_version": "9.11-r0",
+      "packages": [
+        "coreutils",
+        "coreutils-env",
+        "coreutils-fmt",
+        "coreutils-sha512sum"
+      ],
+      "recipe_sha256": "bba704cf7370ba7fea168c20fc34eb802f07c591ac10d3ed196c5fb1f460c427",
+      "source_input_count": 3
+    },
+    {
+      "commit": "c65a7b3f6d6bc4b3c0a8a6fff759d8fd05a167ce",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/curl",
+      "git_tree": "0ccf4fe0a07882189b614492d616f3578aff619b",
+      "origin": "curl",
+      "package_version": "8.23.0-r0",
+      "packages": [
+        "libcurl"
+      ],
+      "recipe_sha256": "13e89ad8f7bcf78396b626a0dd38e307a347a0680aae3b58600009ba00d86a3f",
+      "source_input_count": 1
+    },
+    {
+      "commit": "fac808c0fddf93e8980ec1f55972e6f69b78ba6f",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/cyrus-sasl",
+      "git_tree": "7fb10c8be8c456e9e00ed4c3fc4763d1c0564949",
+      "origin": "cyrus-sasl",
+      "package_version": "2.1.28-r9",
+      "packages": [
+        "libsasl"
+      ],
+      "recipe_sha256": "7bdec6a39ee51dda594196c0ae099964dcd2f0aebfe736df7a2c6e6bdf95b43d",
+      "source_input_count": 5
+    },
+    {
+      "commit": "8683a6972cb245fbbdb535dad6435a9930bb9374",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/e2fsprogs",
+      "git_tree": "0b67e9672930fcf4733bc76222bcf9fbab3c0ad8",
+      "origin": "e2fsprogs",
+      "package_version": "1.47.4-r0",
+      "packages": [
+        "libcom_err"
+      ],
+      "recipe_sha256": "fdeebc52e727e071462ef6616e1d24064fb94a9ed4df88e0b16a3e77d1baa5f3",
+      "source_input_count": 1
+    },
+    {
+      "commit": "af0fa42036cd6e626768c0d65fddaa1d1b30cf21",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/expat",
+      "git_tree": "30ad584ba5ffa5116054adfa53ec3a50fa21c49f",
+      "origin": "expat",
+      "package_version": "2.10.0-r0",
+      "packages": [
+        "libexpat"
+      ],
+      "recipe_sha256": "8f6b72616d400bf56d24b6577a7843901e2a4d4da29339693e19f76e928646ed",
+      "source_input_count": 1
+    },
+    {
+      "commit": "423a8ad043d07f2c7546c8ec3e2b0384cda360ae",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/gcc",
+      "git_tree": "f0d2c5afa42e2527e4456601614f35c63697606d",
+      "origin": "gcc",
+      "package_version": "15.2.0-r5",
+      "packages": [
+        "libgcc",
+        "libstdc++"
+      ],
+      "recipe_sha256": "71d831dbef88c2b0ff7b36b7422e878a07751419583a44b06cda2e561cdb82d4",
+      "source_input_count": 45
+    },
+    {
+      "commit": "1ea03990396db618edfcc8a9a0bc6b72662bac8f",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/gdbm",
+      "git_tree": "b4c2d151cb9ba15bfa27501b6f0d1f8004096379",
+      "origin": "gdbm",
+      "package_version": "1.26-r0",
+      "packages": [
+        "gdbm"
+      ],
+      "recipe_sha256": "862f63ae6868bb40b80a3da3c97d6e603af549e05c3051ceadcfa4ad7b135f1b",
+      "source_input_count": 1
+    },
+    {
+      "commit": "a0b12dbf67fb047e79a1b76c6dfe6f2904d0d391",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/gettext",
+      "git_tree": "806802e00fe4a32978bf0a09263c9aea50a1a149",
+      "origin": "gettext",
+      "package_version": "1.0-r0",
+      "packages": [
+        "libintl"
+      ],
+      "recipe_sha256": "e22f0eecaf4e5f1f5febe725f47ee019481ded75cdcf76d3c9dd5e7a9e590d13",
+      "source_input_count": 5
+    },
+    {
+      "commit": "b3ed5f8f4ce6b2ef13adeaf7494557add6546bda",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/git",
+      "git_tree": "ad8a2437b525ded6897013171de0f8570c64fba2",
+      "origin": "git",
+      "package_version": "2.54.0-r0",
+      "packages": [
+        "git",
+        "git-init-template"
+      ],
+      "recipe_sha256": "af43f6de15a7de1402a4ae17ea5fc8cde5383897f1c01dfd890ad24af3b3138e",
+      "source_input_count": 4
+    },
+    {
+      "commit": "206e7b39f7884d62a174aba4d33a42454518c1c2",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/gmp",
+      "git_tree": "fb230233fbb3d128978ffd5fc9a0df4f4e5f9636",
+      "origin": "gmp",
+      "package_version": "6.3.0-r4",
+      "packages": [
+        "gmp"
+      ],
+      "recipe_sha256": "290bb17b403afbc3c70a370b7db5b262b547240f611101486d6223e488e270c0",
+      "source_input_count": 2
+    },
+    {
+      "commit": "d71dde667049817d90cb84fe7b1e21630784b52f",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/gnupg",
+      "git_tree": "80364726f75c43bb97091132e0af8586d3c5058d",
+      "origin": "gnupg",
+      "package_version": "2.4.9-r1",
+      "packages": [
+        "gnupg",
+        "gnupg-dirmngr",
+        "gnupg-gpgconf",
+        "gnupg-keyboxd",
+        "gnupg-utils",
+        "gnupg-wks-client",
+        "gpg",
+        "gpg-agent",
+        "gpg-wks-server",
+        "gpgsm",
+        "gpgv"
+      ],
+      "recipe_sha256": "a8202cc914ef4ed2ee8eb87da6681df5efbe4e82af1cbe4e4a8c5d301240c4db",
+      "source_input_count": 13
+    },
+    {
+      "commit": "c09f2e94a4b0b4077da49683cf0faa09ed63fb5b",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/gnutls",
+      "git_tree": "7996ce0fb2ade35ffe4a6ab3bad827d847654440",
+      "origin": "gnutls",
+      "package_version": "3.8.13-r0",
+      "packages": [
+        "gnutls"
+      ],
+      "recipe_sha256": "3154d6cd6507d7e60fdd7941d0d8175a9520d111ee1bedad7ab6c77ea174960b",
+      "source_input_count": 5
+    },
+    {
+      "commit": "88919740865a31680e7f1c4cb568dfd7a87e9f08",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/jansson",
+      "git_tree": "94d02ca625f4fec8b2817ffd97eb35f54c9616d6",
+      "origin": "jansson",
+      "package_version": "2.15.0-r0",
+      "packages": [
+        "jansson"
+      ],
+      "recipe_sha256": "d3a8a353357fcb5df7e0ef8f69eaec6a57bec895fcb48a8eadf84720d6dff38c",
+      "source_input_count": 1
+    },
+    {
+      "commit": "2437351bfa2aecb328f0b859f4a4987476ae31c9",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/jq",
+      "git_tree": "c8cb0f0f0b2774c10523891db965b89c13c52551",
+      "origin": "jq",
+      "package_version": "1.8.2-r0",
+      "packages": [
+        "jq"
+      ],
+      "recipe_sha256": "185277cca1d71e6b3d63267f1d0e5c4d7596113db34d45e57a82ded1217b180b",
+      "source_input_count": 1
+    },
+    {
+      "commit": "8bac74716d06c84627ab02d101fd9d2bafd0a34c",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/keyutils",
+      "git_tree": "8ba58a4c51d8c6537977c1851708f5299080ab11",
+      "origin": "keyutils",
+      "package_version": "1.6.3-r4",
+      "packages": [
+        "keyutils-libs"
+      ],
+      "recipe_sha256": "6b0c294e67f58f31ced1ed2b9f849a855395d6f8ae5942669b5fbb3f529daa7b",
+      "source_input_count": 2
+    },
+    {
+      "commit": "92bc4f0d36aa5307e819fb57167fc19952cf515f",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/krb5",
+      "git_tree": "f4bfc2889bcfb8ff1d9f9ffacbd08137beb3f12d",
+      "origin": "krb5",
+      "package_version": "1.22.2-r1",
+      "packages": [
+        "krb5-libs"
+      ],
+      "recipe_sha256": "2a17ffcb22914c67e655de6fcf889e774e43d4fae03f4ad3f81b4d232d41764a",
+      "source_input_count": 5
+    },
+    {
+      "commit": "4a46b2cb955e25fd6d6f913794d35bc6d876aea9",
+      "external_input_count": 0,
+      "generated_payload_recipe": true,
+      "git_path": "main/krb5-conf",
+      "git_tree": "daf8d16641d42b2d9aa9fb48982a866eedafac36",
+      "origin": "krb5-conf",
+      "package_version": "1.0-r2",
+      "packages": [
+        "krb5-conf"
+      ],
+      "recipe_sha256": "7962206597c478b726f46b0392a73bec21bfa70afa56c62ccb043d1ade3d6286",
+      "source_input_count": 0
+    },
+    {
+      "commit": "dc3fc2d94931a406ff0810e5fb276e289d771d99",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/libassuan",
+      "git_tree": "fb7ca06e994142e8cbf744dbf875de802fd219f1",
+      "origin": "libassuan",
+      "package_version": "3.0.2-r0",
+      "packages": [
+        "libassuan"
+      ],
+      "recipe_sha256": "3af411befd6ddc8815bf0b4f678b3e5629fc13d862e47f4c9ab3249d9145b0d4",
+      "source_input_count": 1
+    },
+    {
+      "commit": "02365e78d654a7beb23fd35d7d69f4a649009ede",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/libbsd",
+      "git_tree": "3eb4abc9adefa5c8dedb3721e601861d99c24dac",
+      "origin": "libbsd",
+      "package_version": "0.12.2-r0",
+      "packages": [
+        "libbsd"
+      ],
+      "recipe_sha256": "db881fac5ce6d33e7b09a30abf01ab56643e51ed267ca7402677b00592830fbb",
+      "source_input_count": 1
+    },
+    {
+      "commit": "2c2a7bb4a8b16066834e90402567b2c19403a790",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/libffi",
+      "git_tree": "cdef5fac274a9226cca485ed42c8db9d83920b22",
+      "origin": "libffi",
+      "package_version": "3.5.2-r1",
+      "packages": [
+        "libffi"
+      ],
+      "recipe_sha256": "7dcba5b144b4882426dbd4fcacf10c09d19e3c4347cdd8faa7c1946912b55c1f",
+      "source_input_count": 2
+    },
+    {
+      "commit": "0ae860b01c54e362509a5b1354f3dd2369b9dffc",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/libgcrypt",
+      "git_tree": "17503cde5092724dbd9b0b1df3fad3690c29f57a",
+      "origin": "libgcrypt",
+      "package_version": "1.12.2-r0",
+      "packages": [
+        "libgcrypt"
+      ],
+      "recipe_sha256": "62c9341bda9b59825b9edf04bb5478d23118767d24f9c2d82787e2c7c9fe7fe6",
+      "source_input_count": 1
+    },
+    {
+      "commit": "8caf2102b9e8f0d9189cc11ad1069060d8a10f53",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/libgpg-error",
+      "git_tree": "8601e084b8ec59699ff46a7cd5b4c57e380b9729",
+      "origin": "libgpg-error",
+      "package_version": "1.61-r0",
+      "packages": [
+        "libgpg-error"
+      ],
+      "recipe_sha256": "d626047d228b872e68adc0f9dd6bcf3239c2391495b51deb24723cc10c4cb0f7",
+      "source_input_count": 1
+    },
+    {
+      "commit": "8240e09aa2fdd8f9979b2016be082273965aff0c",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/libidn2",
+      "git_tree": "0f8082f38c715f10af6a80d1578ab316195f9819",
+      "origin": "libidn2",
+      "package_version": "2.3.8-r0",
+      "packages": [
+        "libidn2"
+      ],
+      "recipe_sha256": "b10c820249ffdf9eea4864bee27618a56163a297f06708362203d553de54a34a",
+      "source_input_count": 1
+    },
+    {
+      "commit": "a753c0e07020a12107aaf290e8e9b02e149f6666",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/libksba",
+      "git_tree": "0dbbc40f3481d13825e2e520c9094f2533bfb4fa",
+      "origin": "libksba",
+      "package_version": "1.7.0-r0",
+      "packages": [
+        "libksba"
+      ],
+      "recipe_sha256": "86a4a9bcafb15ce0466d9e8443817170a14e29f127732e18bea909df43591cc5",
+      "source_input_count": 1
+    },
+    {
+      "commit": "87b78bc6890645c317d3167bdbb0187502d0cda9",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/libmd",
+      "git_tree": "2d984976198b4594df6743387995dd054ef52cc3",
+      "origin": "libmd",
+      "package_version": "1.2.0-r0",
+      "packages": [
+        "libmd"
+      ],
+      "recipe_sha256": "666cbb883c1723674806743c02246f75b391fab030f066481b927dc53bd15716",
+      "source_input_count": 1
+    },
+    {
+      "commit": "a9e2a2dc46f377eb25884f7fea9834492de7f518",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "community/libnsl",
+      "git_tree": "4a0d34339756724afc38ae35d3969b621d29d843",
+      "origin": "libnsl",
+      "package_version": "2.0.1-r2",
+      "packages": [
+        "libnsl"
+      ],
+      "recipe_sha256": "08617ed63fa2fcbd890f5437b8b61a3adad2e4b3a5600c0ba4853c8ea1c94f86",
+      "source_input_count": 1
+    },
+    {
+      "commit": "6bd45b53fb316dc01bda59f5feaf1e127eb64f22",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/libpsl",
+      "git_tree": "d89c37a3e63be1bf16c666e61f9ecbe421f6710e",
+      "origin": "libpsl",
+      "package_version": "0.21.5-r3",
+      "packages": [
+        "libpsl"
+      ],
+      "recipe_sha256": "b68a1b2d744a902cf296a641631f013d172a3dee2ec78c324e9ec73031a7d2ad",
+      "source_input_count": 1
+    },
+    {
+      "commit": "771f180774aa0d9d3783d7f4eb9e3788c615658b",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/libtasn1",
+      "git_tree": "0d4447952f84bfa06aa2698e79b3891877989052",
+      "origin": "libtasn1",
+      "package_version": "4.21.0-r0",
+      "packages": [
+        "libtasn1"
+      ],
+      "recipe_sha256": "23c9685d8b0d19f0f9b09e7a9c87bc10ef8cdefd47688f3b9aa7afdf4410d840",
+      "source_input_count": 1
+    },
+    {
+      "commit": "4519a8c0bafdd843397d13a9146c906ff64a6c2f",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/libtirpc",
+      "git_tree": "9b16638b297b80a726dd417ad01cd79e84b7b5bc",
+      "origin": "libtirpc",
+      "package_version": "1.3.5-r1",
+      "packages": [
+        "libtirpc",
+        "libtirpc-conf"
+      ],
+      "recipe_sha256": "bdb4912bbcb40e5f4c5226d38b39e246722015225938832d094e215714dccef6",
+      "source_input_count": 3
+    },
+    {
+      "commit": "30d9f19340385b2cd16eaf1cc6a9a8b30c4afe1c",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/libunistring",
+      "git_tree": "a17fc5ce0f54d2a5fcfd9f1a5072513dace09bdf",
+      "origin": "libunistring",
+      "package_version": "1.4.2-r0",
+      "packages": [
+        "libunistring"
+      ],
+      "recipe_sha256": "897e2505f928b37f16ebae9fa0b31d0ef67a8523f3dd5c4dcebc825c13d2fcfa",
+      "source_input_count": 1
+    },
+    {
+      "commit": "84a227baf001b6e0208e3352b294e4d7a40e93de",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/libverto",
+      "git_tree": "c6ab700272e1a3c695dbb51acd7d1f5cc4fec77b",
+      "origin": "libverto",
+      "package_version": "0.3.2-r2",
+      "packages": [
+        "libverto"
+      ],
+      "recipe_sha256": "92c2e109154768bb5f3080d776949f0e3225082367a33c7aa7db674e88bae9f9",
+      "source_input_count": 1
+    },
+    {
+      "commit": "b30bac94ff81d73cc5038f795cf60d82c2497a93",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/linux-pam",
+      "git_tree": "e9e9aa4c6ff82b57186a373c0dbeb4cd7177e817",
+      "origin": "linux-pam",
+      "package_version": "1.7.1-r2",
+      "packages": [
+        "linux-pam"
+      ],
+      "recipe_sha256": "35ee6e3efe1195d490f64a7c3649f4478967a7d8818fe918f210c79034b1c09e",
+      "source_input_count": 9
+    },
+    {
+      "commit": "8f79d39391b46d6dbf1800fb68b8212a21d5ee2e",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/musl",
+      "git_tree": "91ac4452385f6c3e888fba5b4b085e905e58c4af",
+      "origin": "musl",
+      "package_version": "1.2.6-r3",
+      "packages": [
+        "musl",
+        "musl-utils"
+      ],
+      "recipe_sha256": "22c5adb3f3b68ab84e5ff7d20df68447063d1ecb5c7b39afd5a04a1dfd444a35",
+      "source_input_count": 12
+    },
+    {
+      "commit": "2cee8a7328d061418336ad327b512d96bcd7bc5e",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/ncurses",
+      "git_tree": "8376cf9dd261f1adc9e012ee90c93b6633fbac8c",
+      "origin": "ncurses",
+      "package_version": "6.6_p20260516-r0",
+      "packages": [
+        "libncursesw",
+        "libpanelw",
+        "ncurses-terminfo-base"
+      ],
+      "recipe_sha256": "9801a0e262437b470ddfd6c35e55c231a79b6903262fe68df8a547845d095d6a",
+      "source_input_count": 2
+    },
+    {
+      "commit": "bf898e6d067c1c0ecc0f5ff39c79fc893399acd8",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/nettle",
+      "git_tree": "498256d3055ce11d808901ee0b095a1151f10062",
+      "origin": "nettle",
+      "package_version": "3.10.2-r0",
+      "packages": [
+        "nettle"
+      ],
+      "recipe_sha256": "b7934415ee1478994232cdbb873451c9f66ec53f9d1066fe32de4ec48b7e8804",
+      "source_input_count": 1
+    },
+    {
+      "commit": "d5a34efc88bbe8d18737fda28125071c4aef8517",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/nghttp2",
+      "git_tree": "82f050a7eeca873b55de3b1ae0a6b7c01ce4484b",
+      "origin": "nghttp2",
+      "package_version": "1.70.0-r0",
+      "packages": [
+        "nghttp2-libs"
+      ],
+      "recipe_sha256": "a4428f82a616800eaaae34b7d8c1020199fc38d672ac639b452f21274c22c7dd",
+      "source_input_count": 1
+    },
+    {
+      "commit": "bf86ff2a6bc3bc18850fada852dc3653434f2d41",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/npth",
+      "git_tree": "c6b210972914491a5f8cc1bd5b40bcd79f006fa7",
+      "origin": "npth",
+      "package_version": "1.8-r0",
+      "packages": [
+        "npth"
+      ],
+      "recipe_sha256": "f17199dabdc878de64d5b4a7c6af7c17271f4f54a834764eddb208becb8ef39d",
+      "source_input_count": 1
+    },
+    {
+      "commit": "31082e89063dfb6b02af0b38c46af803a118137a",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/oniguruma",
+      "git_tree": "aa8f04177a721bfc766c65a37965b3b983b2b9b3",
+      "origin": "oniguruma",
+      "package_version": "6.9.10-r0",
+      "packages": [
+        "oniguruma"
+      ],
+      "recipe_sha256": "0eaca067f737ca930a82b3e6175108498379358840fcdf557a3d72062f1b7d48",
+      "source_input_count": 1
+    },
+    {
+      "commit": "dff61c85c6c68e2c5fb8abac65f0dd97d4ad8763",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/openldap",
+      "git_tree": "a05de237a9384ff91781520f4acd5a020cbc9ead",
+      "origin": "openldap",
+      "package_version": "2.6.15-r0",
+      "packages": [
+        "libldap"
+      ],
+      "recipe_sha256": "d19d8ee663943d57f9441c63d86af245aa653a300afe183b16fc02e3abf66225",
+      "source_input_count": 17
+    },
+    {
+      "commit": "29b9ec24b1b5b39aeef51fa2a044210e2ec5258e",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/openssl",
+      "git_tree": "87e71869155271b587885c56de727da159296f96",
+      "origin": "openssl",
+      "package_version": "3.5.9-r0",
+      "packages": [
+        "libcrypto3",
+        "libssl3"
+      ],
+      "recipe_sha256": "ea459c051ee8d846c06f1d47d09d0f737778502c01de88c9696e96a208de5943",
+      "source_input_count": 2
+    },
+    {
+      "commit": "922ca1ffc9cc326f7d95b093b365e31da5cba1a9",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/p11-kit",
+      "git_tree": "464fadb66e30f7a998cb0c71a52a28a679479ff2",
+      "origin": "p11-kit",
+      "package_version": "0.26.2-r0",
+      "packages": [
+        "p11-kit"
+      ],
+      "recipe_sha256": "36c00f2297d83c135abee45698e43b5b254fe30eb67ced6a5c94a4af11600ef4",
+      "source_input_count": 1
+    },
+    {
+      "commit": "5120e945a123efcb74ac4f3e9617165ea551c7d2",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/patch",
+      "git_tree": "ab4371f86fb929f47092fb780ddeda37fff9a76e",
+      "origin": "patch",
+      "package_version": "2.8.1-r0",
+      "packages": [
+        "patch"
+      ],
+      "recipe_sha256": "329d234418f0e2b100db368880ca6b587095630875880f481d4d960add317a22",
+      "source_input_count": 1
+    },
+    {
+      "commit": "c61801eeacb3ffcd9c2025b09e402153bb93fb39",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/pax-utils",
+      "git_tree": "31c18cc6a9bc15bde7224e984c0173bde716e692",
+      "origin": "pax-utils",
+      "package_version": "1.3.9-r1",
+      "packages": [
+        "scanelf"
+      ],
+      "recipe_sha256": "f33df75f467601dcd73038b4e15029de60338a5f3f7d9a37574475a723b07c20",
+      "source_input_count": 1
+    },
+    {
+      "commit": "3d497cbb3217749c4fb85f90f3b6f7908b0c1f95",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/pcre2",
+      "git_tree": "1bc4ee59b319708e9aca8ddedac45c0617550cf0",
+      "origin": "pcre2",
+      "package_version": "10.49-r0",
+      "packages": [
+        "pcre2"
+      ],
+      "recipe_sha256": "49a612c42929ff12532525282be2e7bb2146b40321e170ca8c03ec6824de25be",
+      "source_input_count": 1
+    },
+    {
+      "commit": "0c05b7bd82c7560340de5c02bf96db417366b697",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/pinentry",
+      "git_tree": "d896144116566798bc89de46c24040c53a98d6b8",
+      "origin": "pinentry",
+      "package_version": "1.3.2-r0",
+      "packages": [
+        "pinentry"
+      ],
+      "recipe_sha256": "fcc205079f9cf12031ba75b1a8dd6b456764274906c1c0afaee16e459a60652e",
+      "source_input_count": 1
+    },
+    {
+      "commit": "a854c03acdac188901fb012f7acbee70a36e8041",
+      "external_input_count": 4,
+      "generated_payload_recipe": false,
+      "git_path": "main/readline",
+      "git_tree": "2fdcaab8708d902d5ba62659c6efbf1b5a7e96b9",
+      "origin": "readline",
+      "package_version": "8.3.3-r1",
+      "packages": [
+        "readline"
+      ],
+      "recipe_sha256": "d6ea7771ae1475b0f0843ed543664beba1beea893a99000dbb34ef20878cf4e9",
+      "source_input_count": 6
+    },
+    {
+      "commit": "20f03e3dc807abbe036c173c1a5cb1f525a1f0d1",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "community/shadow",
+      "git_tree": "1a4557d192b7884554376c9e7619508a26e59e7c",
+      "origin": "shadow",
+      "package_version": "4.18.0-r1",
+      "packages": [
+        "shadow"
+      ],
+      "recipe_sha256": "24af7296df8a6e532a496edc1a762ac82848c03762c641a341a7a049b25391eb",
+      "source_input_count": 4
+    },
+    {
+      "commit": "f148233038fa9b35932a7996df29f110b32c2160",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/skalibs",
+      "git_tree": "4a9ee54467ec24599696760c36ce52931ece7a10",
+      "origin": "skalibs",
+      "package_version": "2.15.0.0-r0",
+      "packages": [
+        "skalibs-libs"
+      ],
+      "recipe_sha256": "7878dd8832e4248e5ad535f7b8beabc9c962cdfc059b1c732d30742d57adc027",
+      "source_input_count": 1
+    },
+    {
+      "commit": "a9c3ba8b9129ec0f294d0a9bf538c2f1632bb016",
+      "external_input_count": 2,
+      "generated_payload_recipe": false,
+      "git_path": "main/sqlite",
+      "git_tree": "9c28859b06833fc36031cc61b40af331387aa195",
+      "origin": "sqlite",
+      "package_version": "3.53.4-r0",
+      "packages": [
+        "sqlite-libs"
+      ],
+      "recipe_sha256": "8e0cdc5e9d36fa52760c2b89b538e0125552ee0b53451a0712c33b7dcdd609dd",
+      "source_input_count": 2
+    },
+    {
+      "commit": "63faba7f731ad47f4cd60d3ff34ff1aadd49c091",
+      "external_input_count": 3,
+      "generated_payload_recipe": false,
+      "git_path": "main/tzdata",
+      "git_tree": "8152e72979a93582fa93b8a43fd0ad6dc5e6f230",
+      "origin": "tzdata",
+      "package_version": "2026f-r0",
+      "packages": [
+        "tzdata"
+      ],
+      "recipe_sha256": "870a4f9a463ca5f4ac848784d358007656ca8ca80e8ec8b623556c17ec5e83cf",
+      "source_input_count": 5
+    },
+    {
+      "commit": "d98c55af59055e6ca60fbe36e171546918709965",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/util-linux",
+      "git_tree": "faf938646b4c89f51a70ed46e5f06d318f58b22b",
+      "origin": "util-linux",
+      "package_version": "2.42.3-r1",
+      "packages": [
+        "libuuid"
+      ],
+      "recipe_sha256": "5347f9d386c8684e7f5cc160ae8595c5c3d3cfedcfdc758f5e022a46e560b944",
+      "source_input_count": 12
+    },
+    {
+      "commit": "900a4ecef77ae677eab8243b99f2c40cbf8ea35b",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/utmps",
+      "git_tree": "b6f89bb66611dfc8de24c0b875094d03236e6fe7",
+      "origin": "utmps",
+      "package_version": "0.1.3.3-r0",
+      "packages": [
+        "utmps-libs"
+      ],
+      "recipe_sha256": "40e59c8bf91709421c237776b427d95aed192ee8d7453ba31bde751230f06fa4",
+      "source_input_count": 9
+    },
+    {
+      "commit": "0c088d609f9fe69eedd6b4c7f4b99cdad847c20a",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/xz",
+      "git_tree": "1068c55dcb93c9d70cd503cd59c8d2522d463faa",
+      "origin": "xz",
+      "package_version": "5.8.4-r0",
+      "packages": [
+        "xz-libs"
+      ],
+      "recipe_sha256": "e66901db8f5fe99356c3ccda131290c2639a940238c998fec2ce30d7c06982c3",
+      "source_input_count": 1
+    },
+    {
+      "commit": "bdf501c870a92a05c097857401f69c48c4810384",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/zlib",
+      "git_tree": "54be36d7f2a8ca5405608e01758c835e33e605da",
+      "origin": "zlib",
+      "package_version": "1.4-r0",
+      "packages": [
+        "zlib"
+      ],
+      "recipe_sha256": "f03e134596ecd53717a25715fd7b7616a0ad42a151246ee9c2a06242370ec51b",
+      "source_input_count": 1
+    },
+    {
+      "commit": "3c6e2ee2b16f403d53eab39c4426eb61f003c322",
+      "external_input_count": 1,
+      "generated_payload_recipe": false,
+      "git_path": "main/zstd",
+      "git_tree": "0cba4f95ce39616a595b364568c9f6a9214eca96",
+      "origin": "zstd",
+      "package_version": "1.5.7-r2",
+      "packages": [
+        "zstd-libs"
+      ],
+      "recipe_sha256": "635134417b866a71fc0684bfbc1f8b5ff660c3edcd68f1b0b1335f04963ef5c1",
+      "source_input_count": 1
+    }
+  ],
+  "status": "BOUNDED_LOCAL_TEST_SOURCE_INPUT_GRAPH_ONLY"
+}

@@ -1,0 +1,41 @@
+{
+  "run_id": 42678037016,
+  "head_sha": "ad735ccfccf3f3ea74abd987538ef03d80fabd67",
+  "actual_source_commit": "fa255a179ed302ced31f0a947635d9daed66ecec",
+  "architectures": {
+    "amd64": {
+      "artifact_id": 13703981172,
+      "artifact_sha256": "556ab7f4de580319f2c61023d83a535c57f7db3b1c5fa3f196ddc2982ebe2610",
+      "image_id": "sha256:3d3d2c48bb28572a5d26cd449ff8fa3d1713e4f634280993bcce42a969aa891f",
+      "live_external_source_receipt_sha256": "93f3c0e0c0bf25240c7de97d6fd02b925949f95fe32a6952984048f8e347d1a4",
+      "package_set_sha256": "7033a976497b436ec929dd67f72c2fda28560e199edf0174f2eb05dc5a8e03be",
+      "source_files": 626,
+      "external_packages": 117,
+      "source_groups": 99,
+      "source_inputs": 314,
+      "runtime_passed_checks": 27,
+      "bootstrap_scenarios_passed": 2
+    },
+    "arm64": {
+      "artifact_id": 13703592218,
+      "artifact_sha256": "cae213e63397cd77588d39e863656a18f6d7b35ae6b80154f8fdc743ae9110c3",
+      "image_id": "sha256:ac10ebb4cb0c65a966f97dd5e12c7f32987717733068ae59c35f9504617bbf99",
+      "live_external_source_receipt_sha256": "90111fdb3ef3a5e2cddb512e7ac3a1d93def3857b4b1376b1fb9518c2b017a88",
+      "package_set_sha256": "1bcf166bff1adfae5613c7ebf51193fd86ee0aa28e92d0bba08f813ee8fca3c4",
+      "source_files": 625,
+      "external_packages": 117,
+      "source_groups": 99,
+      "source_inputs": 314,
+      "runtime_passed_checks": 27,
+      "bootstrap_scenarios_passed": 2
+    }
+  },
+  "shared_runtime_failures": {
+    "native_source_and_artifact_integrity": "AssertionError: missing regular file: index.json"
+  },
+  "raw_paired_receipt_sha256": "6f88eabaf41b0b67d2b0c87191f77dcfc9d234a921e8e652f8f6828a4d8543eb",
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/native-external-source-delivery-paired-42678037016.json and alpine-source-integrated-{amd64,arm64}-42678037016/",
+  "scope": "Actual native unprivileged offline immutable-image external-source verification against live APK query/database, with complete raw artifacts independently rehashed. Both full runtime gates remain failed. Python-base delivery at the subsequent head, four owned package joins, compiler/nested source, complete attribution/advisory, MCP and final acceptance are separate unfinished obligations.",
+  "full_runtime_source_acceptance": false,
+  "status": "PAIRED_NATIVE_EXTERNAL_SOURCE_IMAGE_DELIVERY_PASSED_AGGREGATE_SOURCE_FAILED"
+}

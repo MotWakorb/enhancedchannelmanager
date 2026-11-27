@@ -11,8 +11,11 @@ from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from auth import RequireHumanAdminForOutboundTest
+from auth import RequireAdminIfEnabled, RequireHumanAdminForOutboundTest
 from database import get_session
+from m3u_change_exclusions import (
+    M3UChangeExclusionsUpdate, list_exclusions, list_groups, update_exclusions, visible_changes,
+)
 import journal
 import safe_regex
 
@@ -44,6 +47,41 @@ class M3UDigestSettingsUpdate(BaseModel):
 # M3U Change Tracking API
 # -------------------------------------------------------------------------
 
+@router.get("/changes/exclusions")
+async def get_m3u_change_exclusions():
+    """Read the shared view exclusions (not digest notification patterns)."""
+    db = get_session()
+    try:
+        return list_exclusions(db)
+    finally:
+        db.close()
+
+
+@router.patch("/changes/exclusions", dependencies=[RequireAdminIfEnabled])
+async def patch_m3u_change_exclusions(request: M3UChangeExclusionsUpdate):
+    """Atomically add/remove exact account/group identities, or clear the list."""
+    db = get_session()
+    try:
+        return update_exclusions(db, request)
+    finally:
+        db.close()
+
+
+@router.get("/changes/groups")
+async def get_m3u_change_groups(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(200, ge=1, le=200),
+    m3u_account_id: Optional[int] = Query(None, gt=0, le=2**63 - 1),
+    search: str = Query("", max_length=255),
+):
+    """Discover recorded groups plus saved exclusions, independently of view filters."""
+    db = get_session()
+    try:
+        return list_groups(db, page, page_size, m3u_account_id, search)
+    finally:
+        db.close()
+
+
 @router.get("/changes")
 async def get_m3u_changes(
     # Bounds enforced here (bead enhancedchannelmanager-g4z2h, systemic sibling
@@ -59,6 +97,7 @@ async def get_m3u_changes(
     sort_order: Optional[str] = "desc",
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    include_excluded: bool = False,
 ):
     """
     Get paginated list of M3U change logs.
@@ -81,6 +120,8 @@ async def get_m3u_changes(
     db = get_session()
     try:
         query = db.query(M3UChangeLog)
+        if not include_excluded:
+            query = visible_changes(query)
 
         # Apply filters
         if m3u_account_id:
@@ -142,6 +183,7 @@ async def get_m3u_changes(
 async def get_m3u_changes_summary(
     hours: int = 24,
     m3u_account_id: Optional[int] = None,
+    include_excluded: bool = False,
 ):
     """
     Get aggregated summary of M3U changes.
@@ -158,7 +200,7 @@ async def get_m3u_changes_summary(
     try:
         detector = M3UChangeDetector(db)
         since = dt.utcnow() - timedelta(hours=hours)
-        summary = detector.get_change_summary(since, m3u_account_id)
+        summary = detector.get_change_summary(since, m3u_account_id, apply_view_exclusions=not include_excluded)
         return summary
     finally:
         db.close()

@@ -12,6 +12,9 @@ from __future__ import annotations
 # Complete MCP endpoint-contract inventory. Entries stay here even when refused
 # so adding a tool contract requires an explicit backend authority decision.
 _MCP_DECLARED_ROUTES: frozenset[tuple[str, str]] = frozenset({
+    ('GET', '/api/m3u/changes/exclusions'),
+    ('GET', '/api/m3u/changes/groups'),
+    ('PATCH', '/api/m3u/changes/exclusions'),
     ('DELETE', '/api/backup/saved/{filename}'),
     ('DELETE', '/api/channel-groups/orphaned'),
     ('DELETE', '/api/channel-groups/{group_id}'),

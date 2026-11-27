@@ -1,0 +1,9 @@
+{
+  "capture_sha256": "fa84def3df9b9e43d310e8562d200f466c1aec00a85142f4539de7fb60ec2e2c",
+  "database_sha256": "c54eac609ef50c2d1f06b68874e28eea556c5243e9def52ab94bdcb1e019ac5e",
+  "image": "sha256:0c5586b42b0da040b974f5e87b80c6075374216186f28ad3833eb4cab704fc2f",
+  "machine": "x86_64",
+  "selected_names": [".python-rundeps", "musl", "musl-utils", "skalibs-libs", "utmps-libs"],
+  "selection": "Five complete original installed-database paragraphs and corresponding original live APK query objects; no field renaming. JSON whitespace only is reformatted. Paragraph bytes verified against the original full capture before commit.",
+  "scope": "Actual pinned local Alpine test environment, not the full application candidate. Full capture has 94 packages and 68 source origins. Neither fixture nor parser proves signatures, source delivery, owned-provider closure or advisory acceptance."
+}

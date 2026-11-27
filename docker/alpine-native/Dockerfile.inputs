@@ -1,0 +1,39 @@
+# Network acquisition only. Component recipes below rehash these exact inputs
+# before their unchanged networkless compilation steps.
+FROM python:3.12-alpine3.24@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7 AS input-preparer
+COPY scripts/ /proof/source/scripts/
+COPY docker/alpine-native/ /proof/source/docker/alpine-native/
+COPY docker/alpine-busybox/ /proof/source/docker/alpine-busybox/
+COPY docker/native/ /proof/source/docker/native/
+COPY docker/python-third-party/ /proof/source/docker/python-third-party/
+COPY backend/requirements.txt /proof/source/backend/requirements.txt
+COPY sbom/native-dependencies.json /proof/source/sbom/native-dependencies.json
+COPY docs/design/evidence/stable-alpine-musllinux-gnu-20261108.json.gz docs/design/evidence/stable-alpine-gnu12-source-reproduction-20261108.json.gz /proof/source/docs/design/evidence/
+RUN python /proof/source/scripts/alpine_repository_policy.py
+
+FROM input-preparer AS native-input-preparer
+RUN python /proof/source/scripts/prepare_alpine_native_cache.py --output-dir /proof/inputs
+FROM scratch AS native-inputs
+COPY --from=native-input-preparer /proof/inputs/ /
+FROM native-inputs AS owned-cache
+FROM native-inputs AS security-cache
+FROM native-inputs AS jxl-cache
+FROM native-inputs AS ffmpeg-cache
+FROM native-inputs AS resdet-cache
+
+FROM input-preparer AS busybox-input-preparer
+RUN python /proof/source/scripts/prepare_busybox_cache.py --output-dir /proof/inputs
+FROM scratch AS busybox-cache
+COPY --from=busybox-input-preparer /proof/inputs/ /
+
+FROM input-preparer AS wheel-input-preparer
+RUN case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \
+    && python /proof/source/scripts/prepare_musllinux_wheels.py --arch "$arch" --output-dir /proof/wheels
+FROM scratch AS proof-wheels
+COPY --from=wheel-input-preparer /proof/wheels/ /
+
+FROM input-preparer AS gnu-input-preparer
+RUN python /proof/source/scripts/prepare_musllinux_gnu_sources.py --work-dir /proof/gnu-work \
+    --output-dir /proof/gnu-sources --receipt-file /proof/gnu-receipt.json
+FROM scratch AS gnu-sources
+COPY --from=gnu-input-preparer /proof/gnu-sources/ /

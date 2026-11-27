@@ -101,7 +101,7 @@ SUSE_HEALTHCHECK = (
     "port = os.environ.get('ECM_PORT', '6100'); "
     "urllib.request.urlopen(f'http://localhost:{port}/api/health')\" || exit 1"
 )
-SUSE_DOCKERFILE = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+SUSE_DOCKERFILE = (ROOT / "docker/native/Dockerfile.suse").read_text(encoding="utf-8")
 BUILDKIT_INSTRUCTION_WHITESPACE = (" ", "\t", "\v", "\f", "\r")
 BUILDKIT_INSTRUCTION_WHITESPACE_IDS = (
     "space",
@@ -673,7 +673,7 @@ def test_reviewed_suse_graph_records_one_runtime_image_and_manifest_native_graph
         ("RUN case", "ENV CFLAGS=-O0\nRUN case"),
         ("RUN case", 'SHELL ["/bin/true"]\nRUN case'),
         ("RUN case", "ARG PATH=/tmp\nRUN case"),
-        ("zypper --non-interactive update", "true || zypper --non-interactive update"),
+        ("zypper --non-interactive --no-refresh update", "true || zypper --non-interactive --no-refresh update"),
         ("/tmp/runtime-rpms/*.rpm \\\n", "ffmpeg \\\n"),
         ("$(cat /tmp/runtime-packages.txt)", "libxml2-16"),
         ("install --no-recommends gcc", "install --dry-run --no-recommends gcc"),
@@ -1149,6 +1149,44 @@ def test_pinned_images_and_stage_aliases_work_for_every_buildkit_instruction_whi
             "role": "runtime",
         },
     ]
+
+
+def test_named_source_context_accounts_for_both_pinned_carrier_images(sbom):
+    text = (ROOT / "Dockerfile").read_text()
+    # Legacy retained-source contexts still have an exact parser contract, but
+    # the refreshed product recipe must not depend on the old source carriers.
+    assert not any(item["image"] == "ghcr.io/motwakorb/enhancedchannelmanager"
+                   for item in sbom.parse_dockerfile_images(text, "Dockerfile"))
+    text += "\nCOPY --from=ecm-native-sources / /legacy-source-fixture/\n"
+    images = sbom.parse_dockerfile_images(text, "Dockerfile")
+    carriers = [item for item in images if item["image"] == "ghcr.io/motwakorb/enhancedchannelmanager"]
+    assert {item["digest"] for item in carriers} == {
+        "sha256:13cbcfffff8d5091f857583656b91ed8fe40ad3b472b54f7a67ab50e22846c01",
+        "sha256:98722bea0ddb8f7c52398151751b89d4173b775f6612afc5bb75aa133d091d48",
+    }
+    assert {item["role"] for item in carriers} == {"build"}
+    assert next(item for item in images if item["role"] == "runtime")["image"] == "python:3.12-alpine3.24"
+
+
+def test_current_native_recovery_contract_validates(sbom):
+    sbom.validate_native_runtime_docker_contract((ROOT / "Dockerfile").read_text(), "Dockerfile")
+
+
+@pytest.mark.parametrize("before,after", [
+    ("--network=none ", ""),
+    ("--require-hashes", ""),
+    ("--runtime-inventory /proof/runtime-inventory.json", "--runtime-inventory /tmp/stale.json"),
+    ("COPY --from=gnu-sources / /usr/share/ecm/sources/wheel-gnu/\n", ""),
+    ("python:3.12-alpine3.24@sha256:", "python:3.12-alpine@sha256:"),
+    ("install_alpine_native.py", "echo install_alpine_native.py"),
+    ("build_busybox_provider.py check", "build_busybox_provider.py skipped-check"),
+])
+def test_recovery_does_not_relax_exact_native_docker_contract(sbom, before, after):
+    original = (ROOT / "Dockerfile").read_text()
+    mutant = original.replace(before, after)
+    assert mutant != original, "the dangerous mutant must actually change the recipe"
+    with pytest.raises(sbom.SbomError):
+        sbom.validate_native_runtime_docker_contract(mutant, "Dockerfile")
 
 
 def test_a_dockerfile_without_a_from_is_rejected(sbom):

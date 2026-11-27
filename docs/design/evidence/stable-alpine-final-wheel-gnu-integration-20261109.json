@@ -1,0 +1,64 @@
+{
+  "status": "REVIEWED_GNU_SOURCE_DELIVERY_AND_FINAL_LAYOUT_INSTALLED_WHEEL_JOINS_ONLY",
+  "bead": "enhancedchannelmanager-g3vd3",
+  "helpers": {
+    "scripts/prepare_musllinux_gnu_sources.py": "97da28df861e6e079de3889e289d5056ac2df3624da63b56078d21ece41e2e25",
+    "scripts/verify_alpine_wheel_sources.py": "c782d4e1c9b03d0090a8f24c93f8626e9d1fe9a1692f34479a97e1c25b05de60"
+  },
+  "source_delivery": {
+    "unchanged_gnu_manifest_sha256": "609dac61e58e81d074d7996bcc13dff6620cfa2592f35cd97c6e659fbebdf615",
+    "source_families": {"alpine-gcc-14": "AUTHENTICATED_PROVIDER_SOURCE", "rust-cross-gcc-12": "REPRODUCED_CORRESPONDING_SOURCE"},
+    "delivered_source_recipe_notice_proof_files": 27,
+    "unique_inputs": 21,
+    "exact_retained_repository_inputs": 12,
+    "exact_https_upstream_inputs": 9,
+    "network_acquisition": "PASS on exact original SHA256/size pins; no version substitution or source execution",
+    "offline_cache_replay": "PASS on nonroot AMD64 stable Alpine with read-only source/cache, network none and task-owned output. Explicit caches require the complete exact 21-input set plus canonical expected index, not missing-input network fallback.",
+    "offline_copy_receipt_sha256": "9df2ce02c9926a7c2b1a60415df4e44f4082532c6011c683edfeba5b9e995fce",
+    "candidate_destination": "/usr/share/ecm/sources/wheel-gnu",
+    "scope": "Source data only; no historical/other-distribution APK runtime is installed, no comparison/compiler binary reaches runtime, and no approved source status is upgraded. Original source/build/repair proof assets and historical unknown producer-checkout limit stay unchanged."
+  },
+  "actual_local_layout_proof": {
+    "architecture": "amd64",
+    "candidate_python_builder_image_id": "sha256:bccdd0d09a0cc743ce6f7c8c0350788cf779b4be1eb95fdb4c806ab848ac1db8",
+    "candidate_python_builder_build_log_sha256": "92553171f980d434a1a905923ce50a70c9cafaeac44f79ac49693d7b18266df5",
+    "disposable_final_layout_image_id": "sha256:d8dddb2a33e849b14f7a3ac7a7f73b1892e87f8d094dd717c179eb896bda54d8",
+    "dockerfile": "Retained Dockerfile.gnu-final-layout-proof; candidate Python-builder plus exact final /opt/venv, application lock, notices/artifact indexes and GNU-source destination layout",
+    "consumer_receipt_sha256": "ad4b96fb5d96f3923537024320080db59b86a5f256518be404d21e8b7f19a6a5",
+    "execution": "Nonroot 1000:1000, read-only root and trusted checkout scripts, offline, all capabilities dropped, no-new-privileges. No target ELF, source, repair tool or compiler executed by the consumer.",
+    "installed_reviewed_distributions": 74,
+    "installed_native_ELFs": 48,
+    "installed_gnu_member_copies": 9,
+    "installed_distinct_gnu_objects": 6,
+    "gnu_source_files_rehashed": 27,
+    "notices_and_raw_sbom_payloads": "All original reviewed wheel notices/raw SBOM payloads rehashed; retained-identical notice destinations verified at actual final layout paths",
+    "complete_native_and_gnu_elf_coverage": true,
+    "scope": "Actual candidate Python-builder chain plus a disposable final-layout fixture, NOT the complete ECM application image or native ARM execution. The initial attempt to use a bare local sha256 image ID as Dockerfile FROM was rejected by BuildKit's registry-name interpretation; retained as a fixture-build failure. A fresh task-owned tag, independently checked against the exact immutable builder ID, was used only to construct the disposable local fixture. Nothing published or deployed."
+  },
+  "negative_controls": {
+    "actual_layout_cases": ["Corrupted installed GNU ELF", "Corrupted installed wheel notice", "Additional unlisted installed GNU ELF", "Corrupted delivered COPYING.RUNTIME source notice", "Changed pinned wheel inventory bytes"],
+    "result": "All five reject with no partial success report",
+    "receipt_sha256": "011060b945e7c133d24826900859d6890bb35e15ed7bce1573cbb7cfdcb945e3",
+    "guard_mutants": "Disabling complete recorded GNU member-set/hash comparison makes six extra/missing/changed-member cases fail DID NOT RAISE",
+    "mutant_log_sha256": "e236f1fdf74cbde0f475d8890d61df210dc8dbaee2851e949fdea12f48947dd6"
+  },
+  "regression": {
+    "layer": "Native AMD64 Alpine maintained tooling subsets, not complete backend/application/source/advisory acceptance",
+    "modules": 59,
+    "passed": 1830,
+    "unchanged_existing_skips": 1,
+    "log_sha256": "466a95fa215b7b971f882f63f2f3caa6061f0850570cfc7bef2b8e7bec26573e",
+    "additional_checks": "Ruff, SBOM verify/audit, 1080-file application-source guard and unchanged production Dockerfiles pass"
+  },
+  "ci": {
+    "source_preparation": "Existing input-preparation step acquires exact source bytes before the candidate build; source receipt remains separate from the closed delivered tree",
+    "candidate": "Named gnu-sources build context copied to final application source path, not runtime library search paths",
+    "consumer": "Existing Python-base verification step invokes trusted read-only checkout code against saved immutable image ID on each native architecture; writes application/wheel-sources.json",
+    "reviewed_step_indices_and_conditions": "Unchanged; independent always() aggregate runtime gate remains blocking and still runs if a bounded consumer rejects",
+    "actual_full_application_and_native_arm_results": "pending new commit CI"
+  },
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/gnu-final-image-integration-01",
+  "remaining": "Actual full-candidate and native ARM consumer results; non-GNU bundled wheel components and crate/compiler/static/feature attribution; three glycin metadata gaps; independent unsuppressed unfixed-aware CVE/FFmpeg/libxml2 reconciliation; frontend/Alpine MCP composition; aggregate source/SBOM acceptance. Original OWNED_PENDING and aggregate RPM dispatch remain unchanged. Production Dockerfiles and all 74 pins are unchanged. No merge, publication or deployment.",
+  "new_source_reproduction_performed": false,
+  "full_runtime_source_acceptance": false
+}

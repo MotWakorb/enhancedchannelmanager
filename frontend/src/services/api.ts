@@ -107,6 +107,7 @@ import type {
   AcceptProfileConflictOutcome,
   ProfileConflictReviewsResponse,
 } from '../types/profileConflict';
+import type { ValidationIssueType } from '../types/editMode';
 import { logger } from '../utils/logger';
 import { voidBackupBannerSnoozeIfScheduled } from '../utils/backupBannerSnooze';
 import { fetchJson, fetchText, buildQuery, HttpError } from './httpClient';
@@ -271,13 +272,26 @@ export async function reorderChannelStreams(channelId: number, streamIds: number
   });
 }
 
+/**
+ * Number `channelIds` in sequence from `startingNumber`.
+ *
+ * `expectedNumbers` is the number the caller last read for every channel in
+ * `channelIds` (`null` for none). The server refuses the whole range with 409,
+ * writing nothing, when any channel has moved since, and with 422 when a
+ * channel has no entry.
+ */
 export async function bulkAssignChannelNumbers(
   channelIds: number[],
-  startingNumber?: number
+  startingNumber: number | undefined,
+  expectedNumbers: Record<number, number | null>,
 ): Promise<void> {
   return fetchJson(`${API_BASE}/channels/assign-numbers`, {
     method: 'POST',
-    body: JSON.stringify({ channel_ids: channelIds, starting_number: startingNumber }),
+    body: JSON.stringify({
+      channel_ids: channelIds,
+      starting_number: startingNumber,
+      expected_numbers: expectedNumbers,
+    }),
   });
 }
 
@@ -433,10 +447,14 @@ export interface BulkCommitRequest {
   continueOnError?: boolean;
   /** If true, server consolidates redundant operations before executing */
   consolidate?: boolean;
+  /** Request a recovery receipt tied to the operator and actual create client. */
+  profileRecoveryOperator?: string;
+  profileRecoveryDestination?: string;
+  returnSettledOperationIndexes?: boolean;
 }
 
 export interface ValidationIssue {
-  type: 'missing_channel' | 'missing_stream' | 'invalid_operation';
+  type: ValidationIssueType;
   severity: 'error' | 'warning';
   message: string;
   operationIndex?: number;
@@ -444,12 +462,27 @@ export interface ValidationIssue {
   channelName?: string;
   streamId?: number;
   streamName?: string;
+  /** The contested or out-of-contract number (numbering issues only). */
+  channelNumber?: number;
+  /** Every channel on that number in the proposed final state. */
+  channelIds?: number[];
+  /** Every operation to change to resolve it; `operationIndex` is the first. */
+  operationIndexes?: number[];
+}
+
+/** One channel a numbering write was refused for: it moved after the caller's read. */
+export interface ConcurrentNumberChange {
+  channelId: number;
+  baselineNumber: number | null;
+  serverNumber: number | null;
 }
 
 export interface BulkCommitError {
   operationId: string;
   operationType?: string;
   error: string;
+  /** Present when the operation was refused because these channels moved. */
+  concurrentNumberChanges?: ConcurrentNumberChange[];
   channelId?: number;
   channelName?: string;
   streamId?: number;
@@ -461,8 +494,17 @@ export interface BulkCommitResponse {
   success: boolean;
   operationsApplied: number;
   operationsFailed: number;
+  /** Failed operations whose own upstream writes landed before they failed. */
+  operationsPartiallyApplied?: number;
   errors: BulkCommitError[];
   tempIdMap: Record<number, number>;
+  /** Real id of each created channel -> the number Dispatcharr created it on. */
+  createdChannelNumbers?: Record<number, number | null>;
+  profileRecoveryBinding?: string;
+  /** Submitted operation indexes whose complete effects are safe to retire. */
+  settledOperationIndexes?: number[];
+  /** Confirmed placements of the consolidated batch, excluding compensated numbering. */
+  settledChannelNumbers?: Record<number, number | null>;
   groupIdMap: Record<string, number>;
   /** Validation issues found during pre-validation */
   validationIssues?: ValidationIssue[];
@@ -475,6 +517,10 @@ export interface BulkCommitResponse {
    * duplicates. False for full success and for total failure (nothing applied).
    */
   partial?: boolean;
+  /** createChannel operations that asked for normalization and did not get it. */
+  normalizationFailures?: Record<string, unknown>[];
+  /** Journal rows for landed writes that ECM could not write. Non-zero: do not retry. */
+  journalRowsUnwritten?: number;
   /**
    * Channels a failed numbering plan left on the wrong number, which the
    * compensating write could not put back either (bead
@@ -489,7 +535,8 @@ export interface BulkCommitResponse {
   numberingRecovery?: {
     channelId: number;
     channelName: string;
-    currentNumber: number | null;
+    /** Absent when the channel sits on a number Dispatcharr chose and ECM has not read back. */
+    currentNumber?: number | null;
     targetNumber: number | null;
     step: string;
     error: string;
@@ -1118,6 +1165,7 @@ export type GracenoteConflictMode = 'ask' | 'skip' | 'overwrite';
 export type DispatcharrAuthMethod = 'password' | 'api_key';
 
 export interface SettingsResponse {
+  profile_recovery_destination?: string | null;
   url: string;
   auth_method: DispatcharrAuthMethod;
   username: string;
@@ -1173,6 +1221,7 @@ export interface SettingsResponse {
   bitrate_sample_duration: number;  // Duration in seconds to sample stream for bitrate (10, 20, or 30)
   parallel_probing_enabled: boolean;  // Probe streams from different M3Us simultaneously
   max_concurrent_probes: number;  // Max simultaneous probes when parallel probing is enabled (1-16)
+  probe_capacity_wait_timeout?: number;  // Seconds to wait for capacity; older servers omit this (default 300)
   profile_distribution_strategy: string;  // How to distribute probes across M3U profiles: fill_first, round_robin, least_loaded
   skip_recently_probed_hours: number;  // Skip streams probed within last N hours (0 = always probe)
   refresh_m3us_before_probe: boolean;  // Refresh all M3U accounts before starting probe
@@ -1352,6 +1401,7 @@ export async function saveSettings(settings: {
   bitrate_sample_duration?: number;  // Optional - duration in seconds to sample stream for bitrate (10, 20, or 30), defaults to 10
   parallel_probing_enabled?: boolean;  // Optional - probe streams from different M3Us simultaneously, defaults to true
   max_concurrent_probes?: number;  // Optional - max simultaneous probes when parallel probing is enabled (1-16), defaults to 8
+  probe_capacity_wait_timeout?: number;  // Capacity waiting, distinct from media timeout (0-3600, default 300)
   profile_distribution_strategy?: string;  // Optional - how to distribute probes across profiles: fill_first, round_robin, least_loaded
   skip_recently_probed_hours?: number;  // Optional - skip streams probed within last N hours, defaults to 0 (always probe)
   refresh_m3us_before_probe?: boolean;  // Optional - refresh all M3U accounts before starting probe, defaults to true
@@ -2150,12 +2200,25 @@ export async function createStreamProfile(data: StreamProfileCreateRequest): Pro
 }
 
 // Channel Profiles
-export async function getChannelProfiles(): Promise<ChannelProfile[]> {
-  return fetchJson(`${API_BASE}/channel-profiles`);
+function profileRequest(binding?: string) {
+  return binding === undefined
+    ? { path: `${API_BASE}/channel-profiles`, headers: undefined }
+    : { path: `${API_BASE}/created-channel-profiles`, headers: { 'X-ECM-Profile-Recovery': binding } };
 }
 
-export async function getChannelProfile(id: number): Promise<ChannelProfile> {
-  return fetchJson(`${API_BASE}/channel-profiles/${id}`);
+export async function getChannelProfiles(binding?: string, destination?: string): Promise<ChannelProfile[]> {
+  if (destination) {
+    return fetchJson(`${API_BASE}/created-channel-profiles/catalog`, {
+      cache: 'no-store', headers: { 'X-ECM-Profile-Destination': destination },
+    });
+  }
+  const { path, headers } = profileRequest(binding);
+  return fetchJson(path, { cache: 'no-store', headers });
+}
+
+export async function getChannelProfile(id: number, options?: { fresh?: boolean; binding?: string }): Promise<ChannelProfile> {
+  const { path, headers } = profileRequest(options?.binding);
+  return fetchJson(`${path}/${id}`, options?.fresh || headers ? { cache: 'no-store', headers } : undefined);
 }
 
 export async function createChannelProfile(data: { name: string }): Promise<ChannelProfile> {
@@ -2184,10 +2247,13 @@ export async function deleteChannelProfile(id: number): Promise<{ status: string
 export async function updateProfileChannel(
   profileId: number,
   channelId: number,
-  data: { enabled: boolean }
+  data: { enabled: boolean },
+  binding?: string,
 ): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/channel-profiles/${profileId}/channels/${channelId}`, {
+  const { path, headers } = profileRequest(binding);
+  return fetchJson(`${path}/${profileId}/channels/${channelId}`, {
     method: 'PATCH',
+    headers,
     body: JSON.stringify(data),
   });
 }
@@ -2196,21 +2262,20 @@ export async function updateProfileChannel(
  * Bulk enable/disable a batch of channels for a profile in one call
  * (enhancedchannelmanager-hq3de.i).
  *
- * NOTE: per dispatcharr_client.bulk_update_profile_channels, the underlying
- * Dispatcharr bulk endpoint only UPDATES existing ChannelProfileMembership
- * rows — it does not create new ones for a channel the profile has never
- * tracked before. `updateProfileChannel` (individual PATCH, used by
- * ChannelProfilesListModal's "Save Changes") is the safe path when new
- * memberships may need to be created. Prefer this bulk call only for
- * channels already known to the profile.
+ * Older deployments may only update existing membership rows. Callers must
+ * confirm enabled IDs by fresh readback, not infer completion from the write
+ * response's counts/status. Missing rows may require individual PATCH fallback.
  */
 export async function bulkUpdateProfileChannels(
   profileId: number,
   channelIds: number[],
   enabled: boolean,
+  binding?: string,
 ): Promise<Record<string, unknown>> {
-  return fetchJson(`${API_BASE}/channel-profiles/${profileId}/channels/bulk-update`, {
+  const { path, headers } = profileRequest(binding);
+  return fetchJson(`${path}/${profileId}/channels/bulk-update`, {
     method: 'PATCH',
+    headers,
     body: JSON.stringify({ channel_ids: channelIds, enabled }),
   });
 }
@@ -2674,6 +2739,7 @@ export async function getProbeProgress(): Promise<{
   total: number;
   current: number;
   status: string;
+  deferred_reason?: string | null;
   current_stream: string;
   success_count: number;
   failed_count: number;
@@ -2693,6 +2759,7 @@ export async function getProbeProgress(): Promise<{
     total: number;
     current: number;
     status: string;
+    deferred_reason?: string | null;
     current_stream: string;
     success_count: number;
     failed_count: number;
@@ -2802,6 +2869,7 @@ export interface ProbeHistoryEntry {
   failed_count: number;
   skipped_count: number;
   status: string;
+  deferred_reason?: string | null;
   error?: string;
   success_streams: Array<{ id: number; name: string; url?: string }>;
   failed_streams: Array<{ id: number; name: string; url?: string; error?: string }>;
@@ -3541,6 +3609,37 @@ export async function testTags(groupId: number, text: string): Promise<TestTagsR
 // M3U Change Tracking API
 // =============================================================================
 
+export interface M3UChangeGroup {
+  m3u_account_id: number;
+  group_name: string;
+}
+
+export interface M3UChangeExclusionsUpdateRequest {
+  add?: M3UChangeGroup[];
+  remove?: M3UChangeGroup[];
+  clear?: boolean;
+}
+
+export async function getM3UChangeExclusions(): Promise<{ exclusions: M3UChangeGroup[] }> {
+  return fetchJson(`${API_BASE}/m3u/changes/exclusions`);
+}
+
+export async function updateM3UChangeExclusions(
+  delta: M3UChangeExclusionsUpdateRequest,
+): Promise<{ exclusions: M3UChangeGroup[] }> {
+  return fetchJson(`${API_BASE}/m3u/changes/exclusions`, {
+    method: 'PATCH', body: JSON.stringify(delta),
+  });
+}
+
+export async function getM3UChangeGroups(params?: { page?: number; pageSize?: number }): Promise<{
+  results: M3UChangeGroup[]; total: number; total_pages: number;
+}> {
+  return fetchJson(`${API_BASE}/m3u/changes/groups${buildQuery({
+    page: params?.page, page_size: params?.pageSize,
+  })}`);
+}
+
 /**
  * Get paginated list of M3U change logs
  */
@@ -3554,6 +3653,7 @@ export async function getM3UChanges(params?: {
   sortOrder?: 'asc' | 'desc';
   dateFrom?: string;  // ISO timestamp
   dateTo?: string;    // ISO timestamp
+  includeExcluded?: boolean;
 }): Promise<M3UChangesResponse> {
   const query = buildQuery({
     page: params?.page,
@@ -3565,6 +3665,7 @@ export async function getM3UChanges(params?: {
     sort_order: params?.sortOrder,
     date_from: params?.dateFrom,
     date_to: params?.dateTo,
+    include_excluded: params?.includeExcluded,
   });
   return fetchJson(`${API_BASE}/m3u/changes${query}`);
 }

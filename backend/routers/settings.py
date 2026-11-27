@@ -62,6 +62,7 @@ from media_connection_errors import media_connection_error, redact_media_diagnos
 from cache import get_cache
 from database import get_session
 from log_utils import get_persistent_log_policy
+from profile_recovery import recovery_destination
 from stream_prober import StreamProber, get_prober, set_prober
 from stream_user_agent import StreamUserAgent
 from bandwidth_tracker import BandwidthTracker, get_tracker, set_tracker
@@ -462,6 +463,7 @@ class SettingsRequest(BaseModel):
     bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
     parallel_probing_enabled: bool = True  # Probe multiple streams from different M3Us simultaneously
     max_concurrent_probes: int = 8  # Max simultaneous probes when parallel probing is enabled (1-16)
+    probe_capacity_wait_timeout: int = Field(default=300, ge=0, le=3600)
     profile_distribution_strategy: str = "fill_first"  # How to distribute probes across M3U profiles: fill_first, round_robin, least_loaded
     skip_recently_probed_hours: int = 0  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool = True  # Refresh all M3U accounts before starting probe
@@ -568,6 +570,7 @@ class SettingsRequest(BaseModel):
 
 
 class SettingsResponse(BaseModel):
+    profile_recovery_destination: str | None = None
     url: str
     auth_method: str
     username: str
@@ -617,6 +620,7 @@ class SettingsResponse(BaseModel):
     bitrate_sample_duration: int
     parallel_probing_enabled: bool  # Probe multiple streams from different M3Us simultaneously
     max_concurrent_probes: int  # Max simultaneous probes when parallel probing is enabled (1-16)
+    probe_capacity_wait_timeout: int
     profile_distribution_strategy: str  # How to distribute probes across M3U profiles: fill_first, round_robin, least_loaded
     skip_recently_probed_hours: int  # Skip streams successfully probed within last N hours (0 = always probe)
     refresh_m3us_before_probe: bool  # Refresh all M3U accounts before starting probe
@@ -839,6 +843,7 @@ async def get_current_settings(
     # exists to handle. An empty redaction has nothing to write back.
     redact = not is_settings_admin
     return SettingsResponse(
+        profile_recovery_destination=recovery_destination(settings) if settings.is_configured() else None,
         url=settings.url,
         auth_method=settings.auth_method,
         username=settings.username,
@@ -887,6 +892,7 @@ async def get_current_settings(
         bitrate_sample_duration=settings.bitrate_sample_duration,
         parallel_probing_enabled=settings.parallel_probing_enabled,
         max_concurrent_probes=settings.max_concurrent_probes,
+        probe_capacity_wait_timeout=settings.probe_capacity_wait_timeout,
         profile_distribution_strategy=settings.profile_distribution_strategy,
         skip_recently_probed_hours=settings.skip_recently_probed_hours,
         refresh_m3us_before_probe=settings.refresh_m3us_before_probe,
@@ -1218,6 +1224,7 @@ async def update_settings(
         bitrate_sample_duration=request.bitrate_sample_duration,
         parallel_probing_enabled=request.parallel_probing_enabled,
         max_concurrent_probes=request.max_concurrent_probes,
+        probe_capacity_wait_timeout=request.probe_capacity_wait_timeout,
         profile_distribution_strategy=request.profile_distribution_strategy,
         skip_recently_probed_hours=request.skip_recently_probed_hours,
         refresh_m3us_before_probe=request.refresh_m3us_before_probe,
@@ -1471,13 +1478,15 @@ async def update_settings(
     # Update prober's parallel probing settings without requiring restart
     if (new_settings.parallel_probing_enabled != current_settings.parallel_probing_enabled or
             new_settings.max_concurrent_probes != current_settings.max_concurrent_probes or
-            new_settings.profile_distribution_strategy != current_settings.profile_distribution_strategy):
+            new_settings.profile_distribution_strategy != current_settings.profile_distribution_strategy or
+            new_settings.probe_capacity_wait_timeout != current_settings.probe_capacity_wait_timeout):
         prober = get_prober()
         if prober:
             prober.update_probing_settings(
                 new_settings.parallel_probing_enabled,
                 new_settings.max_concurrent_probes,
-                new_settings.profile_distribution_strategy
+                new_settings.profile_distribution_strategy,
+                new_settings.probe_capacity_wait_timeout,
             )
             logger.info("[SETTINGS] Updated prober parallel probing settings from settings")
 
@@ -2337,9 +2346,9 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
         # deliberate manual "restart services" click; it now also fires
         # automatically from update_settings() on any connection-relevant
         # save, so a probe that happens to be running gets hard-cancelled
-        # (StreamProber.stop() sets _probe_cancelled, which the probe loop
-        # treats as an abort — active asyncio tasks cancelled, pending
-        # streams abandoned, not a graceful drain) without the operator
+        # (StreamProber.stop() retires admission and cancels/joins all probe
+        # owners, including single/pipeline work and admission waiters — pending
+        # streams abandoned, not a graceful completion) without the operator
         # having asked for that. Make the interruption loud in the logs
         # since deferring the rebuild until the probe finishes would add
         # real complexity for a rare timing window.
@@ -2371,13 +2380,8 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
 
         # Start new tracker and prober with current settings
         if not settings.is_configured():
-            # bd-snryv: StreamProber.stop() only flips a cancellation flag —
-            # later probe entry points reset it back to False — so the
-            # just-stopped prober object stays truthy and reusable. Without
-            # clearing the singletons here, callers like
-            # channel_pipeline_engine's ``prober = get_prober(); if not prober:
-            # skip`` guard would pass and proceed against a client for
-            # settings that are no longer configured.
+            # Retired probers refuse admission, but callers should see an
+            # unavailable service rather than a truthy retired/stale singleton.
             set_tracker(None)
             set_prober(None)
             return {"success": False, "message": "Settings not configured"}
@@ -2398,6 +2402,7 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
                 bitrate_sample_duration=settings.bitrate_sample_duration,
                 parallel_probing_enabled=settings.parallel_probing_enabled,
                 max_concurrent_probes=settings.max_concurrent_probes,
+                probe_capacity_wait_timeout=settings.probe_capacity_wait_timeout,
                 profile_distribution_strategy=settings.profile_distribution_strategy,
                 skip_recently_probed_hours=settings.skip_recently_probed_hours,
                 refresh_m3us_before_probe=settings.refresh_m3us_before_probe,

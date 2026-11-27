@@ -12,6 +12,8 @@ import type { M3UChangeLog, M3UChangeSummary, M3UAccount } from '../../types';
 
 // Mock the API module
 vi.mock('../../services/api');
+const viewer = vi.hoisted(() => ({ canEdit: true }));
+vi.mock('../../hooks/useAuth', () => ({ useAdminNavVisible: () => viewer.canEdit }));
 
 const renderWithProviders = (ui: React.JSX.Element) =>
   render(<NotificationProvider>{ui}</NotificationProvider>);
@@ -82,11 +84,20 @@ describe('M3UChangesTab', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    viewer.canEdit = true;
 
     // Setup default mocks
     vi.mocked(api.getM3UAccounts).mockResolvedValue(mockAccounts);
     vi.mocked(api.getM3UChanges).mockResolvedValue(mockChangesResponse);
     vi.mocked(api.getM3UChangesSummary).mockResolvedValue(mockSummary);
+    vi.mocked(api.getM3UChangeExclusions).mockResolvedValue({ exclusions: [] });
+    vi.mocked(api.getM3UChangeGroups).mockResolvedValue({
+      results: [{ m3u_account_id: 1, group_name: 'Sports' }, { m3u_account_id: 2, group_name: 'Sports' }],
+      total: 2, total_pages: 1,
+    });
+    vi.mocked(api.updateM3UChangeExclusions).mockResolvedValue({
+      exclusions: [{ m3u_account_id: 1, group_name: 'Sports' }],
+    });
   });
 
   afterEach(() => {
@@ -94,6 +105,91 @@ describe('M3UChangesTab', () => {
   });
 
   describe('initial rendering', () => {
+    it('does not offer exclusion mutations to non-admin viewers', async () => {
+      viewer.canEdit = false;
+      vi.mocked(api.getM3UChangeExclusions).mockResolvedValue({
+        exclusions: [{ m3u_account_id: 1, group_name: 'Sports' }],
+      });
+      renderWithProviders(<M3UChangesTab />);
+      expect(await screen.findByRole('button', { name: 'Excluded groups (1)' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Clear exclusions' })).toBeDisabled();
+      expect(screen.queryByRole('button', { name: /^Actions for/ })).not.toBeInTheDocument();
+      expect(api.updateM3UChangeExclusions).not.toHaveBeenCalled();
+    });
+
+    it('excludes a row by exact account/name and refreshes server-filtered results', async () => {
+      renderWithProviders(<M3UChangesTab />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Actions for Sports (Test M3U 1)' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Exclude this group' }));
+      await waitFor(() => expect(api.updateM3UChangeExclusions).toHaveBeenCalledWith({
+        add: [{ m3u_account_id: 1, group_name: 'Sports' }],
+      }));
+      expect(await screen.findByRole('button', { name: 'Excluded groups (1)' })).toBeInTheDocument();
+      await waitFor(() => expect(api.getM3UChanges).toHaveBeenCalledTimes(2));
+    });
+
+    it('loads shared exclusions and removes only the unchecked provider identity', async () => {
+      vi.mocked(api.getM3UChangeExclusions).mockResolvedValue({
+        exclusions: [{ m3u_account_id: 2, group_name: 'Sports' }],
+      });
+      renderWithProviders(<M3UChangesTab />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Excluded groups (1)' }));
+      const providerTwo = screen.getByRole('checkbox', { name: 'Sports — Test M3U 2' });
+      expect(providerTwo).toBeChecked();
+      expect(screen.getByRole('checkbox', { name: 'Sports — Test M3U 1' })).not.toBeChecked();
+      fireEvent.click(providerTwo);
+      await waitFor(() => expect(api.updateM3UChangeExclusions).toHaveBeenCalledWith({
+        add: [], remove: [{ m3u_account_id: 2, group_name: 'Sports' }],
+      }));
+    });
+
+    it('searches across paginated group options and bulk-excludes matching groups', async () => {
+      vi.mocked(api.getM3UChangeGroups)
+        .mockResolvedValueOnce({ results: [{ m3u_account_id: 1, group_name: 'Sports' }], total: 3, total_pages: 2 })
+        .mockResolvedValueOnce({ results: [
+          { m3u_account_id: 2, group_name: 'Sports' }, { m3u_account_id: 1, group_name: 'News' },
+        ], total: 3, total_pages: 2 });
+      renderWithProviders(<M3UChangesTab />);
+      const trigger = await screen.findByRole('button', { name: 'Excluded groups (0)' });
+      await waitFor(() => expect(trigger).toBeEnabled());
+      fireEvent.click(trigger);
+      fireEvent.change(screen.getByRole('textbox', { name: 'Search Excluded groups (0)' }), { target: { value: 'Sports' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Select All Visible' }));
+      await waitFor(() => expect(api.updateM3UChangeExclusions).toHaveBeenCalledWith({
+        add: [{ m3u_account_id: 1, group_name: 'Sports' }, { m3u_account_id: 2, group_name: 'Sports' }], remove: [],
+      }));
+      expect(api.getM3UChangeGroups).toHaveBeenCalledWith({ page: 2, pageSize: 200 });
+    });
+
+    it('surfaces exclusion-load failures and retries without inventing an empty saved list', async () => {
+      vi.mocked(api.getM3UChangeExclusions).mockRejectedValueOnce(new Error('Exclusions unavailable'));
+      renderWithProviders(<M3UChangesTab />);
+      expect(await screen.findByText('Exclusions unavailable')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Retry exclusions' }));
+      await waitFor(() => expect(api.getM3UChangeExclusions).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Excluded groups (0)' })).toBeEnabled());
+    });
+
+    it('keeps saved state on mutation failure and allows retry', async () => {
+      vi.mocked(api.updateM3UChangeExclusions).mockRejectedValue(new Error('Save failed'));
+      renderWithProviders(<M3UChangesTab />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Actions for Sports (Test M3U 1)' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Exclude this group' }));
+      expect(await screen.findByText('Save failed')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Excluded groups (0)' })).toBeInTheDocument();
+    });
+
+    it('clears saved exclusions from the filtered empty state without deleting history', async () => {
+      vi.mocked(api.getM3UChangeExclusions).mockResolvedValue({
+        exclusions: [{ m3u_account_id: 1, group_name: 'Sports' }],
+      });
+      vi.mocked(api.getM3UChanges).mockResolvedValue({ ...mockChangesResponse, results: [], total: 0, total_pages: 0 });
+      renderWithProviders(<M3UChangesTab />);
+      expect(await screen.findByText('No changes match the current filters. Recorded history is retained.')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Clear exclusions' }));
+      await waitFor(() => expect(api.updateM3UChangeExclusions).toHaveBeenCalledWith({ clear: true }));
+    });
+
     it('renders the M3U Changes header', async () => {
       renderWithProviders(<M3UChangesTab />);
 
@@ -435,6 +531,18 @@ describe('M3UChangesTab', () => {
   });
 
   describe('pagination', () => {
+    it('returns to page one after excluding a row on a later page', async () => {
+      vi.mocked(api.getM3UChanges).mockResolvedValue({ ...mockChangesResponse, total: 100, total_pages: 2 });
+      renderWithProviders(<M3UChangesTab />);
+      await screen.findByText('Page 1 of 2');
+      fireEvent.click(screen.getByTitle('Next page'));
+      await screen.findByText('Page 2 of 2');
+      fireEvent.click(screen.getByRole('button', { name: 'Actions for Sports (Test M3U 1)' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Exclude this group' }));
+      await screen.findByText('Page 1 of 2');
+      await waitFor(() => expect(api.getM3UChanges).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1 })));
+    });
+
     it('displays pagination controls', async () => {
       renderWithProviders(<M3UChangesTab />);
 

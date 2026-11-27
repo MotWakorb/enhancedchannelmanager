@@ -1,0 +1,59 @@
+{
+  "status": "SOURCE_AVAILABILITY_REPAIR_AND_FRESH_ADVISORY_INPUT_ONLY",
+  "beads": ["enhancedchannelmanager-ahlv3", "enhancedchannelmanager-4izbc"],
+  "source_availability": {
+    "failed_run": 42746663339,
+    "failed_arm_job": 129600278122,
+    "failure": "All three requests for the pinned Savannah config.sub blob returned HTTP 502 before full candidate construction. AMD64 separately reached the existing native_source_and_artifact_integrity failure.",
+    "failure_log_sha256": "145ddf2134e707dee8f0a1b4732b5e26c9b4d08c54c64c3e35024f6a489edaca",
+    "retained_path": "docker/python-third-party/gnu-source-assets/config.sub",
+    "bytes": 36159,
+    "sha256": "75d5d255a2a273b6e651f82eecfabf6cbcd8eaeae70e86b417384c8f4a58d8d3",
+    "source": "Unchanged bytes from the previously verified original GNU source delivery; original revision 3d5db9ebe860 and embedded copyright/license notice preserved. Retained as a mandatory repository input, not a network fallback or new source version.",
+    "unchanged_manifest_sha256": "609dac61e58e81d074d7996bcc13dff6620cfa2592f35cd97c6e659fbebdf615",
+    "preparer_sha256": "45d0885abeff5cf8055b39caa801340ee20e6e27e56ace1f5fd61f31e92ee572",
+    "offline_native_amd64_delivery": {
+      "inputs": 21,
+      "repository_inputs": 13,
+      "https_inputs": 8,
+      "deliveries": 27,
+      "receipt_sha256": "e0fdcd2eb04710d27b14b0ab9a9479a3aa264c17678705d93454e1303dda007b",
+      "scope": "Complete real retained source cache, unchanged source statuses and all original hash/size/closure checks. Nonroot, read-only code and source mounts, network none. No source execution, new compilation, final-image integration or new native ARM result."
+    }
+  },
+  "fresh_advisory_input": {
+    "captured_at": "2026-11-10T04:02:23.426084+00:00",
+    "snapshot_index_sha256": "ce4043fd46f26c21052a2e06778478a4d09c72aa7286450b183de20d6fa104f8",
+    "acquisition": "One new four-endpoint collection using the unchanged helper and ordinary validated HTTPS succeeded. The community endpoint returned its complete recorded-shape 1996-item response this time. The earlier invalid empty response and its rejection remain separate evidence, not a successful acquisition.",
+    "raw_sha256": {
+      "tracker-main": "bcca9ccce00bf56d1c99308d9317578880717829d1b5d67727170fe01ea0f84e",
+      "tracker-community": "31d4b6ead6f7e72c8412265ea236fe1f3598f9cfcd07a960ce46040089fd12e4",
+      "secdb-main": "35e2341005dbaf677f0adbff70defe1ed303559ff8f4ebfdfbed397211debc7b",
+      "secdb-community": "c7ec286970d44b7313338b68ea33a568451d833e57f5b823567bbbaf552f02b7"
+    },
+    "native_offline_reader": "Fresh closed snapshot rechecked on native AMD64 with trusted checkout code, nonroot/read-only/network none. Both tracker repositories and fixed-secdb documents parsed; 185/1996 tracker items and 290/489 fixed-secdb packages.",
+    "subject": "Previously recorded immutable AMD64 runtime-base inventory, NOT a fresh final-image or ARM execution.",
+    "recorded_subject_sha256": "d224f8940bedd4758e95456a92737fb87ab82c777462ff7c9f21f03b124cbe8b",
+    "diagnostic_sha256": "3a2d174f90483b78b3ecb25fa22a0eeca6efa4bcaf92368406d55e84cee73887",
+    "potential_unfixed_matches": 19,
+    "by_source": {"cairo": 1, "coreutils": 3, "glib": 1, "sqlite": 11, "tar": 3},
+    "unknown_severity_matches": 18,
+    "unresolved_owned_packages": ["busybox", "busybox-binsh", "ecm-owned-native", "ssl_client"],
+    "diagnostic_status": "BLOCKED_PUBLISHED_UNFIXED_OR_UNRESOLVED_SUBJECTS",
+    "scope": "HTTPS acquisition and bounded reader only, not signed advisory data, publisher-internal completeness, persistent known-finding enforcement, native APK-version/CPE/owned-backport reconciliation or advisory clearance. Snapshot expires under the unchanged six-hour reader policy; this historical receipt is not a reusable current gate input."
+  },
+  "verification": {
+    "red_before_source_selection_fix": "Five source-plan/retention cases failed and six existing cases passed; original RED retained.",
+    "red_log_sha256": "6e9ecc4c6e432d951a47279754f7cf8164b59c5f4a665fad615c72cfac854901",
+    "broad_modules": 61,
+    "passed": 1869,
+    "unchanged_existing_skip": 1,
+    "broad_log_sha256": "08a89f2696f8ce6833ba5866decb817824b5993b8c80b7def3430bdc41ddc81a",
+    "layer": "Native Alpine tooling subset, not the canonical full application gate. Initial 2GiB tmpfs run exhausted temporary space; unchanged selection passed with a dedicated disk-backed temporary directory, then only that task-owned temporary directory was cleaned.",
+    "other_checks": ["Ruff lint/format", "source SBOM verify/audit", "1080-file application source guard", "production Dockerfiles and dependency locks unchanged against baseline", "git diff --check"]
+  },
+  "retention": ["/tmp/opencode/ecm-alpine-config-sub-proof-20261110", "/tmp/opencode/ecm-alpine-advisories-live-20261110", "/tmp/opencode/ecm-alpine-advisories-live-20261110.acquisition", "/tmp/opencode/ecm-alpine-advisories-live-diagnostic.json", "/tmp/opencode/ecm-alpine-resume-broad-02.log"],
+  "remaining": "Fresh native CI for the retained source selection; immutable final-image advisory binding and persistent known-finding denial; assessment/remediation of the 19 potential records and owned sources including CVE-2026-11979; remaining compiler/static/language/feature/glycin/frontend/MCP and full source/scan acceptance. No runtime provider, package/application pin, golden fixture, trust/repository policy, OWNED_PENDING or aggregate RPM dispatch was changed. No merge, image publication or deployment.",
+  "full_runtime_advisory_acceptance": false,
+  "full_runtime_source_acceptance": false
+}

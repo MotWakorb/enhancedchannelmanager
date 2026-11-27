@@ -123,20 +123,29 @@ SUSE_BASE_IMAGE = (
     "c807eabd03acb6f5dfb6a23fd58ed93700d11283a255cd18184f57815e19fc55"
 )
 SUSE_NATIVE_BUILDER_RUN = (
-    "zypper --non-interactive install --no-recommends python312-base && "
+    'case "$(uname -m)" in '
+    "x86_64) repository=https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/; metadata=36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6 ;; "
+    "aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/; metadata=374a893f64518ff85a66f866d88e0aab77d0fbeb78f83eaa5fe140947a0495ce ;; "
+    "*) exit 1 ;; esac && rm -f /etc/zypp/repos.d/*.repo && "
+    'zypper --non-interactive addrepo --check --gpgcheck --refresh "$repository" oss && '
+    "zypper --non-interactive refresh && "
+    'echo "$metadata /var/cache/zypp/raw/oss/repodata/repomd.xml" | sha256sum --check --strict && '
+    "zypper --non-interactive --no-refresh install --no-recommends python312-base && "
     'case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac && '
     "python3.12 /tmp/build_native_runtime.py --manifest /tmp/native/manifest.json "
-    '--work-dir /tmp/native-work --output-dir /tmp/native-output --arch "$arch"'
+    '--work-dir /tmp/native-work --output-dir /tmp/native-output --arch "$arch" --cache-dir /tmp/native-cache'
 )
 SUSE_RUNTIME_RUN = (
     'case "$(uname -m)" in '
-    "x86_64) repository=https://download.opensuse.org/tumbleweed/repo/oss/ ;; "
-    "aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/ ;; "
+    "x86_64) repository=https://download.opensuse.org/history/20261105/tumbleweed/repo/oss/; metadata=36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6 ;; "
+    "aarch64) repository=https://download.opensuse.org/ports/aarch64/tumbleweed/repo/oss/; metadata=374a893f64518ff85a66f866d88e0aab77d0fbeb78f83eaa5fe140947a0495ce ;; "
     "*) exit 1 ;; esac && rm -f /etc/zypp/repos.d/*.repo && "
     'zypper --non-interactive addrepo --check --gpgcheck --refresh "$repository" oss && '
-    "zypper --non-interactive refresh && zypper --non-interactive update --no-recommends && "
+    "zypper --non-interactive refresh && "
+    'echo "$metadata /var/cache/zypp/raw/oss/repodata/repomd.xml" | sha256sum --check --strict && '
+    "zypper --non-interactive --no-refresh update --no-recommends && "
     "rpm --import /tmp/packman.asc && rpm --checksig /tmp/runtime-rpms/*.rpm && "
-    "zypper --non-interactive install --no-recommends /tmp/runtime-rpms/*.rpm "
+    "zypper --non-interactive --no-refresh install --no-recommends /tmp/runtime-rpms/*.rpm "
     "$(cat /tmp/runtime-packages.txt) python312 python312-base shadow coreutils bash "
     "timezone ca-certificates && zypper clean --all"
 )
@@ -158,13 +167,22 @@ SUSE_CA_BLACKLIST_RUN = (
     "&& update-ca-certificates"
 )
 SUSE_SOURCE_BUILDER_RUN = (
+    'case "$(uname -m)" in '
+    "x86_64) set -- --retained-release-source /tmp/native-cache/93ac0c47def1693d0cf9869269c236d68e6ad9fe7456e1f8f2bb6fdec74f7123 ;; "
+    "aarch64) set -- ;; *) exit 1 ;; esac && "
     "rpm -q --qf '%{DESCRIPTION}\\n' gpg-pubkey-29b700a4 > /tmp/suse.asc && "
     "python3.12 /tmp/collect_native_sources.py --inventory /tmp/runtime-inventory.tsv "
     '--arch "$(uname -m)" --out /tmp/rpm-source-output --suse-key /tmp/suse.asc '
-    "--packman-key /tmp/native/packman.asc"
+    "--packman-key /tmp/native/packman.asc "
+    '--native-manifest /tmp/native/manifest.json --native-sources /tmp/native-output/sources "$@"'
 )
 SUSE_RESDET_BUILDER_RUN = (
-    "zypper --non-interactive install --no-recommends gcc make pkgconf-pkg-config gawk && "
+    'case "$(uname -m)" in '
+    "x86_64) metadata=36db62d4ce6887faa6ec09802a5b1311c1e14e075e5d7011fc590ceccbdabbe6 ;; "
+    "aarch64) metadata=374a893f64518ff85a66f866d88e0aab77d0fbeb78f83eaa5fe140947a0495ce ;; "
+    "*) exit 1 ;; esac && zypper --non-interactive refresh && "
+    'echo "$metadata /var/cache/zypp/raw/oss/repodata/repomd.xml" | sha256sum --check --strict && '
+    "zypper --non-interactive --no-refresh install --no-recommends gcc make pkgconf-pkg-config gawk && "
     + RESDET_BUILD_COMMAND.replace("python ", "python3.12 ", 1)
 )
 RESDET_RUNTIME_ASSERTION = (
@@ -385,7 +403,7 @@ def parse_dockerfile_images(text: str, source: str) -> list[dict[str, str]]:
     rejected: an SBOM naming a floating tag records nothing verifiable.
     """
     images: dict[tuple[str, str], dict[str, str]] = {}
-    stage_base: dict[str, tuple[str, str]] = {}
+    stage_base: dict[str, tuple[str, str] | None] = {}
     runtime_key: tuple[str, str] | None = None
 
     def _record(entry: dict[str, str]) -> tuple[str, str]:
@@ -396,7 +414,7 @@ def parse_dockerfile_images(text: str, source: str) -> list[dict[str, str]]:
     for stage in _docker_stages(text, source):
         reference, number = stage["base"], stage["line"]
         key = stage_base.get(reference)
-        if key is None:
+        if reference != "scratch" and reference not in stage_base:
             key = _record(_pinned_image(reference, source, number, "base"))
         runtime_key = key
         # Only completed previous stages may be COPY sources (never self/future).
@@ -409,7 +427,19 @@ def parse_dockerfile_images(text: str, source: str) -> list[dict[str, str]]:
             reference = match[1]
             if reference == stage["alias"]:
                 raise SbomError(f"{source} line {number} copies from its own stage")
-            if reference not in stage_base:
+            if reference == "ecm-native-sources":
+                # This exact named filesystem context is materialized from the
+                # two pinned source carriers, not an unpinned runtime image.
+                # Account for both build inputs rather than silently skipping it.
+                for identity in (
+                    "13cbcfffff8d5091f857583656b91ed8fe40ad3b472b54f7a67ab50e22846c01",
+                    "98722bea0ddb8f7c52398151751b89d4173b775f6612afc5bb75aa133d091d48",
+                ):
+                    _record(_pinned_image(
+                        "ghcr.io/motwakorb/enhancedchannelmanager@sha256:" + identity,
+                        source, number, "build",
+                    ))
+            elif reference not in stage_base:
                 _record(_pinned_image(reference, source, number, "build"))
         if stage["alias"] is not None:
             stage_base[stage["alias"]] = key
@@ -688,6 +718,7 @@ def _validate_suse_stages(stages: list[dict[str, Any]], source: str) -> None:
     require(1, [
         ("COPY", "scripts/build_native_runtime.py /tmp/build_native_runtime.py"),
         ("COPY", "docker/native/ /tmp/native/"),
+        ("COPY", "docker/native-cache/ /tmp/native-cache/"),
         ("RUN", SUSE_NATIVE_BUILDER_RUN),
     ])
     require(2, [
@@ -748,11 +779,38 @@ def _validate_suse_stages(stages: list[dict[str, Any]], source: str) -> None:
     ])
 
 
+ALPINE_GRAPH_SHA256 = "5b0e07bd5cd6fe94541838c01885a96f99331a60509f0ac890317de2e69f642b"
+ALPINE_RESDET_DOCUMENT_SHA256 = "43b58514faeddd9bc81580c464a9d2097a5079fa7fca644e632b40536c66817e"
+
+
 def validate_native_runtime_docker_contract(dockerfile: str, source: str) -> None:
     """Publication accepts only the current graph, never historical compatibility."""
     stages = _docker_stages(dockerfile, source)
     parse_dockerfile_images(dockerfile, source)
-    _validate_suse_stages(stages, source)
+    _validate_alpine_stages(stages, source)
+
+
+def validate_historical_suse_docker_contract(dockerfile: str, source: str) -> None:
+    """Retained regression fixtures only; not called by publication policy."""
+    parse_dockerfile_images(dockerfile, source)
+    _validate_suse_stages(_docker_stages(dockerfile, source), source)
+
+
+def _validate_alpine_stages(stages: list[dict[str, Any]], source: str) -> None:
+    # Freeze the complete normalized graph, including all acquisition, signature,
+    # offline build, source-delivery and final instructions. No substring-based
+    # allowlist or fall-through to historical RPM/source-carrier contracts.
+    graph = [
+        [stage["base"], stage["alias"], [
+            [kind, args] for kind, args, _line in stage["instructions"]
+        ]]
+        for stage in stages
+    ]
+    digest = hashlib.sha256(
+        json.dumps(graph, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+    if digest != ALPINE_GRAPH_SHA256:
+        raise SbomError(f"{source} must contain only the exact reviewed Alpine recipe")
 
 
 def validate_resdet_docker_contract(document: Any, dockerfile: str, source: str) -> None:
@@ -764,6 +822,14 @@ def validate_resdet_docker_contract(document: Any, dockerfile: str, source: str)
         raise SbomError(f"{NATIVE_DEPENDENCIES_PATH} has no resdet build metadata")
     stages = _docker_stages(dockerfile, source)
     parse_dockerfile_images(dockerfile, source)
+    if any(stage["alias"] == "application-candidate" for stage in stages):
+        _validate_alpine_stages(stages, source)
+        digest = hashlib.sha256(
+            json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if digest != ALPINE_RESDET_DOCUMENT_SHA256:
+            raise SbomError(f"{source} requires the original reviewed resdet/KISS FFT pins")
+        return
     # The historical source-manifest fixtures remain reproducible, but no other
     # graph can fall through into that weaker historical tail contract.
     historical = (
@@ -971,6 +1037,61 @@ def _native_package(entry: dict[str, str]) -> dict[str, Any]:
     if "sha256" in entry:
         package["checksums"] = [{"algorithm": "SHA256", "checksumValue": entry["sha256"]}]
     return package
+
+
+def _alpine_runtime_native_inputs(root: Path, sources: dict[str, str]) -> list[dict[str, str]]:
+    """Project owned source identities; APK inventories remain image evidence."""
+    packages = []
+
+    def add(name: str, version: str, archive: dict, license: str = NOASSERTION) -> None:
+        if not isinstance(version, str) or not version or not isinstance(archive, dict):
+            raise SbomError(f"malformed Alpine owned source identity: {name}")
+        digest = archive.get("sha256")
+        if not isinstance(digest, str) or SHA256.fullmatch(digest) is None:
+            raise SbomError(f"missing Alpine owned source checksum: {name}")
+        _validate_https_url(archive.get("url"), name, "ecm", 0)
+        packages.append({
+            "id": name, "name": name, "version": version, "license": license,
+            "purl": f"pkg:generic/{name}@{version}",
+            "downloadLocation": archive["url"], "sha256": digest,
+        })
+
+    directory = root / "docker/alpine-native"
+    for filename in ("codecs.json", "security-libraries.json"):
+        for row in _read_json(directory / filename)["libraries"]:
+            add(row["name"], row["version"], row["archive"], row["license"])
+    jxl = _read_json(directory / "libjxl.json")
+    add("libjxl", jxl["version"], jxl["archive"])
+    for name in ("ffmpeg", "gosu"):
+        row = _read_json(directory / f"{name}.json")[name]
+        add(name, row["version"], row)
+    busybox = _read_json(root / "docker/alpine-busybox/manifest.json")
+    add("busybox", busybox["upstream_version"], busybox["source"])
+    for relative in ("docker/alpine-native", "docker/alpine-busybox", "docker/native", "docker/trust"):
+        base = root / relative
+        if base.is_symlink():
+            raise SbomError(f"native source input must not be a symlink: {base}")
+        for path in sorted(base.rglob("*")):
+            if path.is_symlink():
+                raise SbomError(f"native source input must not be a symlink: {path}")
+            if path.is_file():
+                sources[path.relative_to(root).as_posix()] = sha256_file(path)
+    # The input recipe copies scripts/ as a whole: fingerprint every copied
+    # Python helper, not only the four entrypoints visible in its RUN lines.
+    for path in sorted((root / "scripts").glob("*.py")):
+        if path.is_symlink():
+            raise SbomError(f"native source input must not be a symlink: {path}")
+        sources[path.relative_to(root).as_posix()] = sha256_file(path)
+    retained = root / "scripts/retained"
+    if retained.is_symlink():
+        raise SbomError(
+            f"retained verification directory must not be a symlink: {retained}"
+        )
+    for path in sorted(retained.glob("*")):
+        if path.is_symlink() or not path.is_file():
+            raise SbomError(f"regular retained verification input required: {path}")
+        sources[path.relative_to(root).as_posix()] = sha256_file(path)
+    return packages
 
 
 def _runtime_native_inputs(root: Path, sources: dict[str, str]) -> list[dict[str, str]]:
@@ -1222,7 +1343,9 @@ def render(root: Path, version: str, created: str) -> dict[str, Any]:
     dockerfile = _read_text(root / "Dockerfile")
     validate_resdet_docker_contract(native_document, dockerfile, "Dockerfile")
     runtime_packages = (
-        _runtime_native_inputs(root, sources)
+        _alpine_runtime_native_inputs(root, sources)
+        if any(stage["alias"] == "application-candidate" for stage in _docker_stages(dockerfile, "Dockerfile"))
+        else _runtime_native_inputs(root, sources)
         if any(stage["alias"] == "native-builder" for stage in _docker_stages(dockerfile, "Dockerfile"))
         else []
     )
@@ -1307,11 +1430,11 @@ def render(root: Path, version: str, created: str) -> dict[str, Any]:
         },
         "coverage": {
             "includes": list(COVERAGE_INCLUDES) + ([
-                ("Source-built FFmpeg/gosu identities from docker/native/manifest.json; "
-                 "native recipe assets and builder/source-collector bytes are fingerprinted"),
+                 ("Source-built native identities from the active runtime recipes; "
+                  "native recipe assets and copied Python build/source helpers are fingerprinted"),
             ] if runtime_packages else []),
             "excludes": ([
-                ("Operating-system RPM packages resolved at build time by zypper are not "
+                 ("Operating-system packages resolved at build time by the distribution package manager are not "
                  "enumerated by this source-manifest SBOM; use the runtime image inventory"),
                 *COVERAGE_EXCLUDES[1:],
             ] if runtime_packages else list(COVERAGE_EXCLUDES)),

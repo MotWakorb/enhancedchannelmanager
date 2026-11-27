@@ -1,0 +1,58 @@
+ECM-owned portable numeric timezone support; preserves CONFIG_FEATURE_TIMEZONE and the unchanged upstream date tests.
+
+--- a/libbb/time.c
++++ b/libbb/time.c
+@@ -7,6 +7,32 @@
+  * Licensed under GPLv2, see file LICENSE in this source tree.
+  */
+ #include "libbb.h"
++
++#if ENABLE_DESKTOP && ENABLE_FEATURE_TIMEZONE
++/* strptime %z is not provided by every supported libc. Keep numeric timezone
++ * input local to BusyBox rather than adding a libc compatibility interface. */
++static char *parse_numeric_timezone(char *value, long *offset)
++{
++	unsigned hours, minutes, i;
++	if (*value == 'Z') {
++		*offset = 0;
++		return value + 1;
++	}
++	if ((*value != '+' && *value != '-') || strlen(value) < 5)
++		return NULL;
++	for (i = 1; i <= 4; i++)
++		if (!isdigit((unsigned char)value[i]))
++			return NULL;
++	hours = (value[1] - '0') * 10 + value[2] - '0';
++	minutes = (value[3] - '0') * 10 + value[4] - '0';
++	if (hours > 23 || minutes > 59)
++		return NULL;
++	*offset = (hours * 60 + minutes) * 60;
++	if (*value == '-')
++		*offset = -*offset;
++	return value + 5;
++}
++#endif
+ 
+ /* Returns 0 if the time structure contains an absolute UTC time which
+  * should not be subject to DST adjustment by the caller. */
+@@ -45,6 +71,20 @@
+ 	fmt = fmt_str;
+ 	while (*fmt) {
+ 		endp = strptime(date_str, fmt, ptm);
++# if ENABLE_FEATURE_TIMEZONE
++		if (!endp && strchr(fmt, 'z')) {
++			char prefix[sizeof(fmt_str)];
++			size_t length = strlen(fmt);
++			/* The two timezone forms end in %z; parse the date portion
++			 * using the same libc, then bound-check the numeric offset. */
++			memcpy(prefix, fmt, length - 2);
++			prefix[length - 2] = '\0';
++			*ptm = save;
++			endp = strptime(date_str, prefix, ptm);
++			if (endp)
++				endp = parse_numeric_timezone(endp, &ptm->tm_gmtoff);
++		}
++# endif
+ 		if (endp && *endp == '\0') {
+ # if ENABLE_FEATURE_TIMEZONE
+ 			if (strchr(fmt, 'z')) {

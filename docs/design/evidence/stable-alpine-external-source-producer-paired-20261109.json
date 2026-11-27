@@ -1,0 +1,34 @@
+{
+  "architectures": {
+    "amd64": {
+      "bundle_bytes": 502072343,
+      "external_packages": 117,
+      "index_sha256": "1f06312a5f3e6858c3a2a78b3d01ca5e3ba9e456d8524db764ffa43f40029e40",
+      "offline_recheck_sha256": "a9497afa457e9e71b8789fe69cf11ad3a5e32eb5daabafb37f2e6f699057659d",
+      "package_set_sha256": "792e5fec1ef63ff1b88cb55128d8999c81b1b5dcd8af0cd1ef4acb631657b6f2",
+      "receipt_sha256": "12d41e585ce561b9c672bedc1e17304b55c0a4130eada318d7b36aef25a8df91",
+      "source_files": 626,
+      "source_groups": 99,
+      "source_input_count": 314
+    },
+    "arm64": {
+      "bundle_bytes": 500049423,
+      "external_packages": 117,
+      "index_sha256": "1f8b39377ec921095d4a278f255f11955aaff8d96b6cee0111f7ec9d4c9b00d3",
+      "offline_recheck_sha256": "be22d5c1e203ca9c16a444ecba7fa9db2d9e3867cfb10fa7fd1d5c67213ccbbc",
+      "package_set_sha256": "f42595d7b8b226aba45810a584e333cdefad69ab9edd9b78e26418b7ac5e889e",
+      "receipt_sha256": "0a10dffc62aa3d832e6d20101a28e683da00ccdd10aedf80432bff8bd563f8c4",
+      "source_files": 625,
+      "source_groups": 99,
+      "source_input_count": 314
+    }
+  },
+  "candidate_capture_run": 42659218638,
+  "consumer_sha256": "fc19460fe6181f3980f05e29455ccc24798cbbbd94ef9563613e8ddc4addd811",
+  "full_runtime_source_acceptance": false,
+  "producer_sha256": "912b817a4eea8a60959c6a20f38d4a2b7e9d82abc72ccc3a099029333a33c8e4",
+  "retained_bundles": "/home/lecaptainc/.cache/ecm-alpine-producer-20261109/{amd64-01,arm64-02}-output/bundle",
+  "scope": "Actual paired immutable-candidate captures. Both acquisitions and offline nonroot/read-only rechecks ran on AMD64; verification of ARM64 data is not native ARM execution. Candidate Docker/workflow wiring unit checks pass, but fresh paired final-image execution remains required. Four owned packages, Python-base, compiler/language support, complete license/advisory and aggregate source gate remain unfinished.",
+  "status": "PAIRED_AUTOMATED_EXTERNAL_SOURCE_ACQUISITION_AND_OFFLINE_RECHECK_ONLY",
+  "unresolved_owned_names": ["busybox", "busybox-binsh", "ecm-owned-native", "ssl_client"]
+}
