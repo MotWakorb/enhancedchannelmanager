@@ -1,4 +1,4 @@
-"""No-secret regressions for 5e3r3/ej4um, crossing real HTTP/log boundaries."""
+"""No-secret regressions for profile and bulk errors, crossing real HTTP/log boundaries."""
 
 import asyncio
 import io
@@ -505,3 +505,203 @@ async def test_unregistered_url_token_is_scrubbed_in_real_profile_warning(
         assert "PROFILE-RECONCILE" in text
         assert token not in text
         assert "REDACTED" in text
+
+
+# ---------------------------------------------------------------------------
+# Operator guidance the sanitizer must keep. Numbering-baseline refusals are
+# local, deliberately worded instructions; replacing them with the generic
+# foreign-error text would hide what the operator has to do next. The terminal
+# envelope's ``error`` is what the MCP bulk_commit_channels tool prints verbatim.
+# ---------------------------------------------------------------------------
+
+STALE_SINGLE_GUIDANCE = (
+    "Channel 1 was not renumbered: it is on channel number 5, and this request "
+    "expected 4. Somebody else changed it. Re-read the channel and decide before "
+    "sending this again."
+)
+MISSING_SINGLE_GUIDANCE = (
+    "Channel 1 was not renumbered: the operation carries no expectedNumber, so "
+    "ECM cannot check whether anybody else changed its number first."
+)
+MISSING_RANGE_GUIDANCE = (
+    "Channels 1, 2 were not renumbered: the range carries no expectedNumbers "
+    "entry for them, so ECM cannot check whether anybody else changed their "
+    "numbers first."
+)
+UNVERIFIABLE_SINGLE_GUIDANCE = (
+    "Channel 1 was not renumbered: the channel lineup could not be read, so ECM "
+    "could not check whether anybody else changed its number first. Nothing "
+    "about this channel was changed."
+)
+GENERIC_OPERATION_ERROR = (
+    "Operation failed; check server logs and the reported results before retrying."
+)
+
+
+def numbering_client(channels_readable=True):
+    from tests.routers.test_renumber_baselines import make_client
+
+    return make_client(channels_readable=channels_readable)
+
+
+async def poll_numbering(async_client, client, operations):
+    with (
+        patch("routers.channels.get_client", return_value=client),
+        patch("routers.channels.journal"),
+    ):
+        envelope = await commit_and_poll(
+            async_client, {"operations": operations, "continueOnError": True}
+        )
+    assert envelope["status"] == "completed", envelope
+    return envelope["result"]
+
+
+def renumber_op(channel_id, number, expected):
+    return {
+        "type": "updateChannel",
+        "channelId": channel_id,
+        "data": {"channel_number": number},
+        "expectedNumber": {"number": expected},
+    }
+
+
+@pytest.mark.asyncio
+async def test_stale_baseline_guidance_and_payload_survive_terminal_poll(async_client):
+    client = numbering_client()
+    result = await poll_numbering(async_client, client, [renumber_op(1, 40, 4)])
+    client.update_channel.assert_not_awaited()
+    assert result["operationsFailed"] == 1
+    error = result["errors"][0]
+    assert error["error"] == STALE_SINGLE_GUIDANCE
+    assert error["concurrentNumberChanges"] == [
+        {"channelId": 1, "baselineNumber": 4, "serverNumber": 5},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stale_range_guidance_and_payload_survive_terminal_poll(async_client):
+    client = numbering_client()
+    result = await poll_numbering(
+        async_client,
+        client,
+        [{
+            "type": "bulkAssignChannelNumbers",
+            "channelIds": [1, 2],
+            "startingNumber": 100,
+            "expectedNumbers": {"1": 5, "2": 99},
+        }],
+    )
+    client.assign_channel_numbers.assert_not_awaited()
+    error = result["errors"][0]
+    assert error["error"] != GENERIC_OPERATION_ERROR
+    assert "Somebody else changed" in error["error"]
+    assert error["concurrentNumberChanges"] == [
+        {"channelId": 2, "baselineNumber": 99, "serverNumber": 6},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unverifiable_baseline_guidance_survives_terminal_poll(async_client):
+    client = numbering_client(channels_readable=False)
+    result = await poll_numbering(async_client, client, [renumber_op(1, 40, 5)])
+    client.update_channel.assert_not_awaited()
+    assert result["errors"][0]["error"] == UNVERIFIABLE_SINGLE_GUIDANCE
+    # The lineup read failed with foreign text; it must not reach the envelope.
+    assert "Dispatcharr unreachable" not in str(result)
+
+
+async def run_without_baseline(operation, clear):
+    """Drive the executor's own backstop, which the request model normally guards."""
+    from routers.channels import BulkCommitRequest, _run_bulk_commit
+
+    request = BulkCommitRequest(operations=[operation], continueOnError=True)
+    clear(request.operations[0])
+    client = numbering_client()
+    with (
+        patch("routers.channels.get_client", return_value=client),
+        patch("routers.channels.journal"),
+    ):
+        result = await _run_bulk_commit(request, batch_id="batch-no-baseline")
+    client.update_channel.assert_not_awaited()
+    client.assign_channel_numbers.assert_not_awaited()
+    return result
+
+
+@pytest.mark.asyncio
+async def test_missing_single_baseline_backstop_keeps_its_guidance():
+    def clear(op):
+        op.expectedNumber = None
+
+    result = await run_without_baseline(renumber_op(1, 40, 5), clear)
+    assert result["operationsFailed"] == 1
+    assert result["errors"][0]["error"] == MISSING_SINGLE_GUIDANCE
+
+
+@pytest.mark.asyncio
+async def test_missing_range_baseline_backstop_keeps_its_guidance():
+    def clear(op):
+        op.expectedNumbers = {}
+
+    result = await run_without_baseline(
+        {
+            "type": "bulkAssignChannelNumbers",
+            "channelIds": [1, 2],
+            "startingNumber": 100,
+            "expectedNumbers": {"1": 5, "2": 6},
+        },
+        clear,
+    )
+    assert result["operationsFailed"] == 1
+    assert result["errors"][0]["error"] == MISSING_RANGE_GUIDANCE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["runtime", "status", "value"])
+async def test_numbering_recovery_entries_do_not_carry_upstream_text(
+    async_client, log_outputs, kind
+):
+    client = numbering_client()
+    calls = 0
+    error = upstream_error(kind)
+
+    async def update_channel(channel_id, data):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"id": channel_id, **data}
+        raise error
+
+    client.update_channel.side_effect = update_channel
+    result = await poll_numbering(
+        async_client, client, [renumber_op(1, 21, 5), renumber_op(2, 22, 6)]
+    )
+    recovery = result["numberingRecovery"]
+    assert [entry["channelId"] for entry in recovery] == [1]
+    assert "ESPN" in recovery[0]["step"] and "5" in recovery[0]["step"]
+    assert recovery[0]["error"]
+    assert SECRET not in str(result) and CAUSE not in str(result)
+    assert HOST not in str(result)
+    assert_safe_logs(log_outputs, "CHANNELS-BULK")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["runtime", "status", "value"])
+async def test_range_read_back_failure_is_scrubbed_in_every_log_sink(
+    async_client, log_outputs, kind
+):
+    client = numbering_client()
+    client.get_channel.side_effect = upstream_error(kind)
+    result = await poll_numbering(
+        async_client,
+        client,
+        [{
+            "type": "bulkAssignChannelNumbers",
+            "channelIds": [1, 2],
+            "expectedNumbers": {"1": 5, "2": 6},
+        }],
+    )
+    client.assign_channel_numbers.assert_awaited_once_with([1, 2], None)
+    assert result["success"] is True
+    assert result["operationsApplied"] == 1
+    assert SECRET not in str(result) and CAUSE not in str(result)
+    assert_safe_logs(log_outputs, "could not read its new number back")
