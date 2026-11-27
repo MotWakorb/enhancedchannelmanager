@@ -1391,7 +1391,7 @@ class RestoreReport(BaseModel):
     # credential). ADDITIVE optional — no CONTRACT_VERSION bump.
     # Pre-flight refused the plan, so nothing ran and no outcome exists. The
     # refusal reasons are in ``notes``; this is the structured signal callers
-    # map to an error code. ADDITIVE optional — no CONTRACT_VERSION bump.
+    # map to an error code. Additive and optional, so no CONTRACT_VERSION bump.
     preflight_refused: bool = Field(
         default=False,
         description=(
