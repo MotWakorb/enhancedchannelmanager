@@ -189,3 +189,17 @@ async def test_the_baseline_survives_the_confirmation_flow():
     assert _update_bodies(client) == [
         {"channel_number": 20, "expectedNumber": {"number": 5}},
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_missing_baseline_is_refused_before_a_token_is_issued():
+    # Through the safety wrapper: no preview read, and no confirmation token
+    # for a call that could never be confirmed.
+    mcp = _registry()
+    client = _client()
+    with patch("tools.channels.get_ecm_client", return_value=client):
+        result = await mcp.call_tool("update_channel", {"channel_id": 1, "channel_number": 20})
+    text = _text(result)
+    assert "expected_number" in text
+    assert "confirmation_token" not in text
+    client.call_endpoint.assert_not_called()

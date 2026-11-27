@@ -123,6 +123,22 @@ class ExpectedChannelNumber(BaseModel):
     number: Annotated[float, Field(strict=True, allow_inf_nan=False)] | None
 
 
+def missing_number_baseline(arguments: dict) -> str | None:
+    """The refusal for an update_channel call that renumbers without a baseline.
+
+    Shared with the safety wrapper, which must refuse before it issues a
+    confirmation token for a call that could never be confirmed.
+    """
+    if arguments.get("channel_number") is None or arguments.get("expected_number") is not None:
+        return None
+    return (
+        f"Channel {arguments.get('channel_id')} was not updated: changing channel_number "
+        "needs expected_number, the number you last read for this channel "
+        '(get_channel or list_channels), as {"number": n} or {"number": null} '
+        "for no number. Nothing was sent."
+    )
+
+
 def register(mcp: FastMCP):
     @mcp.tool()
     async def list_channels(
@@ -372,13 +388,13 @@ def register(mcp: FastMCP):
             confirm: Set True to apply a gated rename/group-change on a manual
                      channel (see CONFIRM GATING above).
         """
-        if channel_number is not None and expected_number is None:
-            return (
-                f"Channel {channel_id} was not updated: changing channel_number needs "
-                "expected_number, the number you last read for this channel "
-                '(get_channel or list_channels), as {"number": n} or {"number": null} '
-                "for no number. Nothing was sent."
-            )
+        refusal = missing_number_baseline({
+            "channel_id": channel_id,
+            "channel_number": channel_number,
+            "expected_number": expected_number,
+        })
+        if refusal:
+            return refusal
         try:
             client = get_ecm_client()
             payload = {}
