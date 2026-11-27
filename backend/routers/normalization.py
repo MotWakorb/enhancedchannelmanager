@@ -1064,9 +1064,12 @@ async def import_normalization_rules(request: ImportRulesRequest):
     rules_data = data["normalization_rules"]
     if not isinstance(rules_data, dict) or "groups" not in rules_data:
         raise HTTPException(status_code=400, detail="Missing 'groups' key in normalization_rules")
-    if not isinstance(rules_data["groups"], list):
+    if not isinstance(rules_data["groups"], list) or not all(
+        isinstance(group, dict) for group in rules_data["groups"]
+    ):
         raise HTTPException(
-            status_code=400, detail="'groups' in normalization_rules must be a list"
+            status_code=400,
+            detail="'groups' in normalization_rules must be a list of mappings",
         )
 
     try:

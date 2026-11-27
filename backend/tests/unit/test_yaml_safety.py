@@ -313,3 +313,114 @@ def test_refusal_description_names_the_limit():
     with pytest.raises(YamlSafetyError) as error:
         safe_load_bounded("[1, 2, 3, 4]", max_nodes=3)
     assert error.value.describe() == "more than 3 YAML nodes"
+
+
+# --- object walk: the creation-side preflight --------------------------------
+
+
+def _walk_fixtures():
+    import datetime
+
+    shared_stream = {"id": 1, "name": "Shared", "m3u_account": 2}
+    shared_list = [1, 2, 3]
+    stamp = datetime.datetime(2026, 1, 2, 3, 4, 5)
+    channels = [
+        {
+            "id": i,
+            "channel_number": float(i),
+            "name": "Channel %d" % i,
+            "tvg_id": None,
+            "auto_created": False,
+            "streams": [{"id": i * 3 + s, "name": "S", "m3u_account": 1} for s in range(3)],
+        }
+        for i in range(200)
+    ]
+    return {
+        "realistic channels": {"dispatcharr": {"channels": channels}},
+        "nested settings": {
+            "ecm_export": {"version": "x", "sections_included": ["settings"]},
+            "settings": {"smtp": {"host": "h", "port": 25, "tls": {"on": True}}, "list": [[1], [2, [3]]]},
+        },
+        "shared dict": {"a": [shared_stream] * 50, "b": {"again": shared_stream}},
+        "shared list and datetime": {"x": shared_list, "y": shared_list, "t1": stamp, "t2": stamp},
+        "empty containers and scalars": {"": [], "e": {}, "n": None, "f": 1.5, "s": "", 7: "int key"},
+        "top-level list": [{"k": "v"}, [], "s", 1],
+        "scalar": "just text",
+    }
+
+
+@pytest.mark.parametrize("name", sorted(_walk_fixtures()))
+def test_object_walk_counts_exactly_what_restore_composes(name):
+    from yaml_safety import measure_bounded, measure_object
+
+    obj = _walk_fixtures()[name]
+    text = yaml.dump(obj, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    assert measure_object(obj, max_nodes=BACKUP_MAX_NODES) == measure_bounded(
+        text, max_nodes=BACKUP_MAX_NODES
+    )
+
+
+def _deep(depth):
+    obj = 0
+    for _ in range(depth):
+        obj = [obj]
+    return obj
+
+
+def _amplified():
+    base = list(range(1_000))
+    return {"base": base, "refs": [base] * 1_100}
+
+
+@pytest.mark.parametrize(
+    "obj,ceiling,reason",
+    [
+        (list(range(20)), 10, "nodes"),
+        (_deep(70), 1_000, "depth"),
+        (_amplified(), BACKUP_MAX_NODES, "aliases"),
+    ],
+)
+def test_object_walk_refuses_what_restore_refuses(obj, ceiling, reason):
+    from yaml_safety import YamlSafetyError, measure_bounded, measure_object
+
+    with pytest.raises(YamlSafetyError) as walked:
+        measure_object(obj, max_nodes=ceiling)
+    with pytest.raises(YamlSafetyError) as composed:
+        measure_bounded(yaml.dump(obj), max_nodes=ceiling)
+    assert walked.value.reason == composed.value.reason == reason
+
+
+def test_object_walk_refuses_recursive_structures():
+    from yaml_safety import YamlSafetyError, measure_object
+
+    loop = []
+    loop.append(loop)
+    with pytest.raises(YamlSafetyError) as error:
+        measure_object(loop, max_nodes=BACKUP_MAX_NODES)
+    assert error.value.reason == "recursive"
+
+
+def test_object_walk_boundary_matches_restore():
+    from yaml_safety import measure_bounded, measure_object
+
+    obj = list(range(99))  # 100 nodes
+    assert measure_object(obj, max_nodes=100) == 100
+    assert measure_bounded(yaml.dump(obj), max_nodes=100) == 100
+
+
+def test_legacy_ceiling_constant():
+    import yaml_safety
+
+    assert yaml_safety.LEGACY_MAX_NODES == 2_000_000
+
+
+def test_alias_budget_can_be_raised_for_self_generated_text():
+    from yaml_safety import YamlSafetyError, safe_load_bounded
+
+    document = _fanout(1_000, 1_100)
+    with pytest.raises(YamlSafetyError):
+        safe_load_bounded(document, max_nodes=BACKUP_MAX_NODES)
+    data = safe_load_bounded(
+        document, max_nodes=BACKUP_MAX_NODES, alias_expansion_budget=BACKUP_MAX_NODES
+    )
+    assert len(data["refs"]) == 1_100

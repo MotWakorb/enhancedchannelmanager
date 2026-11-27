@@ -78,9 +78,10 @@ from database import close_db, get_engine, get_session, init_db, JOURNAL_DB_FILE
 from dispatcharr_client import get_client, reset_client
 from yaml_safety import (
     BACKUP_MAX_NODES,
+    LEGACY_MAX_NODES,
     YamlSafetyError,
     limit_message,
-    measure_bounded,
+    measure_object,
     safe_load_bounded,
 )
 from models import (
@@ -1702,15 +1703,15 @@ _MAX_LEGACY_SETTINGS_BYTES = 8 * 1024 * 1024
 # journal.db bomb is ~1028x (261,180 compressed -> 268,435,456 declared bytes),
 # so it remains rejected before a member is read.
 _LEGACY_COMPRESSIBLE_MEMBER_NAMES = ("journal.db",)
-
-# Upload cap for the legacy YAML /validate and /restore-yaml routes, read in
-# chunks so an oversized upload is never buffered whole. A legacy export excludes
-# the channel catalog; measured exports run about 10 to 13 bytes per YAML node, so
-# 128 MiB stays above BACKUP_MAX_NODES and the node ceiling binds first.
-_LEGACY_YAML_MAX_UPLOAD_BYTES = 128 * 1024 * 1024
-_LEGACY_YAML_READ_CHUNK_BYTES = 1024 * 1024
 _LEGACY_COMPRESSIBLE_MEMBER_PREFIXES = ("m3u_uploads/",)
 _LEGACY_MAX_ENTRY_RATIO = 1000
+
+# Upload cap for the legacy YAML /validate and /restore-yaml routes, applied in
+# chunks as ECM reads the upload. Measured exports run about 10 to 13 bytes per
+# YAML node, so 128 MiB stays far above LEGACY_MAX_NODES and the node ceiling
+# binds first.
+_LEGACY_YAML_MAX_UPLOAD_BYTES = 128 * 1024 * 1024
+_LEGACY_YAML_READ_CHUNK_BYTES = 1024 * 1024
 
 # Headroom multiplier for the pre-build free-disk check. The redacted source
 # (logos + journal.db) is read once into a compressed ZIP; we conservatively
@@ -1967,17 +1968,21 @@ class BackupNotRestorableError(Exception):
         )
 
 
-def _verify_restorable_export(text: str, subject: str, category: Optional[str] = None) -> None:
-    """Refuse YAML that restore would refuse, before it is written anywhere.
+def _verify_restorable_export(
+    obj, subject: str, category: Optional[str] = None, *, max_nodes: Optional[int] = None
+) -> None:
+    """Refuse an export restore would refuse, before it is dumped or written.
 
-    Applies the restore side's exact structure budgets to the bytes about to be
-    stored, without constructing them a second time.
+    Walks the object about to be passed to ``yaml.dump`` with the restore
+    side's exact structure budgets (``measure_object``, whose count equals what
+    restore composes from the dump). ``max_nodes`` defaults to the legacy
+    export ceiling; DBAS categories pass ``BACKUP_MAX_NODES``.
 
     Raises:
-        BackupNotRestorableError: The text exceeds a backup structure budget.
+        BackupNotRestorableError: The export exceeds a structure budget.
     """
     try:
-        measure_bounded(text, max_nodes=BACKUP_MAX_NODES)
+        measure_object(obj, max_nodes=LEGACY_MAX_NODES if max_nodes is None else max_nodes)
     except YamlSafetyError as exc:
         logger.error("[BACKUP] %s is not restorable: %s", subject, exc)
         raise BackupNotRestorableError(subject, exc, category) from exc
@@ -2076,8 +2081,19 @@ async def _gather_redacted_categories(
             verify_restorable=False,
         )
         subject = "Backup category '%s'" % key
+        # ECM's own output, parsed only to redact it. The credential path dumps
+        # producer objects unredacted, so a stream shared by many channels is
+        # aliased here; redaction then copies every container, and the final
+        # bytes carry no aliases. With the alias budget raised to the node
+        # ceiling, refusing this parse implies the expanded, alias-free final
+        # document is over the ceiling too, so no backup is refused for aliases
+        # its written bytes lack.
         try:
-            parsed = safe_load_bounded(yaml_text, max_nodes=BACKUP_MAX_NODES)
+            parsed = safe_load_bounded(
+                yaml_text,
+                max_nodes=BACKUP_MAX_NODES,
+                alias_expansion_budget=BACKUP_MAX_NODES,
+            )
         except YamlSafetyError as exc:
             logger.error("[BACKUP] %s is not restorable: %s", subject, exc)
             raise BackupNotRestorableError(subject, exc, key) from exc
@@ -2108,11 +2124,10 @@ async def _gather_redacted_categories(
                 degraded.append(key)
             if key == "channels":
                 unresolved_epg_links = _count_unresolved_epg_links(section_value)
-        category_text = yaml.dump(
+        _verify_restorable_export(redacted, subject, key, max_nodes=BACKUP_MAX_NODES)
+        out["%s.yaml" % key] = yaml.dump(
             redacted, default_flow_style=False, sort_keys=False, allow_unicode=True
         )
-        _verify_restorable_export(category_text, subject, key)
-        out["%s.yaml" % key] = category_text
     return out, sorted(degraded), unresolved_epg_links
 
 
@@ -6036,10 +6051,9 @@ async def build_yaml_export(
             export_data, exempt_identity_keys=exempt_identity_keys
         )
 
-    text = yaml.dump(export_data, default_flow_style=False, sort_keys=False, allow_unicode=True)
     if verify_restorable:
-        _verify_restorable_export(text, "YAML export")
-    return text
+        _verify_restorable_export(export_data, "YAML export")
+    return yaml.dump(export_data, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
 @router.get("/export-sections")
@@ -6210,7 +6224,7 @@ RESTORABLE_SECTIONS = {
 def _parse_yaml_export(content: bytes) -> dict:
     """Parse and validate a YAML export file. Raises HTTPException on failure."""
     try:
-        data = safe_load_bounded(content, max_nodes=BACKUP_MAX_NODES)
+        data = safe_load_bounded(content, max_nodes=LEGACY_MAX_NODES)
     except YamlSafetyError as e:
         logger.warning("[BACKUP] YAML export refused: %s", e)
         raise HTTPException(status_code=400, detail=limit_message("YAML export", "backup", e))
@@ -6228,14 +6242,12 @@ def _parse_yaml_export(content: bytes) -> dict:
 
 async def _read_legacy_yaml_upload(file: UploadFile) -> bytes:
     """Read a legacy YAML upload in chunks, refusing with 413 past the cap."""
-    chunks = []
-    total = 0
+    content = bytearray()
     while True:
         chunk = await file.read(_LEGACY_YAML_READ_CHUNK_BYTES)
         if not chunk:
-            return b"".join(chunks)
-        total += len(chunk)
-        if total > _LEGACY_YAML_MAX_UPLOAD_BYTES:
+            return bytes(content)
+        if len(content) + len(chunk) > _LEGACY_YAML_MAX_UPLOAD_BYTES:
             logger.warning(
                 "[BACKUP] YAML upload refused: more than %d bytes",
                 _LEGACY_YAML_MAX_UPLOAD_BYTES,
@@ -6245,7 +6257,7 @@ async def _read_legacy_yaml_upload(file: UploadFile) -> bytes:
                 detail="YAML export exceeds the backup size limit (more than %d MiB)"
                 % (_LEGACY_YAML_MAX_UPLOAD_BYTES // (1024 * 1024)),
             )
-        chunks.append(chunk)
+        content += chunk
 
 
 def _count_section_items(data: dict, section_key: str) -> int:

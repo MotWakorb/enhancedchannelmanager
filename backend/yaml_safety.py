@@ -22,6 +22,12 @@ MAX_DEPTH = 64
 # 100k to 240k channels per category document.
 BACKUP_MAX_NODES = 10_000_000
 
+# Legacy YAML exports carry ECM configuration and Dispatcharr accounts, groups
+# and profiles, but never the channel catalog or logos. A real instance's
+# largest legacy-side structures measured tens of thousands of nodes, so this
+# leaves more than an order of magnitude of headroom.
+LEGACY_MAX_NODES = 2_000_000
+
 # Hand-maintained configuration (tags, normalization, dummy EPG, channel rules).
 # Real exports are a few hundred nodes; this matches the rule editor's scale.
 IMPORT_MAX_NODES = 100_000
@@ -143,13 +149,15 @@ class BoundedSafeLoader(yaml.SafeLoader):
         return super().construct_document(node)
 
 
-def safe_load_bounded(stream, *, max_nodes):
+def safe_load_bounded(stream, *, max_nodes, alias_expansion_budget=None):
     """Load one safe YAML document within the structure budgets.
 
     Args:
         stream: YAML text or bytes.
         max_nodes: The composed-node ceiling for this caller, normally
-            ``IMPORT_MAX_NODES`` or ``BACKUP_MAX_NODES``.
+            ``IMPORT_MAX_NODES``, ``LEGACY_MAX_NODES`` or ``BACKUP_MAX_NODES``.
+        alias_expansion_budget: Override for the shared alias budget. Only for
+            text ECM generated itself in-process; external input never sets it.
 
     Returns:
         The constructed document.
@@ -160,6 +168,8 @@ def safe_load_bounded(stream, *, max_nodes):
     """
     loader = BoundedSafeLoader(stream)
     loader.max_nodes = max_nodes
+    if alias_expansion_budget is not None:
+        loader.alias_expansion_budget = alias_expansion_budget
     try:
         return loader.get_single_data()
     except ValueError as exc:
@@ -209,3 +219,84 @@ def limit_message(subject, scope, exc):
         A message that never calls well-formed YAML invalid.
     """
     return "%s exceeds the %s size limit (%s)" % (subject, scope, exc.describe())
+
+
+def _dumped_as_alias(obj):
+    """Whether ``yaml.dump`` would emit a repeat of ``obj`` as an alias.
+
+    Mirrors ``SafeRepresenter.ignore_aliases``: ``None``, the empty tuple,
+    ``str``, ``bytes``, ``bool``, ``int`` and ``float`` are always written in
+    full; every other object repeated by identity becomes an anchor and aliases.
+    """
+    if obj is None or (isinstance(obj, tuple) and obj == ()):
+        return False
+    return not isinstance(obj, (str, bytes, bool, int, float))
+
+
+def measure_object(obj, *, max_nodes):
+    """Apply ``measure_bounded``'s refusals to an object before it is dumped.
+
+    Walks the object ``yaml.dump`` is about to serialize and counts exactly the
+    nodes restore will compose from the result: one per mapping, sequence and
+    scalar (mapping keys included), and one per alias for a container repeated
+    by identity. Expanded weight and depth are computed the same way as
+    :meth:`BoundedSafeLoader.check_graph`. Much cheaper than dumping and
+    composing, and equivalence with ``measure_bounded`` is pinned by tests.
+
+    Args:
+        obj: The Python object about to be passed to ``yaml.dump``.
+        max_nodes: The composed-node ceiling the eventual reader applies.
+
+    Returns:
+        The number of nodes restore will compose.
+
+    Raises:
+        YamlSafetyError: The dumped document would exceed a structure budget.
+    """
+    memo = {}
+    active = set()
+    composed = 0
+
+    def children(current):
+        if isinstance(current, dict):
+            for key, value in current.items():
+                yield key
+                yield value
+        elif isinstance(current, (set, frozenset)):
+            for item in current:
+                yield item
+                yield None
+        elif isinstance(current, (list, tuple)):
+            yield from current
+
+    def walk(current, depth):
+        nonlocal composed
+        composed += 1
+        if depth > MAX_DEPTH:
+            raise YamlSafetyError("depth", MAX_DEPTH)
+        if composed > max_nodes:
+            raise YamlSafetyError("nodes", max_nodes)
+        aliasable = _dumped_as_alias(current)
+        identity = id(current)
+        if aliasable:
+            if identity in active:
+                raise YamlSafetyError("recursive")
+            if identity in memo:
+                return memo[identity]
+            active.add(identity)
+        height, weight = 1, 1
+        for child in children(current):
+            child_height, child_weight = walk(child, depth + 1)
+            height = max(height, child_height + 1)
+            weight += child_weight
+        if aliasable:
+            active.remove(identity)
+            memo[identity] = height, weight
+        return height, weight
+
+    height, weight = walk(obj, 1)
+    if height > MAX_DEPTH:
+        raise YamlSafetyError("depth", MAX_DEPTH)
+    if weight > composed + ALIAS_EXPANSION_BUDGET:
+        raise YamlSafetyError("aliases", ALIAS_EXPANSION_BUDGET)
+    return composed

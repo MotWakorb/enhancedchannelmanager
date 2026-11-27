@@ -143,7 +143,7 @@ async def test_rule_import_scalar_document_is_a_clean_400(async_client, document
 @pytest.mark.asyncio
 async def test_validate_node_ceiling_refused(async_client):
     content = legacy_export(payload=list(range(60)))
-    with patch("routers.backup.BACKUP_MAX_NODES", 50):
+    with patch("routers.backup.LEGACY_MAX_NODES", 50):
         response = await async_client.post(
             "/api/backup/validate",
             files={"file": ("export.yaml", content, "text/yaml")},
@@ -158,7 +158,7 @@ async def test_validate_node_ceiling_refused(async_client):
 @pytest.mark.asyncio
 async def test_validate_under_node_ceiling_accepted(async_client):
     content = legacy_export(payload=list(range(30)))
-    with patch("routers.backup.BACKUP_MAX_NODES", 50):
+    with patch("routers.backup.LEGACY_MAX_NODES", 50):
         response = await async_client.post(
             "/api/backup/validate",
             files={"file": ("export.yaml", content, "text/yaml")},
@@ -213,7 +213,7 @@ async def test_legacy_upload_at_byte_cap_is_accepted(async_client):
 async def test_restore_yaml_node_refusal_restores_nothing(async_client):
     content = legacy_export(payload=list(range(60)))
     with (
-        patch("routers.backup.BACKUP_MAX_NODES", 50),
+        patch("routers.backup.LEGACY_MAX_NODES", 50),
         patch("routers.backup._restore_section") as restore,
     ):
         response = await async_client.post(
@@ -326,25 +326,31 @@ async def test_bundle_rules_node_ceiling_is_import_limit(async_client):
 
 
 def test_legacy_export_preflight_refuses_what_restore_would_refuse():
-    from routers.backup import BackupNotRestorableError, _verify_restorable_export
+    from fastapi import HTTPException
 
-    text = yaml.safe_dump(
-        {"ecm_export": {"version": "x"}, "database": {"tag_groups": list(range(80))}}
+    from routers.backup import (
+        BackupNotRestorableError,
+        _parse_yaml_export,
+        _verify_restorable_export,
     )
-    with (
-        patch("routers.backup.BACKUP_MAX_NODES", 50),
-        pytest.raises(BackupNotRestorableError) as error,
-    ):
-        _verify_restorable_export(text, "YAML export")
+
+    export = {"ecm_export": {"version": "x"}, "database": {"tag_groups": list(range(80))}}
+    dumped = yaml.dump(export, default_flow_style=False, sort_keys=False).encode()
+    with patch("routers.backup.LEGACY_MAX_NODES", 50):
+        with pytest.raises(BackupNotRestorableError) as error:
+            _verify_restorable_export(export, "YAML export")
+        with pytest.raises(HTTPException):
+            _parse_yaml_export(dumped)
     assert "YAML export exceeds the backup size limit" in str(error.value)
-    with patch("routers.backup.BACKUP_MAX_NODES", 500):
-        _verify_restorable_export(text, "YAML export")
+    with patch("routers.backup.LEGACY_MAX_NODES", 500):
+        _verify_restorable_export(export, "YAML export")
+        assert _parse_yaml_export(dumped) == export
 
 
 @pytest.mark.asyncio
 async def test_export_route_refuses_unrestorable_export(async_client):
     with (
-        patch("routers.backup.BACKUP_MAX_NODES", 50),
+        patch("routers.backup.LEGACY_MAX_NODES", 50),
         patch("routers.backup._gather_db_tables", return_value={"tag_groups": list(range(80))}),
         patch("routers.backup._gather_dispatcharr_sections", return_value={}),
     ):
@@ -356,7 +362,7 @@ async def test_export_route_refuses_unrestorable_export(async_client):
 @pytest.mark.asyncio
 async def test_export_route_under_ceiling_still_exports(async_client):
     with (
-        patch("routers.backup.BACKUP_MAX_NODES", 500),
+        patch("routers.backup.LEGACY_MAX_NODES", 500),
         patch("routers.backup._gather_db_tables", return_value={"tag_groups": list(range(80))}),
         patch("routers.backup._gather_dispatcharr_sections", return_value={}),
     ):
@@ -372,7 +378,7 @@ async def test_scheduled_yaml_backup_never_writes_an_unrestorable_export(tmp_pat
     task.sections = ["tag_groups"]
     with (
         patch("tasks.yaml_backup.BACKUPS_DIR", tmp_path),
-        patch("routers.backup.BACKUP_MAX_NODES", 50),
+        patch("routers.backup.LEGACY_MAX_NODES", 50),
         patch("routers.backup._gather_db_tables", return_value={"tag_groups": list(range(80))}),
         patch("routers.backup._gather_dispatcharr_sections", return_value={}),
     ):
@@ -428,3 +434,61 @@ async def test_import_scalar_section_is_a_clean_400(
     assert response.status_code == 400
     assert key in response.json()["detail"]
     session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_legacy_ceiling_is_separate_from_the_dbas_ceiling(async_client):
+    content = legacy_export(payload=list(range(60)))
+    with (
+        patch("routers.backup.BACKUP_MAX_NODES", 50),
+        patch("routers.backup.LEGACY_MAX_NODES", 500),
+    ):
+        response = await async_client.post(
+            "/api/backup/validate",
+            files={"file": ("export.yaml", content, "text/yaml")},
+        )
+    assert response.status_code == 200
+
+
+def test_legacy_export_preflight_walks_the_object_not_the_bytes():
+    from routers import backup
+
+    with (
+        patch("yaml_safety.BoundedSafeLoader.compose_node") as compose,
+        patch("routers.backup.LEGACY_MAX_NODES", 500),
+    ):
+        backup._verify_restorable_export({"a": list(range(10))}, "YAML export")
+    compose.assert_not_called()
+
+
+# --- list items must be mappings ----------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,module,document,key",
+    [
+        ("/api/tags/import", "tags", "tags: {groups: [42]}", "groups"),
+        ("/api/tags/import", "tags", "tags: {groups: [{name: a}, text]}", "groups"),
+        ("/api/normalization/import", "normalization", "normalization_rules: {groups: [42]}", "groups"),
+        ("/api/normalization/import", "normalization", "normalization_rules: {groups: [[1]]}", "groups"),
+        ("/api/dummy-epg/profiles/import/yaml", "dummy_epg", "profiles: [42]", "profiles"),
+        ("/api/dummy-epg/profiles/import/yaml", "dummy_epg", "[text]", "profiles"),
+        ("/api/auto-creation/import/yaml", "channel_pipeline", "rules: [42]", "rules"),
+        ("/api/auto-creation/import/yaml", "channel_pipeline", "rules: 42", "rules"),
+        ("/api/auto-creation/import/yaml", "channel_pipeline", "[text]", "rules"),
+    ],
+)
+async def test_import_list_items_must_be_mappings(async_client, path, module, document, key):
+    with (
+        patch(f"routers.{module}.get_session") as session,
+        patch(f"routers.{module}.get_client") if module in ("dummy_epg", "channel_pipeline") else patch(f"routers.{module}.logger") as client,
+    ):
+        response = await async_client.post(
+            path, json={"yaml_content": document, "overwrite": False}
+        )
+    assert response.status_code == 400
+    assert key in response.json()["detail"]
+    session.assert_not_called()
+    if module in ("dummy_epg", "channel_pipeline"):
+        client.assert_not_called()

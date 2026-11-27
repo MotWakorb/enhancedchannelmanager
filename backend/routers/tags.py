@@ -469,8 +469,10 @@ async def import_tags(request: ImportTagsRequest):
     tags_data = data["tags"]
     if not isinstance(tags_data, dict) or "groups" not in tags_data:
         raise HTTPException(status_code=400, detail="Missing 'groups' key in tags")
-    if not isinstance(tags_data["groups"], list):
-        raise HTTPException(status_code=400, detail="'groups' in tags must be a list")
+    if not isinstance(tags_data["groups"], list) or not all(
+        isinstance(group, dict) for group in tags_data["groups"]
+    ):
+        raise HTTPException(status_code=400, detail="'groups' in tags must be a list of mappings")
 
     try:
         from models import TagGroup, Tag

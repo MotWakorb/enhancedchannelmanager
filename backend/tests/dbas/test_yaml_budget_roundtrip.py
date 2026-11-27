@@ -249,3 +249,54 @@ async def test_refused_restore_fails_before_destination_or_orchestrator(
     get_client.assert_not_called()
     dry_run.assert_not_awaited()
     apply.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_credential_backup_not_refused_for_aliases_its_final_bytes_lack(tmp_path):
+    # The credential path dumps the producer's objects unredacted, so a stream
+    # shared by many channels is emitted once and aliased. Redaction copies
+    # every container, so the bytes ECM writes carry no aliases at all.
+    import yaml_safety
+
+    journal = tmp_path / "journal.db"
+    _seed_journal_db(journal)
+    (tmp_path / "settings.json").write_text("{}")
+    client = _client(0)
+    shared = [1_000_000]
+    client.get_channels = AsyncMock(
+        return_value={
+            "count": 300,
+            "next": None,
+            "results": [dict(_channel(i), streams=shared) for i in range(300)],
+        }
+    )
+    client.get_streams = AsyncMock(
+        return_value={"count": 1, "next": None, "results": [_stream(1_000_000)]}
+    )
+    session = MagicMock()
+    session.query.return_value.all.return_value = []
+    session.query.return_value.filter_by.return_value.all.return_value = []
+    session.query.return_value.filter_by.return_value.order_by.return_value.all.return_value = []
+    session.query.return_value.filter.return_value.order_by.return_value.all.return_value = []
+    settings = MagicMock()
+    settings.model_dump.return_value = {"url": "http://x", "username": "a"}
+    with (
+        patch.object(backup_mod, "CONFIG_DIR", tmp_path),
+        patch.object(backup_mod, "CONFIG_FILE", tmp_path / "settings.json"),
+        patch.object(backup_mod, "JOURNAL_DB_FILE", journal),
+        patch.object(backup_mod, "get_engine", return_value=_mock_engine()),
+        patch.object(backup_mod, "get_settings", return_value=settings),
+        patch.object(backup_mod, "get_session", return_value=session),
+        patch.object(backup_mod, "get_client", return_value=client),
+        # 300 aliases of a 7-node stream amplify by about 1,800 nodes.
+        patch.object(yaml_safety, "ALIAS_EXPANSION_BUDGET", 100),
+        patch.object(yaml_safety.BoundedSafeLoader, "alias_expansion_budget", 100),
+    ):
+        categories, _degraded, _unresolved = await backup_mod._gather_redacted_categories(
+            include_credentials=True
+        )
+
+    text = categories["channels.yaml"]
+    assert "&" not in text and "*id" not in text
+    data = yaml.safe_load(text)
+    assert len(data["dispatcharr"]["channels"]) == 300
