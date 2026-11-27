@@ -5,6 +5,7 @@
 # coverage on a selected subset misleading. A subset is NOT the gate.
 # Excluded: tests/e2e needs a live container on localhost:6100;
 # tests/performance belongs to perf-benchmarks. See docs/testing.md.
+# --subset refuses empty, whole-tree and tests/e2e selections before pytest.
 set -euo pipefail
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"

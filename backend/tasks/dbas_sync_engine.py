@@ -155,7 +155,7 @@ from dbas.restore_orchestrator import (
     run_restore,
 )
 from dbas.importers import logos as logos_mod
-from dbas.importers.channels import import_channels
+from dbas.importers.channels import CHANNEL_PREVIEW_ATTACHMENT_CAVEAT, import_channels
 from dbas.importers.logos import import_logos
 from dbas.importers.m3u_accounts import import_m3u_accounts
 from credential_sentinel import credential_is_present, strip_redaction_sentinels
@@ -2392,6 +2392,37 @@ def _journal_sync_run(
         logger.warning("[SYNC] Failed to journal sync run: %s", exc)
 
 
+SYNC_STREAM_PREVIEW_CAVEAT = (
+    "Streams are not previewed: the apply matches each source stream against "
+    "the sync target's own streams. A stream with no match is created on the "
+    "sync target as a placeholder."
+)
+SYNC_CHANNEL_PREVIEW_CAVEAT = (
+    "Existing channels' stream lists are not compared in a preview, so a "
+    "channel shown as identical may still have its streams rewritten on the "
+    "sync target when the sync is applied."
+)
+
+
+def _describe_preview_caveats_for_sync(report: RestoreReport) -> None:
+    """Replace the shared channels importer's restore wording on a sync preview.
+
+    The importer explains its STREAM and CHANNEL preview limits in terms of a
+    backup being restored. A sync preview has no backup, so its operator
+    summary states the same limits in terms of the sync target.
+    """
+    if not report.is_dry_run:
+        return
+    for category in report.categories:
+        if category.entity_type == EntityType.STREAM and category.predicted is False:
+            category.caveat = SYNC_STREAM_PREVIEW_CAVEAT
+        elif (
+            category.entity_type == EntityType.CHANNEL
+            and category.caveat == CHANNEL_PREVIEW_ATTACHMENT_CAVEAT
+        ):
+            category.caveat = SYNC_CHANNEL_PREVIEW_CAVEAT
+
+
 async def run_sync(
     sync_target,
     *,
@@ -2568,6 +2599,7 @@ async def run_sync(
 
     # --- 4b. Surface each deduped-out duplicate name as a per-item CONFLICT. ---
     _apply_name_conflict_details(result, excluded_name_conflicts)
+    _describe_preview_caveats_for_sync(result)
 
     # --- 4c. A read that failed AFTER the gate still means the report describes
     # a destination it did not fully read (…-jqfxm). The importer that hit it

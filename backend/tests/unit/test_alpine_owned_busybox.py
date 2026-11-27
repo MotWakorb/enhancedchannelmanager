@@ -114,21 +114,21 @@ def test_same_version_label_never_hides_signed_control_or_installed_payload_drif
     elif mutation == "origin":
         text = text.replace("o:busybox", "o:other", 1)
     elif mutation == "size":
-        line = next(l for l in text.splitlines() if l.startswith("S:"))
+        line = next(entry for entry in text.splitlines() if entry.startswith("S:"))
         text = text.replace(line, "S:1", 1)
     elif mutation == "license":
         text = text.replace("L:GPL-2.0-only", "L:MIT", 1)
     elif mutation in {"control-checksum", "file-checksum"}:
         prefix = "C:" if mutation == "control-checksum" else "Z:"
-        line = next(l for l in text.splitlines() if l.startswith(prefix))
+        line = next(entry for entry in text.splitlines() if entry.startswith(prefix))
         text = text.replace(line, prefix + "Q1AAAAAAAAAAAAAAAAAAAAAAAAAAA=", 1)
     elif mutation == "missing-path":
-        line = next(l for l in text.splitlines() if l.startswith("R:"))
+        line = next(entry for entry in text.splitlines() if entry.startswith("R:"))
         text = text.replace(line, line.replace("R:", "R:renamed-"), 1)
     elif mutation == "extra-path":
         text += "\nR:unattributed\nZ:Q1AAAAAAAAAAAAAAAAAAAAAAAAAAA="
     elif mutation == "mode":
-        line = next(l for l in text.splitlines() if l.startswith("a:"))
+        line = next(entry for entry in text.splitlines() if entry.startswith("a:"))
         text = text.replace(line, "a:0:0:700", 1)
     else:
         text = text.replace("o:busybox\n", "o:busybox\nf:S\n", 1)

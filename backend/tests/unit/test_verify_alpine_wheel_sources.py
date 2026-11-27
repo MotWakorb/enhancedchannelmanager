@@ -49,16 +49,25 @@ def test_recorded_native_maps_join_all9_gnu_copies_to6_objects_and2_source_famil
     assert len(inventory["distributions"]) == 74
 
 
-@pytest.mark.parametrize("mutation", ["changed-dns-hash", "native-dns", "not-pure", "unreviewed-pure-wheel"])
-def test_pure_dns_security_overlay_cannot_rebind_other_or_native_artifacts(consumer, maps, mutation):
+@pytest.mark.parametrize("package", ["dnspython", "mako"])
+@pytest.mark.parametrize(
+    "mutation",
+    ["changed-hash", "native", "not-pure", "changed-version", "replaced-selection", "unreviewed-pure-wheel"],
+)
+def test_pure_security_overlay_cannot_rebind_other_or_native_artifacts(consumer, maps, package, mutation):
     arch, inventory, manifest = maps
-    dns = next(row for row in inventory["distributions"] if row["name"] == "dnspython")
-    if mutation == "changed-dns-hash":
-        dns["sha256"] = "0" * 64
-    elif mutation == "native-dns":
-        dns["native_files"] = [{"path": "dns/hidden.so", "sha256": "0" * 64}]
+    updated = next(row for row in inventory["distributions"] if row["name"] == package)
+    if mutation == "changed-hash":
+        updated["sha256"] = "0" * 64
+    elif mutation == "native":
+        updated["native_files"] = [{"path": package + "/hidden.so", "sha256": "0" * 64}]
     elif mutation == "not-pure":
-        dns["purelib"] = False
+        updated["purelib"] = False
+    elif mutation == "changed-version":
+        updated["version"] = "0"
+    elif mutation == "replaced-selection":
+        replaced = consumer.PURE_SECURITY_UPDATES[updated["filename"]][3]
+        manifest["wheel_selection"][replaced] = "0" * 64
     else:
         other = next(row for row in inventory["distributions"] if row["name"] == "email-validator")
         other["sha256"] = "0" * 64

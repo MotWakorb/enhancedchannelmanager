@@ -131,7 +131,7 @@ Every exclusion is named. A bare "2 deselected" is an unreadable signal.
 
 | Excluded | How | Why |
 | --- | --- | --- |
-| `tests/e2e/` (10 files) | `--ignore` | Hits a live ECM container on `localhost:6100`. Without one it self-skips; with one it exercises whatever that container happens to be running — a result that depends on unrelated local state cannot gate a PR. E2E as a CI gate is deferred to bead `enhancedchannelmanager-2lw25`. |
+| `tests/e2e/` (10 files) | `--ignore` | Hits a live ECM container on `localhost:6100` and **mutates it**. `backend/pytest.ini` ignores it too, and without `ECM_E2E_LIVE=1` its conftest keeps it from being collected; see [The live backend e2e suite](#the-live-backend-e2e-suite). Even opted in, its result depends on whatever that container happens to be running, so it cannot gate a PR. E2E as a CI gate is deferred to bead `enhancedchannelmanager-2lw25`. |
 | `tests/performance/` (2 files) | `--ignore` | Seeds a 250k-row fixture; runs in the dedicated `perf-benchmarks` workflow (`bd-skqln.10`). |
 | `test_find_candidate_under_5ms_per_call_for_500_candidates` | `-m "not slow"` | Wall-clock microbenchmark with a 5 ms soft cap. Host contention on a runner false-fails it, and the latency figure is informational, not a gate. Still runs under an explicit `-m slow`. |
 | `test_migration_up_down_against_5m_rows` | `-m "not slow"` | Times an Alembic up/down against ~5M `session_telemetry` rows. Local pre-merge only (`bd-skqln.2`); also guarded by `ECM_RUN_VOLUME_TESTS`, so it self-skips even when selected. |
@@ -204,7 +204,35 @@ execution. Windows requires a working project interpreter and installed pins too
 scripts/backend-gate.sh --subset tests/unit/test_foo.py -k some_case
 ```
 
-`--subset` adds `--no-cov` and prints a banner. **A `--subset` run is not the gate** and must never be reported as one.
+`--subset` adds `--no-cov` and `--ignore=tests/e2e`, and prints a banner. **A `--subset` run is not the gate** and must never be reported as one.
+
+`--subset` checks its arguments before pytest starts, and refuses (exit 2, no pytest run) when a selection could reach the live e2e suite or the whole tree:
+
+- an empty or blank argument (`""`): pytest reads it as its working directory, the whole backend tree;
+- `.`, `tests`, `backend` or any other directory that contains `tests/e2e`: that is the whole tree, not a subset;
+- any path at or under `tests/e2e`, with or without a `::` node id: `--ignore` does not apply to paths named on the command line;
+- no argument that is an existing file or directory (for example only `-k foo`): pytest would fall back to `testpaths`, the whole tree. The check counts any existing path, an option value included, so it proves that something was named, not that only tests were;
+- `@file` argument files and `--pyargs` (either spelling), whose targets the check cannot see;
+- options that change what pytest collects or switch off a guard: `-c`/`--config-file`, `-o`/`--override-ini` for `testpaths` or `addopts`, `--noconftest`, and `-p no:skipping` or `-p no:ecm_e2e_guard`, including glued forms such as `-otestpaths=…` and `-qpno:skipping`;
+- the same cases inside `PYTEST_ADDOPTS`, including a blank word such as `''`.
+
+Every argument that does not start with `-` is checked as a possible path, option values included: write `-k=tests`, not `-k tests`. Directories below `tests/` that do not contain `tests/e2e`, such as `tests/unit`, are allowed: the always-on `--ignore=tests/e2e` keeps everything else out, and they cannot reach the live suite. Custom runs (extra arguments without `--subset`) apply the same refusals, except the whole-tree and no-path ones. The full gate's selection is unchanged.
+
+Those checks read tokens, and pytest decides what to collect only afterwards. A symlink under `tests/unit` that points into `tests/e2e` is found by the directory walk and passes both the checks and `--ignore`. So every pytest run the gate starts (full, `--subset` and custom) also loads `scripts/pytest_plugins/ecm_e2e_guard.py` with `-p ecm_e2e_guard`. The gate tells it, through `ECM_GATE_ALLOW_LIVE_E2E` and `ECM_GATE_E2E_DIR`, whether `--allow-live-e2e` was given. Without the flag, it replaces any directory or module that resolves into `tests/e2e` with an empty collector, so nothing there is imported, and then ends the run with a usage error (exit code 4). That covers symlinks, `..` segments, `testpaths` overrides and alternate config files. Loaded outside the gate, without those variables, the plugin refuses to start.
+
+`--allow-live-e2e` lifts only the `tests/e2e` path refusal and prints a warning; see [The live backend e2e suite](#the-live-backend-e2e-suite).
+
+### The live backend e2e suite
+
+`backend/tests/e2e/` talks to the ECM on `localhost:6100`, which on a developer host is the operator's live instance. It writes: it marks notifications read (irreversibly), clears the cache, and creates, runs and deletes a channel-pipeline rule. Reachability is therefore not consent. Without `ECM_E2E_LIVE=1`, `backend/tests/e2e/conftest.py` sets `collect_ignore_glob = ["*"]`, so pytest imports none of the suite's modules, and it deselects any e2e test file named on the command line. Neither depends on the skipping plugin, so `-p no:skipping` cannot turn them into passes. Its `e2e_client` fixture also fails before any request without the opt-in. The conftest probes the container only after the opt-in, and with it the suite still skips when the container is unreachable. `backend/pytest.ini` puts `--ignore=tests/e2e` in `addopts`, so a bare `pytest` does not walk into the directory either. Before this, the suite ran whenever `/api/health` answered (its old `pytestmark` skip in the conftest never applied, since `pytestmark` in a conftest marks nothing).
+
+Run it only against an instance that may be mutated, and name it explicitly:
+
+```bash
+ECM_E2E_LIVE=1 scripts/backend-gate.sh --subset --allow-live-e2e tests/e2e
+```
+
+Both opt-ins are needed: the runner flag lets the path through, and the environment variable lets the tests run. `--ignore` does not apply to a path named on the command line, so the `addopts` ignore does not block this command. Without `ECM_E2E_LIVE=1`, nothing is collected and the run prints the reason. No CI workflow runs this suite.
 
 ## Backend Test Layers: `integration/` vs `routers/`
 
@@ -641,7 +669,8 @@ scripts/backend-gate.sh
 cd frontend && npm run test:coverage
 ```
 
-For a quick single-file run, use `scripts/backend-gate.sh --subset <path>`; it
+For a quick single-file run, use `scripts/backend-gate.sh --subset <path>`, naming
+explicit files (it refuses empty, whole-tree and `tests/e2e` selections). It
 adds `--no-cov`, without which the run fails on whole-tree coverage no matter
 how the selected tests do. See [The subset-run coverage trap](#the-subset-run-coverage-trap).
 

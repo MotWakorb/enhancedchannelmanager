@@ -1625,7 +1625,13 @@ manual single-rule run (`POST /api/channel-pipeline/rules/{id}/run`,
 `triggered_by="api"`) completes with the `event_sync:` summary line in the
 execution log → journal provenance is queryable by category + batch_id.
 The test picks a master group with **zero channels**, so the execute-mode
-run is attach-nothing **by construction** and safe against live data.
+run is attach-nothing **by construction**. It still creates and deletes a
+rule and leaves execution and journal rows, so the e2e suite skips unless
+`ECM_E2E_LIVE=1` is set. Run it only against an instance that may change:
+
+```bash
+ECM_E2E_LIVE=1 scripts/backend-gate.sh --subset --allow-live-e2e tests/e2e/test_event_sync.py
+```
 
 What it cannot cover live: the actual multi-provider attachment. The dev
 instance has no event group with `auto_channel_sync` ON, and ECM never

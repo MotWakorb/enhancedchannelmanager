@@ -1081,7 +1081,8 @@ async def test_sync_fuzzy_opt_in_attaches_low_confidence(tmp_path):
             target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
         )
 
-    assert report.category(EntityType.STREAM).updated == 1
+    assert report.category(EntityType.STREAM).updated == 0
+    assert report.category(EntityType.STREAM).skipped == 1
     assert any("low-confidence stream match (fuzzy)" in n for n in report.notes)
 
 

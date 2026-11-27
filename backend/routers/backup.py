@@ -114,7 +114,7 @@ def _resolve_backup_normalization_group_ids(item: dict, session) -> str | None:
     if item.get("normalize_names"):
         from models import NormalizationRuleGroup
         groups = session.query(NormalizationRuleGroup.id).filter(
-            NormalizationRuleGroup.enabled == True
+            NormalizationRuleGroup.enabled == True  # noqa: E712 - SQL equality expression, not a Python truth test
         ).order_by(NormalizationRuleGroup.priority).all()
         return json.dumps([g.id for g in groups]) if groups else None
     return None
@@ -143,7 +143,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.2-0093"
+APP_VERSION = "0.18.2-0097"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
