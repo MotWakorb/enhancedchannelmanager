@@ -428,14 +428,22 @@ def test_scoped_npm_purl_is_canonical(sbom, generated):
 
 def test_oci_purls_are_canonical_and_use_only_supported_qualifiers(sbom, generated):
     expected = {
-        f"pkg:oci/node@sha256:{NODE_DIGEST}"
-        "?repository_url=docker.io%2Flibrary%2Fnode&tag=20-alpine",
-        f"pkg:oci/python@sha256:{PYTHON_DIGEST}"
-        "?repository_url=docker.io%2Flibrary%2Fpython&tag=3.12-slim",
-        f"pkg:oci/uv@sha256:{UV_DIGEST}"
-        "?repository_url=ghcr.io%2Fastral-sh%2Fuv&tag=latest",
-        f"pkg:oci/python@sha256:{ALPINE_DIGEST}"
-        "?repository_url=docker.io%2Flibrary%2Fpython&tag=3.12-alpine",
+        (
+            f"pkg:oci/node@sha256:{NODE_DIGEST}"
+            "?repository_url=docker.io%2Flibrary%2Fnode&tag=20-alpine"
+        ),
+        (
+            f"pkg:oci/python@sha256:{PYTHON_DIGEST}"
+            "?repository_url=docker.io%2Flibrary%2Fpython&tag=3.12-slim"
+        ),
+        (
+            f"pkg:oci/uv@sha256:{UV_DIGEST}"
+            "?repository_url=ghcr.io%2Fastral-sh%2Fuv&tag=latest"
+        ),
+        (
+            f"pkg:oci/python@sha256:{ALPINE_DIGEST}"
+            "?repository_url=docker.io%2Flibrary%2Fpython&tag=3.12-alpine"
+        ),
     }
     actual = set()
     for name in ("ecm.spdx.json", "mcp.spdx.json"):
@@ -1124,13 +1132,19 @@ def test_pinned_images_and_stage_aliases_work_for_every_buildkit_instruction_whi
     images = sbom.parse_dockerfile_images(
         line_ending.join(
             [
-                f"FROM{instruction_whitespace}node:20-alpine@sha256:{NODE_DIGEST}"
-                f"{instruction_whitespace}AS{instruction_whitespace}build",
-                f"COPY{instruction_whitespace}--from=busybox:1.36@sha256:{UV_DIGEST}"
-                f"{instruction_whitespace}/bin/x{instruction_whitespace}/bin/x",
+                (
+                    f"FROM{instruction_whitespace}node:20-alpine@sha256:{NODE_DIGEST}"
+                    f"{instruction_whitespace}AS{instruction_whitespace}build"
+                ),
+                (
+                    f"COPY{instruction_whitespace}--from=busybox:1.36@sha256:{UV_DIGEST}"
+                    f"{instruction_whitespace}/bin/x{instruction_whitespace}/bin/x"
+                ),
                 f"FROM{instruction_whitespace}build",
-                f"COPY{instruction_whitespace}--from=build"
-                f"{instruction_whitespace}/app{instruction_whitespace}/app",
+                (
+                    f"COPY{instruction_whitespace}--from=build"
+                    f"{instruction_whitespace}/app{instruction_whitespace}/app"
+                ),
                 "",
             ]
         ),

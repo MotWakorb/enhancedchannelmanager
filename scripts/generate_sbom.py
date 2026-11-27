@@ -74,7 +74,7 @@ import json
 import re
 import ssl
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -263,9 +263,11 @@ COVERAGE_INCLUDES = (
     "Base and build images referenced by digest in the Dockerfile",
 )
 COVERAGE_EXCLUDES = (
-    "Operating-system packages inside the base images (apt/apk); the Dockerfiles "
-    "also run `apt-get upgrade` / `apk upgrade` at build time, so the installed "
-    "OS package set is not derivable from the source tree at all",
+    (
+        "Operating-system packages inside the base images (apt/apk); the Dockerfiles "
+        "also run `apt-get upgrade` / `apk upgrade` at build time, so the installed "
+        "OS package set is not derivable from the source tree at all"
+    ),
     "Transitive native libraries vendored inside Python wheels",
     "Published subject image digest: no release image exists when this document is cut",
 )
@@ -889,7 +891,7 @@ def validate_resdet_docker_contract(document: Any, dockerfile: str, source: str)
                 raise SbomError(f"{source} final resdet artifacts may not be replaced after copy")
     for index, (kind, args, _line) in enumerate(final_instructions):
         if index < artifact_indexes[0] and kind == "COPY" and (
-            args.endswith(" /usr/local/bin/resdet") or args.endswith(" /usr/share/doc/resdet/")
+            args.endswith((" /usr/local/bin/resdet", " /usr/share/doc/resdet/"))
         ):
             raise SbomError(f"{source} final resdet artifacts must have one source")
     build = resdet["build"]
@@ -1713,7 +1715,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"SBOM PASS: {candidate} is internally consistent")
             return 1 if failed else 0
         if args.command == "generate":
-            created = args.created or datetime.now(timezone.utc).strftime(
+            created = args.created or datetime.now(UTC).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"
             )
             for name in generate(root, directory, version, created):
