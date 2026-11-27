@@ -78,6 +78,14 @@ from dbas.restore_contracts import ChannelReattachMode
 from dbas.importers.settings_agents import is_safe_setting_key
 from database import close_db, get_engine, get_session, init_db, JOURNAL_DB_FILE
 from dispatcharr_client import get_client, reset_client
+from yaml_safety import (
+    BACKUP_MAX_NODES,
+    LEGACY_MAX_NODES,
+    YamlSafetyError,
+    limit_message,
+    measure_object,
+    safe_load_bounded,
+)
 from models import (
     ChannelPipelineRule,
     DummyEPGProfile,
@@ -135,7 +143,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.2-0090"
+APP_VERSION = "0.18.2-0091"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -1602,6 +1610,13 @@ _LEGACY_COMPRESSIBLE_MEMBER_NAMES = ("journal.db",)
 _LEGACY_COMPRESSIBLE_MEMBER_PREFIXES = ("m3u_uploads/",)
 _LEGACY_MAX_ENTRY_RATIO = 1000
 
+# Upload cap for the legacy YAML /validate and /restore-yaml routes, applied in
+# chunks as ECM reads the upload. Measured exports run about 10 to 13 bytes per
+# YAML node, so 128 MiB stays far above LEGACY_MAX_NODES and the node ceiling
+# binds first.
+_LEGACY_YAML_MAX_UPLOAD_BYTES = 128 * 1024 * 1024
+_LEGACY_YAML_READ_CHUNK_BYTES = 1024 * 1024
+
 # Headroom multiplier for the pre-build free-disk check. The redacted source
 # (logos + journal.db) is read once into a compressed ZIP; we conservatively
 # require free space >= estimated_source_bytes (the ZIP is typically smaller,
@@ -1843,6 +1858,40 @@ def _count_unresolved_epg_links(channels) -> int:
     )
 
 
+class BackupNotRestorableError(Exception):
+    """ECM produced YAML that its own restore would refuse, so it is not written.
+
+    Attributes:
+        category: The DBAS category name, or ``None`` for a legacy YAML export.
+    """
+
+    def __init__(self, subject: str, exc: YamlSafetyError, category: Optional[str] = None):
+        self.category = category
+        super().__init__(
+            limit_message(subject, "backup", exc) + "; ECM would refuse to restore it"
+        )
+
+
+def _verify_restorable_export(
+    obj, subject: str, category: Optional[str] = None, *, max_nodes: Optional[int] = None
+) -> None:
+    """Refuse an export restore would refuse, before it is dumped or written.
+
+    Walks the object about to be passed to ``yaml.dump`` with the restore
+    side's exact structure budgets (``measure_object``, whose count equals what
+    restore composes from the dump). ``max_nodes`` defaults to the legacy
+    export ceiling; DBAS categories pass ``BACKUP_MAX_NODES``.
+
+    Raises:
+        BackupNotRestorableError: The export exceeds a structure budget.
+    """
+    try:
+        measure_object(obj, max_nodes=LEGACY_MAX_NODES if max_nodes is None else max_nodes)
+    except YamlSafetyError as exc:
+        logger.error("[BACKUP] %s is not restorable: %s", subject, exc)
+        raise BackupNotRestorableError(subject, exc, category) from exc
+
+
 async def _gather_redacted_categories(
     include_credentials: bool = False,
 ) -> tuple[dict[str, str], list[str], int]:
@@ -1933,8 +1982,25 @@ async def _gather_redacted_categories(
             {key},
             include_credentials=include_credentials,
             exempt_identity_keys=exempt,
+            verify_restorable=False,
         )
-        parsed = yaml.safe_load(yaml_text)
+        subject = "Backup category '%s'" % key
+        # ECM's own output, parsed only to redact it. The credential path dumps
+        # producer objects unredacted, so a stream shared by many channels is
+        # aliased here; redaction then copies every container, and the final
+        # bytes carry no aliases. With the alias budget raised to the node
+        # ceiling, refusing this parse implies the expanded, alias-free final
+        # document is over the ceiling too, so no backup is refused for aliases
+        # its written bytes lack.
+        try:
+            parsed = safe_load_bounded(
+                yaml_text,
+                max_nodes=BACKUP_MAX_NODES,
+                alias_expansion_budget=BACKUP_MAX_NODES,
+            )
+        except YamlSafetyError as exc:
+            logger.error("[BACKUP] %s is not restorable: %s", subject, exc)
+            raise BackupNotRestorableError(subject, exc, key) from exc
         redacted = _redact_credentials_deep(
             parsed,
             preserve_keys,
@@ -1962,6 +2028,7 @@ async def _gather_redacted_categories(
                 degraded.append(key)
             if key == "channels":
                 unresolved_epg_links = _count_unresolved_epg_links(section_value)
+        _verify_restorable_export(redacted, subject, key, max_nodes=BACKUP_MAX_NODES)
         out["%s.yaml" % key] = yaml.dump(
             redacted, default_flow_style=False, sort_keys=False, allow_unicode=True
         )
@@ -5816,8 +5883,13 @@ async def build_yaml_export(
     sections: Optional[set[str]] = None,
     include_credentials: bool = False,
     exempt_identity_keys: frozenset = frozenset(),
+    verify_restorable: bool = True,
 ) -> str:
     """Build a YAML export string, optionally limited to specific sections.
+
+    ``verify_restorable`` refuses (:class:`BackupNotRestorableError`) an export
+    the restore routes would refuse, so ECM never writes one. Only the DBAS
+    gather turns it off, because it verifies each category's final bytes itself.
 
     If sections is None, all sections are included. Otherwise only the
     specified section keys (from RESTORABLE_SECTIONS) are included.
@@ -5883,6 +5955,8 @@ async def build_yaml_export(
             export_data, exempt_identity_keys=exempt_identity_keys
         )
 
+    if verify_restorable:
+        _verify_restorable_export(export_data, "YAML export")
     return yaml.dump(export_data, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
@@ -5920,7 +5994,11 @@ async def export_yaml(
         if invalid:
             raise HTTPException(status_code=400, detail="Unknown sections: %s" % ", ".join(sorted(invalid)))
 
-    yaml_str = await build_yaml_export(selected)
+    try:
+        yaml_str = await build_yaml_export(selected)
+    except BackupNotRestorableError as exc:
+        logger.warning("[BACKUP] YAML export refused: %s", exc)
+        raise HTTPException(status_code=413, detail=str(exc))
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
     filename = f"ecm-export-{now}.yaml"
 
@@ -6050,7 +6128,10 @@ RESTORABLE_SECTIONS = {
 def _parse_yaml_export(content: bytes) -> dict:
     """Parse and validate a YAML export file. Raises HTTPException on failure."""
     try:
-        data = yaml.safe_load(content)
+        data = safe_load_bounded(content, max_nodes=LEGACY_MAX_NODES)
+    except YamlSafetyError as e:
+        logger.warning("[BACKUP] YAML export refused: %s", e)
+        raise HTTPException(status_code=400, detail=limit_message("YAML export", "backup", e))
     except yaml.YAMLError as e:
         raise HTTPException(status_code=400, detail="Invalid YAML: %s" % str(e))
 
@@ -6061,6 +6142,26 @@ def _parse_yaml_export(content: bytes) -> dict:
         raise HTTPException(status_code=400, detail="Not a valid ECM YAML export: missing ecm_export header")
 
     return data
+
+
+async def _read_legacy_yaml_upload(file: UploadFile) -> bytes:
+    """Read a legacy YAML upload in chunks, refusing with 413 past the cap."""
+    content = bytearray()
+    while True:
+        chunk = await file.read(_LEGACY_YAML_READ_CHUNK_BYTES)
+        if not chunk:
+            return bytes(content)
+        if len(content) + len(chunk) > _LEGACY_YAML_MAX_UPLOAD_BYTES:
+            logger.warning(
+                "[BACKUP] YAML upload refused: more than %d bytes",
+                _LEGACY_YAML_MAX_UPLOAD_BYTES,
+            )
+            raise HTTPException(
+                status_code=413,
+                detail="YAML export exceeds the backup size limit (more than %d MiB)"
+                % (_LEGACY_YAML_MAX_UPLOAD_BYTES // (1024 * 1024)),
+            )
+        content += chunk
 
 
 def _count_section_items(data: dict, section_key: str) -> int:
@@ -6092,7 +6193,7 @@ async def validate_yaml_export(file: UploadFile = File(...), _admin=RequireAdmin
     """
     logger.info("[BACKUP] YAML validate requested, filename=%s", file.filename)
 
-    content = await file.read()
+    content = await _read_legacy_yaml_upload(file)
     data = _parse_yaml_export(content)
 
     export_meta = data.get("ecm_export", {})
@@ -6171,7 +6272,7 @@ async def restore_from_yaml(
             % ", ".join(artifact_only),
         )
 
-    content = await file.read()
+    content = await _read_legacy_yaml_upload(file)
     data = _parse_yaml_export(content)
 
     sections_restored = []

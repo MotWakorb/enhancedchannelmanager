@@ -4,6 +4,7 @@ Auto-creation router — auto-creation pipeline CRUD, execution, import/export, 
 Extracted from main.py (Phase 3 of v0.13.0 backend refactor).
 """
 import asyncio
+import gzip
 import io
 import json
 import logging
@@ -12,6 +13,7 @@ import tarfile
 import tempfile
 import time
 import uuid
+import zlib
 from datetime import date, datetime
 from typing import List, Literal, Optional
 
@@ -40,6 +42,32 @@ from regex_lint import (
     lint_pattern,
     violations_to_http_detail,
 )
+from yaml_safety import (
+    IMPORT_MAX_CHARS,
+    IMPORT_MAX_NODES,
+    YamlSafetyError,
+    limit_message,
+    safe_load_bounded,
+)
+
+# Debug-bundle upload bounds for analyze/from-bundle. The generator caps logs at
+# 50 MiB and the rest of a bundle scales with the catalog (channels.json is about
+# 0.6 KiB per channel), so these admit any bundle ECM produces with headroom while
+# bounding what an upload can make the server inflate.
+_BUNDLE_MAX_UPLOAD_BYTES = 128 * 1024 * 1024
+_BUNDLE_MAX_TOTAL_BYTES = 512 * 1024 * 1024
+_BUNDLE_MAX_MEMBERS = 256
+_BUNDLE_MAX_RULES_BYTES = IMPORT_MAX_CHARS
+_BUNDLE_MAX_DIAGNOSTIC_BYTES = 16 * 1024 * 1024
+_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
+# tarfile reads a GNU long-name/long-link or PAX header's whole body inside
+# next(), and that body is not counted in any member's size. Real bundles need
+# none or a few short ones (long or non-ASCII names).
+_BUNDLE_EXTENDED_HEADER_MAX_BYTES = 64 * 1024
+_BUNDLE_MAX_EXTENDED_HEADERS = 64
+# Inflated bytes beyond the declared member sizes: headers, block padding and
+# the bounded extended headers above.
+_BUNDLE_INFLATE_ALLOWANCE_BYTES = 8 * 1024 * 1024
 
 # Strong references to in-flight background pipeline tasks (bd-enfsy). Without
 # this set, asyncio only weakly references created tasks and the GC could
@@ -307,7 +335,7 @@ def _pipeline_plan_view(result: dict) -> dict:
 
 class ImportYAMLRequest(BaseModel):
     """Request to import rules from YAML."""
-    yaml_content: str
+    yaml_content: str = Field(max_length=IMPORT_MAX_CHARS)
     overwrite: bool = False
 
 
@@ -659,6 +687,172 @@ async def analyze_auto_creation_rules():
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+async def _read_upload_capped(file: UploadFile, limit: int) -> bytearray:
+    """Read an upload in chunks, refusing with 413 once it exceeds ``limit`` bytes."""
+    content = bytearray()
+    while True:
+        chunk = await file.read(_UPLOAD_READ_CHUNK_BYTES)
+        if not chunk:
+            return content
+        if len(content) + len(chunk) > limit:
+            logger.warning("[AUTO-CREATE] Bundle upload refused: more than %d bytes", limit)
+            raise HTTPException(
+                status_code=413,
+                detail="Upload exceeds %d MiB" % (limit // (1024 * 1024)),
+            )
+        content += chunk
+
+
+class _BundleRefused(Exception):
+    """A debug bundle refused before or while inflating it."""
+
+    def __init__(self, status_code: int, detail: str):
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(detail)
+
+
+class _CappedReader:
+    """Count inflated bytes and refuse once they pass ``limit``.
+
+    tarfile in stream mode pulls bounded chunks through this, so no tar
+    construction can make the server decompress more than ``limit`` bytes.
+    """
+
+    def __init__(self, raw, limit: int):
+        self._raw = raw
+        self.limit = limit
+        self.total = 0
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            size = self.limit - self.total + 1
+        data = self._raw.read(size)
+        self.total += len(data)
+        if self.total > self.limit:
+            raise _BundleRefused(
+                413,
+                "Bundle exceeds %d MiB uncompressed"
+                % (_BUNDLE_MAX_TOTAL_BYTES // (1024 * 1024)),
+            )
+        return data
+
+
+class _BundleTarInfo(tarfile.TarInfo):
+    """Refuse oversized extended headers and sparse entries before reading them.
+
+    ``_proc_member`` is the dispatch point tarfile documents for subclass
+    extension; checking ``self.size`` there happens before the header body is
+    read. The GNU sparse readers are private, so the tests assert they still
+    exist and that sparse bundles are refused, which fails loudly if a Python
+    upgrade renames them.
+    """
+
+    _EXTENDED_TYPES = (
+        tarfile.GNUTYPE_LONGNAME,
+        tarfile.GNUTYPE_LONGLINK,
+        tarfile.XHDTYPE,
+        tarfile.XGLTYPE,
+        tarfile.SOLARIS_XHDTYPE,
+    )
+
+    def _proc_member(self, tarfile_obj):
+        if self.type in self._EXTENDED_TYPES:
+            seen = getattr(tarfile_obj, "_ecm_extended_headers", 0) + 1
+            tarfile_obj._ecm_extended_headers = seen
+            if seen > _BUNDLE_MAX_EXTENDED_HEADERS:
+                raise _BundleRefused(
+                    413,
+                    "Bundle has more than %d tar extended headers"
+                    % _BUNDLE_MAX_EXTENDED_HEADERS,
+                )
+            if self.size > _BUNDLE_EXTENDED_HEADER_MAX_BYTES:
+                raise _BundleRefused(
+                    413,
+                    "Bundle tar extended header exceeds %d KiB"
+                    % (_BUNDLE_EXTENDED_HEADER_MAX_BYTES // 1024),
+                )
+        elif self.type == tarfile.GNUTYPE_SPARSE:
+            raise _BundleRefused(400, "Bundle contains an unsupported sparse tar entry")
+        return super()._proc_member(tarfile_obj)
+
+    def _refuse_sparse(self, *_args):
+        raise _BundleRefused(400, "Bundle contains an unsupported sparse tar entry")
+
+    _proc_gnusparse_00 = _refuse_sparse
+    _proc_gnusparse_01 = _refuse_sparse
+    _proc_gnusparse_10 = _refuse_sparse
+
+
+def _read_bundle_member(tf: tarfile.TarFile, member: tarfile.TarInfo, limit: int):
+    """Read one bundle member, refusing with 413 once it exceeds ``limit`` bytes."""
+    extracted = tf.extractfile(member)
+    if extracted is None:
+        return None
+    raw = extracted.read(limit + 1)
+    if len(raw) > limit:
+        raise _BundleRefused(
+            413, "%s exceeds %d bytes" % (member.name.rsplit("/", 1)[-1], limit)
+        )
+    return raw
+
+
+def _scan_debug_bundle(content) -> tuple[Optional[str], Optional[dict]]:
+    """Return ``(rules.yaml text, diagnostic)`` from a bundle, within the bounds.
+
+    The archive is read as a stream: one pass, members in order, every inflated
+    byte counted by :class:`_CappedReader`. A member's declared size bounds how
+    far skipping it inflates, so the running total refuses a bomb before it is
+    decompressed.
+
+    Raises:
+        _BundleRefused: A bound was exceeded or the archive uses sparse entries.
+        tarfile.TarError, OSError, EOFError: The archive is not a valid tar.gz.
+        UnicodeDecodeError: rules.yaml is not UTF-8.
+    """
+    reader = _CappedReader(
+        gzip.GzipFile(fileobj=io.BytesIO(content), mode="rb"),
+        _BUNDLE_MAX_TOTAL_BYTES + _BUNDLE_INFLATE_ALLOWANCE_BYTES,
+    )
+    rules_yaml_text: Optional[str] = None
+    diagnostic: Optional[dict] = None
+    with tarfile.open(fileobj=reader, mode="r|", tarinfo=_BundleTarInfo) as tf:
+        members = 0
+        declared_bytes = 0
+        for member in tf:
+            members += 1
+            if members > _BUNDLE_MAX_MEMBERS:
+                raise _BundleRefused(
+                    413, "Bundle has more than %d members" % _BUNDLE_MAX_MEMBERS
+                )
+            declared_bytes += max(member.size, 0)
+            if declared_bytes > _BUNDLE_MAX_TOTAL_BYTES:
+                raise _BundleRefused(
+                    413,
+                    "Bundle exceeds %d MiB uncompressed"
+                    % (_BUNDLE_MAX_TOTAL_BYTES // (1024 * 1024)),
+                )
+            if not member.isfile():
+                continue
+            # Match by basename so we tolerate bundles created with a leading
+            # directory (the production generator ships flat).
+            base = member.name.rsplit("/", 1)[-1]
+            if base == "rules.yaml":
+                raw = _read_bundle_member(tf, member, _BUNDLE_MAX_RULES_BYTES)
+                if raw is not None:
+                    rules_yaml_text = raw.decode("utf-8")
+            elif base == "channel_groups_diagnostic.json":
+                raw = _read_bundle_member(tf, member, _BUNDLE_MAX_DIAGNOSTIC_BYTES)
+                if raw is not None:
+                    try:
+                        diagnostic = json.loads(raw)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        # The diagnostic is optional, so a corrupt one is
+                        # dropped rather than failing the whole analysis.
+                        diagnostic = None
+    return rules_yaml_text, diagnostic
+
+
 @router.post("/rules/analyze/from-bundle")
 async def analyze_auto_creation_rules_from_bundle(
     file: UploadFile = File(...),
@@ -682,47 +876,25 @@ async def analyze_auto_creation_rules_from_bundle(
     )
 
     try:
-        content = await file.read()
+        content = await _read_upload_capped(file, _BUNDLE_MAX_UPLOAD_BYTES)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=400, detail=f"Failed to read uploaded file: {e}"
         )
 
     try:
-        buf = io.BytesIO(content)
-        tf = tarfile.open(fileobj=buf, mode="r:gz")
-    except (tarfile.TarError, OSError) as e:
+        rules_yaml_text, diagnostic = _scan_debug_bundle(content)
+    except _BundleRefused as e:
+        logger.warning("[AUTO-CREATE] Bundle refused: %s", e.detail)
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="rules.yaml is not UTF-8 text")
+    except (tarfile.TarError, EOFError, OSError, zlib.error) as e:
         raise HTTPException(
             status_code=400,
             detail=f"Uploaded file is not a valid tar.gz archive: {e}",
-        )
-
-    rules_yaml_text: str | None = None
-    diagnostic: dict | None = None
-    try:
-        with tf:
-            for member in tf.getmembers():
-                if not member.isfile():
-                    continue
-                # Match by basename so we tolerate bundles created with a
-                # leading directory (the production generator ships flat).
-                base = member.name.rsplit("/", 1)[-1]
-                if base == "rules.yaml":
-                    extracted = tf.extractfile(member)
-                    if extracted is not None:
-                        rules_yaml_text = extracted.read().decode("utf-8")
-                elif base == "channel_groups_diagnostic.json":
-                    extracted = tf.extractfile(member)
-                    if extracted is not None:
-                        try:
-                            diagnostic = json.loads(extracted.read())
-                        except (json.JSONDecodeError, UnicodeDecodeError):
-                            # Diagnostic is optional — corrupt one shouldn't
-                            # 400 the whole analysis. Just drop it.
-                            diagnostic = None
-    except tarfile.TarError as e:
-        raise HTTPException(
-            status_code=400, detail=f"Failed to read archive: {e}"
         )
 
     if rules_yaml_text is None:
@@ -732,7 +904,12 @@ async def analyze_auto_creation_rules_from_bundle(
         )
 
     try:
-        data = yaml.safe_load(rules_yaml_text)
+        data = safe_load_bounded(rules_yaml_text, max_nodes=IMPORT_MAX_NODES)
+    except YamlSafetyError as e:
+        logger.warning("[AUTO-CREATE] Bundle rules.yaml refused: %s", e)
+        raise HTTPException(
+            status_code=400, detail=limit_message("rules.yaml", "import", e)
+        )
     except yaml.YAMLError as e:
         raise HTTPException(
             status_code=400, detail=f"rules.yaml is not valid YAML: {e}"
@@ -3003,8 +3180,12 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
 
         # Parse YAML
         try:
-            data = yaml.safe_load(request.yaml_content)
-            logger.debug("[AUTO-CREATE-YAML] Parsed YAML with %s rules", len(data.get('rules', data) if isinstance(data, dict) else data))
+            data = safe_load_bounded(request.yaml_content, max_nodes=IMPORT_MAX_NODES)
+        except YamlSafetyError as e:
+            logger.warning("[AUTO-CREATE-YAML] Import refused: %s", e)
+            raise HTTPException(
+                status_code=400, detail=limit_message("Rule import", "import", e)
+            )
         except yaml.YAMLError as e:
             raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
 
@@ -3012,8 +3193,13 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
         if isinstance(data, list):
             data = {"rules": data}
 
-        if not data or "rules" not in data:
+        if not isinstance(data, dict) or "rules" not in data:
             raise HTTPException(status_code=400, detail="YAML must contain a 'rules' array or be a list of rules")
+        if not isinstance(data["rules"], list) or not all(
+            isinstance(rule, dict) for rule in data["rules"]
+        ):
+            raise HTTPException(status_code=400, detail="'rules' must be a list of rule mappings")
+        logger.debug("[AUTO-CREATE-YAML] Parsed YAML with %s rules", len(data["rules"]))
 
         # Build name→id lookup maps for portable import
         client = get_client()
