@@ -307,9 +307,8 @@ def test_escaped_json_values_are_masked_to_their_own_closing_quote(text):
         f"{{'password': '{SECRET_TAIL} unclosed\nnext line survives",
         f'{{"password": ["{SECRET_TAIL}", "unclosed\nnext line survives',
         f'{{\\"password\\": \\"{SECRET_TAIL} unclosed\nnext line survives',
-        f"password=\nnext line survives",
     ],
-    ids=["double", "single", "list", "escaped", "empty-value"],
+    ids=["double", "single", "list", "escaped"],
 )
 def test_an_unclosed_value_stops_at_the_end_of_its_line(text):
     out = redact_secrets(text)
@@ -334,3 +333,28 @@ def test_nested_list_is_masked_without_a_stray_bracket():
     assert redact_secrets('{"password": [["x", "y"], ["z"]], "ok": 1}') == (
         '{"password": [***REDACTED***], "ok": 1}'
     )
+
+
+# ---------------------------------------------------------------------------
+# The separator may span whitespace, including a line break; the value may not.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f'{{\n  "password":\n    "{SECRET_TAIL}",\n  "ok": 1\n}}',
+        f'password:\xa0"{SECRET_TAIL}" accepted',
+        f"password:\r\n\t{SECRET_TAIL}\nnext",
+    ],
+    ids=["pretty-printed-json", "non-breaking-space", "crlf-unquoted"],
+)
+def test_a_value_on_the_line_after_its_key_is_masked(text):
+    out = redact_secrets(text)
+    assert SECRET_TAIL not in out
+
+
+def test_a_key_with_no_value_masks_only_the_next_word():
+    # Accepted cost of letting the separator cross a line break: the first
+    # word of the following line is taken as the value; the rest survives.
+    out = redact_secrets("password:\nChannel 100 moved to 7 at 10:00\nnext line")
+    assert out == "password:\n***REDACTED*** 100 moved to 7 at 10:00\nnext line"
