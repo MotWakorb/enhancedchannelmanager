@@ -99,7 +99,12 @@ class Endpoint:
 # contract test can't cross-check it (the backend body schema has no
 # properties).
 _CHANNEL_PATCH_FIELDS = frozenset(
-    {"name", "channel_number", "channel_group_id", "tvg_id", "logo_id", "streams"}
+    {
+        "name", "channel_number", "channel_group_id", "tvg_id", "logo_id", "streams",
+        # ECM bookkeeping the backend strips before forwarding: the baseline a
+        # channel_number write must carry.
+        "expectedNumber",
+    }
 )
 
 # backend/routers/auto_creation.py :: CreateAutoCreationRuleRequest

@@ -186,6 +186,11 @@ export async function getChannels(params?: {
   return fetchJson(`${API_BASE}/channels${query}`, { signal: params?.signal });
 }
 
+/** One channel as the server holds it now. */
+export async function getChannel(channelId: number): Promise<Channel> {
+  return fetchJson(`${API_BASE}/channels/${channelId}`);
+}
+
 export async function getChannelStreams(channelId: number): Promise<Stream[]> {
   return fetchJson(`${API_BASE}/channels/${channelId}/streams`);
 }
@@ -244,11 +249,46 @@ export async function getChannelsNormalizePreviewBatch(
   });
 }
 
-export async function updateChannel(id: number, data: Partial<Channel>): Promise<Channel> {
+/** The number a caller last read for a channel, `null` for no number. */
+export interface ChannelNumberBaseline {
+  expectedNumber: number | null;
+}
+
+/**
+ * PATCH a channel.
+ *
+ * `baseline` is required whenever `data` sets `channel_number`: it is the
+ * number the caller last read (displayed, or recorded by history) for this
+ * channel. The server answers 422 without it and 409, writing nothing, when the
+ * channel has moved since. It is sent as `expectedNumber: {number}`, the shape
+ * a bulk-commit `updateChannel` carries, and never reaches Dispatcharr.
+ */
+export async function updateChannel(
+  id: number,
+  data: Partial<Channel>,
+  baseline?: ChannelNumberBaseline,
+): Promise<Channel> {
+  const body = baseline === undefined
+    ? data
+    : { ...data, expectedNumber: { number: baseline.expectedNumber } };
   return fetchJson(`${API_BASE}/channels/${id}`, {
     method: 'PATCH',
-    body: JSON.stringify(data),
+    body: JSON.stringify(body),
   });
+}
+
+/**
+ * The baseline a direct `updateChannel` needs for `changes`, read from the
+ * channel as the caller displayed it. `undefined` when `changes` does not set
+ * `channel_number`, so an edit that leaves the number alone sends none.
+ */
+export function numberBaselineFor(
+  shown: Pick<Channel, 'channel_number'>,
+  changes: object,
+): ChannelNumberBaseline | undefined {
+  return 'channel_number' in changes
+    ? { expectedNumber: shown.channel_number ?? null }
+    : undefined;
 }
 
 export async function addStreamToChannel(channelId: number, streamId: number): Promise<Channel> {

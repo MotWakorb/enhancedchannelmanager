@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "1d117454cc88f15d2a07827d630e7f5906930f9310776d5e412e29b6c95a0494",
+      "sha256": "ab3616d884b33661957b1a6df150bf2927940815b3ef66c6d3d7126a81f72d16",
       "type": "file"
     },
     {
@@ -1134,7 +1134,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "a60afcf6cd37a4a1565a955668dedfc4b885b51d180314746a8874fd97648862",
+      "sha256": "bfbe70693bb3ce2800d9f414415873b9f00a7518f50f9731916460037fb88cd0",
       "type": "file"
     },
     {
@@ -1158,7 +1158,7 @@
     {
       "executable": false,
       "path": "backend/routers/channels.py",
-      "sha256": "21bea404bcf5cd9d6c1c42c0a0e8fe94c5076d73fad4140cb8f19b323543c798",
+      "sha256": "502c89b9ac7b5c8a141d7097ddd544054ef32317fd18a1d71cbb00a48c6330bf",
       "type": "file"
     },
     {
@@ -1836,7 +1836,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "2ca4ae67eb938ef3ca1864f391e4c78e6a7413f9a8f7ecdef25b0e4fd891debe",
+      "sha256": "ded28a207a81890c5344b9a48c89dad509f959e44884fce0e1c3c55d7d4c1ce9",
       "type": "file"
     },
     {
@@ -1878,7 +1878,7 @@
     {
       "executable": false,
       "path": "frontend/src/App.bulkCreateStaging.test.tsx",
-      "sha256": "a776bb5113cd77164e52805c62691c8b7ab38274cd42e9b6cbcc047372a3be15",
+      "sha256": "1722097074130f7cc58c2be73b36c352498a4aa97dd662d0bd8e358da001fa4f",
       "type": "file"
     },
     {
@@ -1908,7 +1908,7 @@
     {
       "executable": false,
       "path": "frontend/src/App.tsx",
-      "sha256": "92610ba8dba62fd5c39e1c464493c0e3c85aff9853b09e0d7f794cf1abf051de",
+      "sha256": "807d367e0c35106e61bfa65cf7d2b596c526d442fec785301cf22c41470dddb9",
       "type": "file"
     },
     {
@@ -2171,6 +2171,12 @@
     },
     {
       "executable": false,
+      "path": "frontend/src/components/ChannelsPane.directNumberWrite.test.tsx",
+      "sha256": "2891cb3a58357181b00725b33fbe60ce4f7ad263fbf40585c3e473f18c7179db",
+      "type": "file"
+    },
+    {
+      "executable": false,
       "path": "frontend/src/components/ChannelsPane.duplicateNumber.test.tsx",
       "sha256": "5c705521eea40e8d6e7ed60ba52601f9e82b2642083b9b8b957edbf2d9cee389",
       "type": "file"
@@ -2220,7 +2226,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/ChannelsPane.tsx",
-      "sha256": "90c8d6286698231aaee32177542598429a73005dee00895c33971afa73790918",
+      "sha256": "95fced791cf1e801a3d75246136c99f55f9b12043759bd4626e32f159a021bd0",
       "type": "file"
     },
     {
@@ -5142,13 +5148,13 @@
     {
       "executable": false,
       "path": "frontend/src/hooks/useChangeHistory.test.ts",
-      "sha256": "a255cf5e358edf878e5291918488e68ee0edbf612a595585448a77121736ca15",
+      "sha256": "49a3ca78639016243164d6b5aff761533e2c1ee42d6e029c77a9d458ff5de6f8",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/hooks/useChangeHistory.ts",
-      "sha256": "4e13433bbfab3b8b7fe13328539c8c13d7b1aaa829beeda41ad840a5b3a50ee2",
+      "sha256": "7c38948f2d6a242cff3752c05f7cf426eda222db98065c6ce10cb9b63a845e49",
       "type": "file"
     },
     {
@@ -5430,13 +5436,13 @@
     {
       "executable": false,
       "path": "frontend/src/services/api.test.ts",
-      "sha256": "8e0daf0066e012878f2c51ed65c22fdea1d451bef10e8d745e9ced7bb0a29377",
+      "sha256": "ee507b08fca93ec2e41278578630c03c3d80b7eef89592c843c4eee0988d8228",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/services/api.ts",
-      "sha256": "a8101a4e11252e59a0885ef40bc29ce3b2760537ce7f660965f639576388a279",
+      "sha256": "2208750cdcf123cbff92322faffba7ca49d37b7d566f5f7f9c486e82a42224ec",
       "type": "file"
     },
     {
@@ -5688,7 +5694,7 @@
     {
       "executable": false,
       "path": "frontend/src/utils/channelNumberConcurrency.ts",
-      "sha256": "1c0d22243b0c7a2742087b468aab3bba119ad761d6fb3005c68f14bc9a15d652",
+      "sha256": "4c8af98c5b7d2b4a8724ded9bb1d0cfbacfc6dfd1ed46996be34e69eccc2d62c",
       "type": "file"
     },
     {
@@ -6080,7 +6086,7 @@
     {
       "executable": false,
       "path": "mcp-server/_endpoint_contracts.py",
-      "sha256": "169fd8e92f9988a9cef193442fc0d2322e2c62db5d01f972ba70f13c8da74bbe",
+      "sha256": "9b57e408eaaf6cdc3ff0fb76055de56a8c8a5996a9fac5f7b2ce1290f73750bd",
       "type": "file"
     },
     {
@@ -6416,7 +6422,7 @@
     {
       "executable": false,
       "path": "mcp-server/tests/test_onazy_destructive_guardrails.py",
-      "sha256": "6be744b9106dd5ff16c95074fcaf8656afc5c0035e276284ba347c95d0bff8c6",
+      "sha256": "84b5795068ab682ab9154f25940eb706870c6512f7114df52bc5478cbf0f923c",
       "type": "file"
     },
     {
@@ -6541,6 +6547,12 @@
     },
     {
       "executable": false,
+      "path": "mcp-server/tests/test_update_channel_number_baseline.py",
+      "sha256": "fc5ffbcac71c5f250245827d53f35ba3a8764d04a2f3967ebb95d685c66865ff",
+      "type": "file"
+    },
+    {
+      "executable": false,
       "path": "mcp-server/tests/test_vkktd5_list_tasks_effective_enabled.py",
       "sha256": "a43d1419f767120824fe528238d58d776aaa33f7f8d324714e804f488b8d00f6",
       "type": "file"
@@ -6572,7 +6584,7 @@
     {
       "executable": false,
       "path": "mcp-server/tools/_safety_policy.py",
-      "sha256": "8234644306585db3813ff80d5c898321b4eb0eff86e3a813b7149349fa969db1",
+      "sha256": "7a68bd6ce637bd902e804286d27925f27adb8de2a83c6dbb69cf16b7353c40bc",
       "type": "file"
     },
     {
@@ -6590,7 +6602,7 @@
     {
       "executable": false,
       "path": "mcp-server/tools/channels.py",
-      "sha256": "074e8a1f2530d72821641a4fd52d2f4db77a3a9ce25841ffa108d8caddf9bd40",
+      "sha256": "3310103f7e7a546fd4bd9b857d53d87d2120c9069f83643a28f6b8a153254758",
       "type": "file"
     },
     {
@@ -7063,5 +7075,34 @@
     "previous_manifest_sha256": "6fe42a80de57ec12e50da581ff98a840c8826e3ed784b525c36dbb8d0ffa457c",
     "scope": "Bind saved DBAS restores to a private owner-only snapshot opened without following symlinks, with cleanup on every exit path, and reclaim abandoned private snapshots, including a decrypted plaintext temp left beside or without the snapshot ZIP, under cross-process flock leases (beads enhancedchannelmanager-0m06f.3.3 and enhancedchannelmanager-sumq7), harden an existing snapshot parent to 0700 or refuse a symlinked or foreign-owned one, refuse a saved restore before copying when a DBAS restore is active, another snapshot copy is in progress, the backup exceeds the 2 GiB cap or free space is short, log snapshot filesystem errors as a 500 with the partial snapshot removed, word saved-route errors as Saved backup, plus 0089 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0089"
+  },
+  "patch_number_baselines_update": {
+    "added_files": [
+      "frontend/src/components/ChannelsPane.directNumberWrite.test.tsx",
+      "mcp-server/tests/test_update_channel_number_baseline.py"
+    ],
+    "base_commit": "af5a40011bfc73f2cfc29bbfb23ed13bda191269",
+    "bead": "enhancedchannelmanager-dtv8p",
+    "changed_files": {
+      "backend/main.py": "1d117454cc88f15d2a07827d630e7f5906930f9310776d5e412e29b6c95a0494",
+      "backend/routers/backup.py": "a60afcf6cd37a4a1565a955668dedfc4b885b51d180314746a8874fd97648862",
+      "backend/routers/channels.py": "21bea404bcf5cd9d6c1c42c0a0e8fe94c5076d73fad4140cb8f19b323543c798",
+      "frontend/package.json": "2ca4ae67eb938ef3ca1864f391e4c78e6a7413f9a8f7ecdef25b0e4fd891debe",
+      "frontend/src/App.bulkCreateStaging.test.tsx": "a776bb5113cd77164e52805c62691c8b7ab38274cd42e9b6cbcc047372a3be15",
+      "frontend/src/App.tsx": "92610ba8dba62fd5c39e1c464493c0e3c85aff9853b09e0d7f794cf1abf051de",
+      "frontend/src/components/ChannelsPane.tsx": "90c8d6286698231aaee32177542598429a73005dee00895c33971afa73790918",
+      "frontend/src/hooks/useChangeHistory.test.ts": "a255cf5e358edf878e5291918488e68ee0edbf612a595585448a77121736ca15",
+      "frontend/src/hooks/useChangeHistory.ts": "4e13433bbfab3b8b7fe13328539c8c13d7b1aaa829beeda41ad840a5b3a50ee2",
+      "frontend/src/services/api.test.ts": "8e0daf0066e012878f2c51ed65c22fdea1d451bef10e8d745e9ced7bb0a29377",
+      "frontend/src/services/api.ts": "a8101a4e11252e59a0885ef40bc29ce3b2760537ce7f660965f639576388a279",
+      "frontend/src/utils/channelNumberConcurrency.ts": "1c0d22243b0c7a2742087b468aab3bba119ad761d6fb3005c68f14bc9a15d652",
+      "mcp-server/_endpoint_contracts.py": "169fd8e92f9988a9cef193442fc0d2322e2c62db5d01f972ba70f13c8da74bbe",
+      "mcp-server/tests/test_onazy_destructive_guardrails.py": "6be744b9106dd5ff16c95074fcaf8656afc5c0035e276284ba347c95d0bff8c6",
+      "mcp-server/tools/_safety_policy.py": "8234644306585db3813ff80d5c898321b4eb0eff86e3a813b7149349fa969db1",
+      "mcp-server/tools/channels.py": "074e8a1f2530d72821641a4fd52d2f4db77a3a9ce25841ffa108d8caddf9bd40"
+    },
+    "previous_manifest_sha256": "1eeda3cad795dc28b73450c77489b8d979ac417203256b95a429d7225cdc3e8d",
+    "scope": "Require the caller's numbering baseline on PATCH /api/channels/{id}: a body that sets channel_number must carry expectedNumber {number} (the number last read, or null for none), a missing or malformed wrapper is refused with 422 and a moved channel with 409 and concurrentNumberChanges, and the key is removed before forwarding so Dispatcharr and the Journal never see it; make the bulk-commit updateChannel expectedNumber wrapper require number and reject extra keys; send baselines from the inline number editor, the Edit Channel dialog, the Guide channel editor and undo, redo and checkpoint revert outside Edit Mode (multi-channel steps pre-read and refuse as a whole), invalidate checkpoints at or after a step dropped after a refusal and restore only reverted channels on a checkpoint revert, and add an expected_number argument to the MCP update_channel tool that refuses a renumber without a valid one before issuing a confirmation token, plus 0090 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0090"
   }
 }
