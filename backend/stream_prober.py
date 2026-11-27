@@ -12,7 +12,7 @@ import tempfile
 import time
 from datetime import datetime, timedelta
 from numbers import Real
-from typing import Optional
+from typing import Callable, Optional
 from pathlib import Path
 import os
 import re
@@ -70,6 +70,17 @@ PROBE_RETRYABLE_HTTP_STATUSES = RETRYABLE_STREAM_HTTP_STATUSES
 
 class ResolutionDetectionError(RuntimeError):
     """A resdet failure with a fixed operator-safe message."""
+
+
+class ProbeCapacityError(RuntimeError):
+    """Admission refused; messages are fixed text, not upstream diagnostics."""
+
+    def __init__(self, message: str, *, retryable: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
+
+
+PROBE_DEFERRED_REASON = "Probe deferred: provider capacity was unavailable or could not be verified; see skipped stream reasons"
 
 
 # Provider portals can redirect onto HTTP media edges. Four probe paths use this
@@ -466,6 +477,7 @@ class StreamProber:
         _resdet_lock_path: Path = RESDET_PIPELINE_LOCK_PATH,
         low_bitrate_threshold: float = 1.0,
         deprioritize_low_bitrate: bool = False,
+        probe_capacity_wait_timeout: int = 300,
     ):
         self.client = client
         self.probe_timeout = probe_timeout
@@ -476,6 +488,7 @@ class StreamProber:
         self.parallel_probing_enabled = parallel_probing_enabled
         self.max_concurrent_probes = max(1, min(16, max_concurrent_probes))  # Clamp to 1-16
         self.profile_distribution_strategy = profile_distribution_strategy
+        self.probe_capacity_wait_timeout = probe_capacity_wait_timeout
         self.skip_recently_probed_hours = skip_recently_probed_hours
         self.refresh_m3us_before_probe = refresh_m3us_before_probe
         self.auto_reorder_after_probe = auto_reorder_after_probe
@@ -525,6 +538,11 @@ class StreamProber:
         self._probe_paused = False  # Controls pausing of in-progress probe
         self._probing_in_progress = False
         self._bulk_probe_tasks: set[asyncio.Task] = set()
+        # Lifecycle ownership is independent of the batch progress envelope.
+        # Register before the first await, including control-plane waiters.
+        self._probe_tasks: set[asyncio.Task] = set()
+        self._probe_run_task: asyncio.Task | None = None
+        self._stopped = False  # Retirement is permanent; start/reset cannot revive it.
         # Progress tracking for probe all streams
         self._probe_progress_total = 0
         self._probe_progress_current = 0
@@ -558,6 +576,14 @@ class StreamProber:
         # Per-account ramp-up state (reset each probe run)
         self._account_ramp_state = {}  # account_id -> ramp state dict
 
+        # Shared by single, bulk, pipeline and probe-all on the singleton prober.
+        # Unlike ramp/scheduler state these reservations are NOT reset per run.
+        self._probe_capacity_lock = asyncio.Lock()
+        self._probe_account_connections: dict[int, int] = {}
+        self._probe_profile_connections: dict[int, int] = {}
+        self._capacity_now = time.monotonic
+        self._probe_status_snapshot: tuple[float, dict[int, int], dict[int, int]] | None = None
+
         # Notification callbacks for progress updates
         self._notification_create_callback = None  # async fn(type, title, message, source, source_id, metadata) -> dict with id
         self._notification_update_callback = None  # async fn(notification_id, type, message, metadata) -> dict
@@ -586,7 +612,8 @@ class StreamProber:
             self._probe_history = []
 
     def update_probing_settings(self, parallel_probing_enabled: bool, max_concurrent_probes: int,
-                                profile_distribution_strategy: str = "fill_first") -> None:
+                                profile_distribution_strategy: str = "fill_first",
+                                probe_capacity_wait_timeout: int = 300) -> None:
         """Update the parallel probing settings.
 
         This allows updating the prober's concurrency settings without restarting the service.
@@ -603,6 +630,7 @@ class StreamProber:
         self.parallel_probing_enabled = parallel_probing_enabled
         self.max_concurrent_probes = max(1, min(16, max_concurrent_probes))
         self.profile_distribution_strategy = profile_distribution_strategy
+        self.probe_capacity_wait_timeout = probe_capacity_wait_timeout
         logger.info("[STREAM-PROBE] Updated probing settings: parallel_probing_enabled=%s->%s, "
                     "max_concurrent_probes=%s->%s, "
                     "profile_distribution_strategy=%s->%s",
@@ -820,12 +848,24 @@ class StreamProber:
 
         try:
             # If cancelled, delete the notification instead of updating it
-            if self._probe_cancelled and self._notification_delete_by_source_callback:
-                await self._notification_delete_by_source_callback("stream_probe")
-                logger.info("[STREAM-PROBE] Deleted probe notification (probe was cancelled)")
+            if self._probe_cancelled:
+                if self._notification_delete_by_source_callback:
+                    await self._notification_delete_by_source_callback("stream_probe")
+                    logger.info("[STREAM-PROBE] Deleted probe notification (probe was cancelled)")
                 return
 
             if not self._notification_update_callback:
+                return
+
+            if self._probe_progress_status == "deferred":
+                await self._notification_update_callback(
+                    notification_id=self._probe_notification_id,
+                    notification_type="warning",
+                    message=PROBE_DEFERRED_REASON,
+                    metadata={"deferred_reason": PROBE_DEFERRED_REASON,
+                              "progress": {"status": "deferred", "current": self._probe_progress_current,
+                                           "total": self._probe_progress_total, "skipped": self._probe_progress_skipped_count}},
+                )
                 return
 
             # Determine notification type based on results
@@ -1045,12 +1085,101 @@ class StreamProber:
         )
 
     async def stop(self):
-        """Stop the stream prober and cancel any in-progress probes."""
+        """Retire admission, then join every old owner before replacement is safe."""
         logger.info("[STREAM-PROBE] StreamProber stopping...")
+        self._stopped = True
         self._probe_cancelled = True
-        for task in tuple(self._bulk_probe_tasks):
-            task.cancel()
+        tasks = self._probe_tasks | self._bulk_probe_tasks
+        if self._probe_run_task is not None:
+            tasks.add(self._probe_run_task)
+        await self._cancel_and_join_probe_tasks(tasks)
         logger.info("[STREAM-PROBE] StreamProber stopped")
+
+    def _probe_run_rejection(self, owner: asyncio.Task | None = None) -> str | None:
+        """One admission rule for direct calls and synchronously claimed starts."""
+        if self._stopped:
+            return "cancelled"
+        if self._probe_run_task is not None:
+            if self._probe_run_task is not owner or self._probe_progress_status != "queued":
+                return "already_running"
+        elif self._probing_in_progress:
+            return "already_running"
+        return None
+
+    def schedule_probe(self, *, stream_ids: list[int] | None = None, **kwargs) -> dict:
+        """Claim queued batch ownership before an endpoint acknowledges a start.
+
+        The worker may adopt only its own claim. Resetting progress cannot make
+        another start available, and retirement/cancellation before the worker's
+        first instruction must still release that claim without opening media.
+        """
+        rejection = self._probe_run_rejection()
+        if rejection:
+            message = (
+                "Stream prober has been stopped" if rejection == "cancelled"
+                else "A probe is already in progress; check /probe/progress"
+            )
+            return {"status": rejection, "message": message}
+
+        async def run():
+            # Even an eager task factory must yield until its claim is installed.
+            await asyncio.sleep(0)
+            if self._probe_cancelled:
+                return {"status": "cancelled"}
+            if stream_ids is None:
+                return await self.probe_all_streams(**kwargs)
+            return await self.probe_streams_by_ids(stream_ids, **kwargs)
+
+        operation = run()
+        try:
+            task = asyncio.create_task(operation)
+        except BaseException:
+            operation.close()
+            raise
+        self._probe_run_task = task
+        self._probing_in_progress = True
+        self._probe_cancelled = False
+        self._probe_progress_status = "queued"
+        self._probe_progress_current_stream = ""
+        task.add_done_callback(self._scheduled_probe_done)
+        return {"status": "started"}
+
+    def _scheduled_probe_done(self, task: asyncio.Task) -> None:
+        error = None if task.cancelled() else task.exception()
+        if error is not None:
+            logger.error("[STREAM-PROBE] Background probe failed (%s)", type(error).__name__)
+        # An unstarted/cancelled worker never reaches the batch method's finally.
+        # A completed old callback must not clear a successor's ownership.
+        if self._probe_run_task is task:
+            self._probe_run_task = None
+            self._probing_in_progress = False
+            self._probe_progress_status = "failed" if error is not None else "cancelled"
+            self._probe_progress_current_stream = ""
+
+    @staticmethod
+    def _cancel_probe_tasks(tasks) -> None:
+        """Request cancellation once; another request can abort media cleanup."""
+        for task in tasks:
+            if not task.done() and not task.cancelling():
+                task.cancel()
+
+    async def _cancel_and_join_probe_tasks(self, tasks) -> None:
+        """Drain cancelled children despite repeated cancellation of the parent.
+
+        Shield the join, not just a subprocess wait: no caller may release a
+        capacity permit while a child's media contexts are still unwinding.
+        Cancellation of the caller is re-raised after cleanup, never swallowed.
+        """
+        self._cancel_probe_tasks(tasks)
+        joined = asyncio.gather(*tasks, return_exceptions=True)
+        cancelled = False
+        while not joined.done():
+            try:
+                await asyncio.shield(joined)
+            except asyncio.CancelledError:
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
 
     def cancel_probe(self) -> dict:
         """Cancel an in-progress probe operation.
@@ -1058,13 +1187,14 @@ class StreamProber:
         Returns:
             Dict with status of the cancellation.
         """
-        if not self._probing_in_progress:
+        # History/scope publication is terminal; notification delivery may still
+        # be awaiting I/O, but cancellation can no longer change that outcome.
+        if not self._probing_in_progress or self._probe_progress_status in ("completed", "failed", "cancelled", "deferred"):
             return {"status": "no_probe_running", "message": "No probe is currently running"}
 
         logger.info("[STREAM-PROBE] Cancelling in-progress probe...")
         self._probe_cancelled = True
-        for task in tuple(self._bulk_probe_tasks):
-            task.cancel()
+        self._cancel_probe_tasks(tuple(self._bulk_probe_tasks))
         return {"status": "cancelling", "message": "Probe cancellation requested"}
 
     def pause_probe(self) -> dict:
@@ -1121,7 +1251,383 @@ class StreamProber:
 
     async def probe_stream(
         self, stream_id: int, url: Optional[str], name: Optional[str] = None,
-        *, stream: Optional[dict] = None,
+        *, stream: dict | None = None, black_screen_only: bool = False,
+        _media_semaphore: asyncio.Semaphore | None = None,
+        _cancel_check: Callable[[], bool] | None = None,
+    ) -> dict:
+        """Admit every probe entrypoint before opening direct provider media.
+
+        Reservations coordinate this ECM process, not Dispatcharr viewers. See
+        docs/probe-capacity.md for the remaining read/admit race (GH1032).
+        """
+        if self._stopped:
+            return {"stream_id": stream_id, "stream_name": name,
+                    "probe_status": "skipped", "error_message": "Probe skipped: prober has been stopped"}
+        owner = asyncio.current_task()
+        self._probe_tasks.add(owner)
+        reservation = None
+        try:
+            if url:
+                try:
+                    stream, reservation = await self._wait_for_probe_capacity(
+                        stream_id, url, stream, media_semaphore=_media_semaphore,
+                        cancel_check=_cancel_check,
+                    )
+                    url = stream.get("_probe_media_url", url)
+                except Exception as exc:  # noqa: BLE001 - unknown upstream failures must refuse admission
+                    reason = (
+                        str(exc) if type(exc) is ProbeCapacityError
+                        else "Probe skipped: account capacity could not be verified"
+                    )
+                    logger.warning("[STREAM-PROBE] Stream %s: %s (%s)", stream_id, reason, type(exc).__name__)
+                    # Capacity is not a measurement of stream health. Preserve
+                    # previous successful stats and let batch callers count skips.
+                    return {"stream_id": stream_id, "stream_name": name,
+                            "probe_status": "skipped", "error_message": reason,
+                            "deferred_reason": reason}
+            # A control-plane callback can request cancellation without another
+            # await before this point. Do not schedule media with a pending
+            # cancellation: creating its child first could race that cancellation.
+            if owner.cancelling() or (self._probe_cancelled and owner in self._bulk_probe_tasks):
+                raise asyncio.CancelledError
+            if _cancel_check is not None and _cancel_check():
+                return {"stream_id": stream_id, "stream_name": name,
+                        "probe_status": "skipped", "error_message": "Probe skipped: scan cancelled"}
+            # The owner may receive multiple cancellation requests (API,
+            # scheduler, shutdown). Isolate media cleanup from those requests
+            # and join it before the reservation's finally block can run.
+            media = asyncio.create_task(self._probe_stream_admitted(stream_id, url, name, stream=stream, black_screen_only=black_screen_only))
+            try:
+                return await asyncio.shield(media)
+            except asyncio.CancelledError:
+                await self._cancel_and_join_probe_tasks((media,))
+                raise
+        finally:
+            # No await: cancellation cannot interrupt bookkeeping, and media
+            # context/subprocess cleanup has unwound before this release.
+            if reservation is not None:
+                if _media_semaphore is not None:
+                    _media_semaphore.release()
+                account_id, profile_ids = reservation
+                for counts, keys in ((self._probe_account_connections, (account_id,)),
+                                     (self._probe_profile_connections, profile_ids)):
+                    for key in keys:
+                        counts[key] -= 1
+                        if counts[key] == 0:
+                            del counts[key]
+            self._probe_tasks.discard(owner)
+
+    async def _wait_for_probe_capacity(
+        self, stream_id: int, url: str, cached: dict | None, *,
+        media_semaphore: asyncio.Semaphore | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> tuple[dict, tuple[int, tuple[int, ...]]]:
+        """Wait without holding a global media slot or a provider reservation.
+
+        Refresh stream identity on each attempt: a queued probe cannot carry a
+        reservation across a route reassignment. The deadline includes control
+        reads and lock waits, but is separate from the actual media timeout.
+        """
+        deadline = self._capacity_now() + self.probe_capacity_wait_timeout
+        reason = "Probe skipped: account capacity could not be verified"
+        first = True
+        while first or self._capacity_now() < deadline:
+            first = False
+            if cancel_check is not None and cancel_check():
+                raise ProbeCapacityError("Probe skipped: scan cancelled")
+            while self._probe_paused and asyncio.current_task() in self._bulk_probe_tasks:
+                paused_at = self._capacity_now()
+                await asyncio.sleep(0.1)
+                deadline += self._capacity_now() - paused_at
+            try:
+                # A zero wait budget means one immediate admission attempt,
+                # still with bounded upstream reads (useful for API clients).
+                budget = max(0, deadline - self._capacity_now())
+                async with asyncio.timeout(budget if self.probe_capacity_wait_timeout else 30):
+                    fresh = await asyncio.wait_for(self.client.get_stream(stream_id), timeout=10)
+                    stream = self._validated_probe_stream(stream_id, fresh, cached=cached)
+                    reservation = await self._reserve_probe_capacity(stream, url=url, media_semaphore=media_semaphore)
+                    return stream, reservation
+            except ProbeCapacityError as exc:
+                # A mismatched/malformed route or unsupported shared-capacity
+                # contract cannot be repaired by waiting for a viewer to leave.
+                # Only contention and transient control reads consume the wait
+                # budget; never poll a permanently unprovable route for minutes.
+                if not exc.retryable:
+                    raise
+                reason = str(exc)
+            except Exception:  # Control-plane errors never authorize media.
+                reason = "Probe skipped: account capacity or live status could not be verified"
+            remaining = deadline - self._capacity_now()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(0.5, remaining))
+        raise ProbeCapacityError(reason)
+
+    @staticmethod
+    def _validated_probe_stream(stream_id: int, fresh: dict, *, cached: dict | None) -> dict:
+        """Validate identity before using account references or scheduler hints.
+
+        A cached row cannot authorize a route after stream reassignment. Only
+        the selected profile ID is retained as a hint; its classification and
+        rewrite configuration come from the fresh account response.
+        """
+        unavailable = "Probe skipped: stream route capacity could not be verified"
+        if type(stream_id) is not int or stream_id <= 0:
+            raise ProbeCapacityError(unavailable)
+        for row in (fresh,) if cached is None else (fresh, cached):
+            if (not isinstance(row, dict)
+                    or type(row.get("id")) is not int or row["id"] != stream_id
+                    or not isinstance(row.get("url"), str) or not row["url"]
+                    or "m3u_account" not in row):
+                raise ProbeCapacityError(unavailable)
+            account_id = row["m3u_account"]
+            if account_id is not None and (type(account_id) is not int or account_id <= 0):
+                raise ProbeCapacityError(unavailable)
+        if cached is not None and any(cached[key] != fresh[key] for key in ("id", "url", "m3u_account")):
+            raise ProbeCapacityError(unavailable)
+        selected = cached.get("_selected_profile") if cached is not None else None
+        if selected is not None and (
+            fresh["m3u_account"] is None or not isinstance(selected, dict)
+            or type(selected.get("id")) is not int or selected["id"] <= 0
+        ):
+            raise ProbeCapacityError(unavailable)
+        stream = dict(fresh)
+        stream.pop("_selected_profile", None)
+        if selected is not None:
+            stream["_selected_profile"] = {"id": selected["id"]}
+        return stream
+
+    def _probe_route_profiles(self, stream: dict, url: str, account: dict | None) -> list[dict]:
+        """Prove supplied media and reserved capacity describe the same route.
+
+        Validate classifications before branching; accountless and unselected
+        calls still require exact URL identity. This helper never reroutes.
+        """
+        unavailable = "Probe skipped: profile capacity cannot be associated with the media route"
+        if not isinstance(url, str) or not url:
+            raise ProbeCapacityError(unavailable)
+        selected = stream.get("_selected_profile")
+        original_url = stream["url"]
+        if account is None:
+            if selected is not None or url != original_url:
+                raise ProbeCapacityError(unavailable)
+            return []
+        profiles = account["profiles"]
+        if type(account.get("max_streams")) is not int or account["max_streams"] < 0:
+            raise ProbeCapacityError(unavailable)
+        for profile in profiles:
+            if (type(profile.get("is_default")) is not bool
+                    or type(profile.get("is_active")) is not bool
+                    or type(profile.get("max_streams")) is not int or profile["max_streams"] < 0):
+                raise ProbeCapacityError(unavailable)
+        defaults = [profile for profile in profiles if profile["is_default"]]
+        if len(defaults) != 1:
+            raise ProbeCapacityError(unavailable)
+        default = defaults[0]
+        candidates = [p for p in profiles if p["id"] == selected["id"]] if selected is not None else [default]
+        if len(candidates) != 1 or not candidates[0]["is_active"]:
+            raise ProbeCapacityError(unavailable)
+        profile = candidates[0]
+        expected_url = original_url
+        if selected is not None:
+            if not profile["is_default"] and any(not isinstance(profile.get(key), str) for key in ("search_pattern", "replace_pattern")):
+                raise ProbeCapacityError(unavailable)
+            expected_url = self._rewrite_url_for_profile(original_url, profile, require_match=True)
+        if url != expected_url:
+            raise ProbeCapacityError(unavailable)
+        route_profiles = [profile]
+        if not profile["is_default"] and expected_url == original_url:
+            if not default["is_active"]:
+                raise ProbeCapacityError(unavailable)
+            route_profiles.append(default)
+        return route_profiles
+
+    async def _probe_live_profile_counts(self, profile_map: dict[int, int]) -> dict[int, int]:
+        """Fresh counts, or <=30s last VERIFIED snapshot on a read failure.
+
+        Cached counts never include our direct probes, and are reusable only
+        with the same profile attribution. Failed reads never refresh the age.
+        """
+        unavailable = "Probe skipped: live status unavailable or stale; capacity cannot be verified"
+        try:
+            status = await asyncio.wait_for(self.client.get_channel_stats(), timeout=10)
+            if not isinstance(status, dict) or not isinstance(status.get("channels"), list):
+                raise ProbeCapacityError(unavailable)
+            channels = status["channels"]
+            if "count" in status and (type(status["count"]) is not int or status["count"] != len(channels)):
+                raise ProbeCapacityError(unavailable)
+            counts = {}
+            for channel in channels:
+                pid = channel.get("m3u_profile_id") if isinstance(channel, dict) else None
+                if type(pid) is not int or pid not in profile_map:
+                    raise ProbeCapacityError(unavailable)
+                counts[pid] = counts.get(pid, 0) + 1
+        except Exception:
+            snapshot = self._probe_status_snapshot
+            if (snapshot is None or self._capacity_now() - snapshot[0] > 30
+                    or snapshot[2] != profile_map):
+                raise ProbeCapacityError(unavailable, retryable=True) from None
+            logger.warning("[STREAM-PROBE] Live status unavailable; using validated snapshot (age %.1fs)",
+                           self._capacity_now() - snapshot[0])
+            return dict(snapshot[1])
+        self._probe_status_snapshot = (self._capacity_now(), counts, dict(profile_map))
+        return counts
+
+    async def _reserve_probe_capacity(
+        self, stream: dict, *, url: str,
+        media_semaphore: asyncio.Semaphore | None = None,
+    ) -> tuple[int, tuple[int, ...]]:
+        """Select/validate the media route and locally reserve its profile(s).
+
+        Dispatcharr copies account.max_streams to the DEFAULT profile; it is
+        not a total cap over independent profile logins (upstream connection_pool).
+        Shared server-group limits remain unverified and are never guessed.
+        This serializes ECM admissions only, not later Dispatcharr viewers.
+        """
+        unavailable = "Probe skipped: account capacity could not be verified"
+        if not isinstance(stream, dict) or "m3u_account" not in stream:
+            raise ProbeCapacityError(unavailable)
+        account_id = stream["m3u_account"]
+        if account_id is None:
+            self._probe_route_profiles(stream, url, None)
+            raise ProbeCapacityError("Probe skipped: accountless capacity cannot be verified")
+        if type(account_id) is not int or account_id <= 0:
+            raise ProbeCapacityError(unavailable)
+
+        async with self._probe_capacity_lock:
+            accounts = await asyncio.wait_for(self.client.get_m3u_accounts(), timeout=10)
+            if not isinstance(accounts, list):
+                raise ProbeCapacityError(unavailable)
+            account_map, profile_map = {}, {}
+            for account in accounts:
+                if (not isinstance(account, dict) or type(account.get("id")) is not int
+                        or account["id"] <= 0):
+                    raise ProbeCapacityError(unavailable)
+                aid = account["id"]
+                if aid in account_map or not isinstance(account.get("profiles"), list):
+                    raise ProbeCapacityError(unavailable)
+                account_map[aid] = account
+                for profile in account["profiles"]:
+                    if (not isinstance(profile, dict) or type(profile.get("id")) is not int
+                            or profile["id"] <= 0):
+                        raise ProbeCapacityError(unavailable)
+                    pid = profile["id"]
+                    if pid in profile_map:
+                        raise ProbeCapacityError(unavailable)
+                    profile_map[pid] = aid
+            account = account_map.get(account_id)
+            if account is None:
+                raise ProbeCapacityError(unavailable)
+            self._probe_route_profiles(stream, url, account)
+            if "server_group" not in account or account["server_group"] is not None:
+                raise ProbeCapacityError("Probe skipped: shared server-group capacity cannot be verified")
+            profile_active = await self._probe_live_profile_counts(profile_map)
+            account_active = sum(count for pid, count in profile_active.items() if profile_map[pid] == account_id)
+            local_account = self._probe_account_connections.get(account_id, 0)
+            limit = self.max_concurrent_probes if self.parallel_probing_enabled else 1
+            if sum(self._probe_account_connections.values()) >= limit:
+                raise ProbeCapacityError("Probe skipped: global probe capacity is full", retryable=True)
+            if media_semaphore is not None and media_semaphore.locked():
+                raise ProbeCapacityError("Probe skipped: scan media concurrency capacity is full", retryable=True)
+
+            # Keep the tuner's separate physical limit even if metadata says
+            # unlimited. Do not silently turn HDHomeRun into an IPTV spare login.
+            is_tuner = ':5004/' in url or 'hdhomerun' in url.lower()
+            if is_tuner and account_active + local_account >= 2:
+                raise ProbeCapacityError("Probe skipped: tuner capacity is full", retryable=True)
+            if self._is_account_held(account_id):
+                raise ProbeCapacityError("Probe skipped: provider is in rate-limit backoff", retryable=True)
+            if (account_id in self._account_ramp_state
+                    and local_account >= self._get_account_ramp_limit(account_id, 0, 0)):
+                raise ProbeCapacityError("Probe skipped: provider probe ramp capacity is full", retryable=True)
+
+            profiles = sorted((p for p in account["profiles"] if p["is_active"]),
+                              key=lambda p: (not p["is_default"], p["id"]))
+            self._account_profiles[account_id] = profiles
+            self._profile_max_streams.update({p["id"]: p["max_streams"] for p in profiles})
+            # An explicit selected route must still prove its supplied URL;
+            # ordinary callers delegate selection to this common admission path.
+            pinned = stream.get("_selected_profile")
+            if pinned is not None:
+                candidates = [p for p in profiles if p["id"] == pinned["id"]]
+            elif is_tuner:
+                candidates = [p for p in profiles if p["is_default"]]
+            else:
+                candidates = profiles
+            eligible = []
+            route_error = None
+            full_profiles = {}
+            for profile in candidates:
+                try:
+                    media_url = (self._rewrite_url_for_profile(stream["url"], profile, require_match=True)
+                                 if not profile["is_default"] else stream["url"])
+                    candidate = {**stream, "_selected_profile": profile}
+                    routes = self._probe_route_profiles(candidate, media_url, account)
+                except Exception:
+                    route_error = ProbeCapacityError("Probe skipped: profile route capacity cannot be verified")
+                    continue
+                # Identity aliases cannot manufacture independent headroom.
+                # Charge the same URL's known sibling profiles as well, even
+                # when the default route was selected rather than its alias.
+                for sibling in profiles:
+                    if any(p["id"] == sibling["id"] for p in routes):
+                        continue
+                    try:
+                        sibling_url = (stream["url"] if sibling["is_default"] else
+                                       self._rewrite_url_for_profile(stream["url"], sibling, require_match=True))
+                    except Exception:
+                        continue
+                    if sibling_url == media_url:
+                        routes.append(sibling)
+                # Account settings mirror the default's cap; if a transient or
+                # older response disagrees, honor the narrower declared default
+                # allowance, never impose it on a separate rewritten login.
+                limits = {
+                    p["id"]: min((n for n in (p["max_streams"], account["max_streams"] if p["is_default"] else 0)
+                                  if n > 0), default=0)
+                    for p in routes
+                }
+                if all(limits[p["id"]] == 0 or (
+                    (account_active + local_account if len(routes) > 1 else
+                     profile_active.get(p["id"], 0) + self._probe_profile_connections.get(p["id"], 0))
+                    < limits[p["id"]]
+                ) for p in routes):
+                    eligible.append((profile, media_url, routes))
+                else:
+                    for p in routes:
+                        used = (account_active + local_account if len(routes) > 1 else
+                                profile_active.get(p["id"], 0) + self._probe_profile_connections.get(p["id"], 0))
+                        if limits[p["id"]] > 0 and used >= limits[p["id"]]:
+                            full_profiles[p["id"]] = f"profile {p['id']}: {used}/{limits[p['id']]} connections"
+            if not eligible:
+                if route_error and len(candidates) == 1:
+                    raise route_error
+                reason = "Probe skipped: profile capacity is full"
+                if route_error:
+                    reason += " or profile routes cannot be verified"
+                if full_profiles:
+                    reason += " (" + "; ".join(list(full_profiles.values())[:8]) + ")"
+                raise ProbeCapacityError(reason, retryable=bool(full_profiles))
+            selected = self._select_probe_profile(account_id, profile_active, self._probe_profile_connections, 0,
+                                                  account_active + local_account,
+                                                  eligible_profile_ids={item[0]["id"] for item in eligible})
+            profile, media_url, route_profiles = next(item for item in eligible if item[0]["id"] == selected["id"])
+            if media_semaphore is not None:
+                # Checked under the shared admission lock. acquire() completes
+                # immediately without yielding; waiters never hold this slot.
+                await media_semaphore.acquire()
+            stream["_selected_profile"] = profile
+            stream["_probe_media_url"] = media_url
+            self._probe_account_connections[account_id] = local_account + 1
+            profile_ids = tuple(p["id"] for p in route_profiles)
+            for pid in profile_ids:
+                self._probe_profile_connections[pid] = self._probe_profile_connections.get(pid, 0) + 1
+            return account_id, profile_ids
+
+    async def _probe_stream_admitted(
+        self, stream_id: int, url: str | None, name: str | None = None,
+        *, stream: dict | None = None, black_screen_only: bool = False,
     ) -> dict:
         """
         Probe a single stream using ffprobe.
@@ -1134,6 +1640,12 @@ class StreamProber:
             return self._save_probe_result(
                 stream_id, name, None, "failed", "No URL available"
             )
+
+        if black_screen_only:
+            # Standalone scan: same admission/ownership, no full probe or health
+            # save. The task retains its existing indeterminate/error contract.
+            return {"stream_id": stream_id, "probe_status": "success",
+                    "is_black_screen": await self._detect_black_screen(url, stream_id=stream_id)}
 
         try:
             user_agent = await StreamUserAgentResolver(self.client).resolve(stream, stream_id=stream_id)
@@ -2288,7 +2800,8 @@ class StreamProber:
 
     def _select_probe_profile(self, account_id: int, dispatcharr_profile_conns: dict,
                                our_profile_conns: dict, account_max: int,
-                               total_account_conns: int) -> Optional[dict]:
+                               total_account_conns: int, *,
+                               eligible_profile_ids: set[int] | None = None) -> Optional[dict]:
         """Select the best profile to use for probing a stream from this account.
 
         Distributes probes across profiles using the configured strategy:
@@ -2321,7 +2834,8 @@ class StreamProber:
             for i in range(len(profiles)):
                 idx = (last_idx + 1 + i) % len(profiles)
                 profile = profiles[idx]
-                if self._profile_has_capacity(profile, dispatcharr_profile_conns, our_profile_conns):
+                if ((eligible_profile_ids is None or profile["id"] in eligible_profile_ids)
+                        and self._profile_has_capacity(profile, dispatcharr_profile_conns, our_profile_conns)):
                     self._round_robin_index[account_id] = idx
                     logger.debug("[STREAM-PROBE] Account %s: round_robin selected profile %s "
                                "('%s', idx=%s)",
@@ -2336,6 +2850,8 @@ class StreamProber:
             best_headroom = -1
             for profile in profiles:
                 profile_id = profile["id"]
+                if eligible_profile_ids is not None and profile_id not in eligible_profile_ids:
+                    continue
                 profile_max = self._profile_max_streams.get(profile_id, 0)
                 if profile_max == 0:
                     # Unlimited = always best
@@ -2359,7 +2875,8 @@ class StreamProber:
         else:
             # "fill_first" (default) — iterate in order, pick first with capacity
             for profile in profiles:
-                if self._profile_has_capacity(profile, dispatcharr_profile_conns, our_profile_conns):
+                if ((eligible_profile_ids is None or profile["id"] in eligible_profile_ids)
+                        and self._profile_has_capacity(profile, dispatcharr_profile_conns, our_profile_conns)):
                     logger.debug("[STREAM-PROBE] Account %s: fill_first selected profile %s "
                                "('%s')",
                                account_id, profile['id'], profile.get('name', 'unnamed'))
@@ -2367,7 +2884,9 @@ class StreamProber:
             logger.debug("[STREAM-PROBE] Account %s: fill_first - all profiles at capacity", account_id)
             return None
 
-    def _rewrite_url_for_profile(self, original_url: str, profile: dict) -> str:
+    def _rewrite_url_for_profile(
+        self, original_url: str, profile: dict, *, require_match: bool = False,
+    ) -> str:
         """Rewrite a stream URL for a specific profile using search/replace patterns.
 
         Args:
@@ -2382,22 +2901,39 @@ class StreamProber:
 
         search_pattern = profile.get("search_pattern", "")
         replace_pattern = profile.get("replace_pattern", "")
+        if isinstance(replace_pattern, str):
+            # Dispatcharr transform_url accepts JS-style captures in stored
+            # profiles, including the recorded default identity rule "$1".
+            replace_pattern = re.sub(r'\$<([^>]+)>', r'\\g<\1>', replace_pattern)
+            replace_pattern = re.sub(r'\$(\d+)', r'\\\1', replace_pattern)
 
         if not search_pattern:
+            if require_match:
+                raise ProbeCapacityError("Probe skipped: profile capacity cannot be associated with the media route")
             return original_url
 
         # User-supplied regex — run through safe_regex to cap ReDoS exposure.
-        # safe_regex.sub returns the original text unchanged on timeout,
-        # oversize pattern, or compile error, and emits a [SAFE_REGEX] WARN
-        # log with a pattern sha256 + excerpt. That sentinel is the correct
-        # fallback here: an unrewritten URL probes directly against the
-        # source, which is safer than blocking the probe entirely.
+        # The legacy helper returns the original URL on errors. Admission opts
+        # into match/error evidence: a fallback must not authorize the selected
+        # profile when media still uses the default route. Metadata-only logs
+        # keep provider credentials out of diagnostics in either mode.
+        matched = False
+        failures = []
+
+        def replace(match):
+            nonlocal matched
+            matched = True
+            return match.expand(replace_pattern)
+
         rewritten = safe_regex.sub(
             search_pattern,
-            replace_pattern,
+            replace if require_match else replace_pattern,
             original_url,
+            on_error=failures.append if require_match else None,
             diagnostic_mode="metadata_only",
         )
+        if require_match and (failures or not matched):
+            raise ProbeCapacityError("Probe skipped: profile capacity cannot be associated with the media route")
         if rewritten != original_url:
             # Rewrite patterns may themselves contain provider credentials.
             logger.debug("[STREAM-PROBE] Profile %s: rewrote URL", profile['id'])
@@ -2846,10 +3382,14 @@ class StreamProber:
                      self.parallel_probing_enabled, self.max_concurrent_probes,
                      self.profile_distribution_strategy)
 
-        if self._probing_in_progress:
+        rejection = self._probe_run_rejection(asyncio.current_task())
+        if rejection == "cancelled":
+            return {"status": "cancelled", "probed": 0, "reordered_channels": 0}
+        if rejection:
             logger.warning("[STREAM-PROBE] Probe already in progress")
             return {"status": "already_running"}
 
+        self._probe_run_task = asyncio.current_task()
         self._probing_in_progress = True
         self._probe_cancelled = False  # Reset cancellation flag
         self._probe_paused = False  # Reset paused flag
@@ -2871,6 +3411,7 @@ class StreamProber:
         self._probe_progress_low_bitrate_count = 0
         self._account_ramp_state = {}  # Fresh ramp state for each probe run
 
+        active_tasks = {}  # Retained until provider cleanup has been awaited.
         probed_count = 0
         start_time = datetime.utcnow()
         try:
@@ -2879,14 +3420,14 @@ class StreamProber:
                 channel_group_ids_override,
             )
             if resolved_group_ids == frozenset():
-                if stream_ids_filter is None:
+                if stream_ids_filter is None and not self._probe_cancelled:
                     self._last_probe_scope_kind = "scoped"
                     self._last_probe_channel_stream_ids = set()
-                self._probe_progress_status = "completed"
+                self._probe_progress_status = self._probe_terminal_status()
                 self._probe_progress_current_stream = ""
                 self._save_probe_history(start_time, 0, reordered_channels=[])
                 return {
-                    "status": "completed",
+                    "status": self._probe_progress_status,
                     "probed": 0,
                     "reordered_channels": 0,
                 }
@@ -2919,14 +3460,14 @@ class StreamProber:
             logger.info("[STREAM-PROBE] Found %s unique streams across all channels", len(channel_stream_ids))
 
             if not channel_stream_ids:
-                if stream_ids_filter is None:
+                if stream_ids_filter is None and not self._probe_cancelled:
                     self._last_probe_scope_kind = "all" if resolved_group_ids is None else "scoped"
                     self._last_probe_channel_stream_ids = set()
-                self._probe_progress_status = "completed"
+                self._probe_progress_status = self._probe_terminal_status()
                 self._probe_progress_current_stream = ""
                 self._save_probe_history(start_time, 0, reordered_channels=[])
                 return {
-                    "status": "completed",
+                    "status": self._probe_progress_status,
                     "probed": 0,
                     "reordered_channels": 0,
                 }
@@ -2934,7 +3475,6 @@ class StreamProber:
             # Fetch M3U accounts to map account IDs to names and max_streams
             logger.info("[STREAM-PROBE] Fetching M3U accounts...")
             m3u_accounts_map = {}  # id -> name
-            m3u_max_streams = {}   # id -> max_streams
             self._profile_to_account_map = {}  # profile_id -> account_id
             self._account_profiles = {}  # account_id -> [sorted list of active profile dicts]
             self._profile_max_streams = {}  # profile_id -> max_streams
@@ -2954,7 +3494,6 @@ class StreamProber:
                     account_profiles.sort(key=lambda p: (not p.get("is_default", False), p["id"]))
                     self._account_profiles[account_id] = account_profiles
                     # Use the account-level max_streams as the cap
-                    m3u_max_streams[account_id] = account.get("max_streams", 0)
                 logger.info("[STREAM-PROBE] Found %s M3U accounts, %s profiles mapped, "
                            "%s active profiles",
                            len(m3u_accounts_map), len(self._profile_to_account_map),
@@ -3038,27 +3577,14 @@ class StreamProber:
             else:
                 logger.info("[STREAM-PROBE] Starting probe of %s streams", len(streams_to_probe))
 
-            if self.parallel_probing_enabled:
-                # ========== PARALLEL PROBING MODE ==========
+            if streams_to_probe:
+                # Sequential mode also queues providers independently; shared
+                # admission limits actual media connections to one in that mode.
                 logger.info("[STREAM-PROBE] Starting parallel probe of %s streams (filtered from %s total)", len(streams_to_probe), len(all_streams))
                 logger.info("[STREAM-PROBE] Rate limit settings: max_concurrent_probes=%s", self.max_concurrent_probes)
 
-                # Global concurrency limit - max simultaneous probes regardless of M3U account
-                # This prevents system resource exhaustion when probing many streams
-                global_probe_semaphore = asyncio.Semaphore(self.max_concurrent_probes)
-                logger.info("[STREAM-PROBE] Semaphore created with limit=%s", self.max_concurrent_probes)
-
-                # Track our own probe connections per M3U (separate from Dispatcharr's active connections)
-                # This lets us know how many streams WE are currently probing per M3U
-                probe_connections_lock = asyncio.Lock()
-                probe_connections = {}  # profile_id (or m3u_id fallback) -> count of our active probes
-
                 # Results lock for thread-safe updates
                 results_lock = asyncio.Lock()
-
-                # Track active concurrent probes for debugging
-                active_probe_count = [0]  # Use list to allow modification in nested function
-                active_probe_count_lock = asyncio.Lock()
 
                 async def probe_single_stream(stream: dict, display_string: str) -> tuple[str, dict]:
                     """Probe a single stream and return (status, stream_info)."""
@@ -3066,68 +3592,26 @@ class StreamProber:
                     stream_name = stream.get("name", f"Stream {stream_id}")
                     stream_url = stream.get("url", "")
                     m3u_account_id = self._extract_m3u_account_id(stream.get("m3u_account"))
+                    if m3u_account_id:
+                        self._init_account_ramp(m3u_account_id)
 
-                    # Apply profile URL rewriting if a profile was selected
-                    selected_profile = stream.get("_selected_profile")
-                    if selected_profile:
-                        stream_url = self._rewrite_url_for_profile(stream_url, selected_profile)
-
-                    # Log probe decisions without provider URLs, which may embed
-                    # account identifiers or credentials.
-                    if selected_profile:
-                        logger.debug("[STREAM-PROBE] Stream %s (%s): "
-                                     "strategy=%s, "
-                                     "profile=%s ('%s')",
-                                     stream_id, stream_name,
-                                     self.profile_distribution_strategy,
-                                     selected_profile['id'], selected_profile.get('name', 'unnamed'))
+                    result = await self.probe_stream(stream_id, stream_url, stream_name, stream=stream)
+                    probe_status = result.get("probe_status", "failed")
+                    error_message = result.get("error_message", "")
+                    stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
+                    if probe_status == "skipped":
+                        stream_info["reason"] = error_message
+                    elif probe_status != "success":
+                        stream_info["error"] = error_message or "Unknown error"
+                        if m3u_account_id:
+                            self._record_probe_failure(m3u_account_id, error_message)
                     else:
-                        logger.debug("[STREAM-PROBE] Stream %s (%s): "
-                                     "no profile (direct provider connection)",
-                                     stream_id, stream_name)
-
-                    # Acquire global semaphore to limit total concurrent probes
-                    async with global_probe_semaphore:
-                        # Track concurrent probe count
-                        async with active_probe_count_lock:
-                            active_probe_count[0] += 1
-                            current_count = active_probe_count[0]
-                            if current_count > self.max_concurrent_probes:
-                                logger.error("[STREAM-PROBE] RATE LIMIT EXCEEDED! active=%s, limit=%s", current_count, self.max_concurrent_probes)
-                            else:
-                                logger.debug("[STREAM-PROBE] Acquired semaphore: active=%s/%s, stream=%s", current_count, self.max_concurrent_probes, stream_id)
-                        try:
-                            result = await self.probe_stream(stream_id, stream_url, stream_name, stream=stream)
-                            probe_status = result.get("probe_status", "failed")
-                            error_message = result.get("error_message", "")
-                            stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
-
-                            if probe_status != "success":
-                                stream_info["error"] = error_message or "Unknown error"
-                                if m3u_account_id:
-                                    self._record_probe_failure(m3u_account_id, error_message)
-                            else:
-                                if m3u_account_id:
-                                    self._record_probe_success(m3u_account_id)
-                                if result.get("is_black_screen", False):
-                                    stream_info["is_black_screen"] = True
-                                if result.get("is_low_fps", False):
-                                    stream_info["is_low_fps"] = True
-                                if result.get("is_low_bitrate", False):
-                                    stream_info["is_low_bitrate"] = True
-
-                            return (probe_status, stream_info)
-                        finally:
-                            # Track concurrent probe count decrement
-                            async with active_probe_count_lock:
-                                active_probe_count[0] -= 1
-                                logger.debug("[STREAM-PROBE] Released semaphore: active=%s/%s, stream=%s", active_probe_count[0], self.max_concurrent_probes, stream_id)
-                            # Release our probe connection (by profile_id or m3u_account_id)
-                            release_key = selected_profile["id"] if selected_profile else m3u_account_id
-                            if release_key:
-                                async with probe_connections_lock:
-                                    if release_key in probe_connections:
-                                        probe_connections[release_key] = max(0, probe_connections[release_key] - 1)
+                        if m3u_account_id:
+                            self._record_probe_success(m3u_account_id)
+                        for flag in ("is_black_screen", "is_low_fps", "is_low_bitrate"):
+                            if result.get(flag, False):
+                                stream_info[flag] = True
+                    return probe_status, stream_info
 
                 # Process streams with parallel probing
                 pending_streams = list(streams_to_probe)  # Streams waiting to be probed
@@ -3136,9 +3620,7 @@ class StreamProber:
                 while pending_streams or active_tasks:
                     if self._probe_cancelled:
                         self._probe_progress_status = "cancelled"
-                        # Cancel active tasks
-                        for task in active_tasks:
-                            task.cancel()
+                        self._cancel_probe_tasks(active_tasks)
                         break
 
                     # Check for pause - wait while paused
@@ -3152,28 +3634,25 @@ class StreamProber:
                     # If cancelled while paused, break
                     if self._probe_cancelled:
                         self._probe_progress_status = "cancelled"
-                        for task in active_tasks:
-                            task.cancel()
+                        self._cancel_probe_tasks(active_tasks)
                         break
 
                     # Restore status after unpause
                     if self._probe_progress_status == "paused":
                         self._probe_progress_status = "probing"
 
-                    # Get fresh connection counts from Dispatcharr (profile and account level)
-                    dispatcharr_profile_conns = await self._get_profile_active_connections()
-                    # Derive account-level from profile-level
-                    dispatcharr_connections = {}
-                    for pid, cnt in dispatcharr_profile_conns.items():
-                        aid = self._profile_to_account_map.get(pid, pid)
-                        dispatcharr_connections[aid] = dispatcharr_connections.get(aid, 0) + cnt
-                    if dispatcharr_connections:
-                        logger.info("[STREAM-PROBE] Account-level active connections: %s", dispatcharr_connections)
-
                     # Try to start new probes for streams that have available M3U capacity
                     streams_started_this_round = []
                     for stream in pending_streams:
+                        if self._probe_cancelled:
+                            break
                         m3u_account_id = self._extract_m3u_account_id(stream.get("m3u_account"))
+                        queued_for_account = sum(
+                            self._extract_m3u_account_id(s.get("m3u_account")) == m3u_account_id
+                            for s, _ in active_tasks.values()
+                        )
+                        if queued_for_account >= self.max_concurrent_probes:
+                            continue
                         stream_id = stream["id"]
                         stream_name = stream.get("name", f"Stream {stream_id}")
                         stream_url = stream.get("url", "")
@@ -3196,122 +3675,19 @@ class StreamProber:
                         else:
                             display_string = f"{display_parts[0]}: {display_parts[1]}"
 
-                        # Check M3U capacity
-                        can_probe = True
-                        skip_reason = None
-
-                        # Detect HDHomeRun-style URLs (local tuner devices)
-                        # These need limited parallelism because each probe locks a tuner
-                        is_hdhomerun = False
-                        if stream_url:
-                            # HDHomeRun URLs: http://192.168.x.x:5004/auto/... or http://IP:5004/...
-                            if ':5004/' in stream_url or 'hdhomerun' in stream_url.lower():
-                                is_hdhomerun = True
-
-                        if m3u_account_id:
-                            max_streams = m3u_max_streams.get(m3u_account_id, 0)
-
-                            # For HDHomeRun devices, limit to 2 concurrent probes regardless of max_streams
-                            # This prevents 5XX errors from overwhelming the tuner while still allowing some parallelism
-                            effective_max = 2 if is_hdhomerun else max_streams
-
-                            if effective_max > 0:
-                                # Calculate total account connections (dispatcharr + our probes)
-                                dispatcharr_active = dispatcharr_connections.get(m3u_account_id, 0)
-                                async with probe_connections_lock:
-                                    our_profile_conns_snapshot = dict(probe_connections)
-                                # Sum our probes for this account across all profiles
-                                profiles = self._account_profiles.get(m3u_account_id, [])
-                                if profiles:
-                                    our_account_total = sum(
-                                        our_profile_conns_snapshot.get(p["id"], 0) for p in profiles
-                                    )
-                                else:
-                                    our_account_total = our_profile_conns_snapshot.get(m3u_account_id, 0)
-                                total_account_conns = dispatcharr_active + our_account_total
-
-                                # Ramp-up gate: limit concurrent probes per account
-                                self._init_account_ramp(m3u_account_id)
-                                if self._is_account_held(m3u_account_id):
-                                    can_probe = False
-                                else:
-                                    ramp_limit = self._get_account_ramp_limit(m3u_account_id, effective_max, dispatcharr_active)
-                                    if our_account_total >= ramp_limit:
-                                        can_probe = False
-
-                                if can_probe:
-                                    if not is_hdhomerun and profiles:
-                                        # Profile-aware selection
-                                        selected_profile = self._select_probe_profile(
-                                            m3u_account_id, dispatcharr_profile_conns,
-                                            our_profile_conns_snapshot, effective_max, total_account_conns
-                                        )
-                                        if selected_profile:
-                                            stream["_selected_profile"] = selected_profile
-                                        else:
-                                            if our_account_total > 0:
-                                                can_probe = False  # Wait for active probes to finish
-                                            else:
-                                                m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
-                                                skip_reason = f"M3U '{m3u_name}' at max connections ({dispatcharr_active}/{effective_max})"
-                                                logger.info("[STREAM-PROBE] Skipping stream %s (%s): %s", stream_id, stream_name, skip_reason)
-                                    else:
-                                        # HDHomeRun or no profiles - use account-level logic
-                                        if total_account_conns >= effective_max:
-                                            if our_account_total > 0:
-                                                can_probe = False  # Wait, don't skip
-                                            else:
-                                                m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
-                                                skip_reason = f"M3U '{m3u_name}' at max connections ({dispatcharr_active}/{effective_max})"
-                                                logger.info("[STREAM-PROBE] Skipping stream %s (%s): %s", stream_id, stream_name, skip_reason)
-                            else:
-                                # Unlimited account — still apply ramp-up
-                                self._init_account_ramp(m3u_account_id)
-                                dispatcharr_active = dispatcharr_connections.get(m3u_account_id, 0)
-                                if self._is_account_held(m3u_account_id):
-                                    can_probe = False
-                                else:
-                                    async with probe_connections_lock:
-                                        our_profile_conns_snapshot = dict(probe_connections)
-                                    profiles = self._account_profiles.get(m3u_account_id, [])
-                                    if profiles:
-                                        our_account_total = sum(our_profile_conns_snapshot.get(p["id"], 0) for p in profiles)
-                                    else:
-                                        our_account_total = our_profile_conns_snapshot.get(m3u_account_id, 0)
-                                    ramp_limit = self._get_account_ramp_limit(m3u_account_id, 0, dispatcharr_active)
-                                    if our_account_total >= ramp_limit:
-                                        can_probe = False
-
-                        if skip_reason:
-                            # Skip this stream - M3U is at capacity with Dispatcharr connections
-                            stream_info = {"id": stream_id, "name": stream_name, "url": stream_url, "reason": skip_reason}
-                            async with results_lock:
-                                self._probe_progress_skipped_count += 1
-                                self._probe_skipped_streams.append(stream_info)
-                            probed_count += 1
-                            streams_started_this_round.append(stream)
-                            self._probe_progress_current = probed_count
-                            await self._update_probe_notification()
-                            continue
-
-                        if can_probe:
-                            # Reserve a probe connection (by profile_id or m3u_account_id)
-                            selected_profile = stream.get("_selected_profile")
-                            reserve_key = selected_profile["id"] if selected_profile else m3u_account_id
-                            if reserve_key:
-                                async with probe_connections_lock:
-                                    probe_connections[reserve_key] = probe_connections.get(reserve_key, 0) + 1
-
+                        # Shared admission owns capacity checks and waiting;
+                        # never reject from a second, stale scheduler snapshot.
+                        if not self._probe_cancelled:
                             # Start the probe task
                             task = asyncio.create_task(probe_single_stream(stream, display_string))
                             active_tasks[task] = (stream, display_string)
+                            self._bulk_probe_tasks.add(task)
                             streams_started_this_round.append(stream)
 
                             # Update progress display with active streams
-                            # Show actual concurrent probe count (inside semaphore), not queued tasks
+                            # Capacity waiters do not count as active media.
                             active_displays = [info[1] for info in active_tasks.values()]
-                            async with active_probe_count_lock:
-                                actual_concurrent = active_probe_count[0]
+                            actual_concurrent = sum(self._probe_account_connections.values())
                             if len(active_displays) == 1:
                                 self._probe_progress_current_stream = active_displays[0]
                             elif actual_concurrent <= 1:
@@ -3331,6 +3707,7 @@ class StreamProber:
                         completed_had_hdhomerun = False
                         for task in done:
                             stream, display_string = active_tasks.pop(task)
+                            self._bulk_probe_tasks.discard(task)
                             stream_url = stream.get("url", "")
                             if ':5004/' in stream_url or 'hdhomerun' in stream_url.lower():
                                 completed_had_hdhomerun = True
@@ -3349,6 +3726,9 @@ class StreamProber:
                                         if stream_info.get("is_low_bitrate"):
                                             self._probe_progress_low_bitrate_count += 1
                                             self._probe_low_bitrate_streams.append(stream_info)
+                                    elif probe_status == "skipped":
+                                        self._probe_progress_skipped_count += 1
+                                        self._probe_skipped_streams.append(stream_info)
                                     else:
                                         self._probe_progress_failed_count += 1
                                         self._probe_failed_streams.append(stream_info)
@@ -3372,143 +3752,15 @@ class StreamProber:
                     else:
                         # All pending streams are waiting for M3U capacity - wait a bit and retry
                         await asyncio.sleep(0.5)
-            else:
-                # ========== SEQUENTIAL PROBING MODE ==========
-                logger.info("[STREAM-PROBE] Starting sequential probe of %s streams (filtered from %s total)", len(streams_to_probe), len(all_streams))
-
-                for stream in streams_to_probe:
-                    if self._probe_cancelled:
-                        self._probe_progress_status = "cancelled"
-                        break
-
-                    # Check for pause - wait while paused
-                    while self._probe_paused and not self._probe_cancelled:
-                        if self._probe_progress_status != "paused":
-                            self._probe_progress_status = "paused"
-                            self._probe_progress_current_stream = "Probe paused"
-                            await self._update_probe_notification()
-                        await asyncio.sleep(1)
-
-                    # If cancelled while paused, break
-                    if self._probe_cancelled:
-                        self._probe_progress_status = "cancelled"
-                        break
-
-                    # Restore status after unpause
-                    if self._probe_progress_status == "paused":
-                        self._probe_progress_status = "probing"
-
-                    stream_id = stream["id"]
-                    stream_name = stream.get("name", f"Stream {stream_id}")
-                    stream_url = stream.get("url", "")
-
-                    # Build display string: "channel(s): stream | M3U"
-                    display_parts = []
-
-                    # Add channel name(s)
-                    if stream_id in stream_to_channels and stream_to_channels[stream_id]:
-                        channel_names = stream_to_channels[stream_id]
-                        if len(channel_names) == 1:
-                            display_parts.append(channel_names[0])
-                        else:
-                            display_parts.append(f"{channel_names[0]} (+{len(channel_names)-1})")
-                    else:
-                        display_parts.append("Unknown Channel")
-
-                    display_parts.append(stream_name)
-
-                    m3u_account_id = self._extract_m3u_account_id(stream.get("m3u_account"))
-                    if m3u_account_id and m3u_account_id in m3u_accounts_map:
-                        m3u_name = m3u_accounts_map[m3u_account_id]
-                        display_string = f"{display_parts[0]}: {display_parts[1]} | {m3u_name}"
-                    else:
-                        display_string = f"{display_parts[0]}: {display_parts[1]}"
-
-                    self._probe_progress_current = probed_count + 1
-                    self._probe_progress_current_stream = display_string
-
-                    # Check if M3U is at max connections before probing (fresh check each time)
-                    skip_reason = None
-                    selected_profile = None
-                    if m3u_account_id:
-                        max_streams = m3u_max_streams.get(m3u_account_id, 0)
-                        if max_streams > 0:
-                            dispatcharr_profile_conns = await self._get_profile_active_connections()
-                            dispatcharr_connections = {}
-                            for pid, cnt in dispatcharr_profile_conns.items():
-                                aid = self._profile_to_account_map.get(pid, pid)
-                                dispatcharr_connections[aid] = dispatcharr_connections.get(aid, 0) + cnt
-                            total_account_conns = dispatcharr_connections.get(m3u_account_id, 0)
-
-                            profiles = self._account_profiles.get(m3u_account_id, [])
-                            if profiles:
-                                # Profile-aware selection
-                                selected_profile = self._select_probe_profile(
-                                    m3u_account_id, dispatcharr_profile_conns, {},
-                                    max_streams, total_account_conns
-                                )
-                                if not selected_profile:
-                                    m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
-                                    skip_reason = f"M3U '{m3u_name}' at max connections ({total_account_conns}/{max_streams})"
-                                    logger.info("[STREAM-PROBE] Skipping stream %s (%s): %s", stream_id, stream_name, skip_reason)
-                            else:
-                                # No profiles - use account-level logic
-                                if total_account_conns >= max_streams:
-                                    m3u_name = m3u_accounts_map.get(m3u_account_id, f"M3U {m3u_account_id}")
-                                    skip_reason = f"M3U '{m3u_name}' at max connections ({total_account_conns}/{max_streams})"
-                                    logger.info("[STREAM-PROBE] Skipping stream %s (%s): %s", stream_id, stream_name, skip_reason)
-
-                    if skip_reason:
-                        # Skip this stream - M3U is at capacity
-                        stream_info = {"id": stream_id, "name": stream_name, "url": stream_url, "reason": skip_reason}
-                        self._probe_progress_skipped_count += 1
-                        self._probe_skipped_streams.append(stream_info)
-                        probed_count += 1
-                        await self._update_probe_notification()
-                        continue
-
-                    # Rewrite URL if a profile was selected
-                    if selected_profile:
-                        stream_url = self._rewrite_url_for_profile(stream_url, selected_profile)
-
-                    # Account hold check (sequential mode)
-                    if m3u_account_id:
-                        self._init_account_ramp(m3u_account_id)
-                        hold_remaining = self._get_account_hold_remaining(m3u_account_id)
-                        if hold_remaining > 0:
-                            logger.debug("[STREAM-PROBE] Account %s: waiting %.1fs", m3u_account_id, hold_remaining)
-                            await asyncio.sleep(hold_remaining)
-
-                    result = await self.probe_stream(stream_id, stream_url, stream_name, stream=stream)
-
-                    # Track success/failure
-                    probe_status = result.get("probe_status", "failed")
-                    error_message = result.get("error_message", "")
-                    stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
-                    if probe_status == "success":
-                        self._probe_progress_success_count += 1
-                        self._probe_success_streams.append(stream_info)
-                        if result.get("is_black_screen", False):
-                            self._probe_progress_black_screen_count += 1
-                            self._probe_black_screen_streams.append(stream_info)
-                        if result.get("is_low_fps", False):
-                            self._probe_progress_low_fps_count += 1
-                            self._probe_low_fps_streams.append(stream_info)
-                        if result.get("is_low_bitrate", False):
-                            self._probe_progress_low_bitrate_count += 1
-                            self._probe_low_bitrate_streams.append(stream_info)
-                        if m3u_account_id:
-                            self._record_probe_success(m3u_account_id)
-                    else:
-                        self._probe_progress_failed_count += 1
-                        stream_info["error"] = error_message or "Unknown error"
-                        self._probe_failed_streams.append(stream_info)
-                        if m3u_account_id:
-                            self._record_probe_failure(m3u_account_id, error_message)
-
-                    probed_count += 1
-                    await self._update_probe_notification()
-                    await asyncio.sleep(0.5)  # Base rate limiting delay
+            if self._probe_cancelled:
+                # FIRST_COMPLETED can leave other cancelled children cleaning up.
+                # Do not publish a terminal envelope or release run ownership yet.
+                await self._cancel_and_join_probe_tasks(active_tasks)
+                self._probe_progress_status = self._probe_terminal_status()
+                self._probe_progress_current_stream = ""
+                self._save_probe_history(start_time, probed_count, reordered_channels=[])
+                await self._finalize_probe_notification(send_alerts=completion_send_alerts)
+                return {"status": "cancelled", "probed": probed_count, "reordered_channels": 0}
 
             logger.info("[STREAM-PROBE] Completed probing %s streams", probed_count)
             logger.info("[STREAM-PROBE] Final counts: success=%s, "
@@ -3526,7 +3778,7 @@ class StreamProber:
                 self.auto_reorder_after_probe,
                 allow_reorder_after_probe,
             )
-            if self.auto_reorder_after_probe and allow_reorder_after_probe:
+            if self.auto_reorder_after_probe and allow_reorder_after_probe and not self._probe_progress_skipped_count:
                 logger.info("[STREAM-PROBE] Auto-reorder is enabled, reordering streams in probed channels...")
                 self._probe_progress_status = "reordering"
                 self._probe_progress_current_stream = "Reordering streams..."
@@ -3541,21 +3793,25 @@ class StreamProber:
                     raise
 
             # Publish reprobe scope only after the complete scheduled run succeeds.
-            if stream_ids_filter is None:
+            if stream_ids_filter is None and not self._probe_cancelled and not self._probe_progress_skipped_count:
                 self._last_probe_scope_kind = "all" if resolved_group_ids is None else "scoped"
                 self._last_probe_channel_stream_ids = set(channel_stream_ids)
                 logger.info("[STREAM-PROBE] Saved %s channel stream IDs for reprobe scoping", len(self._last_probe_channel_stream_ids))
 
+            # Cancellation during an in-flight reorder cannot undo its writes,
+            # but must not publish a successful scope/history/result afterward.
+            self._probe_progress_status = self._probe_terminal_status()
+            self._probe_progress_current_stream = ""
             # Save to probe history
             self._save_probe_history(start_time, probed_count, reordered_channels=reordered_channels)
 
             # Finalize notification with success/warning status
             await self._finalize_probe_notification(send_alerts=completion_send_alerts)
 
-            return {"status": "completed", "probed": probed_count, "reordered_channels": len(reordered_channels)}
+            return {"status": self._probe_progress_status, "probed": probed_count, "reordered_channels": len(reordered_channels), **self._probe_deferred_fields()}
         except Exception as e:
             logger.exception("[STREAM-PROBE] Probe all streams failed: %s", e)
-            self._probe_progress_status = "failed"
+            self._probe_progress_status = self._probe_terminal_status(failed=True)
             self._probe_progress_current_stream = ""
 
             # Save failed run to history
@@ -3564,9 +3820,15 @@ class StreamProber:
             # Finalize notification with error status
             await self._finalize_probe_notification(send_alerts=completion_send_alerts)
 
-            return {"status": "failed", "error": str(e), "probed": probed_count}
+            return {"status": self._probe_progress_status, "error": str(e), "probed": probed_count}
         finally:
-            self._probing_in_progress = False
+            try:
+                if active_tasks:
+                    await self._cancel_and_join_probe_tasks(active_tasks)
+            finally:
+                self._bulk_probe_tasks.difference_update(active_tasks)
+                self._probing_in_progress = False
+                self._probe_run_task = None
 
     async def probe_streams_by_ids(
         self,
@@ -3585,10 +3847,9 @@ class StreamProber:
 
         Unlike ``probe_all_streams`` it is NOT scoped to streams-in-channels: any
         stream ID that exists in Dispatcharr is probed. It also skips the M3U
-        refresh and channel-capacity gating that the channel-scoped probe-all does
-        (those are meaningful for "probe everything in my lineup", not for an
-        explicit, operator-chosen list). Concurrency is bounded by the same
-        ``max_concurrent_probes`` semaphore probe-all uses.
+        refresh and channel-scoped scheduling that probe-all does. Shared account
+        admission still applies to each probe, as for single/pipeline probes.
+        Concurrency is bounded by ``max_concurrent_probes`` as well.
 
         Args:
             stream_ids: Specific stream IDs to probe.
@@ -3604,10 +3865,14 @@ class StreamProber:
         """
         logger.info("[STREAM-PROBE] probe_streams_by_ids called with %s stream IDs", len(stream_ids))
 
-        if self._probing_in_progress:
+        rejection = self._probe_run_rejection(asyncio.current_task())
+        if rejection == "cancelled":
+            return {"status": "cancelled", "probed": 0, "total": len(stream_ids), "success": 0, "failed": 0}
+        if rejection:
             logger.warning("[STREAM-PROBE] Probe already in progress — refusing bulk probe")
             return {"status": "already_running"}
 
+        self._probe_run_task = asyncio.current_task()
         # Reset the shared probe envelope (mirrors probe_all_streams setup) so
         # get_probe_progress / get_probe_results report THIS bulk run.
         self._probing_in_progress = True
@@ -3658,8 +3923,7 @@ class StreamProber:
 
             await self._create_probe_notification(len(stream_ids), send_alerts=start_send_alerts)
 
-            # Bound concurrency with the same global semaphore probe-all uses.
-            semaphore = asyncio.Semaphore(self.max_concurrent_probes)
+            # Shared admission bounds actual media, not capacity waiters.
             results_lock = asyncio.Lock()
 
             async def _probe_one(stream: dict):
@@ -3667,10 +3931,7 @@ class StreamProber:
                 stream_id = stream["id"]
                 stream_name = stream.get("name", f"Stream {stream_id}")
                 stream_url = stream.get("url", "")
-                m3u_account_id = self._extract_m3u_account_id(stream.get("m3u_account"))
-                async with semaphore:
-                    if self._probe_cancelled:
-                        return
+                if not self._probe_cancelled:
                     self._probe_progress_current_stream = stream_name
                     result = await self.probe_stream(stream_id, stream_url, stream_name, stream=stream)
                     probe_status = result.get("probe_status", "failed")
@@ -3689,6 +3950,10 @@ class StreamProber:
                             if result.get("is_low_bitrate", False):
                                 self._probe_progress_low_bitrate_count += 1
                                 self._probe_low_bitrate_streams.append(stream_info)
+                        elif probe_status == "skipped":
+                            self._probe_progress_skipped_count += 1
+                            stream_info["reason"] = error_message
+                            self._probe_skipped_streams.append(stream_info)
                         else:
                             self._probe_progress_failed_count += 1
                             stream_info["error"] = error_message or "Unknown error"
@@ -3698,24 +3963,39 @@ class StreamProber:
                     await self._update_probe_notification()
 
             if streams_to_probe and not self._probe_cancelled:
-                tasks = {asyncio.create_task(_probe_one(s)) for s in streams_to_probe}
+                # Bound waiters per provider, not globally: a large saturated
+                # playlist must neither starve another provider nor create one
+                # polling task/control-plane request loop per stream.
+                queues = {}
+                for stream in streams_to_probe:
+                    aid = self._extract_m3u_account_id(stream.get("m3u_account"))
+                    queues.setdefault(aid, []).append(stream)
+
+                async def _probe_queue(rows):
+                    for row in rows:
+                        if self._probe_cancelled:
+                            break
+                        await _probe_one(row)
+
+                workers = self.max_concurrent_probes if self.parallel_probing_enabled else 1
+                tasks = {
+                    asyncio.create_task(_probe_queue(rows[offset::workers]))
+                    for rows in queues.values()
+                    for offset in range(min(workers, len(rows)))
+                }
                 self._bulk_probe_tasks.update(tasks)
                 try:
                     await asyncio.gather(*tasks)
                 except asyncio.CancelledError:
-                    if not self._probe_cancelled:
+                    if not self._probe_cancelled or asyncio.current_task().cancelling():
                         raise
                 finally:
-                    for task in tasks:
-                        if not task.done():
-                            task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                    self._bulk_probe_tasks.difference_update(tasks)
+                    try:
+                        await self._cancel_and_join_probe_tasks(tasks)
+                    finally:
+                        self._bulk_probe_tasks.difference_update(tasks)
 
-            if self._probe_cancelled:
-                self._probe_progress_status = "cancelled"
-            else:
-                self._probe_progress_status = "completed"
+            self._probe_progress_status = self._probe_terminal_status()
             self._probe_progress_current_stream = ""
 
             logger.info(
@@ -3733,6 +4013,7 @@ class StreamProber:
                 self.auto_reorder_after_probe
                 and allow_reorder_after_probe
                 and not self._probe_cancelled
+                and not self._probe_progress_skipped_count
             ):
                 self._probe_progress_status = "reordering"
                 self._probe_progress_current_stream = "Reordering streams..."
@@ -3741,29 +4022,33 @@ class StreamProber:
                     logger.info("[STREAM-PROBE-SORT] Bulk probe auto-reordered %s channels", len(reordered_channels))
                 except Exception as e:
                     logger.error("[STREAM-PROBE] Bulk probe auto-reorder failed: %s", e)
-                self._probe_progress_status = "completed"
-                self._probe_progress_current_stream = ""
+            # Match probe-all: cancellation during reorder remains terminally
+            # cancelled, while history retains any returned, already-landed work.
+            self._probe_progress_status = self._probe_terminal_status()
+            self._probe_progress_current_stream = ""
 
             # Reuse the shared history + notification finalization path.
             self._save_probe_history(start_time, probed_count, reordered_channels=reordered_channels)
             await self._finalize_probe_notification()
 
             return {
-                "status": "cancelled" if self._probe_cancelled else "completed",
+                "status": self._probe_progress_status,
                 "probed": probed_count,
                 "total": len(stream_ids),
                 "success": self._probe_progress_success_count,
                 "failed": self._probe_progress_failed_count,
+                **self._probe_deferred_fields(),
             }
         except Exception as e:
             logger.exception("[STREAM-PROBE] Bulk probe failed: %s", e)
-            self._probe_progress_status = "failed"
+            self._probe_progress_status = self._probe_terminal_status(failed=True)
             self._probe_progress_current_stream = ""
             self._save_probe_history(start_time, probed_count, error=str(e))
             await self._finalize_probe_notification()
-            return {"status": "failed", "error": str(e), "probed": probed_count}
+            return {"status": self._probe_progress_status, "error": str(e), "probed": probed_count}
         finally:
             self._probing_in_progress = False
+            self._probe_run_task = None
 
     def get_probe_progress(self) -> dict:
         """Get current probe all streams progress."""
@@ -3775,6 +4060,7 @@ class StreamProber:
             "total": self._probe_progress_total,
             "current": self._probe_progress_current,
             "status": self._probe_progress_status,
+            "deferred_reason": self._probe_deferred_fields().get("deferred_reason"),
             "current_stream": self._probe_progress_current_stream,
             "success_count": self._probe_progress_success_count,
             "failed_count": self._probe_progress_failed_count,
@@ -3858,6 +4144,23 @@ class StreamProber:
             "failure_breakdown": self._failure_breakdown(),
         }
 
+    def _probe_terminal_status(self, *, failed: bool = False, status: str = "completed") -> str:
+        """Cancellation wins over an aborting failure, then normal completion.
+
+        Diagnostics are orthogonal: a cancelled run may retain an error, and an
+        exception with an empty message still fails an uncancelled run. Callers
+        decide what aborts: bulk's optional best-effort reorder remains nonfatal.
+        History also preserves an already-recorded cancelled/failed status.
+        """
+        if self._probe_cancelled or status == "cancelled":
+            return "cancelled"
+        if not failed and status == "completed" and self._probe_progress_skipped_count:
+            return "deferred"
+        return "failed" if failed else status
+
+    def _probe_deferred_fields(self) -> dict:
+        return {"deferred_reason": PROBE_DEFERRED_REASON} if self._probe_progress_status == "deferred" else {}
+
     def _save_probe_history(self, start_time: datetime, total: int, error: str = None, reordered_channels: list = None):
         """Save a probe run to history (keeps last 5 runs)."""
         end_time = datetime.utcnow()
@@ -3871,8 +4174,9 @@ class StreamProber:
             "success_count": self._probe_progress_success_count,
             "failed_count": self._probe_progress_failed_count,
             "skipped_count": self._probe_progress_skipped_count,
-            "status": "failed" if error else ("completed" if self._probe_progress_status == "completed" else self._probe_progress_status),
+            "status": self._probe_terminal_status(failed=bool(error), status=self._probe_progress_status),
             "error": error,
+            "deferred_reason": self._probe_deferred_fields().get("deferred_reason"),
             "success_streams": list(self._probe_success_streams),  # Copy the list
             "failed_streams": list(self._probe_failed_streams),    # Copy the list
             # Why the failures happened, not just how many (bead
@@ -4109,6 +4413,7 @@ def ensure_prober() -> Optional[StreamProber]:
             bitrate_sample_duration=settings.bitrate_sample_duration,
             parallel_probing_enabled=settings.parallel_probing_enabled,
             max_concurrent_probes=settings.max_concurrent_probes,
+            probe_capacity_wait_timeout=settings.probe_capacity_wait_timeout,
             profile_distribution_strategy=settings.profile_distribution_strategy,
             skip_recently_probed_hours=settings.skip_recently_probed_hours,
             refresh_m3us_before_probe=settings.refresh_m3us_before_probe,

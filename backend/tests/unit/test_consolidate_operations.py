@@ -402,16 +402,19 @@ def test_consolidating_an_update_preserves_every_field_except_data():
     assert updates[0].model_dump(exclude={"data"}) == op.model_dump(exclude={"data"})
 
 
-def test_the_range_op_consolidation_rebuilds_carry_no_per_operation_bookkeeping():
+def test_the_range_op_consolidation_rebuilds_carry_every_field_by_hand():
     """``bulkAssignChannelNumbers`` is the one arm that genuinely CANNOT
     template off a single input op -- it regroups several into consecutive
-    ranges -- so its output is still built from parts. That is only safe while
-    the model has nothing else on it. Adding a field to
+    ranges -- so its output is still built from parts, and every field on the
+    model has to be carried across explicitly. ``expectedNumbers`` is per
+    channel and is split with the range (see
+    ``tests/routers/test_renumber_baselines.py``). Adding another field to
     ``BulkAssignNumbersOp`` has to be a decision, so it breaks this."""
     assert set(BulkAssignNumbersOp.model_fields) == {
         "type",
         "channelIds",
         "startingNumber",
+        "expectedNumbers",
     }
 
 

@@ -2,13 +2,17 @@
 Tests for cloud storage framework: adapters, crypto, and cloud target API.
 """
 import json
-import pytest
+import socket
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from cloud_storage import ConnectionTestResult, get_adapter
+from cloud_storage.crypto import (
+    decrypt_credentials,
+    encrypt_credentials,
+    reset_key_cache,
+)
 from cryptography.fernet import Fernet
-
-from cloud_storage import get_adapter, ConnectionTestResult
-from cloud_storage.crypto import encrypt_credentials, decrypt_credentials, reset_key_cache
 
 
 # =============================================================================
@@ -196,6 +200,25 @@ class TestGDriveTokenUriSSRF:
     otherwise a malicious SA JSON with token_uri pointing at the cloud-metadata
     endpoint triggers an unvalidated outbound request (SEC-1)."""
 
+    @pytest.fixture(autouse=True)
+    def controlled_google_dns(self, monkeypatch):
+        """Keep the actual SSRF validator; control only its DNS boundary.
+
+        No test in this class opens a Google connection. Live DNS made the
+        acceptance case fail offline and let rejection cases fail at the wrong
+        host, before they exercised the malicious token URI.
+        """
+        lookups = []
+
+        def resolve(host, port, *, proto):
+            assert host in {"www.googleapis.com", "oauth2.googleapis.com"}
+            assert port == 443 and proto == socket.IPPROTO_TCP
+            lookups.append(host)
+            return [(socket.AF_INET, socket.SOCK_STREAM, proto, "", ("8.8.8.8", port))]
+
+        monkeypatch.setattr("security.ssrf.socket.getaddrinfo", resolve)
+        return lookups
+
     def _adapter(self, token_uri):
         sa_info = {
             "type": "service_account",
@@ -240,13 +263,29 @@ class TestGDriveTokenUriSSRF:
         assert result.success is False
         mock_get_service.assert_not_called()
 
-    def test_validate_endpoint_allows_default_google_token_uri(self):
+    def test_validate_endpoint_allows_default_google_token_uri(self, controlled_google_dns):
         """A normal SA JSON (well-known Google token_uri, or none) passes the
         chokepoint — the legitimate path is not broken."""
         # Explicit well-known token_uri.
         self._adapter("https://oauth2.googleapis.com/token")._validate_endpoint()
         # Omitted token_uri -> falls back to the well-known default.
         self._adapter(None)._validate_endpoint()
+        assert controlled_google_dns == [
+            "www.googleapis.com", "oauth2.googleapis.com",
+            "www.googleapis.com", "oauth2.googleapis.com",
+        ]
+
+    @pytest.mark.parametrize("poisoned_host", ["www.googleapis.com", "oauth2.googleapis.com"])
+    def test_legitimate_google_names_still_reject_poisoned_dns(self, monkeypatch, poisoned_host):
+        from cloud_storage.upload_security import SSRFError
+
+        def resolve(host, port, *, proto):
+            addresses = ["8.8.8.8", "169.254.169.254"] if host == poisoned_host else ["8.8.8.8"]
+            return [(socket.AF_INET, socket.SOCK_STREAM, proto, "", (ip, port)) for ip in addresses]
+
+        monkeypatch.setattr("security.ssrf.socket.getaddrinfo", resolve)
+        with pytest.raises(SSRFError, match="denied address"):
+            self._adapter("https://oauth2.googleapis.com/token")._validate_endpoint()
 
 
 # =============================================================================

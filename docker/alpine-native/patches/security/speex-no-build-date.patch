@@ -1,0 +1,27 @@
+---
+ src/speexdec.c |    2 +-
+ src/speexenc.c |    2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+--- a/src/speexdec.c
++++ b/src/speexdec.c
+@@ -291,7 +291,7 @@ void version()
+ {
+    const char* speex_version;
+    speex_lib_ctl(SPEEX_LIB_GET_VERSION_STRING, (void*)&speex_version);
+-   printf ("speexdec (Speex decoder) version %s (compiled " __DATE__ ")\n", speex_version);
++   printf ("speexdec (Speex decoder) version %s\n", speex_version);
+    printf ("Copyright (C) 2002-2006 Jean-Marc Valin\n");
+ }
+ 
+--- a/src/speexenc.c
++++ b/src/speexenc.c
+@@ -203,7 +203,7 @@ void version()
+ {
+    const char* speex_version;
+    speex_lib_ctl(SPEEX_LIB_GET_VERSION_STRING, (void*)&speex_version);
+-   printf ("speexenc (Speex encoder) version %s (compiled " __DATE__ ")\n", speex_version);
++   printf ("speexenc (Speex encoder) version %s\n", speex_version);
+    printf ("Copyright (C) 2002-2006 Jean-Marc Valin\n");
+ }
+ 

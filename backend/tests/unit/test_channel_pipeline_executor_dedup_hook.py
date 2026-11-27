@@ -21,7 +21,7 @@ import pytest
 import database
 from channel_pipeline_evaluator import StreamContext
 from channel_pipeline_executor import ActionExecutor, ExecutionContext
-from models import PendingMerge
+from models import PendingMerge, PendingMergeJournal
 
 
 @pytest.fixture
@@ -311,9 +311,14 @@ class TestRepeatM3URefreshIdempotency:
 
 
 class TestDryRunBypass:
-    """Dry-run previews must NOT mutate the queue."""
+    """Dry-run previews must NOT mutate the queue.
 
-    def test_dry_run_does_not_enqueue_even_with_strong_match(
+    GH #1018 changed what a dry run REPORTS, not what it writes: it used to
+    bypass the hook and predict a create the live run would not perform; it
+    now predicts the deferral (read-only) and still writes nothing.
+    """
+
+    def test_dry_run_predicts_deferral_without_enqueueing_a_strong_match(
         self, test_session, _bind_session_local
     ):
         existing = [
@@ -344,14 +349,20 @@ class TestDryRunBypass:
 
         result = _run(executor.execute(action, stream_ctx, exec_ctx))
 
-        # Dry-run preview shows "would create" (it actually does match
-        # the existing channel via the executor's own _find_channel_by_name
-        # exact lookup, so we get the "already exists" path — that is
-        # the pre-BD-F behaviour and the hook does NOT change it for
-        # dry-run). What matters: no pending_merges row was written.
+        # No pending_merges row (or journal row) was written...
         assert result.success is True
         assert test_session.query(PendingMerge).count() == 0
-        assert exec_ctx.pending_merges_added == 0
+        assert test_session.query(PendingMergeJournal).count() == 0
+        # ...but the preview predicts what the live hook would do: defer
+        # behind a NEW row (none exists yet, so no id), never a create.
+        assert result.created is False
+        assert result.skipped is True
+        assert result.pending_merge_deferred is True
+        assert result.pending_merge_id is None
+        assert result.description.startswith("PREDICTED")
+        assert exec_ctx.pending_merges_added == 1
+        assert exec_ctx.pending_merge_ids == []
+        assert exec_ctx.predicted_new_pending_merge_keys == {("ESPN HD", "100")}
 
 
 # ---------------------------------------------------------------------------

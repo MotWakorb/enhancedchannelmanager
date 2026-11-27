@@ -99,7 +99,12 @@ class Endpoint:
 # contract test can't cross-check it (the backend body schema has no
 # properties).
 _CHANNEL_PATCH_FIELDS = frozenset(
-    {"name", "channel_number", "channel_group_id", "tvg_id", "logo_id", "streams"}
+    {
+        "name", "channel_number", "channel_group_id", "tvg_id", "logo_id", "streams",
+        # ECM bookkeeping the backend strips before forwarding: the baseline a
+        # channel_number write must carry.
+        "expectedNumber",
+    }
 )
 
 # backend/routers/auto_creation.py :: CreateAutoCreationRuleRequest
@@ -250,7 +255,7 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="channels_assign_numbers",
         method="POST",
         path="/api/channels/assign-numbers",
-        request_fields=frozenset({"channel_ids", "starting_number"}),
+        request_fields=frozenset({"channel_ids", "starting_number", "expected_numbers"}),
     ),
     "channels_clear_auto_created": Endpoint(
         name="channels_clear_auto_created",
@@ -812,6 +817,20 @@ ENDPOINTS: dict[str, Endpoint] = {
     # notifications) — backend/routers/m3u_digest.py get/update_m3u_digest_settings.
     # request_fields mirrors M3UDigestSettingsUpdate (m3u_digest.py:27) verbatim;
     # account_ids (bd-wwovg) scopes which M3U accounts' changes are notified.
+    "m3u_change_exclusions_get": Endpoint(
+        name="m3u_change_exclusions_get", method="GET", path="/api/m3u/changes/exclusions",
+        response_fields=frozenset({"exclusions"}),
+    ),
+    "m3u_change_exclusions_update": Endpoint(
+        name="m3u_change_exclusions_update", method="PATCH", path="/api/m3u/changes/exclusions",
+        request_fields=frozenset({"add", "remove", "clear"}),
+        response_fields=frozenset({"exclusions"}),
+    ),
+    "m3u_change_groups": Endpoint(
+        name="m3u_change_groups", method="GET", path="/api/m3u/changes/groups",
+        query_params=frozenset({"m3u_account_id", "search", "page", "page_size"}),
+        response_fields=frozenset({"results", "total", "page", "page_size", "total_pages"}),
+    ),
     "m3u_digest_get_settings": Endpoint(
         name="m3u_digest_get_settings",
         method="GET",

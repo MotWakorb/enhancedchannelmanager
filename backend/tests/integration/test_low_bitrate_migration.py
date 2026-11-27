@@ -18,6 +18,8 @@ def test_low_bitrate_migration_upgrade_downgrade_and_bootstrap(tmp_path):
     with engine.begin() as connection:
         connection.execute(text("INSERT INTO stream_stats (stream_id, probe_status, created_at, consecutive_failures, is_black_screen, is_low_fps) VALUES (1, 'success', CURRENT_TIMESTAMP, 0, 0, 0)"))
     command.upgrade(config, "0056")
+    # Schema parity is a HEAD assertion, not a property of historic 0056.
+    command.upgrade(config, "head")
     assert database._schema_matches_head(engine) is True
     with engine.connect() as connection:
         assert connection.execute(text("SELECT is_low_bitrate FROM stream_stats WHERE stream_id=1")).scalar_one() == 0

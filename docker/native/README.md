@@ -100,6 +100,38 @@ The source collector resolves complete exact RPM provenance separately.
 
 ## Maintenance and limits
 
+### 20261105 security cohort
+
+The four native P1 fixes use one freshly authenticated official cohort on each
+architecture. Both builder and runtime require the recorded repomd SHA256 **after
+GPG-enforced refresh**, so a changed rolling snapshot fails closed rather than
+silently reusing the `20261105` label. Direct builder descriptors refresh exactly
+12 per architecture; 35 AMD64 and 34 ARM64 descriptors remain unchanged. This
+necessarily includes LAME 4.0, HarfBuzz 15.0, SVT-AV1 4.3 and libopenmpt 0.8.10;
+actual native compilation/media compatibility must be verified, not inferred.
+
+`security_runtime_rpms` separately pins librsvg 2.63.4-1.1, Speex 1.2.1-3.1,
+Mozilla CA 2.92-2.1 and the three Brotli libraries 1.2.1-1.1. The builder installs
+and checks all six actual identities/source headers. They accompany recursive
+ELF-provider specs in `runtime-packages.txt`; the CA is **not** mislabeled an ELF
+provider. Per-architecture CA hashes remain distinct despite its noarch header.
+Final runtime checks query all six installed vendor/architecture/version/source
+identities. The source consumer binds the new recipe independently.
+
+The old recovered 156/155-source indexes cannot describe this new inventory.
+Docker uses the collector's fresh all-origin path for SUSE sources. Only the two
+unchanged architecture-specific Packman SRPMs are reused directly from the
+native builder's already retained source inputs, with exact manifest URL/hash
+binding and a full isolated-key/header/Source/Patch re-verification. No old
+carrier hash, source index, package identity, base digest, FFmpeg/gosu input,
+configuration, key or Packman pin is relabeled. This is not a new vendor fork or
+a generic partial cache.
+
+Fresh signed Nov7 availability is not image clearance. Both real native builds,
+source/media/runtime gates and complete unsuppressed scans remain required.
+The larger immutable repository retention design remains separate; expiration
+or a changed signed cohort causes failure, not a floating fallback.
+
 Update both architecture records from actual signed repository metadata; retain
 exact binaries/source RPMs or refresh pins together when the rolling feed drops
 old builds. Review source/patch/config pins and tests together. This manifest

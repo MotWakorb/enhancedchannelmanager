@@ -1,0 +1,29 @@
+{
+  "name": "dnspython",
+  "version": "2.9.2",
+  "bead": "enhancedchannelmanager-w8h34",
+  "scope": "Public PyPI whole-wheel, RECORD/member and bundled notice verification. Pure-Python security update only; no native execution, source correspondence or whole-image acceptance claim.",
+  "pypi_metadata": {
+    "url": "https://pypi.org/pypi/dnspython/2.9.2/json",
+    "file": "dnspython-2.9.2.pypi.json",
+    "sha256": "ebfd66c52097ea571595fd686e8bf123e65b3e408575f727357dae7dd8c10aa1"
+  },
+  "wheel": {
+    "filename": "dnspython-2.9.2-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/1e/0c/5346358b3a20275d256978c35203ddc2c8617f78c1b23795b79ba22ced6d/dnspython-2.9.2-py3-none-any.whl",
+    "sha256": "af15f7d385a6ae2fb35a796fde2138004c8c42c7389090e2addc83e3b3340fd8",
+    "bytes": 360455,
+    "root_is_purelib": true,
+    "tag": "py3-none-any",
+    "native_files": [],
+    "metadata_sha256": "dffafe5b3b88a9637d04b3f399b5b8efec3be6c771e65bc80cde97d90c6e8f7d"
+  },
+  "license": {
+    "expression": "ISC",
+    "wheel_path": "dnspython-2.9.2.dist-info/licenses/LICENSE",
+    "sha256": "c3ea3ff5654b329c19d3bc5f7481af623c3dded4a6145585499f843ad3d741cd",
+    "delivered_path": "artifact-index/musllinux/payloads/c3ea3ff5654b329c19d3bc5f7481af623c3dded4a6145585499f843ad3d741cd",
+    "equal_to_retained_2_9_0_notice_text": true
+  },
+  "historical_snapshot": "Supersedes only the dnspython 2.9.0 pure-Python row. All 73 other musllinux distribution records and all native/GNU correspondence evidence are unchanged. Earlier 2.8.0/2.9.0 artifacts remain historical."
+}

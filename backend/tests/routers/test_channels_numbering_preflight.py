@@ -12,6 +12,8 @@ same gate the asynchronous path passes through before its first mutation.
 import pytest
 from unittest.mock import AsyncMock, patch
 
+from tests.routers.numbering_baselines import with_lineup_baselines
+
 
 LINEUP = [
     {"id": 1, "name": "ESPN", "channel_number": 5, "streams": []},
@@ -32,6 +34,7 @@ def _client(lineup=None):
 
 
 async def _validate(async_client, operations, lineup=None):
+    operations = with_lineup_baselines(operations, LINEUP if lineup is None else lineup)
     with patch("routers.channels.get_client", return_value=_client(lineup)), \
          patch("routers.channels.journal"):
         response = await async_client.post("/api/channels/bulk-commit", json={
@@ -192,6 +195,7 @@ class TestFinalNumberingPreflight:
                         "type": "updateChannel",
                         "channelId": 2,
                         "data": {"channel_number": 5},
+                        "expectedNumber": {"number": 6},
                         "acknowledgedDuplicate": {"number": 5, "occupantChannelIds": [1]},
                     },
                     {"type": "updateChannel", "channelId": 2, "data": {"name": "TNT HD"}},
@@ -212,7 +216,8 @@ class TestFinalNumberingPreflight:
              patch("routers.channels.journal"):
             response = await async_client.post("/api/channels/bulk-commit", json={
                 "operations": [
-                    {"type": "updateChannel", "channelId": 2, "data": {"channel_number": 5}},
+                    {"type": "updateChannel", "channelId": 2, "data": {"channel_number": 5},
+                     "expectedNumber": {"number": 6}},
                     {"type": "updateChannel", "channelId": 2, "data": {"name": "TNT HD"}},
                 ],
                 "validateOnly": True,
@@ -266,6 +271,8 @@ class TestTheLineupCouldNotBeLoaded:
 
     @staticmethod
     async def _validate_with(async_client, client, operations):
+        # The caller read LINEUP before the lineup became unreadable.
+        operations = with_lineup_baselines(operations, LINEUP)
         with patch("routers.channels.get_client", return_value=client), \
              patch("routers.channels.journal"):
             response = await async_client.post("/api/channels/bulk-commit", json={
@@ -472,6 +479,7 @@ class TestTheLineupIsFetchedWheneverTheCheckNeedsIt:
 
     @staticmethod
     async def _validate_consolidated(async_client, operations, consolidate=True):
+        operations = with_lineup_baselines(operations, LINEUP)
         with patch("routers.channels.get_client", return_value=_client()), \
              patch("routers.channels.journal"):
             response = await async_client.post("/api/channels/bulk-commit", json={

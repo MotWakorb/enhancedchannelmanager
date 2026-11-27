@@ -58,8 +58,9 @@ export function EditModeExitDialog({
               </ul>
             )}
             <p className="edit-mode-dialog-question">
-              Check the channel list before making further changes — the failed operations were
-              not retried.
+              {commitFailure.keepEditing
+                ? 'Unresolved changes are still staged. Check the channel list before trying Apply again.'
+                : 'Check the channel list before making further changes — the failed operations were not retried.'}
             </p>
           </div>
 

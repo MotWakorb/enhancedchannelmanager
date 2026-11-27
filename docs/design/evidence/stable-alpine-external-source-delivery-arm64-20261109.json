@@ -1,0 +1,212 @@
+{
+  "actual_consumer_result": {
+    "architecture": "aarch64",
+    "external_packages": 117,
+    "full_runtime_source_acceptance": false,
+    "package_set_sha256": "f42595d7b8b226aba45810a584e333cdefad69ab9edd9b78e26418b7ac5e889e",
+    "scope": "Exact supplied-runtime capture and delivered official signature/control/Git/source bytes only. Owned providers, Python base, compiler/language support, full source acceptance, license/advisory and ECM/MCP gates remain separate. No source or target executable was run.",
+    "source_files": 625,
+    "source_groups": 99,
+    "source_input_count": 314,
+    "status": "EXTERNAL_APK_SOURCE_DELIVERY_ONLY",
+    "unresolved_owned_packages": [
+      {
+        "arch": "aarch64",
+        "database_record_sha256": "cf103b10c3dbebf6e465570fd97d3919626dcd310c7762a2fe5658d6d748cad5",
+        "fields": {
+          "A": "aarch64",
+          "C": "Q1kI9RdzS4BTSU39kmEl8lHU62WV4=",
+          "D": "so:libc.musl-aarch64.so.1",
+          "I": "928168",
+          "L": "GPL-2.0-only",
+          "P": "busybox",
+          "S": "522135",
+          "T": "Size optimized toolbox of many common UNIX utilities",
+          "U": "https://busybox.net/",
+          "V": "1.37.0_p20261109-r0",
+          "m": "S\u00f6ren Tempel <soeren+alpine@soeren-tempel.net>",
+          "o": "busybox",
+          "p": "cmd:busybox=1.37.0_p20261109-r0",
+          "r": "busybox-initscripts",
+          "t": "1768059508"
+        },
+        "name": "busybox",
+        "payload_directory_count": 17,
+        "payload_file_count": 7,
+        "version": "1.37.0_p20261109-r0"
+      },
+      {
+        "arch": "noarch",
+        "database_record_sha256": "aa39d4fdc209b675ce7f71c580886266e0f0b6a4314580db20bd9385b440497d",
+        "fields": {
+          "A": "noarch",
+          "C": "Q1TOvNFs46KcZg3ewqomOnlkE8LXI=",
+          "D": "busybox=1.37.0_p20261109-r0",
+          "I": "1",
+          "L": "GPL-2.0-only",
+          "P": "busybox-binsh",
+          "S": "1360",
+          "T": "busybox ash /bin/sh",
+          "U": "https://busybox.net/",
+          "V": "1.37.0_p20261109-r0",
+          "k": "100",
+          "m": "S\u00f6ren Tempel <soeren+alpine@soeren-tempel.net>",
+          "o": "busybox",
+          "p": "/bin/sh cmd:sh=1.37.0_p20261109-r0",
+          "r": "busybox-initscripts",
+          "t": "1768059508"
+        },
+        "name": "busybox-binsh",
+        "payload_directory_count": 1,
+        "payload_file_count": 1,
+        "version": "1.37.0_p20261109-r0"
+      },
+      {
+        "arch": "aarch64",
+        "database_record_sha256": "f4fdf0083652bd18de13861cd687fbe4786ad451e6aa64b9ece9437deeaee2b8",
+        "fields": {
+          "A": "aarch64",
+          "C": "Q1SxxHsOXaPUzzHZlxxhz4IfEzbBo=",
+          "D": "so:libSvtAv1Enc.so.4 so:libaom.so.3 so:libass.so.9 so:libbrotlidec.so.1 so:libbrotlienc.so.1 so:libbz2.so.1 so:libc.musl-aarch64.so.1 so:libcairo-gobject.so.2 so:libcairo.so.2 so:libcrypto.so.3 so:libdav1d.so.7 so:libfontconfig.so.1 so:libfreetype.so.6 so:libfribidi.so.0 so:libgcc_s.so.1 so:libgdk_pixbuf-2.0.so.0 so:libgio-2.0.so.0 so:libglib-2.0.so.0 so:libgme.so.0 so:libgobject-2.0.so.0 so:libgsm.so.1 so:libharfbuzz.so.0 so:libhwy.so.1 so:libiconv.so.2 so:liblzma.so.5 so:libmp3lame.so.0 so:libopenjp2.so.7 so:libopenmpt.so.0 so:libopus.so.0 so:libpango-1.0.so.0 so:libpangocairo-1.0.so.0 so:librav1e.so.0.8 so:libsnappy.so.1 so:libssl.so.3 so:libstdc++.so.6 so:libtheoradec.so.2 so:libtheoraenc.so.2 so:libvorbis.so.0 so:libvorbisenc.so.2 so:libvpx.so.11 so:libwebp.so.7 so:libwebpmux.so.3 so:libx264.so.164 so:libx265.so.215 so:libxvidcore.so.4 so:libz.so.1 so:libzimg.so.2",
+          "I": "213852812",
+          "L": "Apache-2.0 AND BSD-3-Clause AND GPL-3.0-or-later AND LGPL-2.0-only AND LGPL-2.1-only AND LGPL-2.1-or-later AND MIT AND MIT",
+          "P": "ecm-owned-native",
+          "S": "164354077",
+          "T": "ECM reviewed native providers and matching source; not vulnerability clearance",
+          "U": "",
+          "V": "1.0~65e7b43159db6ae5512bc271e4b727756381fae33ee569a3fa46435d998da6b2-r0",
+          "f": "S",
+          "o": "ecm-owned-native",
+          "p": "libjxl=0.12.0-r0 librsvg=2.63.4-r0 libxml2=2.13.9-r3 so:libavcodec.so.62=0 so:libavdevice.so.62=0 so:libavfilter.so.11=0 so:libavformat.so.62=0 so:libavutil.so.60=0 so:libcodec2.so.1.2=0 so:libjxl.so.0.12=0 so:libjxl_cms.so.0.12=0 so:libjxl_threads.so.0.12=0 so:librsvg-2.so.2=0 so:libshine.so.3=0 so:libspeex.so.1=0 so:libswresample.so.6=0 so:libswscale.so.9=0 so:libtwolame.so.0=0 so:libxml2.so.2=0 speex=1.2.1-r3"
+        },
+        "name": "ecm-owned-native",
+        "payload_directory_count": 72,
+        "payload_file_count": 591,
+        "version": "1.0~65e7b43159db6ae5512bc271e4b727756381fae33ee569a3fa46435d998da6b2-r0"
+      },
+      {
+        "arch": "aarch64",
+        "database_record_sha256": "a7f23afc003a7b3218afa822e86ec169fe40e004bac08901f0354a83389da5bf",
+        "fields": {
+          "A": "aarch64",
+          "C": "Q1+uY9oxgikwnv7srTGe2QacL8E7Y=",
+          "D": "so:libc.musl-aarch64.so.1 so:libcrypto.so.3 so:libssl.so.3",
+          "I": "67472",
+          "L": "GPL-2.0-only",
+          "P": "ssl_client",
+          "S": "4893",
+          "T": "External ssl_client for busybox wget",
+          "U": "https://busybox.net/",
+          "V": "1.37.0_p20261109-r0",
+          "i": "busybox=1.37.0_p20261109-r0 libssl3",
+          "m": "S\u00f6ren Tempel <soeren+alpine@soeren-tempel.net>",
+          "o": "busybox",
+          "p": "cmd:ssl_client=1.37.0_p20261109-r0",
+          "r": "busybox-initscripts",
+          "t": "1768059508"
+        },
+        "name": "ssl_client",
+        "payload_directory_count": 2,
+        "payload_file_count": 1,
+        "version": "1.37.0_p20261109-r0"
+      }
+    ],
+    "virtual_packages": [
+      {
+        "checksum": "Q13JgZK9N7J+v/SPnpZ0ZOw6699+I=",
+        "dependencies": "so:libbz2.so.1 so:libc.musl-aarch64.so.1 so:libcrypto.so.3 so:libffi.so.8 so:libgdbm.so.6 so:libgdbm_compat.so.4 so:liblzma.so.5 so:libncursesw.so.6 so:libnsl.so.3 so:libpanelw.so.6 so:libreadline.so.8 so:libsqlite3.so.0 so:libssl.so.3 so:libtirpc.so.3 so:libuuid.so.1 so:libz.so.1",
+        "name": ".python-rundeps",
+        "version": "20261105.193027"
+      }
+    ]
+  },
+  "actual_rehashed_source_denial": {
+    "denial": "complete source input SHA512 mismatch: skalibs-2.15.0.0.tar.gz",
+    "exit": 1,
+    "mutant_source_sha256": "12bb8c96d3d4e4f5f23831b443257b1d662d0d1a1ee5f227dfa8981c4272588c",
+    "original_source_preserved": true,
+    "original_source_sha256": "7fde96e8afb4191593a15328883e9c7726c96891cf071222146821e8c87f8007",
+    "scope": "Actual offline external-source consumer rejects source-only tampering even when the attacker updates the outer index SHA256. Signed-commit APKBUILD SHA512 still enforces original source bytes. No full runtime clearance.",
+    "source_size_unchanged": true,
+    "status": "DENIED_REHASHED_SOURCE_MANIFEST",
+    "verifier_sha256": "fc19460fe6181f3980f05e29455ccc24798cbbbd94ef9563613e8ddc4addd811"
+  },
+  "additional_source_preparation_only": {
+    "cpython": {
+      "base_index_digest": "sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7",
+      "bundled_ensurepip_wheels": [
+        "Python-3.12.16/Lib/ensurepip/_bundled/pip-25.0.1-py3-none-any.whl"
+      ],
+      "expected_base_environment_sha256": "b5796915dc45ff745cfb4e990a7e7c93d6f546328a102ce31448d69ebc37575c",
+      "final_url": "https://www.python.org/ftp/python/3.12.16/Python-3.12.16.tar.xz",
+      "headers": {
+        "Accept-Ranges": "bytes",
+        "Age": "1289287",
+        "Connection": "close",
+        "Content-Length": "20839652",
+        "Date": "Mon, 09 Nov 2026 17:41:40 GMT",
+        "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+        "X-Cache": "MISS, HIT, HIT",
+        "X-Cache-Hits": "0, 48, 795",
+        "X-Served-By": "cache-lga-kjfk8660021-LGA, cache-lga-kjfk8660021-LGA, cache-lga-kjfk8660049-LGA, cache-rfd2130027-RFD",
+        "X-Timer": "S1794246100.264035,VS0,VE0",
+        "content-type": "application/octet-stream",
+        "etag": "\"6ade576d-13dfce4\"",
+        "last-modified": "Sun, 25 Oct 2026 19:24:29 GMT",
+        "server": "nginx",
+        "via": "1.1 varnish, 1.1 varnish, 1.1 varnish",
+        "x-clacks-overhead": "GNU Terry Pratchett"
+      },
+      "license_sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf",
+      "local_test_image": "sha256:0c5586b42b0da040b974f5e87b80c6075374216186f28ad3833eb4cab704fc2f",
+      "result": "OFFICIAL_CPYTHON_SOURCE_MATCHES_BASE_ENV_HASH_ONLY",
+      "scope": "Actual Python-version/environment hash match and official source archive only. Full pinned OCI config, original Docker recipe, native installed-byte/source binding, signatures and delivered-source consumer remain separate.",
+      "sha256": "b5796915dc45ff745cfb4e990a7e7c93d6f546328a102ce31448d69ebc37575c",
+      "size": 20839652,
+      "status": 200,
+      "url": "https://www.python.org/ftp/python/3.12.16/Python-3.12.16.tar.xz"
+    },
+    "glycin_patched_lock_sha256": "1400935c4a3517d464aa99778eb49c39dae71e604743abec0212c3a3b6b30793",
+    "rav1e_lock_sha256": "861482385bdef579e207bb371937dd49cb9ff47d9406c40660b760fa672d0589",
+    "rust_registry_archive_bytes": 78069395,
+    "rust_registry_archives": 546
+  },
+  "bundle_bytes": 500049430,
+  "bundle_file_count": 625,
+  "bundle_source_root": "/home/lecaptainc/.cache/ecm-alpine-delivery-20261109/arm64-external-01",
+  "candidate": {
+    "actual_source_commit": "afee32e52bf18344560ed721d82a1e0898b35ddb",
+    "artifact": {
+      "id": 13695443326,
+      "sha256": "ca73ea24df0bc7c8054401f34e56ba56e1cc324d3efea0a2b1580f4b334e380a"
+    },
+    "head_sha": "36236bd3ccd4bf85f649cf14083c619823a97128",
+    "run_id": 42659218638
+  },
+  "raw_receipt_sha256": {
+    "/home/lecaptainc/.cache/ecm-alpine-delivery-20261109/arm64-external-01/index.json": "54ea92594aa48ddfcd44b68e6404ba9acb51dd4988a9876567db4d440452ad70",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-actual-arm64-apk-source-subjects-01.json": "1a59cca7ee2f8fdd0021437656a3685a30fe92c79444f9c184597bce60f9725b",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-actual-arm64-external-delivery-consumer-01.json": "be22d5c1e203ca9c16a444ecba7fa9db2d9e3867cfb10fa7fd1d5c67213ccbbc",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-actual-arm64-source-graph-01/source-graph.json": "cbf537159238f4dbccbbcab3ac89a27e69c270969ef38175de1f98a667a845c0",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-external-source-consumer-broad-01.log": "e627da886b5e063983e85414a5075fda0da95ed112d2b8749834665a24473b3e",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-external-source-consumer-validator-removal-red-01.log": "53af20a5ca70c66f3995d2ede09458f22de1337275ebcc4116f47c5b1aed386e",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-runtime-arm64-libopenmpt-upstream-01/receipt.json": "a9371ec2f5577a3ae79b093eb94054cec83cf7de73197beecd444c659de5f543",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-runtime-arm64-rust-source-closure-02/crate-receipts.json": "b123bc093f2538f15736431538cb36d6234e3239f1dd0434b15869e70e353657",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-runtime-arm64-rust-source-closure-02/lock-inputs.json": "ce0a063eb8809631eb2035e0ffc69cd6d629860cef77090fc38becc1641c9c17",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/external-delivery-mutants-01/receipt.json": "10f5efa67110d16c4f17b64b9441417e82c6843de487707cda3a1620de29c5fa",
+    "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/python-base-source-archive-01/receipt.json": "fbfdf0961f065bafc5321768252fdbf8e528e9b3808b4d056a77375417eae61c"
+  },
+  "scope": "Actual immutable native ARM64 full-candidate external subjects, verified in a separate nonroot/read-only/networkless AMD64 container without target execution. No final-image delivery/integration or aggregate source gate acceptance. Four owned packages, Python OCI/recipe/installed binding, compiler/language support, Rust resolution/target linkage/vendor consumers, complete license/advisory, MCP and publication gates remain required. All originals and failed retrievals/controls retained.",
+  "source_input_partition": {
+    "external_inputs": 117,
+    "local_recipe_inputs": 197
+  },
+  "status": "EXTERNAL_SOURCE_LAYER_ONLY_NOT_FULL_RUNTIME_ACCEPTANCE",
+  "tests": {
+    "broad_modules": 35,
+    "broad_passed": 578,
+    "dangerous_mutant": "Removing the source-input validator makes the source-and-updated-manifest regression fail with DID NOT RAISE InputError."
+  },
+  "verification_host_image": "sha256:0c5586b42b0da040b974f5e87b80c6075374216186f28ad3833eb4cab704fc2f",
+  "verifier_sha256": "fc19460fe6181f3980f05e29455ccc24798cbbbd94ef9563613e8ddc4addd811"
+}

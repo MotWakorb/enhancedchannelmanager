@@ -1,0 +1,67 @@
+name: Stable Alpine Native Python Acceptance
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/alpine-python.yml'
+      - 'backend/**'
+      - 'scripts/*musllinux*'
+      - 'docker/python-third-party/**'
+      - 'docker/alpine-native/Dockerfile.backend-test'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  application:
+    name: Alpine Python application (${{ matrix.arch }}, not whole-image acceptance)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            machine: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            machine: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Verify native host and prepare all unchanged locked wheels
+        run: |
+          test "$(uname -m)" = '${{ matrix.machine }}'
+          python3 scripts/prepare_musllinux_wheels.py --arch '${{ matrix.arch }}' --output-dir "$RUNNER_TEMP/python-wheels"
+          mkdir "$RUNNER_TEMP/python-results"
+          cp "$RUNNER_TEMP/python-wheels/input-receipt.json" "$RUNNER_TEMP/python-results/"
+      - name: Build the hash-enforced musl test environment and verify installed bytes
+        run: |
+          docker buildx build --platform linux/${{ matrix.arch }} --progress plain \
+            --build-context proof-wheels="$RUNNER_TEMP/python-wheels" \
+            --file docker/alpine-native/Dockerfile.backend-test --load \
+            --tag ecm-alpine-python-test:${{ matrix.arch }} .
+          docker image inspect ecm-alpine-python-test:${{ matrix.arch }} > "$RUNNER_TEMP/python-results/image.json"
+      - name: Run the complete unchanged backend gate natively without network
+        run: |
+          image=$(docker image inspect --format '{{.Id}}' ecm-alpine-python-test:${{ matrix.arch }})
+          docker run --name ecm-alpine-python-gate --network none --cap-drop ALL \
+            --security-opt no-new-privileges --env TMPDIR=/proof/results \
+            "$image"
+      - name: Retain installed-byte and complete backend test evidence
+        if: always()
+        run: |
+          if docker container inspect ecm-alpine-python-gate > /dev/null 2>&1; then
+            docker logs ecm-alpine-python-gate > "$RUNNER_TEMP/python-results/backend-gate.log" 2>&1
+            docker cp ecm-alpine-python-gate:/proof/installed-wheel-bindings.json "$RUNNER_TEMP/python-results/"
+            docker cp ecm-alpine-python-gate:/proof/results/. "$RUNNER_TEMP/python-results/"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: alpine-python-native-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/python-results/
+          retention-days: 14
+          if-no-files-found: error

@@ -50,7 +50,7 @@ interface ProbeProgress {
   black_screen: number;
   low_fps: number;
   low_bitrate?: number;
-  status: 'idle' | 'starting' | 'fetching' | 'refreshing' | 'probing' | 'paused' | 'cancelled' | 'completed' | 'reordering' | 'failed' | 'fetching_sources' | 'fetching_accounts' | 'building_digest' | 'sending_email' | 'sending_discord' | 'clearing';
+  status: 'idle' | 'starting' | 'fetching' | 'refreshing' | 'probing' | 'paused' | 'cancelled' | 'completed' | 'deferred' | 'reordering' | 'failed' | 'fetching_sources' | 'fetching_accounts' | 'building_digest' | 'sending_email' | 'sending_discord' | 'clearing';
   current_stream: string;
 }
 

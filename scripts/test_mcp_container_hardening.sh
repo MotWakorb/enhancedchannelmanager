@@ -134,6 +134,7 @@ echo "== ports: ecm=$ECM_PORT https=$ECM_HTTPS_PORT mcp=$MCP_PORT"
 compose down -v --remove-orphans >/dev/null 2>&1 || true
 
 if [ "${COMPOSE_BUILD:-true}" != "false" ] || [ "$build_only" = true ]; then
+  python3 "$repository_root/scripts/compose_alpine_dockerfile.py" --check
   compose build
 fi
 if [ "$build_only" = true ]; then

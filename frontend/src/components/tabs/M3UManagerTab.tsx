@@ -22,6 +22,7 @@ import { DenseToolbar } from '../DenseToolbar';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatDateTime } from '../../utils/formatting';
 import { isHDHomerunAccount } from '../../utils/hdhomerun';
+import { isActiveDisplayableM3UAccount, isDisplayableM3UAccount } from '../../utils/m3uAccountVisibility';
 import './M3UManagerTab.css';
 
 interface M3UManagerTabProps {
@@ -585,9 +586,7 @@ export function M3UManagerTab({
   const handleRefreshAll = async () => {
     try {
       // Filter out the hidden "custom" account - don't refresh it
-      const accountsToRefresh = accounts.filter(
-        a => a.is_active && a.name.toLowerCase() !== 'custom'
-      );
+      const accountsToRefresh = accounts.filter(isActiveDisplayableM3UAccount);
 
       // Capture initial updated_at for all accounts
       const now = Date.now();
@@ -611,7 +610,7 @@ export function M3UManagerTab({
 
       // Mark these accounts as fetching
       setAccounts(prev => prev.map(a =>
-        a.is_active && a.name.toLowerCase() !== 'custom' ? { ...a, status: 'fetching' } : a
+        isActiveDisplayableM3UAccount(a) ? { ...a, status: 'fetching' } : a
       ));
     } catch (err) {
       logger.error('M3UManagerTab: failed to refresh all M3U accounts', err);
@@ -796,7 +795,7 @@ export function M3UManagerTab({
   // then sort with Standard M3U first, XtreamCodes second, natural sort within each type
   const filteredAccounts = useMemo(() => {
     return accounts
-      .filter(a => a.name.toLowerCase() !== 'custom')
+      .filter(isDisplayableM3UAccount)
       .filter(a => filterServerGroup === null || a.server_group === filterServerGroup)
       .sort((a, b) => {
         // First sort by type: STD (Standard M3U) before XC (XtreamCodes)
@@ -807,9 +806,10 @@ export function M3UManagerTab({
         return naturalCompare(a.name, b.name);
       });
   }, [accounts, filterServerGroup]);
-  const visibleAccountCount = accounts.filter(
-    account => account.name.toLowerCase() !== 'custom',
-  ).length;
+  // Empty-state copy keys off whether ANY account exists, never off the
+  // filtered set: a hidden "custom" account or a server-group filter can empty
+  // filteredAccounts while accounts still exist.
+  const hasAccounts = accounts.length > 0;
 
   // Setup/admin actions surfaced through the header kebab (bead 09x38.2).
   const adminMenuItems: OverflowMenuItem[] = [
@@ -972,9 +972,17 @@ export function M3UManagerTab({
       {filteredAccounts.length === 0 ? (
         <div className="empty-state">
           <span className="material-icons">playlist_play</span>
-          <h3>{visibleAccountCount > 0 ? 'No matching M3U accounts' : 'No M3U Accounts'}</h3>
-          <p>{visibleAccountCount > 0 ? 'No accounts belong to the selected server group.' : 'Add an M3U account to start importing streams.'}</p>
-          {visibleAccountCount > 0
+          <h3>{!hasAccounts
+            ? 'No M3U Accounts'
+            : filterServerGroup !== null
+              ? 'No matching M3U accounts'
+              : 'No M3U accounts to display'}</h3>
+          <p>{!hasAccounts
+            ? 'Add an M3U account to start importing streams.'
+            : filterServerGroup !== null
+              ? 'No accounts belong to the selected server group.'
+              : "The only account present is Dispatcharr's hidden custom account. Add an M3U account to start importing streams."}</p>
+          {hasAccounts && filterServerGroup !== null
             ? <button className="btn-secondary" onClick={() => setFilterServerGroup(null)}>Clear filters</button>
             : <button className="btn-primary" onClick={handleAddAccount}>
                 <span className="material-icons">add</span>

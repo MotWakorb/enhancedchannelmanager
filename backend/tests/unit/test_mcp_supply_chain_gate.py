@@ -34,6 +34,38 @@ def test_repository_satisfies_mcp_publication_policy():
     assert gate.check_repository(REPO_ROOT) == []
 
 
+@pytest.mark.parametrize("package", ["musl", "musl-utils"])
+@pytest.mark.parametrize("replacement", ["", "{package}", "'{package}>=1.2.6-r2'"])
+def test_policy_enforces_both_vendor_fixed_musl_packages(tmp_path, package, replacement):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    dockerfile = tmp_path / "mcp-server/Dockerfile"
+    contents = dockerfile.read_text()
+    required = f"'{package}>=1.2.6-r3'"
+    assert required in contents
+    dockerfile.write_text(
+        contents.replace(required, replacement.format(package=package), 1)
+    )
+    assert any(
+        "musl package floor" in failure for failure in gate.check_repository(tmp_path)
+    )
+
+
+def test_commented_musl_floors_do_not_satisfy_the_policy(tmp_path):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    dockerfile = tmp_path / "mcp-server/Dockerfile"
+    contents = dockerfile.read_text()
+    for package in ("musl", "musl-utils"):
+        required = f"'{package}>=1.2.6-r3'"
+        assert required in contents
+        contents = contents.replace(required, package, 1) + f"\n# {required}\n"
+    dockerfile.write_text(contents)
+    assert sum(
+        "musl package floor" in failure for failure in gate.check_repository(tmp_path)
+    ) == 2
+
+
 def _use_common_base(root: Path) -> Path:
     dockerfile = root / "Dockerfile"
     dockerfile.write_text(
@@ -43,7 +75,7 @@ def _use_common_base(root: Path) -> Path:
     return dockerfile
 
 
-def test_policy_accepts_reviewed_seven_stage_suse_graph(tmp_path):
+def test_policy_accepts_reviewed_self_contained_alpine_graph(tmp_path):
     gate = _load_gate()
     _copy_policy_files(gate, tmp_path)
     _use_common_base(tmp_path)
@@ -51,12 +83,12 @@ def test_policy_accepts_reviewed_seven_stage_suse_graph(tmp_path):
 
 
 @pytest.mark.parametrize(("old", "new"), [
-    ("FROM runtime-base AS resdet-builder", "FROM python-builder AS resdet-builder"),
-    ("FROM native-builder AS source-builder", "FROM runtime-base AS source-builder"),
-    ("COPY --from=runtime-base /tmp/runtime-inventory.tsv", "COPY --from=native-builder /tmp/runtime-inventory.tsv"),
-    ("rpm --checksig /tmp/runtime-rpms/*.rpm", "true"),
-    ("python3.12 /tmp/build_native_runtime.py", "echo python3.12 /tmp/build_native_runtime.py"),
-    ("/usr/share/ecm/sources/owned/", "/tmp/withheld-sources/"),
+    ("FROM runtime-base AS apk-source-builder", "FROM python-builder AS apk-source-builder"),
+    ("FROM apk-source-builder AS rust-source-builder", "FROM runtime-base AS rust-source-builder"),
+    ("--runtime-inventory /proof/runtime-inventory.json", "--runtime-inventory /tmp/stale-inventory.json"),
+    ("install_alpine_native.py --arch", "echo install_alpine_native.py --arch"),
+    ("build_busybox_provider.py check", "echo build_busybox_provider.py check"),
+    ("/usr/share/ecm/sources/apk/", "/tmp/withheld-sources/"),
     ("COPY docker/native/", "ENV LD_PRELOAD=/tmp/evil.so\nCOPY docker/native/"),
 ])
 def test_policy_enforces_the_reviewed_ecm_native_contract(tmp_path, old, new):
@@ -72,13 +104,13 @@ def test_policy_enforces_the_reviewed_ecm_native_contract(tmp_path, old, new):
 
 
 @pytest.mark.parametrize(("old", "new"), [
-    ("FROM runtime-base AS python-builder", "FROM floating:latest AS python-builder"),
-    ("COPY --from=ghcr.io/astral-sh/uv:latest@sha256:", "COPY --from=ghcr.io/astral-sh/uv:latest # sha256:"),
-    ("FROM runtime-base AS python-builder", "FROM future AS python-builder"),
+    ("AS python-builder", "AS future"),
+    ("COPY --from=proof-wheels /", "COPY --from=floating:latest /"),
+    ("FROM scratch AS proof-wheels", "FROM future AS proof-wheels"),
     ("AS resdet-builder", "AS runtime-base"),
     ("AS runtime-base", "AS Runtime-Base"),
-    ("FROM runtime-base\n", "from floating:latest\n"),
-    ("FROM runtime-base\n", "FROM\truntime-base ignored\n"),
+    ("FROM runtime-base AS application-candidate\n", "from floating:latest\n"),
+    ("FROM runtime-base AS application-candidate\n", "FROM\truntime-base ignored\n"),
 ])
 def test_policy_alias_support_does_not_allow_external_or_ambiguous_refs(tmp_path, old, new):
     gate = _load_gate()
@@ -146,6 +178,13 @@ def test_policy_pins_mcp_to_reviewed_alpine_base():
     dockerfile = (REPO_ROOT / "mcp-server/Dockerfile").read_text(encoding="utf-8")
     assert dockerfile.splitlines()[0] == f"FROM {gate.MCP_BASE_IMAGE}"
     assert gate.check_repository(REPO_ROOT) == []
+
+
+def test_mcp_uses_the_same_release_qualified_python_base_as_ecm_alpine():
+    gate = _load_gate()
+    candidate = (REPO_ROOT / "docker/alpine-native/Dockerfile.candidate").read_text()
+    assert gate.MCP_BASE_IMAGE.startswith("python:3.12-alpine3.24@sha256:")
+    assert f"FROM {gate.MCP_BASE_IMAGE} AS runtime-base" in candidate
 
 
 def test_policy_enforces_fixed_mcp_openssl_package_floor(tmp_path):
@@ -337,8 +376,8 @@ def test_policy_rejects_brittle_vulnerable_fixture_output_matcher(tmp_path):
         ),
         (
             "mcp-server/Dockerfile",
-            "python:3.12-alpine@sha256:",
-            "python:3.12-alpine # sha256:",
+            "python:3.12-alpine3.24@sha256:",
+            "python:3.12-alpine3.24 # sha256:",
             "reviewed Alpine base digest",
         ),
         (

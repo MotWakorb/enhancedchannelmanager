@@ -1,8 +1,10 @@
 """Channel management tools."""
 import asyncio
 import logging
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
@@ -107,6 +109,44 @@ def _fmt_channel_number(value) -> str:
     if isinstance(value, float):
         return str(int(value)) if value.is_integer() else str(value)
     return str(value)
+
+
+class ExpectedChannelNumber(BaseModel):
+    """The number the agent last read for a channel, ``null`` for none.
+
+    A wrapper rather than a bare number so that ``null`` can mean "I read it
+    and it had no number" while omitting the argument still means "no claim".
+    It is sent as the backend's ``expectedNumber`` in this exact shape.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    number: Annotated[float, Field(strict=True, allow_inf_nan=False)] | None
+
+
+def missing_number_baseline(arguments: dict) -> str | None:
+    """The refusal for an update_channel call that renumbers without a valid baseline.
+
+    Shared with the safety wrapper, which must refuse before it issues a
+    confirmation token for a call that could never be confirmed, and which sees
+    the raw arguments, so a malformed ``expected_number`` is validated here too.
+    """
+    if arguments.get("channel_number") is None:
+        return None
+    expected = arguments.get("expected_number")
+    if isinstance(expected, ExpectedChannelNumber):
+        return None
+    if expected is not None:
+        try:
+            ExpectedChannelNumber.model_validate(expected)
+            return None
+        except ValidationError:
+            pass
+    return (
+        f"Channel {arguments.get('channel_id')} was not updated: changing channel_number "
+        "needs expected_number, the number you last read for this channel "
+        '(get_channel or list_channels), as {"number": n} or {"number": null} '
+        "for no number, with no other keys. Nothing was sent."
+    )
 
 
 def register(mcp: FastMCP):
@@ -311,10 +351,21 @@ def register(mcp: FastMCP):
         tvg_id: str | None = None,
         logo_id: int | None = None,
         streams: list[int] | None = None,
+        expected_number: ExpectedChannelNumber | None = None,
         confirm: bool = False,
         plan_current_channel: dict | None = None,
     ) -> str:
         """Update an existing channel.
+
+        A NUMBER CHANGE NEEDS ITS BASELINE. Before setting ``channel_number``,
+        call get_channel or list_channels and pass the number you saw as
+        ``expected_number={"number": <that number>}`` (``{"number": null}`` for
+        a channel you saw with no number). ECM refuses the update, writing
+        nothing, if the channel is no longer on that number: somebody else
+        changed it after your read. Read it again and decide before retrying.
+        Do not fetch the number only to fill ``expected_number``; it protects
+        the number you based your change on. Edits that leave
+        ``channel_number`` alone need no baseline.
 
         CONFIRM GATING (bd-onazy): renaming or moving the GROUP of a MANUAL
         channel (``auto_created=False``) is a two-call operation — the first call
@@ -341,9 +392,19 @@ def register(mcp: FastMCP):
                      validates the list is a permutation of the current
                      streams) for pure reordering. Use this only when you
                      intend to set the complete stream membership at once.
+            expected_number: Required with ``channel_number``: the number you
+                     last read for this channel, as ``{"number": n}`` or
+                     ``{"number": null}``. Ignored without ``channel_number``.
             confirm: Set True to apply a gated rename/group-change on a manual
                      channel (see CONFIRM GATING above).
         """
+        refusal = missing_number_baseline({
+            "channel_id": channel_id,
+            "channel_number": channel_number,
+            "expected_number": expected_number,
+        })
+        if refusal:
+            return refusal
         try:
             client = get_ecm_client()
             payload = {}
@@ -351,6 +412,7 @@ def register(mcp: FastMCP):
                 payload["name"] = name
             if channel_number is not None:
                 payload["channel_number"] = channel_number
+                payload["expectedNumber"] = {"number": expected_number.number}
             if group_id is not None:
                 # Backend PATCH /api/channels/{id} forwards keys straight to
                 # Dispatcharr, whose channel field is ``channel_group_id``;
@@ -413,6 +475,13 @@ def register(mcp: FastMCP):
             return f"Channel {channel_id} updated."
         except Exception as e:
             logger.error("[MCP] update_channel failed: %s", e)
+            message = str(e)
+            if "HTTP 409" in message:
+                return (
+                    f"Channel {channel_id} was not updated: it is no longer on the number "
+                    "in expected_number, so somebody else changed it after your read. "
+                    f"Re-read the channel and decide before retrying. Detail: {message}"
+                )
             return f"Error updating channel {channel_id}: {e}"
 
     @mcp.tool()
@@ -947,23 +1016,43 @@ def register(mcp: FastMCP):
     @mcp.tool()
     async def assign_channel_numbers(
         channel_ids: list[int],
+        expected_numbers: dict[int, float | None],
         starting_number: int | None = None,
     ) -> str:
         """Bulk-assign sequential channel numbers to a list of channels.
 
+        READ FIRST. Call list_channels or get_channel for these channels, then
+        pass the number you saw for each one in ``expected_numbers``. ECM
+        refuses the whole assignment, writing nothing, if any channel is no
+        longer on the number you saw: somebody else changed it after your read.
+        When that happens, read the channels again and decide before retrying.
+        Do not fill ``expected_numbers`` from a read made only to satisfy this
+        check; it protects the numbers you based your plan on.
+
         Args:
             channel_ids: List of channel IDs to number
+            expected_numbers: Map of channel ID to the channel number you last
+                read for it (null for a channel you saw with no number). Every
+                ID in ``channel_ids`` needs an entry, and no other ID may have
+                one.
             starting_number: Starting number (auto-assigned if omitted)
         """
         try:
             client = get_ecm_client()
-            payload = {"channel_ids": channel_ids}
+            payload = {"channel_ids": channel_ids, "expected_numbers": expected_numbers}
             if starting_number is not None:
                 payload["starting_number"] = starting_number
             await client.call_endpoint(ENDPOINTS["channels_assign_numbers"], body=payload)
             return f"Assigned numbers to {len(channel_ids)} channels starting from {starting_number or 'auto'}."
         except Exception as e:
             logger.error("[MCP] assign_channel_numbers failed: %s", e)
+            message = str(e)
+            if "HTTP 409" in message:
+                return (
+                    "Nothing was renumbered: a channel is no longer on the number in "
+                    "expected_numbers, so somebody else changed it after your read. "
+                    f"Re-read the channels and decide before retrying. Detail: {message}"
+                )
             return f"Error assigning channel numbers: {e}"
 
     @mcp.tool()
@@ -1323,7 +1412,18 @@ def register(mcp: FastMCP):
 
         Supported operation types: createChannel, updateChannel, deleteChannel,
         addStreamToChannel, removeStreamFromChannel, reorderChannelStreams,
-        createGroup, deleteChannelGroup, renameChannelGroup.
+        bulkAssignChannelNumbers, createGroup, deleteChannelGroup,
+        renameChannelGroup.
+
+        NUMBERING AN EXISTING CHANNEL NEEDS ITS BASELINE. Read the channels
+        first (list_channels / get_channel). An ``updateChannel`` whose
+        ``data`` sets ``channel_number`` on an existing channel must carry
+        ``"expectedNumber": {"number": <the number you saw>}``, and a
+        ``bulkAssignChannelNumbers`` must carry ``"expectedNumbers": {"<id>":
+        <number you saw>, ...}`` for every existing channel in
+        ``channelIds``. A missing baseline is rejected outright; a channel that
+        moved since your read fails its operation without writing. Channels
+        created earlier in the same batch (negative temp ids) take no baseline.
 
         Args:
             operations: List of operation dicts, each with a "type" key and type-specific fields.

@@ -1,0 +1,48 @@
+{
+  "status": "PAIRED_NATIVE_PYTHON_EXTERNAL_RUST_LIVE_CHECKS_AND_BOOTSTRAP_PASS_AGGREGATE_SOURCE_STILL_FAILS",
+  "run_id": 42701394840,
+  "head_sha": "cfc95c82eb5196fd4679a8d77bfc5e3c43302816",
+  "pull_request_merge_sha_from_artifact_names": "bf5825b75a8679c3f4e183a27caf848ce8fc9d18",
+  "amd64": {
+    "job_id": 129446767725,
+    "candidate_image_id": "sha256:871768e44730a71c7df1d38f728983eeb6cc3c8c97802ab50e2e3931071ca00a",
+    "original_artifact_id": 13715960889,
+    "original_artifact_sha256": "9abdb3343f9200af672323a3d2e33a4f9043accabae7287c426346e8a18a2bee",
+    "rust_receipt_sha256": "f8ccba2eb5b62145a7c9c7aa18546057e709de2af112b6f8bcb05662d7966d92",
+    "python_base_receipt_sha256": "dc66055fe61d549a33dbf89744a583d5d5d6b4118480ee2c1f18b37fef698259",
+    "external_receipt_sha256": "b8f9a2738d82688021f37a923ce9b876c45067e53410474408669c04cd7da254",
+    "bootstrap_receipt_sha256": "851732673d31ff52495caa346d65da64a0b1ab5f8018e77d0ebd8e5d00d595c1",
+    "failed_runtime_receipt_sha256": "810e2400ad7f5535c9160be2c0c7d31f752035b9897dcee12e750de905197b8c"
+  },
+  "arm64": {
+    "job_id": 129446768225,
+    "candidate_image_id": "sha256:1dab948877595f3cf8c31a296099b7f859eb1531839abe5d98648704b36a1ee0",
+    "original_artifact_id": 13714736353,
+    "original_artifact_sha256": "47eef77dab37f1fc1aa2b540879848fa0e128cdd6bda82436740290c5761e84b",
+    "rust_receipt_sha256": "0ca6065d2609226d0cfe6ca920837f0506d908b4b1e32b34af6b572a95922ca2",
+    "python_base_receipt_sha256": "492641c7571e55d7c94e68b874c421a7c36e0be21a62bf1e946934fc2ce018be",
+    "external_receipt_sha256": "562f9078e31b659b8aaa2a3343bce667fd05fcc211400660f8d7cbf0c145a593",
+    "bootstrap_receipt_sha256": "49403f33aeb403c49c716619b1af35cf2bd2ef8b959ce098e43da043a6f8d37a",
+    "failed_runtime_receipt_sha256": "da302626b3b3c9ffb2036d3d3cdffaf0cc166f657e2baa5e4f7470a1640f1c3f"
+  },
+  "verified_per_native_architecture": {
+    "pinned_source_preparation": "PASS",
+    "external_source_and_immutable_live_subject_checks": "PASS",
+    "python_base_source_and_live_installed_file_correspondence": "PASS",
+    "rust_source_inputs_and_bounded_live_elf_checks": "PASS",
+    "rust_delivered_files": 562,
+    "rust_registry_archives": 546,
+    "rust_original_registry_regular_members": 29957,
+    "rust_original_registry_source_bytes": 545635396,
+    "rust_selected_live_elfs_verified": 4,
+    "bootstrap_identity_scenarios": 2,
+    "restart_and_recreation_persistence": "PASS for 1000:1000 and 1571:1572",
+    "runtime_functional_checks": 27
+  },
+  "both_aggregate_runtime_failures": {"native_source_and_artifact_integrity": "AssertionError: missing regular file: index.json"},
+  "remaining_rust_limits": "glycin-image-rs, glycin-svg and libglycin still explicitly lack .dep-v0 metadata on both architectures; this is not source clearance. rav1e joins128 registry and2 local packages. Conservative complete source inputs and compiler archives do not establish exact compiled features, reproduced builds or historical compiler linkage.",
+  "summary_receipt_sha256": "e6ebd8fe10e377760cd8dce0b5fa8318ac05c451963293cb83943b906956f519",
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/native-source-integration-{amd64,arm64}-42701394840{.zip,-01/}",
+  "scope": "Both original native GitHub artifacts independently rehashed before selectively retaining exact final-candidate JSON receipts. This run supersedes no original failure: old ARM92fe source EOF remains failed. The current paired native bounded source/ELF/bootstrap/functional passes are not unsuppressed advisory, complete source/compiler/attribution/MCP or aggregate acceptance. Existing RPM aggregate dispatch remains unchanged and both jobs/run conclude failure. No merge, publication or deployment.",
+  "full_runtime_source_acceptance": false
+}

@@ -60,6 +60,8 @@ export interface GroupMultiSelectDropdownProps {
   itemLabelPlural?: string;
   /** Extra class on the outer wrapper, for host-specific width/layout. */
   className?: string;
+  /** Override the collapsed summary for a domain-specific count label. */
+  summary?: string;
 }
 
 const MENU_MAX_HEIGHT_PX = 300;
@@ -79,6 +81,7 @@ export function GroupMultiSelectDropdown({
   itemLabelSingular = 'group',
   itemLabelPlural = 'groups',
   className = '',
+  summary,
 }: GroupMultiSelectDropdownProps) {
   const reactId = useId();
   const [isOpen, setIsOpen] = useState(false);
@@ -196,7 +199,7 @@ export function GroupMultiSelectDropdown({
         aria-controls={isOpen ? listboxId : undefined}
         aria-label={label}
       >
-        <span>{summaryText}</span>
+        <span>{summary ?? summaryText}</span>
         <span className="dropdown-arrow" aria-hidden="true">{isOpen ? '▲' : '▼'}</span>
       </button>
 
@@ -243,10 +246,10 @@ export function GroupMultiSelectDropdown({
             )}
           </div>
           <div className="filter-dropdown-actions">
-            <button type="button" className="filter-dropdown-action" onClick={handleSelectAll}>
+            <button type="button" className="filter-dropdown-action" onClick={handleSelectAll} disabled={disabled}>
               Select All{search ? ' Visible' : ''}
             </button>
-            <button type="button" className="filter-dropdown-action" onClick={handleClearAll}>
+            <button type="button" className="filter-dropdown-action" onClick={handleClearAll} disabled={disabled}>
               Clear{search ? ' Visible' : ' All'}
             </button>
           </div>
