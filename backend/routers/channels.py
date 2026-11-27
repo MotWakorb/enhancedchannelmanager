@@ -16,8 +16,9 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, PositiveInt, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, ValidationError, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
 from auth import RequireAdminIfEnabled
@@ -27,9 +28,11 @@ from bulk_commit_accounting import (
     finalize_bulk_commit_result,
     nothing_to_journal,
 )
+from channel_group_delete import group_delete_failure_detail, hide_associated_group
 from channel_number import (
     CHANNEL_NUMBER_RULE_MESSAGE,
     ChannelNumber,
+    ChannelNumberBaseline,
     InvalidChannelNumberError,
     format_channel_number,
     parse_channel_number_text,
@@ -51,8 +54,10 @@ from config import get_settings
 from csv_handler import parse_csv, generate_csv, generate_template, CSVParseError
 from database import get_session
 from dispatcharr_client import get_client, logo_was_reused, strip_logo_reuse_marker, upstream_http_exception
+from log_utils import redact_exception, redact_log_diagnostic
 from match_fold import fold_match_key
 from normalization_engine import get_normalization_engine
+from profile_recovery import recovery_binding, recovery_destination_matches, recovery_operator
 import journal
 
 logger = logging.getLogger(__name__)
@@ -238,11 +243,11 @@ def write_journal_rows(
                 "[%s] Batch journal write failed for %s row(s) "
                 "(batch=%s); retrying one at a time", log_tag, len(rows), batch_id,
             )
-        except Exception as batch_err:
-            logger.exception(
+        except Exception as batch_err:  # noqa: BLE001 - retry per row; log the scrubbed chain
+            logger.error(
                 "[%s] Batch journal write raised for %s row(s) "
                 "(batch=%s); retrying one at a time: %s",
-                log_tag, len(rows), batch_id, batch_err,
+                log_tag, len(rows), batch_id, redact_exception(batch_err),
             )
 
         unwritten = 0
@@ -250,10 +255,10 @@ def write_journal_rows(
             row = pending[0]
             try:
                 written = journal.log_entry(**row) is not None
-            except Exception as row_err:
-                logger.exception(
+            except Exception as row_err:  # noqa: BLE001 - report the row below; log the scrubbed chain
+                logger.error(
                     "[%s] Journal row raised (batch=%s): %s",
-                    log_tag, batch_id, row_err,
+                    log_tag, batch_id, redact_exception(row_err),
                 )
                 written = False
             # Resolved either way: written, or about to be reported below.
@@ -262,13 +267,15 @@ def write_journal_rows(
                 continue
             unwritten += 1
             logger.error(
-                "[%s] UNJOURNALLED MUTATION (batch=%s): %s", log_tag, batch_id, row,
+                "[%s] UNJOURNALLED MUTATION (batch=%s): %s",
+                log_tag, batch_id, redact_log_diagnostic(str(row)),
             )
         return unwritten
     except BaseException:
         for row in pending:
             logger.error(
-                "[%s] UNJOURNALLED MUTATION (batch=%s): %s", log_tag, batch_id, row,
+                "[%s] UNJOURNALLED MUTATION (batch=%s): %s",
+                log_tag, batch_id, redact_log_diagnostic(str(row)),
             )
         raise
 
@@ -498,6 +505,25 @@ class ReorderStreamsRequest(BaseModel):
 class AssignNumbersRequest(BaseModel):
     channel_ids: list[int]
     starting_number: Optional[ChannelNumber] = None
+    #: The number the caller last read for each channel in ``channel_ids``,
+    #: ``null`` for "I saw no number". Required for every channel: the endpoint
+    #: refuses with 409 rather than overwrite a number that has moved since.
+    #: Optional at the type level only so that a missing map gets the same
+    #: 422 naming the channels as a partial one.
+    #: A baseline is a number READ, so any finite value is accepted; see
+    #: :data:`ChannelNumberBaseline`. ``starting_number`` keeps the write contract.
+    expected_numbers: Optional[dict[int, Optional[ChannelNumberBaseline]]] = None
+
+    @model_validator(mode="after")
+    def _require_a_baseline_per_channel(self):
+        problem = _baseline_map_problem(
+            list(dict.fromkeys(self.channel_ids)),
+            self.expected_numbers,
+            field="expected_numbers",
+        )
+        if problem:
+            raise PydanticCustomError("missing_channel_number_baseline", problem)
+        return self
 
 
 class MergeChannelsRequest(BaseModel):
@@ -633,7 +659,15 @@ class ExpectedChannelNumber(BaseModel):
     the UI.
     """
 
-    number: Optional[ChannelNumber] = None
+    #: An object without exactly this key is refused rather than read as a
+    #: claim of "no number": ``{}`` or a misspelt key would otherwise be one.
+    model_config = ConfigDict(extra="forbid")
+
+    #: The number READ, so any finite value: a number set outside ECM, such as
+    #: ``8.25``, must still be expressible as what the caller saw. The write
+    #: contract stays on ``data.channel_number`` (:data:`ChannelNumberBaseline`).
+    #: Required, with an explicit ``null`` for "I read no number".
+    number: Optional[ChannelNumberBaseline]
 
 
 # Bulk commit operation types
@@ -686,6 +720,14 @@ class BulkAssignNumbersOp(BaseModel):
     type: Literal["bulkAssignChannelNumbers"] = "bulkAssignChannelNumbers"
     channelIds: list[int]
     startingNumber: Optional[ChannelNumber] = None
+    #: The number the caller last read for each EXISTING channel in
+    #: ``channelIds`` (keys are channel ids, ``null`` means "I saw no number").
+    #: The per-channel form of :class:`ExpectedChannelNumber`, because one
+    #: upstream call places every channel in the range. Required for every
+    #: non-negative id and forbidden for a negative one; ``BulkCommitRequest``
+    #: enforces both, so the type stays optional only for that error's sake.
+    #: Any finite number, like every baseline (:data:`ChannelNumberBaseline`).
+    expectedNumbers: Optional[dict[int, Optional[ChannelNumberBaseline]]] = None
 
 
 class BulkCreateChannelOp(BaseModel):
@@ -826,11 +868,96 @@ class BulkCommitRequest(BaseModel):
     continueOnError: Optional[bool] = False
     # If true, consolidate redundant operations before executing
     consolidate: Optional[bool] = False
+    # Opt in to a recovery binding, and refuse if the browser's operator is stale.
+    profileRecoveryOperator: Optional[str] = None
+    profileRecoveryDestination: Optional[str] = None
+    returnSettledOperationIndexes: bool = False
 
     @model_validator(mode="after")
     def _validate_temp_channel_dependencies(self):
         _validate_bulk_channel_dependencies(self.operations)
+        _require_numbering_baselines(self.operations)
         return self
+
+
+def _format_channel_ids(channel_ids) -> str:
+    return ", ".join(str(channel_id) for channel_id in channel_ids)
+
+
+def _baseline_map_problem(
+    existing_ids: Sequence[int],
+    baselines: Optional[dict],
+    *,
+    field: str,
+    temp_ids: Sequence[int] = (),
+) -> Optional[str]:
+    """Describe what is wrong with a per-channel baseline map, or ``None``.
+
+    Every channel in ``existing_ids`` needs an entry, and nothing else may have
+    one: a baseline keyed to a channel the write does not touch is a caller
+    mistake that would otherwise read as protection it does not give.
+    """
+    supplied = baselines or {}
+    problems = []
+    missing = [cid for cid in existing_ids if cid not in supplied]
+    if missing:
+        problems.append(
+            f"{field} has no baseline for channel(s) {_format_channel_ids(missing)}. "
+            "Send, for each channel, the number your change was based on "
+            "(null for no number)"
+        )
+    temp = [cid for cid in supplied if cid in set(temp_ids)]
+    if temp:
+        problems.append(
+            f"{field} names channel(s) {_format_channel_ids(temp)} created in this "
+            "request; a new channel has no baseline"
+        )
+    allowed = set(existing_ids) | set(temp_ids)
+    unknown = [cid for cid in supplied if cid not in allowed]
+    if unknown:
+        problems.append(
+            f"{field} names channel(s) {_format_channel_ids(unknown)} that this "
+            "write does not number"
+        )
+    return "; ".join(problems) or None
+
+
+def _require_numbering_baselines(operations: Sequence[BulkOperation]) -> None:
+    """Refuse a numbering write to an existing channel that carries no baseline.
+
+    A non-negative id is a channel that exists already; a negative one is
+    created earlier in the same request and has nothing to compare against.
+    Every offending operation is named in one error, so a caller fixes the
+    request once rather than once per operation.
+    """
+    problems = []
+    for index, op in enumerate(operations):
+        if op.type == "updateChannel":
+            if (
+                "channel_number" in (op.data or {})
+                and op.channelId >= 0
+                and op.expectedNumber is None
+            ):
+                problems.append(
+                    f"Operation {index} (updateChannel) changes the number of existing "
+                    f"channel {op.channelId} without expectedNumber. Send "
+                    "expectedNumber.number set to the number you last read, so a "
+                    "change made since is not overwritten"
+                )
+        elif op.type == "bulkAssignChannelNumbers":
+            ids = list(dict.fromkeys(op.channelIds))
+            problem = _baseline_map_problem(
+                [cid for cid in ids if cid >= 0],
+                op.expectedNumbers,
+                field="expectedNumbers",
+                temp_ids=[cid for cid in ids if cid < 0],
+            )
+            if problem:
+                problems.append(f"Operation {index} (bulkAssignChannelNumbers): {problem}")
+    if problems:
+        raise PydanticCustomError(
+            "missing_channel_number_baseline", "; ".join(problems)
+        )
 
 
 def _negative_channel_references(op: BulkOperation) -> list[int]:
@@ -877,18 +1004,46 @@ class ValidationIssue(BaseModel):
 
 
 class BulkCommitResponse(BaseModel):
+    """The envelope ``_run_bulk_commit`` returns.
+
+    Not a ``response_model``: the POST returns this only for ``validateOnly``
+    and otherwise a 202 job envelope, and the completed result is delivered
+    inside ``GET /bulk-commit/{job_id}``'s wrapper. Validating through this
+    model would also filter the response, so it documents the contract and
+    ``tests/routers/test_bulk_commit_response_contract.py`` keeps it complete.
+
+    The fields with defaults are absent from the early return for a changed
+    profile-recovery destination; the last three appear only on the paths
+    that produce them.
+    """
     success: bool
     operationsApplied: int
     operationsFailed: int
+    # Failed operations whose own upstream writes landed before they failed.
+    operationsPartiallyApplied: Optional[int] = None
     errors: list[dict]
     # Map of temp channel IDs to real IDs
     tempIdMap: dict[int, int]
+    # Real id of each created channel -> the number Dispatcharr created it on,
+    # the baseline for a later request that numbers it.
+    createdChannelNumbers: Optional[dict[int, Optional[float]]] = None
     # Map of group names to real IDs
     groupIdMap: dict[str, int]
     # Validation issues found during pre-validation
     validationIssues: Optional[list[dict]] = None
     # Whether validation passed (no errors, may have warnings)
     validationPassed: Optional[bool] = None
+    # Some operations applied and some failed.
+    partial: Optional[bool] = None
+    # createChannel operations that asked for normalization and did not get it.
+    normalizationFailures: Optional[list[dict]] = None
+    # Journal rows for landed writes that could not be written.
+    journalRowsUnwritten: Optional[int] = None
+    # Channels left on a wrong number that compensation could not put back.
+    numberingRecovery: Optional[list[dict]] = None
+    profileRecoveryBinding: Optional[str] = None
+    settledOperationIndexes: Optional[list[int]] = None
+    settledChannelNumbers: Optional[dict[int, ChannelNumber | None]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1789,6 +1944,57 @@ def _assignment_description(old_number, new_number, *, observed: bool) -> str:
     )
 
 
+def _range_assignment_description(
+    old_number, new_number, *, old_known: bool, observed: bool,
+) -> str:
+    """:func:`_assignment_description`, for a channel whose previous number
+    ECM may not have observed either (``old_known=False``)."""
+    if old_known:
+        return _assignment_description(old_number, new_number, observed=observed)
+    if not observed:
+        return (
+            "Changed channel number; Dispatcharr chose the new number and ECM "
+            "has not read it back"
+        )
+    if new_number is None:
+        return (
+            "Changed channel number; the channel now carries no number, and ECM "
+            "had not read the previous number"
+        )
+    return (
+        f"Changed channel number to {format_channel_number(new_number)}; ECM had "
+        "not read the previous number"
+    )
+
+
+def _number_before_value(before_channel: dict, name: str) -> dict:
+    """A numbering row's ``before_value``, naming an unobserved number as unknown."""
+    if "channel_number" in before_channel:
+        return {"channel_number": before_channel["channel_number"], "name": name}
+    return {BEFORE_STATE_UNKNOWN_KEY: ["channel_number"], "name": name}
+
+
+async def _read_back_channels(client, channel_ids, *, log_tag: str = "CHANNELS"):
+    """Yield ``(channel_id, channel)`` for each channel Dispatcharr returns.
+
+    One GET per channel, in order, after an assignment that let Dispatcharr
+    choose the numbers. A read that fails is logged and skipped: the
+    assignment has already landed, and the caller's row keeps saying the
+    number was not read back. Only ``Exception`` is caught, so a cancellation
+    still propagates.
+    """
+    for channel_id in channel_ids:
+        try:
+            observed = await client.get_channel(channel_id)
+        except Exception as e:
+            logger.warning(
+                "[%s] Assigned channel %s but could not read its new number back: %s",
+                log_tag, channel_id, redact_log_diagnostic(str(e)),
+            )
+            continue
+        yield channel_id, observed
+
+
 @router.post("/assign-numbers")
 async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAdminIfEnabled):
     """Bulk assign channel numbers. Admin only (bulk operator op, bd-um30y)."""
@@ -1857,6 +2063,22 @@ async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAd
                         if new_name != channel_name:
                             name_updates[channel_id] = new_name
 
+        # Before the upstream call, so a refusal writes nothing at all. The
+        # comparison is against the reads just made above.
+        stale = _stale_number_baselines(
+            {cid: request.expected_numbers[cid] for cid in channels_before},
+            {cid: before["channel_number"] for cid, before in channels_before.items()},
+        )
+        if stale:
+            logger.warning(
+                "[CHANNELS] assign-numbers refused: %s channel(s) moved since the caller read them: %s",
+                len(stale), [change["channelId"] for change in stale],
+            )
+            raise HTTPException(status_code=409, detail={
+                "message": _stale_baselines_message(stale, subject="Channels were"),
+                "concurrentNumberChanges": stale,
+            })
+
         # Call the bulk assign API
         result = await client.assign_channel_numbers(
             request.channel_ids, request.starting_number
@@ -1914,18 +2136,13 @@ async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAd
         # specify the numbers — the specified path already knows them and must
         # not pay N extra GETs for a several-hundred-channel renumber.
         if chose_numbers_upstream:
-            for channel_id, row in row_for_channel.items():
-                try:
-                    observed = await client.get_channel(channel_id)
-                except Exception as e:
-                    # The assignment landed; only the read-back failed. The row
-                    # keeps saying the number has not been read back, which is
-                    # true, rather than acquiring one nothing observed.
-                    logger.warning(
-                        "[CHANNELS] Assigned channel %s but could not read its "
-                        "new number back: %s", channel_id, e,
-                    )
-                    continue
+            # A read that fails leaves its row saying the number has not been
+            # read back, which is true, rather than acquiring one nothing
+            # observed.
+            async for channel_id, observed in _read_back_channels(
+                client, list(row_for_channel),
+            ):
+                row = row_for_channel[channel_id]
                 new_number = observed.get("channel_number")
                 row["after_value"]["channel_number"] = new_number
                 row["description"] = _assignment_description(
@@ -1961,6 +2178,9 @@ async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAd
             )
 
         return result
+    except HTTPException:
+        unwinding = True
+        raise
     except Exception as e:
         logger.exception("[CHANNELS] Failed to assign channel numbers: %s", e)
         unwinding = True
@@ -2013,7 +2233,9 @@ _NUMBER_SCOPED_UPDATE_FIELDS = ("acknowledgedDuplicate", "expectedNumber")
 _NUMBER_SCOPED_CREATE_FIELDS = ("channelNumber", "acknowledgedDuplicate")
 
 
-def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperation]:
+def _consolidate_operations(
+    operations: list[BulkOperation], origins: list[set[int]] | None = None,
+) -> list[BulkOperation]:
     """Consolidate redundant operations to minimize API calls.
 
     Optimizations:
@@ -2051,6 +2273,12 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     """
     start = time.time()
     original_count = len(operations)
+    # Optional retirement provenance: an input contributing to multiple
+    # consolidated writes only settles when every one of those writes settles.
+    original_indexes = {id(op): i for i, op in enumerate(operations)} if origins is not None else {}
+    update_origins: dict[int, set[int]] = {}
+    number_origins: dict[int, set[int]] = {}
+    deleted_origins: dict[int, set[int]] = {}
 
     # First pass: find channels to be deleted and temp channels to be created.
     # Both sets are computed up front so that create+delete cancellation is
@@ -2085,6 +2313,10 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     channel_update_last: dict[int, BulkUpdateChannelOp] = {}
     channel_update_number_source: dict[int, BulkUpdateChannelOp] = {}
     channel_final_numbers: dict[int, float] = {}  # channelId -> final number
+    # The baseline each channel's final range placement was sent with. Taken
+    # from the same operation as the number, because a baseline describes the
+    # write that carries it.
+    channel_range_baselines: dict[int, Any] = {}
     # WHICH KIND OF OPERATION OWNS EACH CHANNEL'S FINAL NUMBER: channelId ->
     # the operation type of the LAST submitted operation that set it. Written
     # by every kind that places a channel on a number, so the winner is decided
@@ -2098,7 +2330,7 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     channel_number_owner: dict[int, str] = {}
     ordered_ops: list[BulkOperation] = []  # create/delete ops in order
 
-    for op in operations:
+    for index, op in enumerate(operations):
         if op.type == "bulkAssignChannelNumbers":
             # An omitted start is 1, which is what the frontend materialiser,
             # the backend materialiser and the executor all already say. It was
@@ -2112,9 +2344,19 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
                 if cid not in channels_to_delete:
                     channel_final_numbers[cid] = start_num + i
                     channel_number_owner[cid] = "bulkAssignChannelNumbers"
+                    if op.expectedNumbers and cid in op.expectedNumbers:
+                        channel_range_baselines[cid] = op.expectedNumbers[cid]
+                    else:
+                        channel_range_baselines.pop(cid, None)
+                    if origins is not None:
+                        number_origins.setdefault(cid, set()).add(index)
+                elif origins is not None:
+                    deleted_origins.setdefault(cid, set()).add(index)
 
         elif op.type == "updateChannel":
             if op.channelId not in channels_to_delete:
+                if origins is not None:
+                    update_origins.setdefault(op.channelId, set()).add(index)
                 existing = channel_final_updates.get(op.channelId, {})
                 existing.update(op.data)
                 channel_final_updates[op.channelId] = existing
@@ -2122,6 +2364,10 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
                 if "channel_number" in op.data:
                     channel_update_number_source[op.channelId] = op
                     channel_number_owner[op.channelId] = "updateChannel"
+                    if origins is not None:
+                        number_origins.setdefault(op.channelId, set()).add(index)
+            elif origins is not None:
+                deleted_origins.setdefault(op.channelId, set()).add(index)
 
         elif op.type in (
             "addStreamToChannel",
@@ -2145,6 +2391,8 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
             if op.tempId not in channels_to_delete:
                 ordered_ops.append(op)
                 channel_number_owner[op.tempId] = "createChannel"
+                if origins is not None and op.channelNumber is not None:
+                    number_origins.setdefault(op.tempId, set()).add(index)
 
         elif op.type == "deleteChannel":
             if op.channelId < 0 and op.channelId in channels_to_create:
@@ -2196,6 +2444,13 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     # envelope to say which of the two writes was the authoritative one.
     consolidated: list[BulkOperation] = []
     for op in ordered_ops:
+        if origins is not None:
+            origin = {original_indexes[id(op)]}
+            if op.type == "createChannel" and channel_number_owner.get(op.tempId) == "createChannel":
+                origin |= number_origins.get(op.tempId, set())
+            elif op.type == "deleteChannel":
+                origin |= deleted_origins.get(op.channelId, set())
+            origins.append(origin)
         if (
             op.type == "createChannel"
             and op.channelNumber is not None
@@ -2223,12 +2478,19 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
             continue
         template = channel_update_number_source.get(cid) or channel_update_last[cid]
         consolidated.append(template.model_copy(update={"data": merged, **overrides}))
+        if origins is not None:
+            origin = update_origins[cid].copy()
+            if "channel_number" in merged:
+                origin |= number_origins[cid]
+            origins.append(origin)
 
     # Consolidated bulkAssign: group into consecutive ranges. This is the one
-    # arm that genuinely cannot copy a single input op — it regroups several
-    # into consecutive ranges — and it stays safe only while
-    # `BulkAssignNumbersOp` carries no per-operation bookkeeping. A test pins
-    # that model's field list so adding one has to be a decision.
+    # arm that genuinely cannot copy a single input op: it regroups several
+    # into consecutive ranges, so every per-channel field on
+    # `BulkAssignNumbersOp` has to be carried across by hand. `expectedNumbers`
+    # is the only one, and it is per channel, so each regrouped range takes
+    # exactly its own channels' baselines. A test pins that model's field list
+    # so adding another has to be a decision.
     #
     # A channel a later operation of another kind places is left out entirely,
     # rather than assigned here and overwritten afterwards: two writes to one
@@ -2248,7 +2510,16 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
             while j + 1 < len(entries) and entries[j + 1][1] == entries[j][1] + 1:
                 j += 1
             ids = [e[0] for e in entries[i:j + 1]]
-            consolidated.append(BulkAssignNumbersOp(channelIds=ids, startingNumber=start_num))
+            baselines = {
+                cid: channel_range_baselines[cid]
+                for cid in ids if cid in channel_range_baselines
+            }
+            consolidated.append(BulkAssignNumbersOp(
+                channelIds=ids, startingNumber=start_num,
+                expectedNumbers=baselines or None,
+            ))
+            if origins is not None:
+                origins.append(set().union(*(number_origins[cid] for cid in ids)))
             i = j + 1
 
     elapsed = (time.time() - start) * 1000
@@ -2270,6 +2541,116 @@ def _same_channel_number_or_both_unset(a, b) -> bool:
     if a is None or b is None:
         return a is None and b is None
     return same_channel_number(a, b)
+
+
+def _stale_number_baselines(
+    baselines: dict[int, Any],
+    current_numbers: dict[int, Any],
+) -> list[dict]:
+    """Every channel whose number is not the one its caller last read.
+
+    The one comparison every numbering path makes before it writes: the staged
+    executor against the lineup it read at the start of the run,
+    ``POST /assign-numbers`` against the per-channel reads it makes just before
+    its upstream call, and ``PATCH /{channel_id}`` against the read of the
+    channel it makes just before its own. A channel absent from
+    ``current_numbers`` counts as holding no number.
+
+    This narrows the window between the caller's read and ECM's write; it does
+    not close it. Dispatcharr 0.28.x has no conditional write (no ``If-Match``,
+    ``ETag``, ``412`` or version field on ``Channel``), so a change that lands
+    between ECM's own read and its write is still overwritten and nothing here
+    can detect it.
+
+    Returns:
+        ``{"channelId", "baselineNumber", "serverNumber"}`` for each stale
+        channel, in ``baselines`` order: the shape the frontend's
+        ``ConcurrentNumberAcknowledgement`` binds a reconcile decision to.
+    """
+    stale = []
+    for channel_id, baseline in baselines.items():
+        current = current_numbers.get(channel_id)
+        if not _same_channel_number_or_both_unset(current, baseline):
+            stale.append({
+                "channelId": channel_id,
+                "baselineNumber": baseline,
+                "serverNumber": current,
+            })
+    return stale
+
+
+def _patch_number_baseline(data: dict) -> Optional[ExpectedChannelNumber]:
+    """The baseline a ``PATCH /{channel_id}`` body carries for its number write.
+
+    The body is the free-form field bag Dispatcharr receives, so the baseline
+    rides in it under ``expectedNumber``, in the exact shape a bulk-commit
+    ``updateChannel`` carries for the same write. The caller strips it before
+    the upstream call, so Dispatcharr never receives it.
+
+    Returns ``None`` when the body does not set ``channel_number``: such a write
+    cannot overwrite anybody's change to the number, so a baseline sent with it
+    is ignored, as on ``updateChannel``.
+
+    Raises:
+        RequestValidationError: ``channel_number`` is set and the baseline is
+            missing, not a ``{"number": ...}`` object, or not a finite number or
+            ``null``. A 422, before anything is read or written.
+    """
+    if "channel_number" not in data:
+        return None
+    if "expectedNumber" not in data:
+        raise RequestValidationError([{
+            "type": "missing_channel_number_baseline",
+            "loc": ("body", "expectedNumber"),
+            "msg": (
+                "This request changes the channel's number without expectedNumber. "
+                'Send expectedNumber as {"number": <the number you last read>} '
+                "(null for a channel you saw with no number), so a change made "
+                "since is not overwritten"
+            ),
+            "input": None,
+        }])
+    try:
+        return ExpectedChannelNumber.model_validate(data["expectedNumber"])
+    except ValidationError as exc:
+        raise RequestValidationError([
+            {**error, "loc": ("body", "expectedNumber", *error["loc"])}
+            for error in exc.errors()
+        ]) from None
+
+
+def _server_number_phrase(value: Any) -> str:
+    """Where the server says a channel is, for guidance that is never scrubbed.
+
+    The server's value is upstream data. A number (or no number) is rendered as
+    usual; anything else is not echoed, because the guidance it lands in passes
+    through unredacted. The structured ``concurrentNumberChanges`` payload keeps
+    the value as read.
+    """
+    if value is None or (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+    ):
+        return f"channel number {format_channel_number(value)}"
+    return "an unreadable channel number"
+
+
+def _stale_baselines_message(
+    stale: list[dict],
+    *,
+    subject: str,
+    unchanged: str = "Nothing in this request's range was changed.",
+) -> str:
+    """Name each moved channel, in the wording the single-channel refusal uses."""
+    moved = "; ".join(
+        f"channel {change['channelId']} is on "
+        f"{_server_number_phrase(change['serverNumber'])}, and this request expected "
+        f"{format_channel_number(change['baselineNumber'])}"
+        for change in stale
+    )
+    return (
+        f"{subject} not renumbered: {moved}. Somebody else changed it. Re-read the "
+        f"channels and decide before sending this again. {unchanged}"
+    )
 
 
 def _numbering_execution_order(
@@ -2416,7 +2797,7 @@ def _prune_old_bulk_commit_jobs() -> None:
 
 
 @router.post("/bulk-commit")
-async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdminIfEnabled):
+async def bulk_commit_operations(request: BulkCommitRequest, http_request: Request, _admin=RequireAdminIfEnabled):
     """
     Process multiple channel operations. Admin only (bulk operator op, bd-um30y).
 
@@ -2437,6 +2818,9 @@ async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdmin
     - validateOnly: If true, only validate without executing
     - continueOnError: If true, continue processing even when operations fail
     - consolidate: If true, server-side dedup of redundant ops
+    - profileRecoveryOperator: Opt in to a binding for the committed channel map
+    - profileRecoveryDestination: Expected staged connection identity, checked by the worker
+    - returnSettledOperationIndexes: Include confirmable positions in the submitted operation list
     """
     # One Apply All is several bulk-commit requests: a create phase, then
     # batches of 200. A client that sends the same X-ECM-Batch-Id on all of
@@ -2450,6 +2834,17 @@ async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdmin
     if request.validateOnly:
         return await _run_bulk_commit(request, batch_id=request_batch_id)
 
+    recovery_scope: dict[str, str] = {}
+    if request.profileRecoveryOperator is not None:
+        operator = await recovery_operator(http_request)
+        if operator != request.profileRecoveryOperator:
+            raise HTTPException(409, "The ECM operator changed. Reload before applying channel changes.")
+        if not request.profileRecoveryDestination:
+            raise HTTPException(409, "Reload the channel manager before applying profile selections.")
+        recovery_scope["profile_recovery_operator"] = operator
+    elif request.profileRecoveryDestination is not None:
+        raise HTTPException(409, "Profile recovery requires the original ECM operator.")
+
     # Enqueue the actual commit as a supervised background task.
     _prune_old_bulk_commit_jobs()
     job_id = uuid.uuid4().hex
@@ -2462,7 +2857,7 @@ async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdmin
             logger.warning("[CHANNELS-BULK] Job %s missing before start", job_id)
             return
         try:
-            result = await _run_bulk_commit(request, batch_id=request_batch_id)
+            result = await _run_bulk_commit(request, batch_id=request_batch_id, **recovery_scope)
             job.result = result
             job.status = "completed"
             job.completed_at = time.time()
@@ -2478,9 +2873,9 @@ async def bulk_commit_operations(request: BulkCommitRequest, _admin=RequireAdmin
             raise
         except Exception as e:  # noqa: BLE001 — supervisor must catch broadly
             job.status = "failed"
-            job.error = f"{type(e).__name__}: {e}"
+            job.error = "Bulk commit failed; check server logs and current state before retrying."
             job.completed_at = time.time()
-            logger.exception("[CHANNELS-BULK] Job %s failed: %s", job_id, e)
+            logger.error("[CHANNELS-BULK] Job %s failed: %s", job_id, redact_exception(e))
 
     task = asyncio.create_task(_runner(), name=f"bulk-commit-{job_id}")
     _BULK_COMMIT_BACKGROUND_TASKS.add(task)
@@ -2529,7 +2924,7 @@ async def get_bulk_commit_status(job_id: str):
 
 
 async def _run_bulk_commit(
-    request: BulkCommitRequest, batch_id: Optional[str] = None
+    request: BulkCommitRequest, batch_id: Optional[str] = None, *, profile_recovery_operator: Optional[str] = None
 ) -> dict:
     """Execute a bulk-commit request and return the result envelope.
 
@@ -2547,6 +2942,18 @@ async def _run_bulk_commit(
     # effective plan must be revalidated after consolidation.
     _validate_bulk_channel_dependencies(request.operations)
     client = get_client()
+    if profile_recovery_operator is not None and not recovery_destination_matches(
+        request.profileRecoveryDestination or "", client,
+    ):
+        return {
+            "success": False, "operationsApplied": 0, "operationsFailed": 0,
+            "tempIdMap": {}, "groupIdMap": {}, "settledOperationIndexes": [],
+            "errors": [{
+                "operationId": "profile-recovery-destination",
+                "error": "The Dispatcharr destination changed. Nothing was applied. Return to the original connection before retrying.",
+            }],
+        }
+    binding = recovery_binding(client, profile_recovery_operator) if profile_recovery_operator is not None else None
     batch_id = batch_id or str(uuid.uuid4())[:8]
 
     # Phase 1 onwards. Until this flips, nothing has been written anywhere, so
@@ -2611,10 +3018,14 @@ async def _run_bulk_commit(
 
     # Consolidate operations if requested
     operations = request.operations
+    origins: list[set[int]] = []
+    settled: set[int] = set()
     if request.consolidate:
-        operations = _consolidate_operations(operations)
+        operations = _consolidate_operations(operations, origins if request.returnSettledOperationIndexes else None)
         _validate_bulk_channel_dependencies(operations)
         request = request.model_copy(update={"operations": operations})
+    elif request.returnSettledOperationIndexes:
+        origins = [{index} for index in range(len(operations))]
     temp_channel_names = {
         op.tempId: op.name
         for op in request.operations
@@ -2637,6 +3048,9 @@ async def _run_bulk_commit(
         "operationsPartiallyApplied": 0,
         "errors": [],
         "tempIdMap": {},  # temp channel ID -> real ID
+        # real ID -> the number Dispatcharr reported creating it on. A later
+        # request that numbers the channel sends this as its baseline.
+        "createdChannelNumbers": {},
         "groupIdMap": {},  # group name -> real ID
         "validationIssues": [],
         "validationPassed": True,
@@ -2696,7 +3110,32 @@ async def _run_bulk_commit(
     # ``backend/channel_number_apply.py``.
     compensator = NumberingCompensator()
 
-    class MalformedCreateResponseError(Exception):
+    class OperatorBulkError(Exception):
+        """Trusted local validation/recovery text, never arbitrary upstream errors.
+
+        ``scrub`` decides whether the message is redacted before it reaches the
+        envelope. It stays on for any message that interpolates names or
+        upstream data. Only a class whose every message is ECM text plus ids
+        and channel numbers turns it off: the registered-value sweep has no
+        context, so a short registered credential would otherwise rewrite the
+        very numbers the operator needs to act on.
+        """
+
+        scrub = True
+
+    class MissingChannelNumberBaselineError(OperatorBulkError):
+        """A numbering write reached the executor without the caller's baseline."""
+
+        # Unscrubbed: a registered credential equal to a channel number or id shows as that number.
+        scrub = False
+
+    class MissingStreamError(OperatorBulkError):
+        """An addStreamToChannel names a stream id the catalog does not hold."""
+
+        # Unscrubbed: a registered credential equal to a channel number or id shows as that number.
+        scrub = False
+
+    class MalformedCreateResponseError(OperatorBulkError):
         """Dispatcharr accepted a create but answered without a usable id.
 
         The channel EXISTS. This is raised so the operation stops early and is
@@ -2706,7 +3145,7 @@ async def _run_bulk_commit(
         the channel twice.
         """
 
-    class UnresolvedGroupError(Exception):
+    class UnresolvedGroupError(OperatorBulkError):
         """A group id that was never resolved to a real Dispatcharr group.
 
         Negative ids are the frontend's staging placeholders. Dispatcharr
@@ -2728,7 +3167,7 @@ async def _run_bulk_commit(
             )
         return group_id
 
-    class UnresolvedChannelError(Exception):
+    class UnresolvedChannelError(OperatorBulkError):
         """A channel id that is still a frontend staging placeholder.
 
         ``resolve_id`` maps a negative temp id onto the real id its
@@ -2737,7 +3176,7 @@ async def _run_bulk_commit(
         path segment is how a caller-supplied id reaches Dispatcharr unchecked.
         """
 
-    class ConcurrentChannelNumberChangeError(Exception):
+    class ConcurrentChannelNumberChangeError(OperatorBulkError):
         """The channel is not on the number the caller said it was on.
 
         Bead ``enhancedchannelmanager-ic884.4``. Raised INSTEAD of the PATCH, so
@@ -2747,7 +3186,15 @@ async def _run_bulk_commit(
         numbering plan that stopped part way is exactly what this is.
         """
 
-    class UnverifiableChannelNumberError(Exception):
+        # Unscrubbed: a registered credential equal to a channel number or id shows as that number.
+        scrub = False
+
+        def __init__(self, message: str, changes: list[dict]):
+            super().__init__(message)
+            #: ``{"channelId", "baselineNumber", "serverNumber"}`` per channel.
+            self.changes = changes
+
+    class UnverifiableChannelNumberError(OperatorBulkError):
         """The caller asked for a check the executor could not run.
 
         The lineup read failed, so there is nothing to compare the caller's
@@ -2757,6 +3204,9 @@ async def _run_bulk_commit(
         not the "a failed lookup never accuses" rule — nothing is being accused
         of not existing; the check itself is being reported as unavailable.
         """
+
+        # Unscrubbed: a registered credential equal to a channel number or id shows as that number.
+        scrub = False
 
     def reject_unresolved_channel(channel_id: int, label: str) -> int:
         """Return ``channel_id``, or raise if it is still a staging placeholder."""
@@ -2833,10 +3283,10 @@ async def _run_bulk_commit(
                 },
                 batch_id=batch_id,
             )
-        except Exception as summary_err:
-            logger.exception(
+        except Exception as summary_err:  # noqa: BLE001 - record journal residue; log the scrubbed chain
+            logger.error(
                 "[CHANNELS-BULK] Summary journal row raised (batch=%s): %s",
-                batch_id, summary_err,
+                batch_id, redact_exception(summary_err),
             )
             summary = None
         if summary is None:
@@ -2867,6 +3317,25 @@ async def _run_bulk_commit(
         """
         flush_journal()
         finalize_bulk_commit_result(result, ledger)
+        if request.returnSettledOperationIndexes:
+            processed = set().union(*(origins[index] for index in settled))
+            incomplete = set().union(*(origin for index, origin in enumerate(origins) if index not in settled))
+            result["settledOperationIndexes"] = sorted(processed - incomplete)
+            if request.consolidate:
+                # One final placement per channel in the consolidated plan.
+                # An original mixed-field operation may remain pending even
+                # though its superseding placement settled. Report that
+                # component separately, after any numbering compensation.
+                numbers: dict[int, ChannelNumber | None] = {}
+                for index in settled:
+                    op = operations[index]
+                    if op.type == "updateChannel" and "channel_number" in op.data:
+                        numbers[resolve_id(op.channelId)] = op.data["channel_number"]
+                    elif op.type == "bulkAssignChannelNumbers":
+                        start = op.startingNumber if op.startingNumber is not None else 1
+                        for offset, channel_id in enumerate(op.channelIds):
+                            numbers[resolve_id(channel_id)] = start + offset
+                result["settledChannelNumbers"] = numbers
         logger.info(
             "[CHANNELS-BULK] Completed (batch=%s): success=%s, applied=%s, failed=%s%s",
             batch_id, result["success"], result["operationsApplied"],
@@ -3009,7 +3478,7 @@ async def _run_bulk_commit(
                 else:
                     logger.debug("[CHANNELS-BULK] All %s referenced channels exist", len(referenced_channel_ids))
             except Exception as e:
-                logger.warning("[CHANNELS-BULK] Failed to fetch channels for validation: %s", e)
+                logger.warning("[CHANNELS-BULK] Failed to fetch channels for validation: %s", redact_log_diagnostic(str(e)))
 
         if referenced_stream_ids:
             try:
@@ -3021,7 +3490,7 @@ async def _run_bulk_commit(
                 streams_resolved = True
                 logger.debug("[CHANNELS-BULK] Loaded %s of %s referenced streams", len(existing_streams), len(referenced_stream_ids))
             except Exception as e:
-                logger.warning("[CHANNELS-BULK] Failed to fetch streams for validation: %s", e)
+                logger.warning("[CHANNELS-BULK] Failed to fetch streams for validation: %s", redact_log_diagnostic(str(e)))
 
         if referenced_profile_ids:
             try:
@@ -3031,7 +3500,7 @@ async def _run_bulk_commit(
                 profiles_resolved = True
                 logger.debug("[CHANNELS-BULK] Loaded %s channel profiles", len(existing_profile_ids))
             except Exception as e:
-                logger.warning("[CHANNELS-BULK] Failed to fetch channel profiles for validation: %s", e)
+                logger.warning("[CHANNELS-BULK] Failed to fetch channel profiles for validation: %s", redact_log_diagnostic(str(e)))
 
         if referenced_hidden_group_ids:
             try:
@@ -3046,7 +3515,7 @@ async def _run_bulk_commit(
                 hidden_groups_resolved = True
                 logger.debug("[CHANNELS-BULK] %s of %s referenced groups are hidden", len(hidden_group_ids), len(referenced_hidden_group_ids))
             except Exception as e:
-                logger.warning("[CHANNELS-BULK] Failed to read hidden groups for validation: %s", e)
+                logger.warning("[CHANNELS-BULK] Failed to read hidden groups for validation: %s", redact_log_diagnostic(str(e)))
 
         # Simulate stream operations in their actual execution sequence. Temp
         # channels start empty at their create; existing channels start from the
@@ -3453,7 +3922,7 @@ async def _run_bulk_commit(
                                     logger.debug("[CHANNELS-BULK] Found existing group '%s' -> ID %s", group_name, g['id'])
                                     break
                         except Exception as find_err:
-                            logger.debug("[CHANNELS-BULK] Failed to search for existing group: %s", find_err)
+                            logger.debug("[CHANNELS-BULK] Failed to search for existing group: %s", redact_log_diagnostic(str(find_err)))
                     else:
                         # Non-duplicate error - abort the run.
                         #
@@ -3466,10 +3935,10 @@ async def _run_bulk_commit(
                         # makes the envelope say a step failed without claiming
                         # an operation did — none was attempted
                         # (bead enhancedchannelmanager-kz089, fix round 2).
-                        logger.error("[CHANNELS-BULK] Failed to create group '%s': %s", group_name, e)
+                        logger.error("[CHANNELS-BULK] Failed to create group '%s': %s", group_name, redact_exception(e))
                         result["errors"].append({
                             "operationId": f"create-group-{group_name}",
-                            "error": str(e)
+                            "error": "Channel group creation failed; check server logs for details."
                         })
                         ledger.record_setup_failure()
                         return finish()
@@ -3587,9 +4056,17 @@ async def _run_bulk_commit(
 
         def check_expected_number(op, channel_id: int) -> None:
             """Refuse to write a number over a change the caller has not seen."""
-            expected = getattr(op, "expectedNumber", None)
-            if expected is None or "channel_number" not in (op.data or {}):
+            if "channel_number" not in (op.data or {}) or op.channelId < 0:
                 return
+            expected = op.expectedNumber
+            if expected is None:
+                # The request model refuses this already; consolidation copies
+                # the number-setting operation, so it cannot drop one either.
+                raise MissingChannelNumberBaselineError(
+                    f"Channel {channel_id} was not renumbered: the operation carries "
+                    "no expectedNumber, so ECM cannot check whether anybody else "
+                    "changed its number first."
+                )
             if not channels_resolved:
                 raise UnverifiableChannelNumberError(
                     f"Channel {channel_id} was not renumbered: the channel lineup "
@@ -3600,11 +4077,53 @@ async def _run_bulk_commit(
             if _same_channel_number_or_both_unset(current, expected.number):
                 return
             raise ConcurrentChannelNumberChangeError(
-                f"Channel {channel_id} was not renumbered: it is on channel number "
-                f"{format_channel_number(current)}, and this request expected "
+                f"Channel {channel_id} was not renumbered: it is on "
+                f"{_server_number_phrase(current)}, and this request expected "
                 f"{format_channel_number(expected.number)}. Somebody else changed it. "
-                "Re-read the channel and decide before sending this again."
+                "Re-read the channel and decide before sending this again.",
+                [{
+                    "channelId": channel_id,
+                    "baselineNumber": expected.number,
+                    "serverNumber": current,
+                }],
             )
+
+        def check_expected_numbers(op) -> None:
+            """The range form of :func:`check_expected_number`.
+
+            Every existing channel in the range is checked before the single
+            upstream call, and one stale channel refuses the whole range: its
+            numbers are positional, so there is no partial range to write.
+            """
+            existing_ids = [cid for cid in dict.fromkeys(op.channelIds) if cid >= 0]
+            if not existing_ids:
+                return
+            baselines = op.expectedNumbers or {}
+            missing = [cid for cid in existing_ids if cid not in baselines]
+            if missing:
+                raise MissingChannelNumberBaselineError(
+                    f"Channels {_format_channel_ids(missing)} were not renumbered: the "
+                    "range carries no expectedNumbers entry for them, so ECM cannot "
+                    "check whether anybody else changed their numbers first."
+                )
+            if not channels_resolved:
+                raise UnverifiableChannelNumberError(
+                    f"Channels {_format_channel_ids(existing_ids)} were not renumbered: "
+                    "the channel lineup could not be read, so ECM could not check "
+                    "whether anybody else changed their numbers first. Nothing in this "
+                    "range was changed."
+                )
+            stale = _stale_number_baselines(
+                {cid: baselines[cid] for cid in existing_ids}, numbers_at_run_start,
+            )
+            if stale:
+                raise ConcurrentChannelNumberChangeError(
+                    _stale_baselines_message(
+                        stale,
+                        subject="Channel was" if len(stale) == 1 else "Channels were",
+                    ),
+                    stale,
+                )
 
         # Renumbers run in an order where a channel is moved onto a number only
         # once its previous holder has left it; everything else keeps the order
@@ -3617,6 +4136,7 @@ async def _run_bulk_commit(
             # numbering change as un-made when the PATCH went through and only
             # ECM's bookkeeping after it did not.
             numbering_landed = False
+            group_channels_moved = 0
             # Exactly one outcome per operation, recorded by this loop rather
             # than by the branches. See bulk_commit_accounting.OperationLedger:
             # branches used to increment `operationsApplied` themselves, at
@@ -3682,7 +4202,7 @@ async def _run_bulk_commit(
                         f"addStreamToChannel for '{temp_channel_names.get(op.channelId, f'Channel {op.channelId}')}'",
                     )
                     if stream_is_missing(op.streamId):
-                        raise ValueError(f"Stream {op.streamId} does not exist")
+                        raise MissingStreamError(f"Stream {op.streamId} does not exist")
                     logger.debug("[CHANNELS-BULK] [%s/%s] addStreamToChannel: channel_id=%s, stream_id=%s", idx+1, len(request.operations), channel_id, op.streamId)
                     channel = await client.get_channel(channel_id)
                     current_streams = channel.get("streams", [])
@@ -3758,7 +4278,7 @@ async def _run_bulk_commit(
                             "[CHANNELS-BULK] reorderChannelStreams rejected for channel %s: %s",
                             channel_id, perm_error,
                         )
-                        raise ValueError(
+                        raise OperatorBulkError(
                             f"Cannot reorder streams for channel {channel_id}: {perm_error}"
                         )
                     channel_name = channel.get("name") or channel_name_of(channel_id)
@@ -3781,6 +4301,9 @@ async def _run_bulk_commit(
                         for cid in op.channelIds
                     ]
                     logger.debug("[CHANNELS-BULK] [%s/%s] bulkAssignChannelNumbers: %s channels starting at %s", idx+1, len(request.operations), len(resolved_ids), op.startingNumber)
+                    # Before any row is built or anything is written, so a
+                    # refused range leaves every channel in it as it was.
+                    check_expected_numbers(op)
                     # One row per channel, matching POST /assign-numbers, which
                     # is the in-repo precedent for "renumbering is N per-channel
                     # facts, not one aggregate". Numbering is sequential from
@@ -3788,47 +4311,110 @@ async def _run_bulk_commit(
                     # the operator was shown. Every row is built from the state
                     # BEFORE the write, so they are all in hand the moment it
                     # lands.
-                    assign_start = op.startingNumber if op.startingNumber is not None else 1
+                    #
+                    # An omitted start survives to here only when consolidation
+                    # is off, and it goes upstream as omitted: Dispatcharr
+                    # chooses the numbers and the assign endpoint returns none.
+                    # Those rows name no target number until the read-back
+                    # below observes one, and no channel can be skipped as
+                    # "already on its target", because there is no target.
+                    #
+                    # A channel whose entry in `existing_channels` carries no
+                    # `channel_number` key is one whose current number ECM has
+                    # not observed, so its row names no previous number either.
+                    chose_numbers_upstream = op.startingNumber is None
                     assigned_rows: list[dict] = []
                     renumbered: dict[int, int] = {}
                     for offset, assigned_id in enumerate(resolved_ids):
-                        old_number = existing_channels.get(assigned_id, {}).get("channel_number")
-                        new_number = assign_start + offset
-                        if old_number == new_number:
+                        before_channel = existing_channels.get(assigned_id, {})
+                        old_known = "channel_number" in before_channel
+                        old_number = before_channel.get("channel_number")
+                        new_number = None if chose_numbers_upstream else op.startingNumber + offset
+                        if not chose_numbers_upstream and old_known and old_number == new_number:
                             continue
                         assigned_name = channel_name_of(assigned_id)
-                        renumbered[assigned_id] = new_number
+                        if not chose_numbers_upstream:
+                            renumbered[assigned_id] = new_number
+                        after_value = {"name": assigned_name}
+                        if not chose_numbers_upstream:
+                            after_value = {"channel_number": new_number, **after_value}
                         assigned_rows.append(journal_row(
                             action_type="reorder",
                             entity_id=assigned_id,
                             entity_name=assigned_name,
-                            description=(
-                                f"Changed channel number from {format_channel_number(old_number)} "
-                                f"to {format_channel_number(new_number)}"
+                            description=_range_assignment_description(
+                                old_number, new_number,
+                                old_known=old_known, observed=not chose_numbers_upstream,
                             ),
-                            before_value={"channel_number": old_number, "name": assigned_name},
-                            after_value={"channel_number": new_number, "name": assigned_name},
+                            before_value=_number_before_value(
+                                before_channel, assigned_name,
+                            ),
+                            after_value=after_value,
                         ))
                     await client.assign_channel_numbers(resolved_ids, op.startingNumber)
-                    # One upstream call, N channel numbers changed. Each is a
-                    # separate fact to put back, exactly as each is a separate
-                    # journal row.
-                    for assigned_id, new_number in renumbered.items():
-                        compensator.record_landed(
-                            channel_id=assigned_id,
-                            name=channel_name_of(assigned_id),
-                            before=existing_channels.get(assigned_id, {}).get("channel_number"),
-                            after=new_number,
-                        )
-                    numbering_landed = True
-                    ledger.record_persisted(journal_row=assigned_rows or nothing_to_journal(
-                        "every channel in the range already carried its target number"
-                    ))
-                    for assigned_id, new_number in renumbered.items():
-                        if assigned_id in existing_channels:
-                            existing_channels[assigned_id] = {
-                                **existing_channels[assigned_id], "channel_number": new_number
-                            }
+                    if chose_numbers_upstream:
+                        # Queued before the read-back's awaits, so a
+                        # cancellation during it still writes rows that are
+                        # true at that instant.
+                        numbering_landed = True
+                        ledger.record_persisted(journal_row=assigned_rows or nothing_to_journal(
+                            "the range named no channels"
+                        ))
+                        observed_numbers: dict[int, Any] = {}
+                        async for assigned_id, observed in _read_back_channels(
+                            client, list(dict.fromkeys(resolved_ids)), log_tag="CHANNELS-BULK",
+                        ):
+                            if isinstance(observed, dict) and "channel_number" in observed:
+                                observed_numbers[assigned_id] = observed["channel_number"]
+                        for row in assigned_rows:
+                            assigned_id = row["entity_id"]
+                            if assigned_id not in observed_numbers:
+                                continue
+                            new_number = observed_numbers[assigned_id]
+                            before_channel = existing_channels.get(assigned_id, {})
+                            row["description"] = _range_assignment_description(
+                                before_channel.get("channel_number"), new_number,
+                                old_known="channel_number" in before_channel, observed=True,
+                            )
+                            row["after_value"] = {"channel_number": new_number, **row["after_value"]}
+                        for assigned_id in dict.fromkeys(resolved_ids):
+                            before_channel = existing_channels.get(assigned_id, {})
+                            observed = assigned_id in observed_numbers
+                            compensator.record_landed(
+                                channel_id=assigned_id,
+                                name=channel_name_of(assigned_id),
+                                before=before_channel.get("channel_number"),
+                                after=observed_numbers.get(assigned_id),
+                                after_known=observed,
+                            )
+                            if assigned_id not in existing_channels:
+                                continue
+                            updated = dict(existing_channels[assigned_id])
+                            if observed:
+                                updated["channel_number"] = observed_numbers[assigned_id]
+                            else:
+                                updated.pop("channel_number", None)
+                            existing_channels[assigned_id] = updated
+                    else:
+                        # One upstream call, N channel numbers changed. Each is
+                        # a separate fact to put back, exactly as each is a
+                        # separate journal row.
+                        for assigned_id, new_number in renumbered.items():
+                            compensator.record_landed(
+                                channel_id=assigned_id,
+                                name=channel_name_of(assigned_id),
+                                before=existing_channels.get(assigned_id, {}).get("channel_number"),
+                                after=new_number,
+                            )
+                        numbering_landed = True
+                        ledger.record_persisted(journal_row=assigned_rows or nothing_to_journal(
+                            "every channel in the range already carried its target number"
+                        ))
+                        for assigned_id, new_number in renumbered.items():
+                            if assigned_id in existing_channels:
+                                existing_channels[assigned_id] = {
+                                    **existing_channels[assigned_id], "channel_number": new_number
+                                }
 
                 elif op.type == "createChannel":
                     logger.debug("[CHANNELS-BULK] [%s/%s] createChannel: name='%s', tempId=%s, groupId=%s, newGroupName=%s, normalize=%s", idx+1, len(request.operations), op.name, op.tempId, op.groupId, op.newGroupName, op.normalize)
@@ -3887,7 +4473,7 @@ async def _run_bulk_commit(
                             logo_id = await resolve_logo_id(op.logoUrl, channel_name)
                             logger.debug("[CHANNELS-BULK] Resolved logo ID %s for channel '%s'", logo_id, op.name)
                         except Exception as logo_err:
-                            logger.warning("[CHANNELS-BULK] Failed to create/find logo for channel '%s': %s", channel_name, logo_err)
+                            logger.warning("[CHANNELS-BULK] Failed to create/find logo for channel '%s': %s", channel_name, redact_log_diagnostic(str(logo_err)))
                             # Continue without logo
 
                     # Create the channel
@@ -3964,7 +4550,7 @@ async def _run_bulk_commit(
                     if not isinstance(created_id, int) or isinstance(created_id, bool):
                         raise MalformedCreateResponseError(
                             f"Dispatcharr accepted the create for '{channel_name}' but returned "
-                            f"no usable channel id ({created_id!r}). The channel exists; ECM "
+                            f"no usable channel id ({type(created_id).__name__}). The channel exists; ECM "
                             f"cannot map temp id {op.tempId} to it, so any operation in this "
                             "batch that referenced it will fail. Do not retry the create — "
                             "reconcile against Dispatcharr instead."
@@ -3973,6 +4559,11 @@ async def _run_bulk_commit(
                     # Track temp ID -> real ID mapping
                     if op.tempId < 0:
                         result["tempIdMap"][op.tempId] = created_id
+                        result["createdChannelNumbers"][created_id] = created_body.get(
+                            "channel_number"
+                        )
+                        if binding is not None:
+                            result["profileRecoveryBinding"] = binding
 
                     # Nameable by later ops in this same batch.
                     existing_channels[created_id] = new_channel
@@ -4003,10 +4594,18 @@ async def _run_bulk_commit(
                         entity_id=channel_id,
                         entity_name=deleted_name,
                         description=f"Deleted channel '{deleted_name}'",
-                        before_value={
-                            "name": deleted_name,
-                            "channel_number": (deleted_before or {}).get("channel_number"),
-                        },
+                        before_value=(
+                            {
+                                BEFORE_STATE_UNKNOWN_KEY: ["channel_number"],
+                                "name": deleted_name,
+                            }
+                            if isinstance(deleted_before, dict)
+                            and "channel_number" not in deleted_before
+                            else {
+                                "name": deleted_name,
+                                "channel_number": (deleted_before or {}).get("channel_number"),
+                            }
+                        ),
                     ) if really_deleted else nothing_to_journal(
                         f"Dispatcharr answered 404 for channel {channel_id}: it was "
                         "already gone, so this run deleted nothing"
@@ -4039,6 +4638,21 @@ async def _run_bulk_commit(
 
                 elif op.type == "deleteChannelGroup":
                     logger.debug("[CHANNELS-BULK] [%s/%s] deleteChannelGroup: groupId=%s", idx+1, len(request.operations), op.groupId)
+                    # Apply the immediate route's association policy BEFORE any
+                    # reparent write. A disabled sync flag is still an association.
+                    hidden = await hide_associated_group(client, op.groupId)
+                    if hidden is not None:
+                        ledger.record_persisted(journal_row=journal_row(
+                            action_type="group_hide",
+                            entity_id=op.groupId,
+                            entity_name=hidden.name,
+                            description=f"Hid channel group '{hidden.name}' (M3U account association)",
+                            after_value={"group_id": op.groupId, "hidden": True},
+                        ) if hidden.created else nothing_to_journal(
+                            f"channel group {op.groupId} was already hidden"
+                        ))
+                        ledger.record_applied()
+                        continue
                     # Each reparent is an independent write that can be the last
                     # one this operation lands, so each is journalled as it
                     # happens rather than summarised after the delete succeeds
@@ -4052,6 +4666,8 @@ async def _run_bulk_commit(
                         channel_id: int, channel_name: str, target_group: dict,
                         _group_id: int = deleted_group_id,
                     ) -> None:
+                        nonlocal group_channels_moved
+                        group_channels_moved += 1
                         target_name = target_group.get("name") or UNGROUPED_TARGET_GROUP_NAME
                         ledger.record_write(journal_row=journal_row(
                             action_type="update",
@@ -4171,19 +4787,32 @@ async def _run_bulk_commit(
                     # the batch. Pydantic's discriminated union makes this
                     # unreachable from the wire; it is the backstop for a new
                     # operation model added without a branch.
-                    raise ValueError(
+                    raise OperatorBulkError(
                         f"Unsupported bulk-commit operation type '{op.type}'"
                     )
 
                 ledger.record_applied()
+                if request.returnSettledOperationIndexes:
+                    settled.add(idx)
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - classify operation accounting and log the scrubbed chain
                 # Build detailed error info with channel/stream names
                 error_details = {
                     "operationId": op_id,
                     "operationType": op.type,
-                    "error": str(e),
+                    "error": (
+                        (redact_log_diagnostic(str(e)) if e.scrub else str(e))
+                        if isinstance(e, OperatorBulkError)
+                        else "Operation failed; check server logs and the reported results before retrying."
+                    ),
                 }
+                if isinstance(e, ConcurrentChannelNumberChangeError):
+                    error_details["concurrentNumberChanges"] = e.changes
+                if op.type == "deleteChannelGroup":
+                    error_details["groupId"] = op.groupId
+                    error_details["error"] = group_delete_failure_detail(
+                        e, op.groupId, channels_moved=group_channels_moved,
+                    )
 
                 # Add context based on operation type
                 if hasattr(op, 'channelId'):
@@ -4236,7 +4865,7 @@ async def _run_bulk_commit(
                 # Log with detailed context
                 channel_info = f" (channel: {error_details.get('channelName', 'N/A')})" if 'channelName' in error_details else ""
                 stream_info = f" (stream: {error_details.get('streamName', 'N/A')})" if 'streamName' in error_details else ""
-                logger.exception("[CHANNELS-BULK] Operation %s failed%s%s: %s", op_id, channel_info, stream_info, e)
+                logger.error("[CHANNELS-BULK] Operation %s failed%s%s: %s", op_id, channel_info, stream_info, redact_exception(e))
 
                 if ledger.persisted:
                     # The upstream write LANDED and only ECM's bookkeeping after
@@ -4249,9 +4878,11 @@ async def _run_bulk_commit(
                     # batch as clean (bead enhancedchannelmanager-e9e5o).
                     error_details["applied"] = True
                     ledger.record_applied(incomplete=True)
+                    if request.returnSettledOperationIndexes:
+                        settled.add(idx)
                     logger.error(
                         "[CHANNELS-BULK] Operation %s APPLIED upstream but could not be "
-                        "recorded; do not retry it: %s", op_id, e,
+                        "recorded; do not retry it: %s", op_id, redact_log_diagnostic(str(e)),
                     )
                 else:
                     # The operation's own outcome did not happen — a group that
@@ -4267,7 +4898,7 @@ async def _run_bulk_commit(
                             "[CHANNELS-BULK] Operation %s FAILED after landing "
                             "upstream writes of its own; those writes stay "
                             "landed and the caller has to reconcile before "
-                            "retrying: %s", op_id, e,
+                            "retrying: %s", op_id, redact_log_diagnostic(str(e)),
                         )
                     ledger.record_failed()
                 result["errors"].append(error_details)
@@ -4308,24 +4939,36 @@ async def _run_bulk_commit(
         # it is deliberately prescriptive: an unexplained middle is the one
         # outcome this whole pass exists to prevent.
         if compensator.half_applied:
+            # A write counted as applied may now be compensated; do not use
+            # the operation-retirement receipt to claim its requested final state.
+            settled.difference_update(
+                i for i, op in enumerate(operations)
+                if op.type == "bulkAssignChannelNumbers"
+                or (op.type == "updateChannel" and "channel_number" in op.data)
+            )
             steps = compensator.compensation_steps()
             logger.warning(
                 "[CHANNELS-BULK] Numbering stopped part way (batch=%s): %s landed, "
                 "%s did not; writing %s channel(s) back",
                 batch_id, len(compensator.landed), len(compensator.failed), len(steps),
             )
-            unrepaired: list[tuple[NumberingWrite, Exception]] = []
+            unrepaired: list[tuple[NumberingWrite, str]] = []
             for step in steps:
                 try:
                     await client.update_channel(
                         step.channel_id, {"channel_number": step.after}
                     )
                 except Exception as comp_err:  # noqa: BLE001 — every failure is reportable
-                    logger.exception(
+                    logger.error(
                         "[CHANNELS-BULK] Could not put channel %s back on %s: %s",
-                        step.channel_id, format_channel_number(step.after), comp_err,
+                        step.channel_id, format_channel_number(step.after), redact_exception(comp_err),
                     )
-                    unrepaired.append((step, comp_err))
+                    # The upstream error text can carry credentials or internal hosts;
+                    # the envelope keeps the step and a fixed reason, the log the detail.
+                    unrepaired.append((
+                        step,
+                        "Dispatcharr did not accept the repair write; check server logs.",
+                    ))
                     continue
                 # The write LANDED, so its row is queued now, exactly as every
                 # other landed write's is. `record_write` and not
@@ -4342,7 +4985,11 @@ async def _run_bulk_commit(
                         f"{format_channel_number(step.after)} after this batch's "
                         "numbering changes stopped part way"
                     ),
-                    before_value={"channel_number": step.before, "name": step.name},
+                    before_value=(
+                        {"channel_number": step.before, "name": step.name}
+                        if step.before_known
+                        else {BEFORE_STATE_UNKNOWN_KEY: ["channel_number"], "name": step.name}
+                    ),
                     after_value={"channel_number": step.after, "name": step.name},
                 ))
                 if step.channel_id in existing_channels:
@@ -4387,11 +5034,11 @@ async def _run_bulk_commit(
         # (bead enhancedchannelmanager-e9e5o, fix round 4).
         return finish()
 
-    except Exception as e:
-        logger.exception("[CHANNELS-BULK] Unexpected error (batch=%s): %s", batch_id, e)
+    except Exception as e:  # noqa: BLE001 - preserve landed-write accounting and log the scrubbed chain
+        logger.error("[CHANNELS-BULK] Unexpected error (batch=%s): %s", batch_id, redact_exception(e))
         result["errors"].append({
             "operationId": "bulk-commit",
-            "error": str(e)
+            "error": "Bulk commit could not finish; check the reported results before retrying."
         })
         # Not an operation failure — the run itself fell over, possibly with
         # every operation already applied. `aborted_run` relaxes the
@@ -4406,10 +5053,10 @@ async def _run_bulk_commit(
             # envelope more than the audit, so that raise falls back to the raw
             # counts rather than propagating.
             return finish()
-        except Exception as finish_err:
-            logger.exception(
+        except Exception as finish_err:  # noqa: BLE001 - return actual ledger counts after finalization failure
+            logger.error(
                 "[CHANNELS-BULK] Could not finalize a crashed batch (batch=%s): %s",
-                batch_id, finish_err,
+                batch_id, redact_exception(finish_err),
             )
             result["operationsApplied"] = ledger.applied
             result["operationsFailed"] = ledger.failed
@@ -4463,14 +5110,14 @@ async def _run_bulk_commit(
         try:
             flush_journal()
         except Exception as flush_err:  # noqa: BLE001 — must not mask the unwind
-            logger.exception(
+            logger.error(
                 "[CHANNELS-BULK] Journal flush failed while unwinding "
-                "(batch=%s): %s", batch_id, flush_err,
+                "(batch=%s): %s", batch_id, redact_exception(flush_err),
             )
         except BaseException as flush_base:
-            logger.exception(
+            logger.error(
                 "[CHANNELS-BULK] Journal flush raised a BaseException "
-                "(batch=%s): %s", batch_id, flush_base,
+                "(batch=%s): %s", batch_id, redact_exception(flush_base),
             )
             if not unwinding_base_exception:
                 raise
@@ -4786,11 +5433,36 @@ async def update_channel(channel_id: int, data: dict, _admin=RequireAdminIfEnabl
         validate_channel_number_in_payload(data)
     except InvalidChannelNumberError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
+    # Raised before the try below, whose catch-all would turn it into a 500.
+    expected = _patch_number_baseline(data)
+    data = {key: value for key, value in data.items() if key != "expectedNumber"}
     client = get_client()
     try:
-        # Get before state for logging
+        # Get before state for logging, and for the baseline check
         start = time.time()
         before_channel = await client.get_channel(channel_id)
+
+        if expected is not None:
+            # Compared against the read just made, before the write. Dispatcharr
+            # has no conditional write, so a change landing between that read and
+            # the PATCH below is still overwritten; see _stale_number_baselines.
+            stale = _stale_number_baselines(
+                {channel_id: expected.number},
+                {channel_id: before_channel.get("channel_number")},
+            )
+            if stale:
+                logger.warning(
+                    "[CHANNELS] PATCH /channels/%s refused: number moved since the caller read it",
+                    channel_id,
+                )
+                raise HTTPException(status_code=409, detail={
+                    "message": _stale_baselines_message(
+                        stale,
+                        subject="Channel was",
+                        unchanged="Nothing about this channel was changed.",
+                    ),
+                    "concurrentNumberChanges": stale,
+                })
 
         result = await client.update_channel(channel_id, data)
         elapsed_ms = (time.time() - start) * 1000

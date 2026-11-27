@@ -31,7 +31,7 @@ So the scrub is layered, VALUE first and SHAPE only as a fallback:
    ``/<user>/<pass>/<id>.<ext>`` at ANY prefix depth. This is what reaches a
    credential no account record holds: a stale stream row, a hand-entered URL.
 3. **Query name** — a credential-named query parameter
-   (:data:`routers.backup._URL_CREDENTIAL_QUERY_KEYS`) loses its value even when
+   (:data:`credential_sentinel.URL_CREDENTIAL_QUERY_KEYS`) loses its value even when
    the value itself is unknown.
 4. **Authority** — hostname/IP and userinfo are replaced wholesale, which is
    what kills the ``user:pass@host`` form.
@@ -44,7 +44,6 @@ URL-shaped byte. Callers building a multi-member artifact should run it over
 every member as a final stage rather than trusting each producer.
 """
 import json
-import logging
 import re
 from urllib.parse import (
     parse_qsl,
@@ -56,7 +55,10 @@ from urllib.parse import (
     urlunparse,
 )
 
-logger = logging.getLogger(__name__)
+from credential_sentinel import URL_CREDENTIAL_QUERY_KEYS
+from credential_sentinel import (
+    rewrite_known_credential_segments as _rewrite_known_credential_values,
+)
 
 # The sentinel. Same spelling the backup artifact uses, so an operator reading
 # either artifact sees one vocabulary for "a credential was here".
@@ -78,8 +80,30 @@ _XC_PATH_RE = re.compile(r"^/[^/]+/[^/]+/\d+\.\w+$")
 # IP address pattern
 _IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
-# URL pattern for matching in free text (generous but avoids trailing punctuation)
-_URL_RE = re.compile(r"https?://[^\s\"'<>\])}]+")
+# URL pattern for matching in free text (generous but avoids trailing punctuation).
+#
+# Any scheme, not only http(s): ``rtmp://``, ``rtsp://``, ``ftp://`` and
+# ``redis://`` carry ``user:pass@`` userinfo as readily, and only a matched URL
+# reaches the authority rule that destroys it. The scheme is bounded so a long
+# run of letters cannot make each start position rescan it. A bracketed IPv6
+# authority (optionally after userinfo, optionally with a zone id) is matched
+# as a unit, because ``]`` otherwise ends the match at the host and leaves the
+# path and query behind it unscrubbed.
+_URL_RE = re.compile(
+    r"\b[A-Za-z][A-Za-z0-9+.\-]{0,31}://"
+    r"(?:[^\s\"'<>\[\](){}/@]{0,512}@)?"
+    r"(?:\[[0-9A-Fa-f:.]{2,64}(?:%[A-Za-z0-9._~\-]{1,32})?\])?"
+    r"[^\s\"'<>\])}]*"
+)
+
+# Xtream Codes stream kinds. An extensionless ``/<kind>/<user>/<pass>/<id>``
+# path is only treated as credential-bearing under one of these, or with no
+# prefix at all, so an ordinary API path ending in an id keeps its segments.
+_XC_KINDS = frozenset({"live", "movie", "series"})
+
+# A path root that marks an API rather than an Xtream Codes stream, for the
+# zero-prefix extensionless form (``/api/channels/123``).
+_NON_XC_ROOTS = frozenset({"api"})
 
 # Minimum length for a value to be swept LITERALLY out of a whole text
 # (:func:`scrub_credential_values`).
@@ -153,35 +177,6 @@ def scrub_credential_values(
     return text
 
 
-def _rewrite_known_credential_values(
-    url: str, secrets: frozenset, identities: frozenset
-):
-    """Layer 1 — delegate to the backup router's value-based path rewriter.
-
-    Imported lazily rather than at module scope on purpose: this module is a
-    leaf utility that :mod:`routers.client_errors` imports on a request path,
-    and :mod:`routers.backup` is a large router module. A module-level import
-    would make every consumer of the scrubber pull in a router, and would create
-    a cycle the first time the backup router wanted to scrub something.
-
-    Reusing that function rather than re-deriving the rule here is the point:
-    it already encodes the secret-gated, percent-decoding, whole-segment
-    containment semantics argued out under bead …-msqf7, and a second
-    implementation of the same rule is a second implementation to keep correct.
-    """
-    if not secrets:
-        return None
-    try:
-        from routers.backup import _rewrite_known_credential_segments
-    except Exception:  # pragma: no cover - defensive; import must never sink a scrub
-        logger.warning(
-            "[OBFUSCATE] Value-based credential rewrite unavailable; "
-            "falling back to the shape rule only"
-        )
-        return None
-    return _rewrite_known_credential_segments(url, secrets, identities)
-
-
 def _redact_xc_path_shape(path: str) -> str:
     """Layer 2 — blank the credential pair of an XtreamCodes stream path.
 
@@ -200,6 +195,12 @@ def _redact_xc_path_shape(path: str) -> str:
     stronger statement than ``user``, and overwriting it would hide which layer
     caught the credential.
 
+    Two further shapes: a timeshift archive
+    (``/timeshift/<user>/<pass>/<minutes>/<start>/<id>.ts``) blanks the pair
+    after ``timeshift``, and an extensionless ``<digits>`` id is accepted only
+    with no prefix (``/<user>/<pass>/<id>``, never under ``/api``) or a single
+    stream-kind prefix (``/live/<user>/<pass>/<id>``).
+
     This layer is a HEURISTIC and is second for that reason: it is what reaches
     a credential no account record holds, at the cost of also blanking two
     segments of any non-credential URL that happens to end in this shape. In a
@@ -210,11 +211,34 @@ def _redact_xc_path_shape(path: str) -> str:
     segments = path.split("/")
     if len(segments) < 4:
         return path
-    if not _XC_ID_SEGMENT_RE.fullmatch(segments[-1]):
+    # Timeshift archives put the pair straight after the kind and two more
+    # segments (duration, start) before the id, so the tail rule would blank
+    # the wrong two: ``/timeshift/<user>/<pass>/<minutes>/<start>/<id>.ts``.
+    for idx, segment in enumerate(segments[:-3]):
+        if segment == "timeshift":
+            return _blank_pair(segments, idx + 1, idx + 2)
+    last = segments[-1]
+    if _XC_ID_SEGMENT_RE.fullmatch(last):
+        user_idx, pass_idx = len(segments) - 3, len(segments) - 2
+        return _blank_pair(segments, user_idx, pass_idx)
+    # Extensionless ids (``/<user>/<pass>/<id>``, ``/live/<user>/<pass>/<id>``)
+    # are what live streams commonly use. Without the extension the tail alone
+    # is too weak, so the prefix must be empty or a known stream kind.
+    if not last.isdigit():
         return path
     user_idx, pass_idx = len(segments) - 3, len(segments) - 2
-    if not segments[user_idx] or not segments[pass_idx]:
+    prefix = segments[1:user_idx]
+    if prefix and not (len(prefix) == 1 and prefix[0].lower() in _XC_KINDS):
         return path
+    if not prefix and segments[user_idx].lower() in _NON_XC_ROOTS:
+        return path
+    return _blank_pair(segments, user_idx, pass_idx)
+
+
+def _blank_pair(segments: list, user_idx: int, pass_idx: int) -> str:
+    """Replace the user/pass segments, leaving any layer-1 sentinel in place."""
+    if not segments[user_idx] or not segments[pass_idx]:
+        return "/".join(segments)
     out = list(segments)
     if out[user_idx] != REDACTED:
         out[user_idx] = "user"
@@ -239,11 +263,6 @@ def _redact_query_credentials(
     """
     if not query:
         return query
-    try:
-        from routers.backup import _URL_CREDENTIAL_QUERY_KEYS as _CRED_KEYS
-    except Exception:  # pragma: no cover - defensive
-        _CRED_KEYS = frozenset({"username", "password", "user", "pass", "token"})
-
     known = {v for v in (set(secrets) | set(identities)) if v and v != REDACTED}
     pairs = parse_qsl(query, keep_blank_values=True)
     if not pairs:
@@ -252,7 +271,7 @@ def _redact_query_credentials(
     out = []
     for key, value in pairs:
         if value and (
-            key.lower() in _CRED_KEYS
+            key.lower() in URL_CREDENTIAL_QUERY_KEYS
             or value in known
             or unquote(value) in known
         ):

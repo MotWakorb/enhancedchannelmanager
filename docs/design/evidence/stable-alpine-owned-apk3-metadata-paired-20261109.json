@@ -1,0 +1,39 @@
+{
+  "status": "PAIRED_OWNED_APK3_NATIVE_SIGNATURE_AND_FULL_INSTALLED_RECORD_JOINS_ONLY",
+  "source_native_run": 42681901847,
+  "consumer_helper_sha256": "26317eaba349ea72a2332d9c663b900bd325c36d0bb63bd5828d3d37c04ec201",
+  "datasets": ["amd64", "arm64"],
+  "execution_architecture": "amd64",
+  "conditions": "Native Alpine apk, nonroot UID/GID 3000:3000, read-only root/input mounts, no network. No ARM target execution or installation.",
+  "verified_per_dataset": {
+    "original_signed_owned_apk": 1,
+    "regular_file_sha256_entries": 559,
+    "symlink_entries": 32,
+    "complete_artifact_entries": 591,
+    "adb_metadata_directories_including_unnamed_root": 73,
+    "actual_installed_database_directories_excluding_unnamed_root": 72,
+    "explicit_installed_file_attribute_rows": 77,
+    "installed_file_checksum_rows": 591
+  },
+  "joins": "Require separately bound original APK/public-key hashes and a single scoped public key, run native apk verify and then adbdump --format json on that same file, bind all native info fields to the actual installed header and original package receipt, reconstruct complete Path-ordered artifact inventory with safe symlink referents, bind every real installed payload path/permission/checksum to the signed ADB metadata. No APKv2 parsing is applied to APKv3.",
+  "checksum_distinctions": "The reviewed owned APKv3 installed f:S records use legacy Q1 tokens containing SHA256-160 for regular bytes or symlink text. The installed package checksum is compared as an opaque native metadata token, not mislabeled as APKv2 compressed-control SHA1. Full signed file SHA256 and original native package/payload verification are independently enforced. The separate BusyBox APKv2 survey found SHA1 per-file/link tokens; its control SHA1/payload SHA256 rules must not be conflated with this package.",
+  "paired_native_tool_consumer_receipt_sha256": "211615b70d44eea6360541a17629f3ceb39d4f55a3f974e8d3cef80bc18ae31b",
+  "complete_actual_installed_record_survey_sha256": "2524329934419e62b48d8880f7e96fc91c8b2e815c3a8870fd084b7ea18eb9c0",
+  "negative_controls": {
+    "actual_payload_mutation": "One embedded source-helper PAYLOAD byte changed in a separate copy; original signed metadata/signature blocks and native adbdump JSON stay exactly unchanged. Native apk verify with the original scoped public key rejects exit 1: file integrity error.",
+    "actual_payload_denial_receipt_sha256": "18639789d4569b49006a28c6b701ec96b03aff633b02f6cf3374f812b41b9736",
+    "actual_installed_record_mutation": "A validly encoded installed file checksum changes with original installed package C token, original signed APK and key unchanged. Full wrapper rejects owned installed payload checksum differs from signed ADB.",
+    "actual_installed_record_denial_log_sha256": "b54dd28f557f58d6a9f8d5cba4f2e1f7b5ae3d1910f5f75a47f53ddf74aa51b7",
+    "dangerous_mutant": "Bypassing the installed-file checksum guard makes both recorded architecture regressions fail with DID NOT RAISE InputError.",
+    "mutant_log_sha256": "95835576d58029b5ca1a837b202436fcf1719e3a9444ba402dc4f37908f982f1"
+  },
+  "regression_tests": {
+    "layer": "Native AMD64 Alpine component/source/workflow subset, including complete real AMD64/ARM64 ADB metadata/installed-record fixtures and mocked process-failure guards; actual native tool/payload checks are the separate receipts above",
+    "modules": 45,
+    "passed": 853,
+    "log_sha256": "61bac311add192d658c769d4503b9fc076db2871c2d6aeb337f46e068f2c2eb0"
+  },
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/{owned-apk3-full-database-replay-paired-02.json,owned-apk3-actual-payload-corruption-01/,owned-apk-source-subjects-{amd64,arm64}-42681901847-01/}",
+  "scope": "Owned native original package signature/payload, metadata/artifact inventory and complete actual installed database correspondence only. Final live installed files and component source/compiler/attribution joins, the three BusyBox owned package consumer joins, full aggregate source/security and MCP acceptance remain unfinished. No RPM dispatch change, missing-origin blanket skip, runtime trust/repository change, package install or target/source program execution. Original failures and candidates retained.",
+  "full_runtime_source_acceptance": false
+}

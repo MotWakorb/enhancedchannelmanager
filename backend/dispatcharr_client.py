@@ -506,7 +506,9 @@ class DispatcharrClient:
             logger.error("[DISPATCHARR] Authentication failed - status: %s", e.response.status_code)
             raise
         except Exception as e:
-            logger.exception("[DISPATCHARR] Authentication error: %s", e)
+            # Type only, as at the request boundary: login error text and its
+            # traceback can carry the credentials or the full request URL.
+            logger.error("[DISPATCHARR] Authentication error: %s", type(e).__name__)
             raise
 
     async def _refresh_access_token(self) -> None:
@@ -668,10 +670,9 @@ class DispatcharrClient:
         except Exception as e:
             # Log only the exception TYPE name -- never the exception object or
             # ``str(e)``. An httpx error's text can embed the full request URL
-            # (with query params/credentials), so logging ``e`` here would leak
-            # exactly what CodeQL flags. Method + exception type is enough to
-            # triage; ``logger.exception`` still attaches the traceback.
-            logger.exception("[DISPATCHARR] API request error: %s - %s", method, type(e).__name__)
+            # (with query params/credentials). Keep this low-level boundary
+            # type-only; logger.exception would append the raw traceback.
+            logger.error("[DISPATCHARR] API request error: %s - %s", method, type(e).__name__)
             raise
 
     # -------------------------------------------------------------------------

@@ -1,0 +1,21 @@
+# Incremental proof builder ONLY. Not the ECM production/native runtime.
+# Supply a content-addressed owned-cache build context containing the three
+# reviewed archives. Offline compilation still rehashes every cached input.
+FROM python:3.12-alpine3.24@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7 AS codec-builder
+COPY scripts/alpine_repository_policy.py /proof/scripts/alpine_repository_policy.py
+RUN python /proof/scripts/alpine_repository_policy.py \
+    && apk upgrade --no-cache \
+    && apk add --no-cache build-base cmake pkgconf binutils patch bash coreutils
+COPY scripts/build_native_runtime.py scripts/build_alpine_codecs.py /proof/scripts/
+COPY docker/alpine-native/ /proof/recipe/
+COPY --from=owned-cache / /proof/cache/
+RUN --network=none case "$(uname -m)" in \
+        x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; \
+    esac \
+    && python /proof/scripts/build_alpine_codecs.py \
+        --manifest /proof/recipe/codecs.json --arch "$arch" \
+        --work-dir /proof/work --output-dir /proof/output --cache-dir /proof/cache
+
+# Local proof export, not a runnable/publishable image.
+FROM scratch AS codec-evidence
+COPY --from=codec-builder /proof/output/ /

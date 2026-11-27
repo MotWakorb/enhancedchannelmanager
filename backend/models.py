@@ -1015,6 +1015,22 @@ class M3USnapshot(Base):
         return f"<M3USnapshot(id={self.id}, m3u_account_id={self.m3u_account_id}, total_streams={self.total_streams})>"
 
 
+class M3UChangeExclusion(Base):
+    """Exact provider/group identities hidden by the shared Changes view."""
+    __tablename__ = "m3u_change_exclusions"
+
+    m3u_account_id = Column(Integer, primary_key=True)
+    group_name = Column(String(255), primary_key=True)
+
+    __table_args__ = (
+        CheckConstraint("m3u_account_id > 0", name="ck_m3u_change_exclusion_account"),
+        CheckConstraint("length(group_name) BETWEEN 1 AND 255", name="ck_m3u_change_exclusion_name"),
+    )
+
+    def to_dict(self):
+        return {"m3u_account_id": self.m3u_account_id, "group_name": self.group_name}
+
+
 class M3UChangeLog(Base):
     """
     Persisted log of detected changes in M3U playlists.

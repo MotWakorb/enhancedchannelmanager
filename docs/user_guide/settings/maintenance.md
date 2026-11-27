@@ -9,7 +9,7 @@ results.
 
 ![The top of the Stream Probing section: probe timeout, bitrate measurement duration, and stream fetch page limit, with parallel probing enabled below.](../../images/user_guide/settings/4-maintenance-stream-probing.png)
 
-The screenshot predates the optional resdet control described below.
+The screenshot predates the optional resdet and capacity-wait controls described below.
 
 ## Common tasks
 
@@ -17,9 +17,9 @@ The screenshot predates the optional resdet control described below.
 
 1. Go to **Settings → Maintenance**.
 2. Under **Stream Probing**, adjust the fields you need: **Probe timeout**,
-   **Max concurrent probes** (match this to your lowest M3U provider
-   connection limit to avoid rate limiting), **Profile distribution
-   strategy**, and whether to **Refresh M3Us before probing** or run
+   **Max concurrent probes** (a global ceiling; ECM adjusts down to available
+   profile capacity), **Capacity wait timeout (seconds)** (default five
+   minutes), **Profile distribution strategy**, and whether to **Refresh M3Us before probing** or run
    **Black screen detection**. Enable **Use resdet for resolution detection**
    if you want ECM to estimate the source resolution before upscaling instead
    of using the displayed dimensions reported by ffprobe.
@@ -31,6 +31,25 @@ The screenshot predates the optional resdet control described below.
 **Result:** The next probe run uses the updated settings. **Reflect stream
 stats to Dispatcharr**, if enabled, also pushes resolution/codec/fps/bitrate
 back to Dispatcharr after each successful probe.
+
+ECM checks current provider connections plus its own active probes, and can use
+an eligible secondary profile with independent login capacity when the default
+is full. Dispatcharr's account Max Streams mirrors its default profile; it is not
+an aggregate cap across independent profile logins. Identical-route aliases do
+not provide extra capacity. Shared server-group capacity that cannot be verified
+still defers.
+
+When full, a stream waits up to **Capacity wait timeout**, then is **skipped/deferred**,
+not failed. Other providers can continue. Set the wait to 0 for an immediate
+admission attempt. This wait is separate from **Probe timeout**, which applies
+to media measurement. If live status fails, ECM can use the last verified counts
+for at most **30 seconds**; after that it waits or defers. A skipped result does
+not change previous stream health or add a failure strike. Click the skipped
+count in probe history to inspect the specific reason.
+
+These checks are **best effort**, not a viewer reservation: a viewer starting
+after the check can compete with a probe for the last connection. See the
+[capacity contract](../../probe-capacity.md) for profile rules and limitations.
 
 When resdet is enabled, ECM still uses ffprobe for codec, frame rate, audio,
 and format metadata. resdet analyzes one video frame and replaces only the

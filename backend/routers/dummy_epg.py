@@ -18,6 +18,13 @@ from regex_lint import (
     lint_substitution_pairs,
     violations_to_http_detail,
 )
+from yaml_safety import (
+    IMPORT_MAX_CHARS,
+    IMPORT_MAX_NODES,
+    YamlSafetyError,
+    limit_message,
+    safe_load_bounded,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +129,7 @@ class ProfileUpdateRequest(BaseModel):
 
 class ImportYAMLRequest(BaseModel):
     """Request to import profiles from YAML."""
-    yaml_content: str
+    yaml_content: str = Field(max_length=IMPORT_MAX_CHARS)
     overwrite: bool = False
 
 
@@ -822,7 +829,12 @@ async def import_dummy_epg_profiles_yaml(request: ImportYAMLRequest):
     try:
         # Parse YAML
         try:
-            data = yaml.safe_load(request.yaml_content)
+            data = safe_load_bounded(request.yaml_content, max_nodes=IMPORT_MAX_NODES)
+        except YamlSafetyError as e:
+            logger.warning("[DUMMY-EPG] Import refused: %s", e)
+            raise HTTPException(
+                status_code=400, detail=limit_message("Dummy EPG import", "import", e)
+            )
         except yaml.YAMLError as e:
             raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
 
@@ -830,8 +842,12 @@ async def import_dummy_epg_profiles_yaml(request: ImportYAMLRequest):
         if isinstance(data, list):
             data = {"profiles": data}
 
-        if not data or "profiles" not in data:
+        if not isinstance(data, dict) or "profiles" not in data:
             raise HTTPException(status_code=400, detail="YAML must contain a 'profiles' array or be a list of profiles")
+        if not isinstance(data["profiles"], list) or not all(
+            isinstance(profile, dict) for profile in data["profiles"]
+        ):
+            raise HTTPException(status_code=400, detail="'profiles' must be a list of profile mappings")
 
         # Build group name→id lookup (case-insensitive)
         client = get_client()

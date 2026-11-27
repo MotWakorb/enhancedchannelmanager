@@ -6,6 +6,7 @@
   "scripts": {
     "test:e2e": "playwright test && npm run test:e2e:verification",
     "test:e2e:verification": "playwright test --config=playwright.verification.config.ts",
+    "test:e2e:m3u-exclusions": "playwright test --config=playwright.m3u-exclusions.config.ts",
     "test:e2e:verification-helpers": "playwright test e2e/verification-helpers.spec.ts e2e/task-notification-lifecycle.spec.ts --project=chromium --workers=1 --retries=0",
     "test:playwright-config": "node --test playwright-base-url.test.mjs",
     "test:e2e:operator-shell": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/operator-shell.spec.ts --project=chromium",

@@ -227,7 +227,8 @@ class TestUpdateChannelConfirm:
         }
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             await mcp.call_tool(
-                "update_channel", {"channel_id": 60, "channel_number": 99}
+                "update_channel",
+                {"channel_id": 60, "channel_number": 99, "expected_number": {"number": 98}},
             )
         muts = _mutation_calls(mock_client)
         assert len(muts) == 1

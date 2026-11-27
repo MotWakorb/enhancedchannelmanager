@@ -70,6 +70,8 @@ from __future__ import annotations
 import json
 import logging
 
+from log_utils import redact_log_diagnostic
+
 from services.event_sync_preflight import resolve_effective_master_group_id
 from services.m3u_group_state import (
     acquire_effective_group_locks,
@@ -222,7 +224,7 @@ async def _resolve_live_rule_ids() -> set[int] | None:
     except Exception as e:  # noqa: BLE001 - conservative fallback below
         logger.warning(
             "[PROFILE-RECONCILE] could not resolve live profile-assigning rule "
-            "ids (%s) — treating all pipeline markers as still-owned this pass", e,
+            "ids (%s) — treating all pipeline markers as still-owned this pass", redact_log_diagnostic(str(e)),
         )
         return None
 
@@ -290,7 +292,7 @@ async def _clear_ownership_marker(client, channel: dict) -> None:
         logger.warning(
             "[PROFILE-RECONCILE] channel %s: fresh custom_properties read FAILED "
             "(%s) — SKIPPING the marker clear rather than writing from stale "
-            "snapshot; will retry on the next sweep", cid, e,
+            "snapshot; will retry on the next sweep", cid, redact_log_diagnostic(str(e)),
         )
         return
     cp = fresh.get("custom_properties") if isinstance(fresh, dict) else None
@@ -309,7 +311,7 @@ async def _clear_ownership_marker(client, channel: dict) -> None:
     except Exception as e:  # noqa: BLE001 - cleanup is best-effort
         logger.warning(
             "[PROFILE-RECONCILE] failed to clear stale ownership marker on "
-            "released channel %s: %s", cid, e,
+            "released channel %s: %s", cid, redact_log_diagnostic(str(e)),
         )
 
 
@@ -437,7 +439,7 @@ async def reconcile_group_profiles(
                     logger.warning(
                         "[PROFILE-RECONCILE] group=%s: post-lock revalidation "
                         "fetch FAILED (%s) — failing closed (no writes), degraded",
-                        group_id, e,
+                        group_id, redact_log_diagnostic(str(e)),
                     )
                     return _result(
                         "degraded", group_id, effective_gid=lock_key,
@@ -461,7 +463,7 @@ async def reconcile_group_profiles(
                             logger.warning(
                                 "[PROFILE-RECONCILE] effective=%s: could not "
                                 "reconcile conflict review queue: %s",
-                                effective_gid, e,
+                                effective_gid, redact_log_diagnostic(str(e)),
                             )
                     return await _reconcile_group_locked(
                         client, all_settings, group_id, effective_gid,
@@ -568,7 +570,7 @@ async def _reconcile_group_locked(
     except Exception as e:  # noqa: BLE001 - one bad fetch must not crash the poll
         logger.warning(
             "[PROFILE-RECONCILE] group=%s: failed to fetch profile universe: %s",
-            group_id, e,
+            group_id, redact_log_diagnostic(str(e)),
         )
         profiles = []
         universe_fetch_failed = True
@@ -603,7 +605,7 @@ async def _reconcile_group_locked(
             logger.warning(
                 "[PROFILE-RECONCILE] group=%s: enable-only ownership re-check "
                 "fetch FAILED (%s) — failing closed (no writes), degraded",
-                group_id, e,
+                group_id, redact_log_diagnostic(str(e)),
             )
             return _result(
                 "degraded", group_id, effective_gid=effective_gid,
@@ -632,7 +634,7 @@ async def _reconcile_group_locked(
                 failed_enable.append(pid)
                 logger.warning(
                     "[PROFILE-RECONCILE] group=%s: profile %s enable failed, "
-                    "skipping: %s", group_id, pid, e,
+                    "skipping: %s", group_id, pid, redact_log_diagnostic(str(e)),
                 )
         # Blocker 3a: enables were applied but EXCLUSIVITY could NOT be enforced
         # (we never learned the universe, so no disables ran). That is NOT a
@@ -686,7 +688,7 @@ async def _reconcile_group_locked(
     except Exception as e:  # noqa: BLE001 - fail closed rather than risk a clobber
         logger.warning(
             "[PROFILE-RECONCILE] group=%s: ownership re-check fetch FAILED (%s) — "
-            "failing closed (no writes), degraded", group_id, e,
+            "failing closed (no writes), degraded", group_id, redact_log_diagnostic(str(e)),
         )
         return _result(
             "degraded", group_id, effective_gid=effective_gid,
@@ -728,7 +730,7 @@ async def _reconcile_group_locked(
             failed_enable.append(pid)
             logger.warning(
                 "[PROFILE-RECONCILE] group=%s: SELECTED profile %s enable failed: %s",
-                group_id, pid, e,
+                group_id, pid, redact_log_diagnostic(str(e)),
             )
 
     if failed_enable:
@@ -764,7 +766,7 @@ async def _reconcile_group_locked(
             failed_disable.append(pid)
             logger.warning(
                 "[PROFILE-RECONCILE] group=%s: profile %s disable failed, "
-                "skipping: %s", group_id, pid, e,
+                "skipping: %s", group_id, pid, redact_log_diagnostic(str(e)),
             )
 
     status = "partial_failure" if failed_disable else "reconciled"
@@ -874,7 +876,7 @@ async def normalize_group_selections(client, all_settings: dict, cancel_check=No
         # Honesty finding (B1): a failed account-list fetch is NOT zero failures —
         # normalize could not converge ANY divergent sibling this pass. Count it
         # so the sweep/monitor reflect a warning instead of a false green.
-        logger.warning("[PROFILE-RECONCILE] normalize: could not list accounts: %s", e)
+        logger.warning("[PROFILE-RECONCILE] normalize: could not list accounts: %s", redact_log_diagnostic(str(e)))
         return {"normalized_accounts": 0, "failed_accounts": 1, "fetch_failed": True}
     if not isinstance(accounts, list):
         logger.warning("[PROFILE-RECONCILE] normalize: account list unavailable (got %r)", type(accounts))
@@ -923,7 +925,7 @@ async def normalize_group_selections(client, all_settings: dict, cancel_check=No
         except Exception as e:  # noqa: BLE001 - best-effort per account
             failed += 1
             logger.warning(
-                "[PROFILE-RECONCILE] normalize: account %s update failed: %s", aid, e
+                "[PROFILE-RECONCILE] normalize: account %s update failed: %s", aid, redact_log_diagnostic(str(e))
             )
     return {"normalized_accounts": normalized, "failed_accounts": failed}
 
@@ -981,7 +983,7 @@ async def _run_selected_group_sweep(
         except Exception as e:  # noqa: BLE001
             # Finding: a failed group-settings fetch is NOT a clean sweep — count
             # it as an errored sweep so task history isn't falsely green.
-            logger.warning("[PROFILE-RECONCILE] failed to fetch group settings: %s", e)
+            logger.warning("[PROFILE-RECONCILE] failed to fetch group settings: %s", redact_log_diagnostic(str(e)))
             return {
                 "groups_reconciled": 0, "groups_partial_failure": 0,
                 "groups_degraded": 0, "groups_errored": 1,
@@ -994,7 +996,7 @@ async def _run_selected_group_sweep(
         from services.profile_conflict_review import reconcile_profile_conflict_reviews
         await reconcile_profile_conflict_reviews(client, all_settings)
     except Exception as e:  # noqa: BLE001 - review queue must not abort membership sweep
-        logger.warning("[PROFILE-RECONCILE] conflict review queue pass failed: %s", e)
+        logger.warning("[PROFILE-RECONCILE] conflict review queue pass failed: %s", redact_log_diagnostic(str(e)))
 
     # Blocker 3b: normalize divergent sibling rows FIRST (durable convergence),
     # so the membership reconcile below sees converged per-account selections.
@@ -1004,7 +1006,7 @@ async def _run_selected_group_sweep(
             client, all_settings, cancel_check=cancel_check
         )
     except Exception as e:  # noqa: BLE001 - best-effort, never abort the sweep
-        logger.warning("[PROFILE-RECONCILE] normalize pass failed: %s", e)
+        logger.warning("[PROFILE-RECONCILE] normalize pass failed: %s", redact_log_diagnostic(str(e)))
 
     live_rule_ids = await _resolve_live_rule_ids()
 
@@ -1054,7 +1056,7 @@ async def _run_selected_group_sweep(
             # it — otherwise a hard per-group failure reads as clean success.
             groups_errored += 1
             logger.warning(
-                "[PROFILE-RECONCILE] group=%s reconcile failed: %s", gid, e
+                "[PROFILE-RECONCILE] group=%s reconcile failed: %s", gid, redact_log_diagnostic(str(e))
             )
 
     if target_gids:

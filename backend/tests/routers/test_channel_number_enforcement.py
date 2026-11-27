@@ -13,6 +13,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from channel_number import CHANNEL_NUMBER_RULE_MESSAGE
+from tests.routers.numbering_baselines import patch_body_with_baseline
 
 OUT_OF_CONTRACT = 1.05
 
@@ -93,8 +94,12 @@ class TestUpdateChannel:
         mock_client.get_channel.return_value = {"id": 7, "name": "ESPN", "channel_number": 5}
         mock_client.update_channel.return_value = {"id": 7, "name": "ESPN"}
         with patch("routers.channels.get_client", return_value=mock_client):
-            response = await async_client.patch("/api/channels/7", json={"channel_number": None})
+            response = await async_client.patch(
+                "/api/channels/7",
+                json=patch_body_with_baseline({"channel_number": None}, 5),
+            )
         assert response.status_code == 200, response.text
+        mock_client.update_channel.assert_called_once_with(7, {"channel_number": None})
 
 
 class TestMergeChannels:
@@ -125,7 +130,10 @@ class TestAssignNumbers:
         with patch("routers.channels.get_client", return_value=mock_client):
             response = await async_client.post(
                 "/api/channels/assign-numbers",
-                json={"channel_ids": [1, 2], "starting_number": OUT_OF_CONTRACT},
+                json={
+                    "channel_ids": [1, 2], "starting_number": OUT_OF_CONTRACT,
+                    "expected_numbers": {"1": 1, "2": 2},
+                },
             )
         _assert_rejected(response)
         mock_client.assign_channel_numbers.assert_not_called()
@@ -166,6 +174,7 @@ class TestBulkCommit:
                             "type": "updateChannel",
                             "channelId": 7,
                             "data": {"channel_number": OUT_OF_CONTRACT},
+                            "expectedNumber": {"number": 7},
                         }
                     ]
                 },
@@ -185,6 +194,7 @@ class TestBulkCommit:
                             "type": "bulkAssignChannelNumbers",
                             "channelIds": [1, 2],
                             "startingNumber": OUT_OF_CONTRACT,
+                            "expectedNumbers": {"1": 1, "2": 2},
                         }
                     ]
                 },
@@ -201,7 +211,11 @@ class TestBulkCommit:
                 "/api/channels/bulk-commit",
                 json={
                     "operations": [
-                        {"type": "updateChannel", "channelId": 7, "data": {"channel_number": 1.1}}
+                        {
+                            "type": "updateChannel", "channelId": 7,
+                            "data": {"channel_number": 1.1},
+                            "expectedNumber": {"number": 7},
+                        }
                     ]
                 },
             )

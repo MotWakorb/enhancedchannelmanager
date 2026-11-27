@@ -7,7 +7,7 @@ a stream_ids_filter for targeted re-probing.
 """
 import asyncio
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Optional
 
 from database import get_session
@@ -208,6 +208,17 @@ class FailedStreamReprobeTask(TaskScheduler):
             failed_count = self._prober._probe_progress_failed_count
             skipped_count = self._prober._probe_progress_skipped_count
             total = self._prober._probe_progress_total
+
+            if self._prober._probe_progress_status == "deferred" and not self._cancel_requested:
+                from stream_prober import PROBE_DEFERRED_REASON
+
+                self._set_progress(status="deferred", current_item="", skipped_count=skipped_count)
+                return TaskResult(
+                    success=False, message=PROBE_DEFERRED_REASON, error="PROBE_DEFERRED",
+                    started_at=started_at, completed_at=datetime.now(UTC).replace(tzinfo=None),
+                    total_items=total, success_count=success_count, failed_count=failed_count,
+                    skipped_count=skipped_count, details={"deferred_reason": PROBE_DEFERRED_REASON},
+                )
 
             self._set_progress(
                 success_count=success_count,

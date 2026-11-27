@@ -24,6 +24,7 @@ from config import (
 )
 from database import get_session
 from dispatcharr_client import get_client, upstream_http_exception
+from log_utils import redact_log_diagnostic
 from alert_methods import send_alert
 from tasks.m3u_digest import send_immediate_digest
 from services.m3u_group_state import (
@@ -1243,7 +1244,7 @@ async def _cascade_to_siblings(client, primary_account_id, desired, all_accounts
                 aid, len(sibling_rows),
             )
         except Exception as e:  # noqa: BLE001 - best-effort per sibling
-            logger.warning("[M3U] enforced-global propagation to account %s failed: %s", aid, e)
+            logger.warning("[M3U] enforced-global propagation to account %s failed: %s", aid, redact_log_diagnostic(str(e)))
             failures.append(aid)
     err = f"{len(failures)} sibling account(s) not updated: {failures}" if failures else None
     return err, changed, failures

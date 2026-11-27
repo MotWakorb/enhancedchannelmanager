@@ -58,6 +58,7 @@ __all__ = [
     "CHANNEL_NUMBER_TICKS_PER_UNIT",
     "InvalidChannelNumberError",
     "ChannelNumber",
+    "ChannelNumberBaseline",
     "channel_number_from_ticks",
     "channel_number_ticks",
     "is_valid_channel_number",
@@ -369,6 +370,47 @@ def _pydantic_channel_number(value: Any) -> Any:
 #: Field type for every request model carrying a channel number. Use as
 #: ``Optional[ChannelNumber]`` where the field may be absent or cleared.
 ChannelNumber = Annotated[float, BeforeValidator(_pydantic_channel_number)]
+
+
+#: The one sentence a rejected baseline gets.
+CHANNEL_NUMBER_BASELINE_MESSAGE = (
+    "A channel number baseline must be a finite number (the number you read), "
+    "or null for a channel you saw with no number."
+)
+
+
+def _pydantic_channel_number_baseline(value: Any) -> Any:
+    """Pydantic hook for a number somebody READ, as opposed to one ECM writes.
+
+    A baseline describes what the server held when the caller looked, and a
+    number set outside ECM (``8.25``, ``-1``) is still a number a caller can
+    read back. So the write contract (non-negative, one decimal place) does not
+    apply here: anything finite is accepted. NaN and infinity are refused
+    because no channel can hold them and they would compare unequal to
+    everything, including themselves. A bool is refused rather than read as
+    ``0``/``1``.
+    """
+    if value is None:
+        return value
+    if isinstance(value, bool):
+        raise PydanticCustomError("channel_number_baseline", CHANNEL_NUMBER_BASELINE_MESSAGE)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise PydanticCustomError(
+            "channel_number_baseline", CHANNEL_NUMBER_BASELINE_MESSAGE,
+        ) from None
+    if not math.isfinite(number):
+        raise PydanticCustomError("channel_number_baseline", CHANNEL_NUMBER_BASELINE_MESSAGE)
+    return number
+
+
+#: Field type for a channel-number BASELINE: the number a caller last read,
+#: sent so ECM can refuse a write over a change made since. Any finite float;
+#: use as ``Optional[ChannelNumberBaseline]`` so ``null`` means "no number".
+#: Compare it with ``same_channel_number``, never ``==``. Deliberately not
+#: :data:`ChannelNumber`, whose contract binds the numbers ECM writes.
+ChannelNumberBaseline = Annotated[float, BeforeValidator(_pydantic_channel_number_baseline)]
 
 
 def format_channel_number(value: Any) -> str:

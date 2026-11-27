@@ -1,0 +1,76 @@
+{
+  "status": "PAIRED_EXACT_CORRESPONDING_BUSYBOX_SOURCE_REPLAY_ONLY_ORIGINAL_STRICT_FAILURES_RETAINED",
+  "source_native_run": 42681901847,
+  "architecture_datasets": ["amd64", "arm64"],
+  "execution_architecture": "amd64",
+  "helpers": {
+    "busybox_sha256": "81deaf9631847adda1fdf061cd0685781eab38ba0215eeddeefadcefab9d683d",
+    "literal_patch_sha256": "6026e2068cd7c2488c0cd6a6b3ddcc5a630c2b2dbffcdb04693205a37d37f91f",
+    "explicit_corresponding_plan_sha256": "3e55d5056d82268b3150d3b0d631884a33b270544e32f4a007e8932ac3b1ebfb"
+  },
+  "original_data": {
+    "regular_files": 2880,
+    "directories_including_archive_root": 167,
+    "regular_source_bytes": 10324478,
+    "vendor_patches": 44,
+    "owned_patches": 2,
+    "original_unified_hunks": 171,
+    "full_file_witness_applications": 66,
+    "final_prepared_source_witnesses": 50
+  },
+  "original_failures_not_waived": {
+    "strict_literal_original_stack": "0029-ash-reject-unknown-long-options.patch has original hunk position/context that differs from the recorded full source preimage; strict replay rejects, without search/fuzz/offset",
+    "native_gnu_fuzz_zero_control": "Original awk test hunk in 0001-awk-fix-handling-of-literal-backslashes-in-replaceme.patch fails with --fuzz=0; prior original patches also report positional offsets",
+    "gnu_fuzz_zero_failed_receipt_sha256": "79637ac3a431516fe19ce6c4a11d92fe5cd4a4f5f79cb4d709c51df3b78befaa",
+    "retention": "busybox-literal-source-replay-paired-{01,02}.stderr and busybox-gnu-source-control-01/"
+  },
+  "independent_native_gnu_default_control": {
+    "all_66_full_pre_and_post_hashes_match_original_policy": true,
+    "all_50_final_prepared_source_hashes_match_original_policy": true,
+    "receipt_sha256": "97985288883d1242b06b8d7fcf4bb1d075e2a430fcf6d3b8b766ad9a4024078f",
+    "observed_original_patch_adjustments": [
+      {"file": "0029-ash-reject-unknown-long-options.patch", "offset_lines": [14]},
+      {"file": "0001-hexdump-fix-regression-with-n4-e-u.patch", "offset_lines": [5]},
+      {"file": "0001-awk-fix-handling-of-literal-backslashes-in-replaceme.patch", "offset_lines": [2, 2], "test_hunk_fuzz": 2},
+      {"file": "0001-tar-fix-TOCTOU-symlink-race-condition.patch", "offset_lines": [-8]},
+      {"file": "CVE-2025-60876.patch", "offset_lines": [3]}
+    ],
+    "gnu_diagnostic_backups": "All six .orig files remain retained and inventoried. Each is bound to an original target path and one of that target's complete recorded stage-preimage hashes. No unknown extra source path or .rej accepted; no blanket filename-suffix exemption.",
+    "scope": "Trusted GNU patch2.8.1 transforms data only in a fresh task-owned writable output under a nonroot/read-only/cap-drop/networkless container. No source/target/recipe/test/compiler program executes. This is explicitly NOT zero-offset/zero-fuzz application of the original patch stack."
+  },
+  "strict_corresponding_replay": {
+    "original_inputs_and_patches_unchanged": true,
+    "source_only_literal_diff_equivalents": 5,
+    "equivalent_vendor_patches": 4,
+    "equivalent_owned_patches": 1,
+    "equivalent_full_file_witnesses": 7,
+    "same_original_before_and_after_hashes_required": true,
+    "automatic_fallback_or_fuzzy_search": false,
+    "all_46_patch_transformations_verified": true,
+    "all_66_stage_file_witnesses_verified": true,
+    "all_50_final_prepared_source_hashes_verified": true,
+    "complete_patched_regular_files": 2881,
+    "complete_patched_source_bytes": 10341177,
+    "complete_patched_source_inventory_sha256": "5bb0e8b0b34b5ce0438c09fbd337cf809a7b4fbdf7fb1e715e592c43ff9fd633",
+    "paired_receipt_sha256": "750c39f849672569f0dc50b9866f5e36290a8f31eded49937812a1e5b6a5e715",
+    "scope": "Caller explicitly supplies a byte-hash-sealed six-file plan namespace. The five source-only corresponding diffs must bind original patch hashes and identical complete source pre/post witnesses. Exact declared positions/context and full hashes are required, without fuzz/offset/search/normalization. Complete output matches independent GNU-default control. These proof diffs are not selected by the builder and change no resulting source/test/golden byte, build recipe, patch provider, runtime artifact or numerical tolerance."
+  },
+  "negative_controls": {
+    "actual_same_size_corresponding_patch_corruption_denied_under_unchanged_plan": true,
+    "actual_denial_receipt_sha256": "cd171b7fa9f1dd7fd3f20f6f9a5a94eec05402e438bdc1258d6b544288be88bf",
+    "dangerous_mutants": "Omitting complete postimage hashes, exact output positions or the sealed-plan hash makes four guards fail with DID NOT RAISE InputError",
+    "mutant_log_sha256": "a4c88b689d5a2fabea75e2c24c7ce95382ca2a4cf0e64237dc18af2a430fde90"
+  },
+  "regression_tests": {
+    "layer": "Native AMD64 Alpine component/source/workflow/native-builder plus full SBOM and classifier/control-mutation subsets, not full backend or final-image acceptance",
+    "modules": 51,
+    "passed": 1609,
+    "log_sha256": "5c2fb24b54cf5f012a443aaa63ba691bc0349ae6565ceee4090484abf5e8717c"
+  },
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/{busybox-explicit-source-replay-paired-02.json,busybox-gnu-source-control-01/,busybox-gnu-corresponding-control-02/,busybox-corresponding-patch-same-size-denial-01.json}",
+  "scope": "Reproduced corresponding patched source, not reproduced runtime binaries, historical compiler/static linkage, native ARM execution or final-image/complete license/advisory/MCP/aggregate acceptance. Original strict/default control outcomes remain distinct; original raw patch stack/tests/build recipe/source witnesses stay intact. Automated signed evidence delivery and live owned file/control-script composition remain required. No source-origin exemption, test skip, vulnerability suppression, runtime trust/repository change, merge, publication or deployment.",
+  "full_runtime_source_acceptance": false,
+  "source_patch_replay_established": true,
+  "original_patch_plan_zero_offset_or_fuzz_claimed": false,
+  "historical_compiler_linkage_established": false
+}

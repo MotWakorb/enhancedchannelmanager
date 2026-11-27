@@ -24,7 +24,7 @@ import zipfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, Optional
-from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlsplit
 
 import yaml
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -60,8 +60,10 @@ from credential_sentinel import (
     PROVIDER_IDENTITY_KEYS,
     REDACTION_SENTINEL,
     SETTINGS_CREDENTIAL_FIELDS,
+    URL_CREDENTIAL_QUERY_KEYS as _URL_CREDENTIAL_QUERY_KEYS,
     collect_credential_values,
     credential_is_present,
+    rewrite_known_credential_segments as _rewrite_known_credential_segments,
     strip_redaction_sentinels,
 )
 from dbas import artifact_crypto
@@ -76,6 +78,14 @@ from dbas.restore_contracts import ChannelReattachMode
 from dbas.importers.settings_agents import is_safe_setting_key
 from database import close_db, get_engine, get_session, init_db, JOURNAL_DB_FILE
 from dispatcharr_client import get_client, reset_client
+from yaml_safety import (
+    BACKUP_MAX_NODES,
+    LEGACY_MAX_NODES,
+    YamlSafetyError,
+    limit_message,
+    measure_object,
+    safe_load_bounded,
+)
 from models import (
     ChannelPipelineRule,
     DummyEPGProfile,
@@ -133,7 +143,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.2-0057"
+APP_VERSION = "0.18.2-0092"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -398,6 +408,10 @@ _STANDARD_ARTIFACT_TABLES: dict[str, str] = {
         "A small operator display preference (group id, group name, hidden_at). "
         "No identity, no credential, and it is annoying to re-establish by hand."
     ),
+    "m3u_change_exclusions": (
+        "Account/group display preferences for Insights / M3U Changes; no "
+        "credentials. Uses the standard free-text credential scrub."
+    ),
 }
 
 # Every other table a model declares, with the reason a STANDARD artifact drops
@@ -628,17 +642,6 @@ _PROVIDER_IDENTITY_KEYS = PROVIDER_IDENTITY_KEYS
 # grow into a general escape hatch.
 _IDENTITY_EXEMPT_CATEGORIES: frozenset[str] = frozenset({"dispatcharr_users"})
 
-# Query-parameter names that make a URL credential-bearing. Providers routinely
-# put the whole credential in the query string (``get.php?username=…&password=…``
-# for a plain-M3U account, ``xmltv.php?username=…&password=…`` for an XC-derived
-# EPG source), where NO credential-named dict key carries it and a key denylist
-# is therefore blind. Short aliases are included because provider URLs use them.
-_URL_CREDENTIAL_QUERY_KEYS = frozenset(
-    _REDACT_KEYS
-    | _PROVIDER_IDENTITY_KEYS
-    | {"user", "pass", "pwd", "token", "apikey", "auth", "key", "sig", "signature"}
-)
-
 # Finds the ``://`` separator and the URL body after it. Needed because a
 # credential-bearing URL is not always the WHOLE value: Dispatcharr echoes
 # upstream failures into ``last_message``, and an upstream error body can quote
@@ -815,93 +818,6 @@ def _url_carries_credentials(
     return any(
         key.lower() in _URL_CREDENTIAL_QUERY_KEYS or value in secrets
         for key, value in parse_qsl(parts.query)
-    )
-
-
-def _rewrite_known_credential_segments(
-    candidate: str, secrets: frozenset, identities: frozenset
-) -> Optional[str]:
-    """Replace path segments that LITERALLY carry a known credential.
-
-    THE SHAPE THIS EXISTS FOR (bead …-msqf7, measured against a real Xtream Codes
-    provider on 2026-08-20). Every one of the 1,409,363 stream URLs in that
-    provider's playlist put the account's username and password in path
-    segments — ``/live/<user>/<pass>/<id>.ts`` and the ``movie`` / ``series``
-    variants — while the SAME provider authenticated its guide endpoint by query
-    string. Neither the key-name denylist (a stream's key is ``url``) nor
-    :func:`_url_carries_credentials` could see it, so the pair crossed to a sync
-    destination intact, on every scheduled cycle, while the run reported that
-    credentials had been stripped.
-
-    WHY THIS IS NOT THE GUESSING THE OLD DOCSTRING REFUSED. It is still true that
-    no GENERAL rule separates ``/live/u/p/1.ts`` from an ordinary path. This rule
-    is not general: it compares each segment against the values the source
-    instance ACTUALLY holds, raw and percent-decoded. A path is rewritten because
-    it contains this operator's password, not because it looks like it might
-    contain someone's.
-
-    THE PASSWORD IS THE GATE, and that is the whole of the false-positive
-    defence. A URL is only rewritten once one of its segments carries a known
-    SECRET; only then is the IDENTITY half redacted alongside it. Without that
-    gate an operator whose XC username happened to be a structural path word
-    (``live``, ``movie``, ``news``) would have every URL on the instance mangled,
-    including credential-free ones belonging to other providers. With it, a
-    username collision can only occur inside a URL already proven to carry the
-    password — where the address needs the operator's attention regardless, so
-    the extra sentinel costs nothing.
-
-    WHAT THE REPLICA GETS. The scheme, host, port, kind marker and stream id all
-    survive; only the credential segments become the sentinel. Blanking the value
-    instead would reproduce bead …-v7d37's outcome one layer down — a replica
-    holding streams with nowhere to point and no record of where they pointed.
-    The destination reports the rewrite as a post-restore action item
-    (``RestoreReport.stream_urls_redacted``) rather than absorbing it silently.
-
-    Args:
-        candidate: A single URL-shaped string.
-        secrets: Known credential values (the authenticating half).
-        identities: Known identity values (the identifying half).
-
-    Returns:
-        The rewritten URL, or ``None`` when no segment matched and the value must
-        be left byte-identical.
-    """
-    if not secrets:
-        return None
-    try:
-        parts = urlsplit(candidate)
-    except ValueError:
-        return None
-    if not parts.scheme or not parts.netloc or "/" not in parts.path:
-        return None
-
-    def carries(segment: str, values: frozenset) -> bool:
-        # CONTAINMENT, not equality, and the whole segment then goes. A provider
-        # that decorates the credential segment (``/<pass>-hd/``) is still
-        # handing over the password, so equality would let it through; and a
-        # segment that carries the password is not an address component worth
-        # preserving byte-for-byte, so there is nothing to gain from splicing
-        # only the matched run out of it. Whole-segment replacement is also the
-        # only well-defined answer for a percent-encoded match, where the
-        # matched span exists in the DECODED string and has no single
-        # corresponding span in the encoded one.
-        #
-        # ``unquote`` never raises. A credential holding URL-reserved characters
-        # arrives percent-encoded, and ``p%40ss`` is the same secret as ``p@ss``,
-        # so an escape must not be a way through.
-        return any(v in segment or v in unquote(segment) for v in values)
-
-    segments = parts.path.split("/")
-    if not any(carries(seg, secrets) for seg in segments):
-        return None
-    rewritten = [
-        REDACTED if carries(seg, secrets) or carries(seg, identities) else seg
-        for seg in segments
-    ]
-    if rewritten == segments:
-        return None
-    return urlunsplit(
-        (parts.scheme, parts.netloc, "/".join(rewritten), parts.query, parts.fragment)
     )
 
 
@@ -1694,6 +1610,13 @@ _LEGACY_COMPRESSIBLE_MEMBER_NAMES = ("journal.db",)
 _LEGACY_COMPRESSIBLE_MEMBER_PREFIXES = ("m3u_uploads/",)
 _LEGACY_MAX_ENTRY_RATIO = 1000
 
+# Upload cap for the legacy YAML /validate and /restore-yaml routes, applied in
+# chunks as ECM reads the upload. Measured exports run about 10 to 13 bytes per
+# YAML node, so 128 MiB stays far above LEGACY_MAX_NODES and the node ceiling
+# binds first.
+_LEGACY_YAML_MAX_UPLOAD_BYTES = 128 * 1024 * 1024
+_LEGACY_YAML_READ_CHUNK_BYTES = 1024 * 1024
+
 # Headroom multiplier for the pre-build free-disk check. The redacted source
 # (logos + journal.db) is read once into a compressed ZIP; we conservatively
 # require free space >= estimated_source_bytes (the ZIP is typically smaller,
@@ -1935,6 +1858,40 @@ def _count_unresolved_epg_links(channels) -> int:
     )
 
 
+class BackupNotRestorableError(Exception):
+    """ECM produced YAML that its own restore would refuse, so it is not written.
+
+    Attributes:
+        category: The DBAS category name, or ``None`` for a legacy YAML export.
+    """
+
+    def __init__(self, subject: str, exc: YamlSafetyError, category: Optional[str] = None):
+        self.category = category
+        super().__init__(
+            limit_message(subject, "backup", exc) + "; ECM would refuse to restore it"
+        )
+
+
+def _verify_restorable_export(
+    obj, subject: str, category: Optional[str] = None, *, max_nodes: Optional[int] = None
+) -> None:
+    """Refuse an export restore would refuse, before it is dumped or written.
+
+    Walks the object about to be passed to ``yaml.dump`` with the restore
+    side's exact structure budgets (``measure_object``, whose count equals what
+    restore composes from the dump). ``max_nodes`` defaults to the legacy
+    export ceiling; DBAS categories pass ``BACKUP_MAX_NODES``.
+
+    Raises:
+        BackupNotRestorableError: The export exceeds a structure budget.
+    """
+    try:
+        measure_object(obj, max_nodes=LEGACY_MAX_NODES if max_nodes is None else max_nodes)
+    except YamlSafetyError as exc:
+        logger.error("[BACKUP] %s is not restorable: %s", subject, exc)
+        raise BackupNotRestorableError(subject, exc, category) from exc
+
+
 async def _gather_redacted_categories(
     include_credentials: bool = False,
 ) -> tuple[dict[str, str], list[str], int]:
@@ -2025,8 +1982,25 @@ async def _gather_redacted_categories(
             {key},
             include_credentials=include_credentials,
             exempt_identity_keys=exempt,
+            verify_restorable=False,
         )
-        parsed = yaml.safe_load(yaml_text)
+        subject = "Backup category '%s'" % key
+        # ECM's own output, parsed only to redact it. The credential path dumps
+        # producer objects unredacted, so a stream shared by many channels is
+        # aliased here; redaction then copies every container, and the final
+        # bytes carry no aliases. With the alias budget raised to the node
+        # ceiling, refusing this parse implies the expanded, alias-free final
+        # document is over the ceiling too, so no backup is refused for aliases
+        # its written bytes lack.
+        try:
+            parsed = safe_load_bounded(
+                yaml_text,
+                max_nodes=BACKUP_MAX_NODES,
+                alias_expansion_budget=BACKUP_MAX_NODES,
+            )
+        except YamlSafetyError as exc:
+            logger.error("[BACKUP] %s is not restorable: %s", subject, exc)
+            raise BackupNotRestorableError(subject, exc, key) from exc
         redacted = _redact_credentials_deep(
             parsed,
             preserve_keys,
@@ -2054,6 +2028,7 @@ async def _gather_redacted_categories(
                 degraded.append(key)
             if key == "channels":
                 unresolved_epg_links = _count_unresolved_epg_links(section_value)
+        _verify_restorable_export(redacted, subject, key, max_nodes=BACKUP_MAX_NODES)
         out["%s.yaml" % key] = yaml.dump(
             redacted, default_flow_style=False, sort_keys=False, allow_unicode=True
         )
@@ -4884,6 +4859,12 @@ def _sweep_stale_restore_temps(dest_dir: Path) -> None:
     if not dest_dir.exists():
         return
     cutoff = time.time() - _DBAS_RESTORE_TMP_MAX_AGE_SECONDS
+    try:
+        from restore_snapshot_storage import sweep_private_restore_snapshots
+
+        sweep_private_restore_snapshots(dest_dir, cutoff)
+    except OSError as exc:
+        logger.warning("[BACKUP] Could not reclaim private restore snapshots: %s", exc)
     removed = 0
     try:
         candidates = list(dest_dir.glob("ecm-restore-*.zip"))
@@ -4906,7 +4887,16 @@ def _sweep_stale_restore_temps(dest_dir: Path) -> None:
         logger.info("[BACKUP] Swept %d stale restore temp artifact(s)", removed)
 
 
-async def _stream_upload_to_temp(file: UploadFile, dest_dir: Path) -> Path:
+# Per-caller wording for _stream_upload_to_temp's errors: (response noun, log noun).
+_STREAM_SOURCE_WORDING = {
+    "upload": ("Uploaded artifact", "upload"),
+    "saved": ("Saved backup", "saved backup"),
+}
+
+
+async def _stream_upload_to_temp(
+    file: UploadFile, dest_dir: Path, *, source: str = "upload"
+) -> Path:
     """Stream an uploaded artifact to a 0600 temp file, chunk by chunk.
 
     NEVER reads the whole upload into RAM (ADR-008 D8) — it copies
@@ -4919,8 +4909,11 @@ async def _stream_upload_to_temp(file: UploadFile, dest_dir: Path) -> Path:
 
     Returns the temp file path on success. Raises ``HTTPException(413)`` on
     oversize and ``HTTPException(400)`` on a read error — the partial temp is
-    cleaned up in both cases.
+    cleaned up in both cases. ``source`` selects the error wording
+    (:data:`_STREAM_SOURCE_WORDING`) so a saved-backup snapshot does not report
+    itself as an upload.
     """
+    noun, log_noun = _STREAM_SOURCE_WORDING[source]
     dest_dir.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix="ecm-restore-", suffix=".zip", dir=str(dest_dir))
     tmp_path = Path(tmp_name)
@@ -4937,18 +4930,18 @@ async def _stream_upload_to_temp(file: UploadFile, dest_dir: Path) -> Path:
                 try:
                     chunk = await file.read(_RESTORE_UPLOAD_CHUNK)
                 except Exception as exc:  # noqa: BLE001 - any read error is a 400
-                    raise HTTPException(status_code=400, detail="Failed to read uploaded artifact") from exc
+                    raise HTTPException(
+                        status_code=400, detail=f"Failed to read {noun.lower()}"
+                    ) from exc
                 if not chunk:
                     break
                 total += len(chunk)
                 if total > _RESTORE_MAX_UPLOAD_BYTES:
                     logger.warning(
-                        "[BACKUP] Refusing restore: upload exceeded size cap (%d bytes max)",
-                        _RESTORE_MAX_UPLOAD_BYTES,
+                        "[BACKUP] Refusing restore: %s exceeded size cap (%d bytes max)",
+                        log_noun, _RESTORE_MAX_UPLOAD_BYTES,
                     )
-                    raise HTTPException(
-                        status_code=413, detail="Uploaded artifact is too large"
-                    )
+                    raise HTTPException(status_code=413, detail=f"{noun} is too large")
                 out.write(chunk)
     except BaseException:
         try:
@@ -4963,7 +4956,7 @@ async def _stream_upload_to_temp(file: UploadFile, dest_dir: Path) -> Path:
             tmp_path.unlink()
         except OSError:
             pass
-        raise HTTPException(status_code=400, detail="Uploaded artifact is empty")
+        raise HTTPException(status_code=400, detail=f"{noun} is empty")
 
     logger.info("[BACKUP] Streamed restore artifact to temp (%d bytes)", total)
     return tmp_path
@@ -5890,8 +5883,13 @@ async def build_yaml_export(
     sections: Optional[set[str]] = None,
     include_credentials: bool = False,
     exempt_identity_keys: frozenset = frozenset(),
+    verify_restorable: bool = True,
 ) -> str:
     """Build a YAML export string, optionally limited to specific sections.
+
+    ``verify_restorable`` refuses (:class:`BackupNotRestorableError`) an export
+    the restore routes would refuse, so ECM never writes one. Only the DBAS
+    gather turns it off, because it verifies each category's final bytes itself.
 
     If sections is None, all sections are included. Otherwise only the
     specified section keys (from RESTORABLE_SECTIONS) are included.
@@ -5957,6 +5955,8 @@ async def build_yaml_export(
             export_data, exempt_identity_keys=exempt_identity_keys
         )
 
+    if verify_restorable:
+        _verify_restorable_export(export_data, "YAML export")
     return yaml.dump(export_data, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
@@ -5994,7 +5994,11 @@ async def export_yaml(
         if invalid:
             raise HTTPException(status_code=400, detail="Unknown sections: %s" % ", ".join(sorted(invalid)))
 
-    yaml_str = await build_yaml_export(selected)
+    try:
+        yaml_str = await build_yaml_export(selected)
+    except BackupNotRestorableError as exc:
+        logger.warning("[BACKUP] YAML export refused: %s", exc)
+        raise HTTPException(status_code=413, detail=str(exc))
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
     filename = f"ecm-export-{now}.yaml"
 
@@ -6124,7 +6128,10 @@ RESTORABLE_SECTIONS = {
 def _parse_yaml_export(content: bytes) -> dict:
     """Parse and validate a YAML export file. Raises HTTPException on failure."""
     try:
-        data = yaml.safe_load(content)
+        data = safe_load_bounded(content, max_nodes=LEGACY_MAX_NODES)
+    except YamlSafetyError as e:
+        logger.warning("[BACKUP] YAML export refused: %s", e)
+        raise HTTPException(status_code=400, detail=limit_message("YAML export", "backup", e))
     except yaml.YAMLError as e:
         raise HTTPException(status_code=400, detail="Invalid YAML: %s" % str(e))
 
@@ -6135,6 +6142,26 @@ def _parse_yaml_export(content: bytes) -> dict:
         raise HTTPException(status_code=400, detail="Not a valid ECM YAML export: missing ecm_export header")
 
     return data
+
+
+async def _read_legacy_yaml_upload(file: UploadFile) -> bytes:
+    """Read a legacy YAML upload in chunks, refusing with 413 past the cap."""
+    content = bytearray()
+    while True:
+        chunk = await file.read(_LEGACY_YAML_READ_CHUNK_BYTES)
+        if not chunk:
+            return bytes(content)
+        if len(content) + len(chunk) > _LEGACY_YAML_MAX_UPLOAD_BYTES:
+            logger.warning(
+                "[BACKUP] YAML upload refused: more than %d bytes",
+                _LEGACY_YAML_MAX_UPLOAD_BYTES,
+            )
+            raise HTTPException(
+                status_code=413,
+                detail="YAML export exceeds the backup size limit (more than %d MiB)"
+                % (_LEGACY_YAML_MAX_UPLOAD_BYTES // (1024 * 1024)),
+            )
+        content += chunk
 
 
 def _count_section_items(data: dict, section_key: str) -> int:
@@ -6166,7 +6193,7 @@ async def validate_yaml_export(file: UploadFile = File(...), _admin=RequireAdmin
     """
     logger.info("[BACKUP] YAML validate requested, filename=%s", file.filename)
 
-    content = await file.read()
+    content = await _read_legacy_yaml_upload(file)
     data = _parse_yaml_export(content)
 
     export_meta = data.get("ecm_export", {})
@@ -6245,7 +6272,7 @@ async def restore_from_yaml(
             % ", ".join(artifact_only),
         )
 
-    content = await file.read()
+    content = await _read_legacy_yaml_upload(file)
     data = _parse_yaml_export(content)
 
     sections_restored = []
@@ -7246,6 +7273,35 @@ class RestoreDbasSavedRequest(BaseModel):
     passphrase: Optional[str] = None
 
 
+# Serializes saved-restore snapshot copies (each up to the size cap) within one
+# process; held from snapshot creation until the restore task is scheduled.
+_SAVED_RESTORE_SNAPSHOT_LOCK = asyncio.Lock()
+# Headroom left free on the config volume after a snapshot copy, so the copy
+# cannot take the space SQLite and logs need.
+_SNAPSHOT_FREE_SPACE_MARGIN_BYTES = 64 * 1024 * 1024
+
+
+def _require_snapshot_free_space(dest_dir: Path, size: int) -> None:
+    """Refuse (HTTP 507) before copying when the snapshot would not fit."""
+    try:
+        fs = os.statvfs(dest_dir)
+    except OSError as exc:
+        # Unmeasurable is not a refusal; the copy's ENOSPC handling still applies.
+        logger.warning("[BACKUP] Could not measure restore snapshot free space: %s", exc)
+        return
+    available = fs.f_bavail * fs.f_frsize
+    needed = size + _SNAPSHOT_FREE_SPACE_MARGIN_BYTES
+    if available < needed:
+        logger.warning(
+            "[BACKUP] Refusing saved restore: %d bytes free, %d needed for snapshot",
+            available, needed,
+        )
+        raise HTTPException(
+            status_code=507,
+            detail="Not enough free space on the config volume to snapshot the saved backup",
+        )
+
+
 @router.post("/restore-dbas-saved")
 async def restore_dbas_saved(
     req: RestoreDbasSavedRequest,
@@ -7275,8 +7331,8 @@ async def restore_dbas_saved(
 
 
     Takes ``{"filename": "ecm-backup-<ts>.zip", "confirm_apply": false,
-    "passphrase": null}``, resolves the filename to its saved
-    ``/config/backups/`` path through the strict regex + containment guard, then
+    "passphrase": null}``, selects and snapshots a no-follow regular file from
+    ``/config/backups/`` before queuing, then
     kicks :class:`tasks.dbas_restore.DbasRestoreTask` in the background (the SAME
     fire-and-forget pattern as POST /restore-dbas) and returns its ``task_id`` so
     the caller can poll ``/api/tasks/{task_id}`` for the terminal RestoreReport.
@@ -7287,9 +7343,8 @@ async def restore_dbas_saved(
     old-format ZIPs.
 
     DRY-RUN is default-ON: without ``confirm_apply=True`` the run is a counts-only
-    plan that makes ZERO mutation. ``cleanup_artifact`` is DELIBERATELY False
-    here — the artifact is the operator's SAVED backup, NOT a throwaway temp, so
-    it MUST survive the restore.
+    plan that makes ZERO mutation. The task consumes a private temporary snapshot;
+    only that snapshot is cleaned up. The operator's SAVED backup is retained.
     """
     # The APPLY carve-out, raised BEFORE the filename is resolved so a refused
     # caller learns nothing about which artifacts exist on disk.
@@ -7312,56 +7367,146 @@ async def restore_dbas_saved(
     # NB: req.passphrase is intentionally NOT logged here (and is excluded from
     # the task's get_config) — it must never surface in a log line or response.
 
-    # Path resolution by TRUSTED ENUMERATION (CodeQL py/path-injection,
-    # CWE-22/23/36/73/99). Unlike restore_saved_backup — whose validated path is
-    # consumed in-function — this path ESCAPES as the dbas_restore task's
-    # ``artifact_path`` (used to open the file in another function), so an
-    # in-function containment barrier is not tracked to that sink. Instead of
-    # building a path FROM the request, we enumerate the real saved backups (a
-    # trusted filesystem source) and select the matching one: the path we use
-    # then originates from ``iterdir()`` — a direct-child listing of BACKUPS_DIR,
-    # so no traversal is representable and the user value never reaches the sink.
-    # Layer 1 (defense in depth): strict zip-only regex allowlist (fullmatch).
+    # Select from the direct-child listing, then bind the file descriptor before
+    # any await. Enumeration or is_file alone cannot stop symlink rebinding.
+    # Regression coverage: tests/routers/test_saved_restore_binding.py.
     if not _BACKUP_ZIP_FILENAME_RE.fullmatch(filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    # Layer 2: select from the trusted directory listing (breaks the taint flow —
-    # the chosen Path comes from iterdir, not from the request body).
     saved_backups = {}
     try:
         for entry in BACKUPS_DIR.iterdir():
-            if entry.is_file():
-                saved_backups[entry.name] = entry
+            saved_backups[entry.name] = entry
     except OSError:
         raise HTTPException(status_code=404, detail="Backup not found")
     path = saved_backups.get(filename)
     if path is None:
         raise HTTPException(status_code=404, detail="Backup not found")
 
-    # Kick the restore task against the SAVED path. cleanup_artifact=False so the
-    # operator's saved backup is NOT deleted after the restore.
-    parameters = {
-        "artifact_path": str(path),
-        "confirm_apply": bool(req.confirm_apply),
-        "cleanup_artifact": False,
-        "channel_reattach_mode": reattach_mode.value,
-    }
-    # Forward the passphrase only when present (encrypted artifact). The task
-    # excludes it from get_config so it is never persisted or logged.
-    if req.passphrase:
-        parameters["passphrase"] = req.passphrase
-
     try:
-        from task_engine import get_engine
-
-        engine = get_engine()
-        # Fire-and-forget: schedule as a background asyncio task and return the
-        # task id immediately. The caller polls /api/tasks/{id} for progress.
-        asyncio.create_task(
-            engine.run_task(DBAS_RESTORE_TASK_ID, parameters=parameters, run_id=run_id)
+        directory_fd = os.open(
+            BACKUPS_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         )
-    except Exception as exc:
-        logger.exception("[BACKUP] Failed to schedule DBAS restore-from-saved task: %s", exc)
-        raise HTTPException(status_code=500, detail="Failed to start restore")
+        try:
+            descriptor = os.open(
+                path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=directory_fd,
+            )
+        finally:
+            os.close(directory_fd)
+    except OSError:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    try:
+        source_info = os.fstat(descriptor)
+        if not stat.S_ISREG(source_info.st_mode):
+            raise HTTPException(status_code=404, detail="Backup not found")
+        source = os.fdopen(descriptor, "rb")
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+    # Reuse bounded streaming (including its size cap and cancellation cleanup),
+    # in an owner-only directory outside the operator-writable backup listing.
+    # Decrypt/header/manifest reads later all use these same snapshot bytes.
+    with source:
+        from restore_snapshot_storage import (
+            PrivateRestoreSnapshot,
+            prepare_private_parent,
+        )
+
+        try:
+            prepare_private_parent(_DBAS_RESTORE_TMP_DIR)
+        except OSError as exc:
+            logger.error("[BACKUP] Refusing saved restore: unsafe snapshot parent: %s", exc)
+            raise HTTPException(status_code=500, detail="Failed to start restore")
+        _sweep_stale_restore_temps(_DBAS_RESTORE_TMP_DIR)
+        # The streaming copy still enforces the cap; refusing on fstat first
+        # avoids copying up to the cap only to discard it.
+        if source_info.st_size > _RESTORE_MAX_UPLOAD_BYTES:
+            logger.warning(
+                "[BACKUP] Refusing saved restore: backup exceeds size cap (%d bytes max)",
+                _RESTORE_MAX_UPLOAD_BYTES,
+            )
+            raise HTTPException(status_code=413, detail="Saved backup is too large")
+        _require_snapshot_free_space(_DBAS_RESTORE_TMP_DIR, source_info.st_size)
+
+        try:
+            from task_engine import get_engine
+
+            engine = get_engine()
+            active_tasks = engine.get_status().get("active_tasks", ())
+        except Exception as exc:
+            logger.exception("[BACKUP] Failed to query task engine for saved restore: %s", exc)
+            raise HTTPException(status_code=500, detail="Failed to start restore")
+        # The engine refuses a duplicate run only after the copy, so preview
+        # callers could otherwise stack full-size copies. Same text as the
+        # engine's ALREADY_RUNNING result.
+        if DBAS_RESTORE_TASK_ID in active_tasks:
+            logger.warning("[BACKUP] Refusing saved restore: a DBAS restore is already running")
+            raise HTTPException(status_code=409, detail="Task is already running")
+        # One snapshot copy per process at a time. No await separates locked()
+        # from acquire(), and an uncontended acquire does not suspend.
+        if _SAVED_RESTORE_SNAPSHOT_LOCK.locked():
+            logger.warning("[BACKUP] Refusing saved restore: another snapshot is being prepared")
+            raise HTTPException(
+                status_code=409, detail="A saved restore is already being prepared"
+            )
+        await _SAVED_RESTORE_SNAPSHOT_LOCK.acquire()
+        try:
+            try:
+                snapshot = PrivateRestoreSnapshot(_DBAS_RESTORE_TMP_DIR)
+            except OSError as exc:
+                # The constructor removes its own directory on failure.
+                logger.exception("[BACKUP] Could not create saved restore snapshot: %s", exc)
+                raise HTTPException(status_code=500, detail="Failed to start restore")
+            try:
+                snapshot_path = await _stream_upload_to_temp(
+                    UploadFile(file=source), Path(snapshot.name), source="saved"
+                )
+            except OSError as exc:
+                snapshot.cleanup()
+                logger.exception("[BACKUP] Could not copy saved restore snapshot: %s", exc)
+                raise HTTPException(status_code=500, detail="Failed to start restore")
+            except BaseException:
+                snapshot.cleanup()
+                raise
+
+            parameters = {
+                "artifact_path": str(snapshot_path),
+                "confirm_apply": bool(req.confirm_apply),
+                "cleanup_artifact": True,
+                "channel_reattach_mode": reattach_mode.value,
+            }
+            # Forward the passphrase only when present (encrypted artifact). The
+            # task excludes it from get_config so it is never persisted or logged.
+            if req.passphrase:
+                parameters["passphrase"] = req.passphrase
+
+            scheduled = None
+            try:
+                async def run_bound_restore():
+                    # Even task-not-found/ALREADY_RUNNING never reaches execute's
+                    # cleanup. The wrapper owns this directory on every exit path.
+                    with snapshot:
+                        return await engine.run_task(
+                            DBAS_RESTORE_TASK_ID, parameters=parameters, run_id=run_id
+                        )
+
+                scheduled = run_bound_restore()
+                task = asyncio.create_task(scheduled)
+                # A task cancelled before its first step never enters the with
+                # block. The completion callback also owns cleanup, even if task
+                # refs survive.
+                task.add_done_callback(lambda _task: snapshot.cleanup())
+            except Exception as exc:
+                if scheduled is not None:
+                    scheduled.close()
+                snapshot.cleanup()
+                logger.exception(
+                    "[BACKUP] Failed to schedule DBAS restore-from-saved task: %s", exc
+                )
+                raise HTTPException(status_code=500, detail="Failed to start restore")
+        finally:
+            _SAVED_RESTORE_SNAPSHOT_LOCK.release()
 
     return {
         "status": "started",

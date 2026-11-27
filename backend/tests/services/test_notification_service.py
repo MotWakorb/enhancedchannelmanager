@@ -734,3 +734,88 @@ class TestDispatchToAlertChannels:
             )
 
         assert results["ntfy"] is False
+
+
+class TestDispatchTelegramHtmlEscaping:
+    """bead j28qs: the Telegram HTML payload must escape interpolated values.
+
+    Unescaped <, > or & makes Telegram reject the sendMessage call, silently
+    losing the alert. Markup the code adds itself (<b>) must stay markup.
+    """
+
+    @staticmethod
+    def _telegram_session():
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_response)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+        session = MagicMock()
+        session.post.return_value = mock_session_ctx
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        return session
+
+    @staticmethod
+    def _settings():
+        s = MagicMock()
+        s.is_discord_configured.return_value = False
+        s.is_telegram_configured.return_value = True
+        s.is_smtp_configured.return_value = False
+        s.telegram_bot_token = "tok"
+        s.telegram_chat_id = "123"
+        return s
+
+    @pytest.mark.asyncio
+    async def test_title_message_and_metadata_are_escaped(self):
+        session = self._telegram_session()
+        with patch("services.notification_service.get_settings", return_value=self._settings()), \
+             patch("aiohttp.ClientSession", return_value=session):
+            from services.notification_service import _dispatch_to_alert_channels
+
+            results = await _dispatch_to_alert_channels(
+                title="Sports & Entertainment <down>",
+                message="Stream a<b & c>d failed",
+                notification_type="error",
+                source="test",
+                metadata={"task_name": "Probe <all> & more", "duration_seconds": 1.25},
+            )
+
+        assert results["telegram"] is True
+        payload = session.post.call_args.kwargs["json"]
+        assert payload["parse_mode"] == "HTML"
+        assert payload["text"] == (
+            "❌ <b>Sports &amp; Entertainment &lt;down&gt;</b>\n\n"
+            "Stream a&lt;b &amp; c&gt;d failed"
+            "\n\n<b>Task:</b> Probe &lt;all&gt; &amp; more"
+            "\n<b>Duration:</b> 1.2s"
+        )
+
+    @pytest.mark.asyncio
+    async def test_plain_text_is_unchanged(self):
+        session = self._telegram_session()
+        with patch("services.notification_service.get_settings", return_value=self._settings()), \
+             patch("aiohttp.ClientSession", return_value=session):
+            from services.notification_service import _dispatch_to_alert_channels
+
+            await _dispatch_to_alert_channels(
+                title="Hello", message="World", notification_type="info",
+                source="test", metadata=None,
+            )
+
+        assert session.post.call_args.kwargs["json"]["text"] == "ℹ️ <b>Hello</b>\n\nWorld"
+
+    @pytest.mark.asyncio
+    async def test_non_string_task_name_does_not_raise(self):
+        session = self._telegram_session()
+        with patch("services.notification_service.get_settings", return_value=self._settings()), \
+             patch("aiohttp.ClientSession", return_value=session):
+            from services.notification_service import _dispatch_to_alert_channels
+
+            results = await _dispatch_to_alert_channels(
+                title="T", message="M", notification_type="info",
+                source="test", metadata={"task_name": 42},
+            )
+
+        assert results["telegram"] is True
+        assert session.post.call_args.kwargs["json"]["text"].endswith("<b>Task:</b> 42")

@@ -1,0 +1,18 @@
+FROM golang:1.26.10-alpine3.24@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696 AS gosu-builder
+# Bootstrap only from the pinned official Go base's exact stable feed files.
+# The Python policy runs immediately after its verified stable APK bootstrap.
+RUN printf '%s\n' \
+        https://dl-cdn.alpinelinux.org/alpine/v3.24/main \
+        https://dl-cdn.alpinelinux.org/alpine/v3.24/community > /tmp/expected-repositories \
+    && cmp /tmp/expected-repositories /etc/apk/repositories \
+    && grep -Eq '^3\.24\.[0-9]+$' /etc/alpine-release \
+    && apk add --no-cache python3 binutils
+COPY scripts/alpine_repository_policy.py scripts/build_native_runtime.py scripts/build_alpine_codecs.py scripts/build_alpine_gosu.py /proof/scripts/
+COPY docker/alpine-native/gosu.json docker/alpine-native/Dockerfile.gosu /proof/recipe/
+RUN python3 /proof/scripts/alpine_repository_policy.py \
+    && case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \
+    && python3 /proof/scripts/build_alpine_gosu.py --manifest /proof/recipe/gosu.json \
+        --arch "$arch" --work-dir /proof/work --output-dir /proof/output
+
+FROM scratch AS gosu-evidence
+COPY --from=gosu-builder /proof/output/ /

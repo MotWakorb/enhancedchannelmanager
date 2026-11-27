@@ -5,16 +5,15 @@ from __future__ import annotations
 
 import argparse
 import os
-from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
 import sys
 import tarfile
+from pathlib import Path, PurePosixPath
 from urllib.request import urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from generate_sbom import SbomError, _read_json, parse_native_dependencies, sha256_file  # noqa: E402
-
+from generate_sbom import SbomError, _read_json, parse_native_dependencies, sha256_file
 
 UPSTREAM_Y4M_LIMIT = "resdet_dims_exceed_limit(*width,*height,4,unsigned char)"
 BUILD_Y4M_LIMIT = "resdet_dims_exceed_limit(*width,*height,{multiplier},unsigned char)"
@@ -132,7 +131,23 @@ def _verify_artifact(binary: Path, source: Path, environment: dict[str, str]) ->
         raise BuildError("resdet bundled KISS FFT static linkage verification failed")
 
 
-def build(manifest: Path, work_dir: Path, output_dir: Path) -> None:
+def _acquire_archive(
+    url: str, digest: str, destination: Path, cache: Path | None
+) -> None:
+    if cache is None:
+        _download(url, destination)
+    else:
+        source = cache / digest
+        if not source.is_file() or source.is_symlink() or sha256_file(source) != digest:
+            raise BuildError("resdet source cache identity mismatch")
+        shutil.copyfile(source, destination)
+    if sha256_file(destination) != digest:
+        raise BuildError("resdet source checksum mismatch")
+
+
+def build(
+    manifest: Path, work_dir: Path, output_dir: Path, cache_dir: Path | None = None
+) -> None:
     try:
         packages, _relationships = parse_native_dependencies(
             _read_json(manifest), "ecm", str(manifest)
@@ -143,13 +158,22 @@ def build(manifest: Path, work_dir: Path, output_dir: Path) -> None:
     build_metadata = resdet["build"]
     if work_dir.exists() or output_dir.exists() or work_dir == output_dir:
         raise BuildError("resdet build locations must be new and distinct")
+    if cache_dir is not None and any(
+        path.resolve().is_relative_to(cache_dir.resolve())
+        or cache_dir.resolve().is_relative_to(path.resolve())
+        for path in [work_dir, output_dir]
+    ):
+        raise BuildError("resdet cache/build locations must be disjoint")
     work_dir.mkdir(parents=True)
     archive = work_dir / "resdet.tar.gz"
     source = work_dir / "source"
 
-    _download(build_metadata["archiveUrl"], archive)
-    if sha256_file(archive) != build_metadata["archiveSha256"]:
-        raise BuildError("resdet source checksum mismatch")
+    _acquire_archive(
+        build_metadata["archiveUrl"],
+        build_metadata["archiveSha256"],
+        archive,
+        cache_dir,
+    )
     _safe_extract(archive, source)
     _patch_y4m_limit(
         source / "lib" / "image" / "y4m.c", build_metadata["y4mLimitMultiplier"]
@@ -165,7 +189,10 @@ def build(manifest: Path, work_dir: Path, output_dir: Path) -> None:
     for tuning in ("-march=native", "-mtune=native", "-mcpu=native"):
         config = config.replace(tuning, "")
     config_path.write_text(config, encoding="utf-8")
-    if any(tuning in config_path.read_text(encoding="utf-8") for tuning in ("-march=native", "-mtune=native", "-mcpu=native")):
+    if any(
+        tuning in config_path.read_text(encoding="utf-8")
+        for tuning in ("-march=native", "-mtune=native", "-mcpu=native")
+    ):
         raise BuildError("resdet native tuning removal failed")
     _run(["make", "resdet"], cwd=source, env=environment)
 
@@ -186,13 +213,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--work-dir", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--cache-dir", type=Path)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        build(args.manifest, args.work_dir, args.output_dir)
+        build(args.manifest, args.work_dir, args.output_dir, args.cache_dir)
     except BuildError as exc:
         raise SystemExit(f"resdet build failed: {exc}") from exc
     return 0

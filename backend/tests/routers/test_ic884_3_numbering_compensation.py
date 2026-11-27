@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from tests.routers.numbering_baselines import with_lineup_baselines
 from routers.channels import BulkCommitRequest, _run_bulk_commit
 
 
@@ -59,6 +60,9 @@ def make_client(lineup=None, fail_on=()):
 
 
 async def run_ops(client, operations, **request_kwargs):
+    operations = with_lineup_baselines(
+        operations, client.get_channels.return_value["results"],
+    )
     request = BulkCommitRequest(operations=operations, **request_kwargs)
     with patch("routers.channels.get_client", return_value=client), \
          patch("routers.channels.journal"):
@@ -138,6 +142,8 @@ class TestCompensationOnPartialFailure:
             client,
             [renumber(1, 21), renumber(2, 22), renumber(3, 23)],
             continueOnError=True,
+            consolidate=True,
+            returnSettledOperationIndexes=True,
         )
         assert result["success"] is False
         assert result["operationsFailed"] == 1
@@ -149,6 +155,8 @@ class TestCompensationOnPartialFailure:
         expected = {cid: prior[cid] for cid in (1, 2, 3) if cid != failing_channel}
         assert restored == expected
         assert result["numberingRecovery"] == []
+        assert result["settledOperationIndexes"] == []
+        assert result["settledChannelNumbers"] == {}
 
     @pytest.mark.asyncio
     async def test_a_run_where_every_numbering_write_lands_compensates_nothing(self):
@@ -193,7 +201,8 @@ class TestCompensationOnPartialFailure:
     async def test_a_compensating_write_is_journalled_like_any_other(self):
         client = make_client(fail_on={2})
         request = BulkCommitRequest(
-            operations=[renumber(1, 21), renumber(2, 22)], continueOnError=True
+            operations=with_lineup_baselines([renumber(1, 21), renumber(2, 22)], LINEUP),
+            continueOnError=True,
         )
         with patch("routers.channels.get_client", return_value=client), \
              patch("routers.channels.write_journal_rows") as write_rows, \

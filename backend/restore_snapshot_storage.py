@@ -1,0 +1,142 @@
+"""Private saved-restore storage with cross-process leases.
+
+Only the known flat snapshot layout is reclaimed; no recursive deletion is used
+by the sweeper. The config parent must remain trusted against same-UID writers.
+"""
+
+import fcntl
+import os
+import re
+import stat
+import tempfile
+import weakref
+from contextlib import AbstractContextManager
+from pathlib import Path
+
+_DIRECTORY_RE = re.compile(r"ecm-saved-restore-[a-z0-9_]{8}\Z")
+# Both names match tempfile.mkstemp output (8 characters from its a-z0-9_
+# alphabet): the snapshot copy and the decrypt gate's plaintext temp.
+_ARTIFACT_RE = re.compile(r"ecm-restore-[a-z0-9_]{8}\.zip\Z")
+_PLAINTEXT_RE = re.compile(r"ecm-restore-dec-[a-z0-9_]{8}\.zip\Z")
+_DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def prepare_private_parent(parent: Path) -> None:
+    """Create or tighten the snapshot parent to an owned, no-follow 0700 directory.
+
+    ``mkdir(mode=0o700, exist_ok=True)`` leaves an EXISTING parent's mode alone.
+    A group/world-writable parent would let another writer rename a 0700
+    snapshot directory and plant a replacement before the task reopens it by
+    path, so an owned parent is tightened in place and a symlinked or
+    foreign-owned parent is refused (``OSError``/``PermissionError``).
+    Regression coverage: tests/routers/test_saved_restore_binding.py
+    (``*_private_parent_*``). Ancestors above ``parent`` remain trusted config.
+    """
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor = os.open(parent, _DIRECTORY_FLAGS)
+    try:
+        info = os.fstat(descriptor)
+        if info.st_uid != os.geteuid():
+            raise PermissionError("restore snapshot parent is not owned by ECM")
+        if stat.S_IMODE(info.st_mode) & 0o077:
+            os.fchmod(descriptor, 0o700)
+    finally:
+        os.close(descriptor)
+
+
+class PrivateRestoreSnapshot(AbstractContextManager):
+    """Keep an advisory directory lease until wrapper/callback cleanup finishes."""
+
+    def __init__(self, parent: Path):
+        self._temporary = tempfile.TemporaryDirectory(
+            prefix="ecm-saved-restore-", dir=parent
+        )
+        self.name = self._temporary.name
+        descriptor = None
+        try:
+            descriptor = os.open(self.name, _DIRECTORY_FLAGS)
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._release = weakref.finalize(self, os.close, descriptor)
+        except BaseException:
+            if descriptor is not None:
+                os.close(descriptor)
+            self._temporary.cleanup()
+            raise
+
+    def cleanup(self):
+        try:
+            self._temporary.cleanup()
+        finally:
+            self._release()
+
+    def __exit__(self, *exc):
+        self.cleanup()
+
+
+def sweep_private_restore_snapshots(parent: Path, cutoff: float) -> None:
+    """Remove old unlocked private snapshots, refusing unknown/unsafe layouts.
+
+    Triggered by the existing restore sweep, including saved-restore requests.
+    Fresh files and directories, live leases, symlinks and unexpected entries are
+    preserved. The router's best-effort sweep boundary handles filesystem errors.
+    """
+    root_fd = os.open(parent, _DIRECTORY_FLAGS)
+    try:
+        root = os.fstat(root_fd)
+        if root.st_uid != os.geteuid() or root.st_mode & 0o022:
+            return
+        for name in os.listdir(root_fd):
+            if not _DIRECTORY_RE.fullmatch(name):
+                continue
+            try:
+                _reclaim(root_fd, name, cutoff)
+            except OSError:
+                # A raced, leased, inaccessible or malformed candidate is not
+                # permission to broaden deletion or block a legitimate restore.
+                continue
+    finally:
+        os.close(root_fd)
+
+
+def _private(info, mode: int) -> bool:
+    return info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == mode
+
+
+def _reclaim(root_fd: int, name: str, cutoff: float) -> None:
+    directory_fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=root_fd)
+    try:
+        fcntl.flock(directory_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        directory = os.fstat(directory_fd)
+        if not _private(directory, 0o700) or directory.st_mtime >= cutoff:
+            return
+        names = os.listdir(directory_fd)
+        # A producer creates at most one snapshot ZIP and, for an encrypted
+        # artifact, at most one decrypted plaintext temp beside it. A kill
+        # mid-restore can leave either or both (task cleanup unlinks the ZIP
+        # before the plaintext); interrupted pre-copy creation can leave an
+        # empty directory. Anything else is outside our ownership claim.
+        artifacts = [n for n in names if _ARTIFACT_RE.fullmatch(n)]
+        plaintexts = [n for n in names if _PLAINTEXT_RE.fullmatch(n)]
+        if (
+            len(artifacts) > 1
+            or len(plaintexts) > 1
+            or len(artifacts) + len(plaintexts) != len(names)
+        ):
+            return
+        for entry in names:
+            info = os.stat(entry, dir_fd=directory_fd, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or not _private(info, 0o600)
+                or info.st_nlink != 1
+                or info.st_mtime >= cutoff
+            ):
+                return
+        for entry in names:
+            os.unlink(entry, dir_fd=directory_fd)
+        # Never remove a replacement name after a directory rename/rebind.
+        current = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+        if (current.st_dev, current.st_ino) == (directory.st_dev, directory.st_ino):
+            os.rmdir(name, dir_fd=root_fd)
+    finally:
+        os.close(directory_fd)

@@ -219,11 +219,10 @@ class DbasRestoreTask(TaskScheduler):
         the more dangerous of the two: a stale ``True`` arms a DESTRUCTIVE apply
         on a run the operator asked nothing of.
 
-        ``cleanup_artifact`` is the fifth, and it defaults back to ``True``
-        rather than to its last value: ``/restore-dbas-saved`` sets it ``False``
-        DELIBERATELY, because the artifact there is the operator's own saved
-        backup and must survive the restore. Left sticky on the singleton, that
-        ``False`` governs whether a LATER run deletes the file it was handed.
+        ``cleanup_artifact`` is the fifth, and defaults back to ``True`` rather
+        than retaining a previous caller's setting. Both HTTP restore routes now
+        hand the task disposable input; saved restores use a private snapshot,
+        never the operator's original backup.
 
         Called from execute()'s ``finally`` so it runs on EVERY exit path.
         """
@@ -339,7 +338,11 @@ class DbasRestoreTask(TaskScheduler):
         from dispatcharr_client import get_client
         from dbas.destination_read import ReadObservingClient, destination_read_reason
         from routers.backup import validate_artifact_manifest
-        from dbas.restore_artifact import decode_artifact_to_plan, logo_content_provider
+        from dbas.restore_artifact import (
+            ArtifactCategoryRefused,
+            decode_artifact_to_plan,
+            logo_content_provider,
+        )
         from dbas.restore_orchestrator import run_dry_run, run_restore, new_restore_id
         from dbas.restore_contracts import IdRemapTable, RestoreReport, RollbackLedger
         from dbas.restore_orchestrator import default_importer_steps
@@ -369,6 +372,12 @@ class DbasRestoreTask(TaskScheduler):
             # .17 refused (version/integrity). NO importer ran. Surface the
             # sanitized message; never leak schema internals.
             return self._fail(started_at, str(exc.detail))
+        except ArtifactCategoryRefused as exc:
+            if zf is not None:
+                zf.close()
+            # A category over the structure budget. NO destination call or
+            # importer ran.
+            return self._fail(started_at, str(exc))
         except Exception:
             if zf is not None:
                 zf.close()

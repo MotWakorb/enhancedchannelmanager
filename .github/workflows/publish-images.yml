@@ -16,8 +16,24 @@ on:
         required: true
         type: boolean
 
+# Only runs that can publish may share a lane: `publish-images-dev:reusable`
+# for the reusable call from a dev push Tests run, `publish-images-main` for a
+# main workflow_run. Within a lane, cancel-in-progress keeps the newest
+# candidate. Each lane's predicate mirrors the `authorize` job's `if` below;
+# keep the two in step. Every other run skips at `authorize`, so it gets a lane
+# of its own (keyed by run id) and can never cancel a publisher.
+# workflow_run runs execute the default branch's copy of this file, which may
+# key its group as `publish-images-<branch>`. The reusable lane name therefore
+# contains `:`, which git forbids in ref names, so no branch-derived group can
+# equal it.
 concurrency:
-  group: publish-images-${{ inputs.candidate_branch || github.event.workflow_run.head_branch }}
+  group: >-
+    publish-images-${{
+    (inputs.tests_attested && inputs.candidate_branch == 'dev' && 'dev:reusable')
+    || (github.event_name == 'workflow_run'
+    && github.event.workflow_run.event == 'push'
+    && github.event.workflow_run.head_branch == 'main' && 'main')
+    || format('ineligible-{0}', github.run_id) }}
   cancel-in-progress: true
 
 env:

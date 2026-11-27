@@ -1,0 +1,26 @@
+{
+  "status": "PAIRED_OWNED_BUSYBOX_ORIGINAL_SIGNATURE_DATABASE_AND_UNDUPLICATED_SOURCE_CHECK_JOINS_ONLY",
+  "source_native_run": 42681901847,
+  "helper_sha256": "758e1a520e074b9bfb4acf74af44c911ff12e354a14ba1cee5c1cf463b4a174b",
+  "change": "load_packages accepts an optional keyword-only source_root selecting a real canonical already-delivered source directory instead of evidence-directory/sources. Every previous package/source/static/check verification remains mandatory; this is location reuse, not a new source provider or identity exemption.",
+  "architecture_datasets": ["amd64", "arm64"],
+  "execution_architecture": "amd64",
+  "verified_per_dataset": {
+    "original_signed_owned_packages": 3,
+    "complete_original_source_files": 110,
+    "original_static_provider_source_graphs": 2,
+    "original_upstream_pass_lines_joined_to_check_log_and_binary": 913,
+    "installed_database_files_busybox_binsh_ssl_client": [7, 1, 1],
+    "installed_database_directories_busybox_binsh_ssl_client": [17, 1, 2]
+  },
+  "proof_receipt_sha256": "3994e3bec4bf79ca44b478fb427fe6ec754caef70965d766671347202b2533e2",
+  "regression_tests": {
+    "layer": "Native Alpine BusyBox install/owned metadata/static source subset, including default/external root selection and missing/file/symlink/parent-symlink denial",
+    "passed": 94,
+    "log_sha256": "c0eebe9950887c387b8b61854b519aa1865242f95cf48639d358047bc5664f00"
+  },
+  "conditions": "Actual original three owned APKs/key/receipts/check log and separately retained original sources per dataset. Independent native AMD64 apk signature/full database and complete source/static/check joins, nonroot/read-only/networkless. Evidence-directory/sources does not exist, proving no duplicated-source fallback.",
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/{owned-busybox-source-evidence-{amd64,arm64}-42681901847-01/,owned-busybox-separated-evidence-{amd64,arm64}-01/,busybox-separated-source-replay-paired-01.json}",
+  "scope": "Original source inventories/static-support/check-receipt correspondence only. Unsigned historical check logs do not establish reproduced tests or historical compiler linkage. Original source/patch replay, complete live file/control-script checks, automated signed evidence delivery, native immutable-image composition, aggregate source/advisory and MCP acceptance remain unfinished. No source/target executed, runtime keys/repositories changed, pending owned obligation removed or aggregate failure waived.",
+  "full_runtime_source_acceptance": false
+}

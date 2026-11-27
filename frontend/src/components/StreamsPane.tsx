@@ -163,6 +163,7 @@ interface StreamsPaneProps {
     customNetworkPrefixes: string[] | undefined,
     stripNetworkSuffix: boolean | undefined,
     customNetworkSuffixes: string[] | undefined,
+    // Undefined means the configured defaults; `[]` means no profiles.
     profileIds: number[] | undefined,
     pushDownOnConflict: boolean | undefined,
     /**
@@ -190,7 +191,8 @@ interface StreamsPaneProps {
   // manual entry now reaches: it moves whatever already occupies
   // `channelNumber` rather than creating a duplicate
   // (bead enhancedchannelmanager-fprsq).
-  onCreateChannel?: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, pushDownOnConflict?: boolean) => Promise<void>;
+  // `profileIds` undefined means the configured defaults; `[]` means none.
+  onCreateChannel?: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, pushDownOnConflict?: boolean, profileIds?: number[]) => Promise<void>;
   // Default value for normalize toggle (from settings)
   defaultNormalizeOnCreate?: boolean;
   // Callback to check for conflicts with existing channel numbers
@@ -652,6 +654,11 @@ export function StreamsPane({
   const [bulkCreateStripNetwork, setBulkCreateStripNetwork] = useState(false);
   const [bulkCreateStripSuffix, setBulkCreateStripSuffix] = useState(false);
   const [bulkCreateSelectedProfiles, setBulkCreateSelectedProfiles] = useState<Set<number>>(new Set());
+  // The picker opens showing the configured defaults. Until the operator
+  // changes it, submitting leaves the profiles unspecified so the defaults in
+  // force at staging apply; once changed, its contents are exact, and an empty
+  // picker means no profiles rather than the defaults.
+  const [bulkCreateProfilesTouched, setBulkCreateProfilesTouched] = useState(false);
   const [bulkCreateGroupSearch, setBulkCreateGroupSearch] = useState('');
   const [profilesExpanded, setProfilesExpanded] = useState(false);
   // Normalization toggle and preview
@@ -975,6 +982,7 @@ export function StreamsPane({
     setBulkCreateSelectedProfiles(
       channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
+    setBulkCreateProfilesTouched(false);
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
@@ -1006,6 +1014,7 @@ export function StreamsPane({
     setBulkCreateSelectedProfiles(
       channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
+    setBulkCreateProfilesTouched(false);
     setNamingOptionsExpanded(false); // Collapse naming options
     setChannelGroupExpanded(false); // Collapse channel group options
     setTimezoneExpanded(false); // Collapse timezone options
@@ -1052,6 +1061,7 @@ export function StreamsPane({
     setBulkCreateSelectedProfiles(
       channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
+    setBulkCreateProfilesTouched(false);
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
@@ -1068,6 +1078,7 @@ export function StreamsPane({
     setBulkCreateCustomGroupNames(new Map());
     setBulkCreateGroupStartNumbers(new Map());
     setBulkCreateSelectedProfiles(new Set());
+    setBulkCreateProfilesTouched(false);
     const returnTarget = bulkCreateReturnFocusRef.current;
     bulkCreateReturnFocusRef.current = null;
     if (returnTarget) {
@@ -1110,6 +1121,7 @@ export function StreamsPane({
     setBulkCreateSelectedProfiles(
       channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
+    setBulkCreateProfilesTouched(false);
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
@@ -1220,6 +1232,7 @@ export function StreamsPane({
     setBulkCreateSelectedProfiles(
       channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
+    setBulkCreateProfilesTouched(false);
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(true); // Expand channel group section so user sees the "new group" option
     setTimezoneExpanded(false);
@@ -1336,6 +1349,7 @@ export function StreamsPane({
     setBulkCreateSelectedProfiles(
       channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
+    setBulkCreateProfilesTouched(false);
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
@@ -1371,6 +1385,7 @@ export function StreamsPane({
     setBulkCreateSelectedProfiles(
       channelDefaults?.defaultChannelProfileIds?.length ? new Set(channelDefaults.defaultChannelProfileIds) : new Set()
     );
+    setBulkCreateProfilesTouched(false);
     setNamingOptionsExpanded(false);
     setChannelGroupExpanded(false);
     setTimezoneExpanded(false);
@@ -1724,6 +1739,8 @@ export function StreamsPane({
     // count exists to prevent (bead enhancedchannelmanager-e9e5o).
     if (createNameResolution === null) return;
 
+    const chosenProfileIds = bulkCreateProfilesTouched ? Array.from(bulkCreateSelectedProfiles) : undefined;
+
     // Handle manual entry mode - create a single channel without streams
     if (isManualEntry && onCreateChannel) {
       if (!manualEntryChannelName.trim()) return;
@@ -1792,7 +1809,8 @@ export function StreamsPane({
           channelNumber,
           groupId ?? undefined,
           newGroupName,
-          pushDown
+          pushDown,
+          chosenProfileIds,
         );
 
         // Normalization was asked for and the engine could not be reached, so
@@ -1870,7 +1888,7 @@ export function StreamsPane({
             channelDefaults?.customNetworkPrefixes,
             bulkCreateStripSuffix,
             channelDefaults?.customNetworkSuffixes,
-            bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined,
+            chosenProfileIds,
             pushDown,
             nameResolution
           );
@@ -1919,7 +1937,7 @@ export function StreamsPane({
           channelDefaults?.customNetworkPrefixes,
           bulkCreateStripSuffix,
           channelDefaults?.customNetworkSuffixes,
-          bulkCreateSelectedProfiles.size > 0 ? Array.from(bulkCreateSelectedProfiles) : undefined,
+          chosenProfileIds,
           pushDown,
           nameResolution
         );
@@ -1972,6 +1990,7 @@ export function StreamsPane({
     bulkCreateStripNetwork,
     bulkCreateStripSuffix,
     bulkCreateSelectedProfiles,
+    bulkCreateProfilesTouched,
     createNameResolution,
     channelGroups,
     onBulkCreateFromGroup,
@@ -3245,6 +3264,7 @@ export function StreamsPane({
                                   newSet.delete(profile.id);
                                 }
                                 setBulkCreateSelectedProfiles(newSet);
+                                setBulkCreateProfilesTouched(true);
                               }}
                             />
                             <span>{profile.name}</span>
@@ -3257,7 +3277,10 @@ export function StreamsPane({
                       {bulkCreateSelectedProfiles.size > 0 && (
                         <button
                           className="btn-clear-profiles"
-                          onClick={() => setBulkCreateSelectedProfiles(new Set())}
+                          onClick={() => {
+                            setBulkCreateSelectedProfiles(new Set());
+                            setBulkCreateProfilesTouched(true);
+                          }}
                         >
                           Clear selection
                         </button>

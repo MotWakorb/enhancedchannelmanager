@@ -31,6 +31,7 @@ class ToolSafety(str, Enum):
 # Inventory generated from the actual FastMCP registry on 2026-08-17 and kept
 # explicit so registry drift fails closed. Aliases are inventory entries too.
 _ALL_TOOLS = frozenset("""
+get_m3u_change_exclusions list_m3u_change_groups update_m3u_change_exclusions
 accept_channel_merge add_sd_lineup add_stream add_stream_to_channel add_tags_to_group
 analyze_auto_creation_rules analyze_channel_pipeline_rules apply_normalization_to_channels
 apply_profile_to_channels assign_channel_numbers audit_epg_duplicates build_channel_lineup
@@ -500,6 +501,12 @@ def install_safety_policy(mcp) -> None:
                         if key != "confirmation_token"
                     }
                     return await _run(clean_arguments, context=context, convert_result=convert_result)
+            if _name == "update_channel":
+                from tools.channels import missing_number_baseline
+
+                refusal = missing_number_baseline(arguments)
+                if refusal:
+                    return present(refusal)
             oversized = _oversized_batch(arguments)
             if oversized:
                 field, count = oversized
@@ -519,11 +526,15 @@ def install_safety_policy(mcp) -> None:
                 "run_channel_pipeline", "run_auto_creation",
                 "apply_normalization_to_channels", "clear_emby_logos",
             }
-            resolved = (
-                _stored_resolution(supplied)
-                if supplied and server_planned
-                else await _resolve_targets(_name, arguments, _run)
-            )
+            # Resolution can call the backend before the claimed tool handler
+            # runs. Authenticate that mutation-free preview too; this does not
+            # validate a confirmation or authorize the subsequent mutation.
+            with claim_context(_name, ToolSafety.DESTRUCTIVE.value, confirmed=False):
+                resolved = (
+                    _stored_resolution(supplied)
+                    if supplied and server_planned
+                    else await _resolve_targets(_name, arguments, _run)
+                )
             if resolved is None:
                 return present("Confirmation token was already used or is unknown; request a new preview.")
             resolved_count = _resolved_count(resolved, server_planned=server_planned)

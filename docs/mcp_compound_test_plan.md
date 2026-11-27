@@ -201,7 +201,7 @@ run the Channel Pipeline to create channels, then roll it back cleanly.
 2. Seed duplicates: *"Force-create channels for the streams 'US: ESPN' and 'US: ESPN' again in 'MCPTEST_Dupes'."*: two `add_stream(force_new)` calls so two same-named channels exist.
 3. *"Find duplicate channels."*: `find_duplicate_channels`. **Seam:** the two seeded channels surface as one duplicate cluster (normalization engine).
 4. *"Merge that duplicate cluster, keeping one and absorbing the other."*: `bulk_merge_duplicate_channels`. **Seam:** the target/source ids come straight from the cluster in #3; the report counts ACTUAL merges (a bad target reports failure, not false success).
-5. *"Assign sequential numbers starting at 8200 to the channels in 'MCPTEST_Dupes'."*: `assign_channel_numbers`.
+5. *"Assign sequential numbers starting at 8200 to the channels in 'MCPTEST_Dupes'."*: `list_channels` then `assign_channel_numbers`. **Seam:** the tool's `expected_numbers` come from the agent's own `list_channels` read; renumbering a channel by hand between the read and the assign makes the tool report that nothing was renumbered.
 6. *"Reorder the streams on the surviving channel, putting '<stream B>' first."*: `reorder_streams`. **Seam:** the supplied list must be the COMPLETE current stream set; an incomplete list is **refused** (no silent detach).
 7. *"Show me the surviving channel and its stream order."*: `get_channel`.
 

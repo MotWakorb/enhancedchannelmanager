@@ -1,0 +1,53 @@
+{
+  "status": "OFFICIAL_UNFIXED_TRACKER_INPUT_DECODING_AND_EXACT_SAVED_SUBJECT_DIAGNOSTIC_ONLY",
+  "beads": ["enhancedchannelmanager-g3vd3", "enhancedchannelmanager-4izbc"],
+  "helper": {"path": "scripts/alpine_advisories.py", "sha256": "8d6d982d89f97a8118232938d672a7119ed4a68f8075298749825c74f360ceff"},
+  "recorded_inputs": [
+    {"fixture": "backend/tests/fixtures/alpine/tracker-main-20261109.json.gz", "url": "https://security.alpinelinux.org/branch/3.24-main", "accept": "application/ld+json", "raw_bytes": 3358593, "raw_sha256": "bcca9ccce00bf56d1c99308d9317578880717829d1b5d67727170fe01ea0f84e", "items": 185, "unique_vulnerability_ids": 185, "exact_branch_state_rows": 292, "unique_source_version_cve_states": 292},
+    {"fixture": "backend/tests/fixtures/alpine/tracker-community-20261109.json.gz", "url": "https://security.alpinelinux.org/branch/3.24-community", "accept": "application/ld+json", "raw_bytes": 76145511, "raw_sha256": "31d4b6ead6f7e72c8412265ea236fe1f3598f9cfcd07a960ce46040089fd12e4", "items": 1996, "unique_vulnerability_ids": 1641, "exact_branch_state_rows": 3853, "unique_source_version_cve_states": 3091},
+    {"fixture": "backend/tests/fixtures/alpine/cve-11979-20261109.json.gz", "url": "https://security.alpinelinux.org/vuln/CVE-2026-11979", "accept": "application/ld+json", "raw_bytes": 47173, "raw_sha256": "d1ab724503c93da7c803d826e13146e3b7515d1736caa730132e02ddc52e3a8d"}
+  ],
+  "decoder_contract": {
+    "branch": "Exact requested 3.24-main/community root and exact nested repo selection. Foreign/historical/edge states embedded by the official stable responses are data, not selected feeds or runtime package sources.",
+    "duplicates": "Official community response repeats identical full vulnerability documents and state IDs. Preserve raw counts, deduplicate identical evidence, reject conflicting repeated documents/state identities/source-version-CVE states. Do not conflate legitimate repeated rows with duplicate JSON object keys.",
+    "types": "fixed must be bool; source/version must use exact canonical official package URLs; CVE/state links and object shapes must agree; finite 0..10 scores cannot be bool.",
+    "scores": "Null vectors and zero scores are UNKNOWN, never safe/low. Official cvss3 field contains twelve CVSS:4.0 vectors as well as 3.0/3.1; preserve the raw field rather than rejecting or silently renaming it.",
+    "installed_subject": "Reuse complete query/database equality and the original virtual/unresolved partition. Require both stable repositories; group exact official source/full-APK-version matches without source-name, missing-origin or owned pseudo-version exemptions.",
+    "no_source_execution": true
+  },
+  "actual_raw_data_diagnostic": {
+    "execution": "Native AMD64 stable-Alpine interpreter, nonroot1000, network none, read-only source/raw documents/saved query+DB, cap-drop ALL and no-new-privileges",
+    "saved_subject_capture_sha256": "be1274458e40960920b662426ed1e91d2472745668fa48cecce382dffab1de5e",
+    "saved_subject_image": "Owned-provider runtime-base d626/dafa dataset, 122 package rows; not a new current-full-candidate snapshot",
+    "report_sha256": "f54ec7b4caf8a5103ece2ac0c21e4ee8d78b577295d247632a173311e76eb088",
+    "exit_code": 1,
+    "status": "BLOCKED_PUBLISHED_UNFIXED_OR_UNRESOLVED_SUBJECTS",
+    "potential_unfixed_source_version_cve_matches": 19,
+    "sources": {"cairo": 1, "coreutils": 3, "glib": 1, "tar": 3, "sqlite": 11},
+    "unknown_severity_matches": 18,
+    "scored_match": {"cve": "CVE-2025-45582", "source": "tar", "score": 4.1, "vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:C/C:N/I:L/A:L"},
+    "unresolved_owned_packages_preserved": ["busybox", "busybox-binsh", "ecm-owned-native", "ssl_client"],
+    "scope": "Potential official tracker records, not nineteen asserted reachable exploits or proof that all fixes are unavailable. Eighteen scores are unknown; conservative P1 triage remains blocking, not invented numerical CVSS ratings. Primary-source/reachability/fix assessment and a fresh exact candidate comparison are tracked in enhancedchannelmanager-4izbc. No additional owned provider is approved or introduced by this diagnostic."
+  },
+  "cve_11979": {
+    "official_exact_stable_state": "libxml2/2.13.9-r2, fixed:false, score0.0/vectornull",
+    "upstream_correction": "c2e233fc1b341685fc99621b2768b503f777a72e",
+    "source_observation": "Original hash-checked 2.13.9 xmlcatalog.c lacks the upstream bounds checks; upstream test/catalogs/test.sh does not exist in 2.13.9, whose catalog tests are embedded in Makefile.am. Do not claim the complete upstream patch applies unchanged, omit its test hunk silently or infer source nonapplicability from a missing runtime executable.",
+    "resolution": "Still open; neither zero severity nor an owned r3 pseudo-version clears it. Source correction/equivalence, tests and actual native installed-source joins remain required."
+  },
+  "tests": {
+    "recorded_shape_unit_tests": 13,
+    "broad_modules": 60,
+    "passed": 1843,
+    "unchanged_existing_skip": 1,
+    "log_sha256": "a84598c5e952ba311024626a55c9c05d082a8d9052978b9722eb1b7c7b9ff56c",
+    "layer": "Native AMD64 Alpine maintained tooling subsets, not complete backend, image or advisory acceptance",
+    "dangerous_mutants": "Unknown-to-LOW classification or bypassing actual query/database equality makes five regressions fail",
+    "mutant_log_sha256": "3d0dc4cb246a88fd14a0e848bf2181f834584c0e3f4074558c7c4c756d27b3e1",
+    "retained_failures": "Initial community response exceeded a 32MiB read cap and was not parsed; deliberate complete retry used a128MiB bound. First decoder tests rejected real CVSS4 vectors under cvss3, exposing a false vocabulary assumption before any gate integration; corrected against recorded real values without dropping those records."
+  },
+  "capture_limits": "Public official data recorded over HTTPS with explicit JSON-LD Accept, not cryptographically signed advisory snapshots. The first complete main body was retained before a later acquisition aborted; it lacks the later per-response header receipt. Community and primary responses have separate HTTP receipts. This is NOT a freshness/authenticity-enforced production advisory-input collector. Only two branch and two fixed-secdb endpoints plus one primary CVE were surveyed; no per-package request flood or runtime feed change.",
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/alpine-advisory-field-survey-01",
+  "remaining": "Freshness/authenticity-bound snapshot preparation and actual immutable final-image collection/CI enforcement; fixed-only secdb/CPE reconciliation; owned backport/corrected-source proofs; primary assessment/remediation of nineteen potential normal-APK records; independent unsuppressed final-image scans; full source/compiler/static/frontend/MCP/aggregate acceptance. No gate has been relaxed, no vulnerability suppressed, no provider/pin/version or production Dockerfile changed, and nothing merged/published/deployed.",
+  "full_runtime_advisory_acceptance": false
+}
