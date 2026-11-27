@@ -239,9 +239,13 @@ check_config_persistence() {
     print_warning "  Fix: add a mount for ${CONFIG_DIR} and recreate the container —"
     print_warning "  'volumes: [\"ecm-config:${CONFIG_DIR}\"]' in compose, or"
     print_warning "  '-v ecm-config:${CONFIG_DIR}' on docker run."
-    print_warning "  Back up first (Settings -> Backup & Restore) if this container"
-    print_warning "  already holds data you care about — recreating without a mount"
-    print_warning "  in place will lose it."
+    print_warning "  Before recreating, if this container already holds data you care about:"
+    print_warning "  copy the whole ${CONFIG_DIR} directory out while the container is still running,"
+    print_warning "  for example 'docker cp <container>:${CONFIG_DIR} ./ecm-config-copy'."
+    print_warning "  Do NOT stop the container first: a container started with --rm is"
+    print_warning "  deleted when it stops, and its data goes with it. A backup from"
+    print_warning "  Settings -> Backup & Restore is not enough on its own, because it does not"
+    print_warning "  restore ECM accounts, rules or schedules."
     return 0
 }
 

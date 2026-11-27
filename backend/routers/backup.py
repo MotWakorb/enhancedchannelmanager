@@ -1423,8 +1423,8 @@ def _scrub_journal_db_in_place(tmp_path: Path) -> None:
                 "_STANDARD_ARTIFACT_TABLES; account state, telemetry and history "
                 "do not travel in it. A restore onto an instance with no accounts "
                 "leaves first-run setup required; the operator re-creates their "
-                "ECM login. Use an encrypted backup with credentials included to "
-                "migrate accounts.",
+                "ECM login. No backup restore applies accounts; copy the whole "
+                "/config directory to move them.",
                 len(non_empty),
                 sum(non_empty.values()),
                 ", ".join("%s=%d rows" % (t, n) for t, n in sorted(non_empty.items())),
@@ -3840,10 +3840,12 @@ def _merge_alert_method_creds_after_restore(
 # carry, and an operator whose disaster-recovery restore returns 200 and then
 # shows a first-run setup wizard has to guess whether that is correct.
 FIRST_RUN_SETUP_NOTICE = (
-    "This instance has no ECM user account. A standard (non-encrypted) backup "
-    "carries no account credentials by design, so accounts are not restored from "
-    "one — create your admin account through first-run setup. To migrate accounts "
-    "between instances instead, take an encrypted backup with credentials included."
+    "This instance has no ECM user account. A current backup does not carry ECM "
+    "accounts: a Full Backup keeps only a fixed list of configuration tables, and "
+    "a Configuration (DBAS) restore never applies journal.db, even from an "
+    "encrypted backup with credentials included. Create your admin account "
+    "through first-run setup. To move accounts to another instance, copy the "
+    "whole /config directory instead."
 )
 
 
@@ -4117,9 +4119,8 @@ def _post_restore_account_notices() -> list[str]:
         notice = (
             "This backup did not carry every configured surface, because a "
             "standard (non-encrypted) backup omits credential stores and "
-            "personal data by design. Re-establish: %s. To carry these between "
-            "instances instead, take an encrypted backup with credentials "
-            "included." % detail
+            "personal data by design. Re-establish: %s. To keep these, copy the "
+            "whole /config directory instead." % detail
         )
         logger.warning("[BACKUP] %s", notice)
         notices.append(notice)
