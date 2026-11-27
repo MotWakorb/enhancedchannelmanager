@@ -2619,6 +2619,21 @@ def _patch_number_baseline(data: dict) -> Optional[ExpectedChannelNumber]:
         ]) from None
 
 
+def _server_number_phrase(value: Any) -> str:
+    """Where the server says a channel is, for guidance that is never scrubbed.
+
+    The server's value is upstream data. A number (or no number) is rendered as
+    usual; anything else is not echoed, because the guidance it lands in passes
+    through unredacted. The structured ``concurrentNumberChanges`` payload keeps
+    the value as read.
+    """
+    if value is None or (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+    ):
+        return f"channel number {format_channel_number(value)}"
+    return "an unreadable channel number"
+
+
 def _stale_baselines_message(
     stale: list[dict],
     *,
@@ -2627,8 +2642,8 @@ def _stale_baselines_message(
 ) -> str:
     """Name each moved channel, in the wording the single-channel refusal uses."""
     moved = "; ".join(
-        f"channel {change['channelId']} is on channel number "
-        f"{format_channel_number(change['serverNumber'])}, and this request expected "
+        f"channel {change['channelId']} is on "
+        f"{_server_number_phrase(change['serverNumber'])}, and this request expected "
         f"{format_channel_number(change['baselineNumber'])}"
         for change in stale
     )
@@ -3111,11 +3126,13 @@ async def _run_bulk_commit(
     class MissingChannelNumberBaselineError(OperatorBulkError):
         """A numbering write reached the executor without the caller's baseline."""
 
+        # Unscrubbed: a registered credential equal to a channel number or id shows as that number.
         scrub = False
 
     class MissingStreamError(OperatorBulkError):
         """An addStreamToChannel names a stream id the catalog does not hold."""
 
+        # Unscrubbed: a registered credential equal to a channel number or id shows as that number.
         scrub = False
 
     class MalformedCreateResponseError(OperatorBulkError):
@@ -3169,6 +3186,7 @@ async def _run_bulk_commit(
         numbering plan that stopped part way is exactly what this is.
         """
 
+        # Unscrubbed: a registered credential equal to a channel number or id shows as that number.
         scrub = False
 
         def __init__(self, message: str, changes: list[dict]):
@@ -3187,6 +3205,7 @@ async def _run_bulk_commit(
         of not existing; the check itself is being reported as unavailable.
         """
 
+        # Unscrubbed: a registered credential equal to a channel number or id shows as that number.
         scrub = False
 
     def reject_unresolved_channel(channel_id: int, label: str) -> int:
@@ -4058,8 +4077,8 @@ async def _run_bulk_commit(
             if _same_channel_number_or_both_unset(current, expected.number):
                 return
             raise ConcurrentChannelNumberChangeError(
-                f"Channel {channel_id} was not renumbered: it is on channel number "
-                f"{format_channel_number(current)}, and this request expected "
+                f"Channel {channel_id} was not renumbered: it is on "
+                f"{_server_number_phrase(current)}, and this request expected "
                 f"{format_channel_number(expected.number)}. Somebody else changed it. "
                 "Re-read the channel and decide before sending this again.",
                 [{

@@ -14,7 +14,12 @@ The diagnostic sweep of registered values skips spellings shorter than four
 characters, the same minimum the debug-bundle literal sweep uses; such a value
 is still caught by the structural URL rules but not in free text. The pattern
 layer masks JSON and repr'd-dict credential keys, `token` and API-key header
-forms. The URL layer matches any scheme (so `rtmp://`, `ftp://` and `redis://`
+forms, masking the whole value: a quoted value to its matching unescaped quote
+and a list to its closing bracket, each bounded so the scan stays linear. A
+registered credential equal to a channel number or id can still appear as that
+number in the unscrubbed numbering guidance, and a non-numeric server number is
+rendered there as "an unreadable channel number" (the `concurrentNumberChanges`
+payload keeps the value as read). The URL layer matches any scheme (so `rtmp://`, `ftp://` and `redis://`
 userinfo is destroyed), bracketed IPv6 authorities, extensionless and timeshift
 Xtream Codes paths. Journal-write failures log the scrubbed exception chain and
 the scrubbed row, and a Dispatcharr login failure logs only its exception type.
