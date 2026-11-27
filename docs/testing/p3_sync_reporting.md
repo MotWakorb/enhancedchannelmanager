@@ -9,6 +9,8 @@ Beads `c7ll3`, `zcnl5`, `cruhd`; candidate based on protected `dev` `0bc12600`.
   fabricated realized/rollback result or successful-apply stamp is introduced.
   The existing indeterminate-outcome helper was inspected but remains for realized
   runs. Destination-unreadable errors still use their established error code.
+  The archive restore task applies the same rule: an apply refused at pre-flight
+  records `unknown` in its task details and log line, matching its summary.
 - Matched stream rows are reused, not updated. The stream category records a
   reasoned `existing_stream_reused` skip without asserting identical fields;
   actual placeholder creation, matching,
