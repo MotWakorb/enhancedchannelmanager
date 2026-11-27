@@ -1,0 +1,258 @@
+{
+  "architectures": {
+    "amd64": {
+      "actual_source_commit": "4ab5ceb006c4ef216ccfabd7de8d07730a261b33",
+      "artifact": {
+        "id": 13696025681,
+        "sha256": "a106bc192459b8cedd3f1c9a722ea2ba7b4ce64cfdc2e43753777dc5a2b2c2d3"
+      },
+      "bootstrap": [
+        {
+          "gid": 1000,
+          "phase": "create",
+          "recreation_persistence": true,
+          "restart_persistence": true,
+          "status": "PASS",
+          "uid": 1000
+        },
+        {
+          "gid": 1572,
+          "phase": "create",
+          "recreation_persistence": true,
+          "restart_persistence": true,
+          "status": "PASS",
+          "uid": 1571
+        }
+      ],
+      "image_id": "sha256:a925ce16f63c46a39531b7b5bfb5f4da1348441bc4b355fe49acea0842c8ccda",
+      "metadata": {
+        "getent_backend": "musl-utils",
+        "getent_missing_identity": {
+          "exit": 2,
+          "stderr": "",
+          "stdout": ""
+        },
+        "getent_owner": "/usr/bin/getent is owned by musl-utils-1.2.6-r3",
+        "security_runtime_packages": {
+          "distribution": "alpine",
+          "official_runtime_packages": {
+            "brotli-libs": {
+              "arch": "x86_64",
+              "description": "Generic lossless compressor (libraries)",
+              "file-size": 429435,
+              "license": "MIT",
+              "name": "brotli-libs",
+              "origin": "brotli",
+              "url": "https://github.com/google/brotli",
+              "version": "1.2.1-r0"
+            },
+            "ca-certificates": {
+              "arch": "x86_64",
+              "description": "Common CA certificates PEM files from Mozilla",
+              "file-size": 129361,
+              "license": "MPL-2.0 AND MIT",
+              "name": "ca-certificates",
+              "origin": "ca-certificates",
+              "url": "https://www.mozilla.org/en-US/about/governance/policies/security-group/certs/",
+              "version": "20261020-r0"
+            },
+            "ca-certificates-bundle": {
+              "arch": "x86_64",
+              "description": "Pre generated bundle of Mozilla certificates",
+              "file-size": 107116,
+              "license": "MPL-2.0 AND MIT",
+              "name": "ca-certificates-bundle",
+              "origin": "ca-certificates",
+              "url": "https://www.mozilla.org/en-US/about/governance/policies/security-group/certs/",
+              "version": "20261020-r0"
+            }
+          },
+          "owned_security_libraries": {
+            "librsvg": {
+              "soname": "librsvg-2.so.2",
+              "version": "2.63.4"
+            },
+            "libxml2": {
+              "soname": "libxml2.so.2",
+              "version": "2.13.9"
+            },
+            "speex": {
+              "soname": "libspeex.so.1",
+              "version": "1.2.1"
+            }
+          },
+          "owned_security_recipe_sha256": "4940090f0dd959262a986933a43856279f5f33bda1c37980371939cf183f7bfa",
+          "release": "3.24.4",
+          "scope": "Actual installed owned-library bytes/links/APK ownership and official package origins only; complete source and advisory gates remain separate."
+        }
+      },
+      "raw_receipt_sha256": {
+        "application-source.json": "3edc4dafc56cf5b9cbbbe9019f3ed64422ba366e9abbfa1e9cfc134288fa6cd0",
+        "application/bootstrap.json": "494fd66060aad070216cfdc34e8b03554a16785c619c8d76b592042371c28643",
+        "application/image-inspect.json": "8756883fcd58b64801004b162ee608a5917152149694b9580a138723596657a3",
+        "application/runtime.json": "55e1630f98f4716a56d536c01dafcab31a2e0bffdfe1835682da11b2f81bd0e8"
+      },
+      "runtime_checks": [
+        "native_python_wheel_imports",
+        "native_python_operations",
+        "system_default_ca_trust",
+        "certifi_ca_trust",
+        "sqlite_wal_foreign_keys_transaction",
+        "named_timezone_dst_transition",
+        "gnu_timeout_kills_child",
+        "getent_identity_tools",
+        "native_versions_readers_licenses",
+        "software_input_format_support",
+        "synthetic_rare_input_decode",
+        "generated_h264_aac_mpegts",
+        "http_probe",
+        "aes_encrypted_hls_probe",
+        "production_prober_ts",
+        "production_prober_aes_hls",
+        "production_prober_cancellation",
+        "dash_probe",
+        "bounded_y4m_resdet",
+        "resdet_pixel_ceiling",
+        "signalstats_black_screen_filter",
+        "mpegts_preview_transcode",
+        "mpegts_preview_video_only",
+        "aes_hls_backend_relay_probe",
+        "aes_hls_backend_relay_previews",
+        "verified_https_probe",
+        "https_untrusted_certificate_refused"
+      ],
+      "runtime_failures": {
+        "native_source_and_artifact_integrity": "AssertionError: missing regular file: index.json"
+      }
+    },
+    "arm64": {
+      "actual_source_commit": "4ab5ceb006c4ef216ccfabd7de8d07730a261b33",
+      "artifact": {
+        "id": 13693809698,
+        "sha256": "85512bc600b33faf263232ad62f4c8fbd9b634b0759a679cfaf8bce3e7a06c0d"
+      },
+      "bootstrap": [
+        {
+          "gid": 1000,
+          "phase": "create",
+          "recreation_persistence": true,
+          "restart_persistence": true,
+          "status": "PASS",
+          "uid": 1000
+        },
+        {
+          "gid": 1572,
+          "phase": "create",
+          "recreation_persistence": true,
+          "restart_persistence": true,
+          "status": "PASS",
+          "uid": 1571
+        }
+      ],
+      "image_id": "sha256:6b85e842a4c36141617d88ff9933447bed2c7842dba6b93af8bb99b98f841701",
+      "metadata": {
+        "getent_backend": "musl-utils",
+        "getent_missing_identity": {
+          "exit": 2,
+          "stderr": "",
+          "stdout": ""
+        },
+        "getent_owner": "/usr/bin/getent is owned by musl-utils-1.2.6-r3",
+        "security_runtime_packages": {
+          "distribution": "alpine",
+          "official_runtime_packages": {
+            "brotli-libs": {
+              "arch": "aarch64",
+              "description": "Generic lossless compressor (libraries)",
+              "file-size": 424994,
+              "license": "MIT",
+              "name": "brotli-libs",
+              "origin": "brotli",
+              "url": "https://github.com/google/brotli",
+              "version": "1.2.1-r0"
+            },
+            "ca-certificates": {
+              "arch": "aarch64",
+              "description": "Common CA certificates PEM files from Mozilla",
+              "file-size": 130942,
+              "license": "MPL-2.0 AND MIT",
+              "name": "ca-certificates",
+              "origin": "ca-certificates",
+              "url": "https://www.mozilla.org/en-US/about/governance/policies/security-group/certs/",
+              "version": "20261020-r0"
+            },
+            "ca-certificates-bundle": {
+              "arch": "aarch64",
+              "description": "Pre generated bundle of Mozilla certificates",
+              "file-size": 107099,
+              "license": "MPL-2.0 AND MIT",
+              "name": "ca-certificates-bundle",
+              "origin": "ca-certificates",
+              "url": "https://www.mozilla.org/en-US/about/governance/policies/security-group/certs/",
+              "version": "20261020-r0"
+            }
+          },
+          "owned_security_libraries": {
+            "librsvg": {
+              "soname": "librsvg-2.so.2",
+              "version": "2.63.4"
+            },
+            "libxml2": {
+              "soname": "libxml2.so.2",
+              "version": "2.13.9"
+            },
+            "speex": {
+              "soname": "libspeex.so.1",
+              "version": "1.2.1"
+            }
+          },
+          "owned_security_recipe_sha256": "4940090f0dd959262a986933a43856279f5f33bda1c37980371939cf183f7bfa",
+          "release": "3.24.4",
+          "scope": "Actual installed owned-library bytes/links/APK ownership and official package origins only; complete source and advisory gates remain separate."
+        }
+      },
+      "raw_receipt_sha256": {
+        "application-source.json": "3edc4dafc56cf5b9cbbbe9019f3ed64422ba366e9abbfa1e9cfc134288fa6cd0",
+        "application/bootstrap.json": "b86b45f6a25e610b8d1be0f6cd53e614f2cfa4284213851c29e64e27538e060e",
+        "application/image-inspect.json": "86c5c4214bc1981ccf2ce6caa8a4b9bcf7a232e952a47a12d3df52dc86ce943f",
+        "application/runtime.json": "798b41782c094838e517f7ff833e87356376d1cc368abcc09c4316f187b293bd"
+      },
+      "runtime_checks": [
+        "native_python_wheel_imports",
+        "native_python_operations",
+        "system_default_ca_trust",
+        "certifi_ca_trust",
+        "sqlite_wal_foreign_keys_transaction",
+        "named_timezone_dst_transition",
+        "gnu_timeout_kills_child",
+        "getent_identity_tools",
+        "native_versions_readers_licenses",
+        "software_input_format_support",
+        "synthetic_rare_input_decode",
+        "generated_h264_aac_mpegts",
+        "http_probe",
+        "aes_encrypted_hls_probe",
+        "production_prober_ts",
+        "production_prober_aes_hls",
+        "production_prober_cancellation",
+        "dash_probe",
+        "bounded_y4m_resdet",
+        "resdet_pixel_ceiling",
+        "signalstats_black_screen_filter",
+        "mpegts_preview_transcode",
+        "mpegts_preview_video_only",
+        "aes_hls_backend_relay_probe",
+        "aes_hls_backend_relay_previews",
+        "verified_https_probe",
+        "https_untrusted_certificate_refused"
+      ],
+      "runtime_failures": {
+        "native_source_and_artifact_integrity": "AssertionError: missing regular file: index.json"
+      }
+    }
+  },
+  "head_sha": "5775ec363210a15199908023324bc9cc340f391a",
+  "run_id": 42657433272,
+  "scope": "Actual native two-architecture full-candidate metadata/functional compatibility only. Complete source and advisory/MCP/final-image approval remain separate.",
+  "status": "BOTH_METADATA_ADAPTERS_PASS_BOTH_FULL_SOURCE_GATES_FAIL"
+}

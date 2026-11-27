@@ -135,7 +135,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.2-0058"
+APP_VERSION = "0.18.2-0090"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -399,6 +399,10 @@ _STANDARD_ARTIFACT_TABLES: dict[str, str] = {
     "hidden_channel_groups": (
         "A small operator display preference (group id, group name, hidden_at). "
         "No identity, no credential, and it is annoying to re-establish by hand."
+    ),
+    "m3u_change_exclusions": (
+        "Account/group display preferences for Insights / M3U Changes; no "
+        "credentials. Uses the standard free-text credential scrub."
     ),
 }
 
@@ -4788,6 +4792,12 @@ def _sweep_stale_restore_temps(dest_dir: Path) -> None:
     if not dest_dir.exists():
         return
     cutoff = time.time() - _DBAS_RESTORE_TMP_MAX_AGE_SECONDS
+    try:
+        from restore_snapshot_storage import sweep_private_restore_snapshots
+
+        sweep_private_restore_snapshots(dest_dir, cutoff)
+    except OSError as exc:
+        logger.warning("[BACKUP] Could not reclaim private restore snapshots: %s", exc)
     removed = 0
     try:
         candidates = list(dest_dir.glob("ecm-restore-*.zip"))
@@ -4810,7 +4820,16 @@ def _sweep_stale_restore_temps(dest_dir: Path) -> None:
         logger.info("[BACKUP] Swept %d stale restore temp artifact(s)", removed)
 
 
-async def _stream_upload_to_temp(file: UploadFile, dest_dir: Path) -> Path:
+# Per-caller wording for _stream_upload_to_temp's errors: (response noun, log noun).
+_STREAM_SOURCE_WORDING = {
+    "upload": ("Uploaded artifact", "upload"),
+    "saved": ("Saved backup", "saved backup"),
+}
+
+
+async def _stream_upload_to_temp(
+    file: UploadFile, dest_dir: Path, *, source: str = "upload"
+) -> Path:
     """Stream an uploaded artifact to a 0600 temp file, chunk by chunk.
 
     NEVER reads the whole upload into RAM (ADR-008 D8) — it copies
@@ -4823,8 +4842,11 @@ async def _stream_upload_to_temp(file: UploadFile, dest_dir: Path) -> Path:
 
     Returns the temp file path on success. Raises ``HTTPException(413)`` on
     oversize and ``HTTPException(400)`` on a read error — the partial temp is
-    cleaned up in both cases.
+    cleaned up in both cases. ``source`` selects the error wording
+    (:data:`_STREAM_SOURCE_WORDING`) so a saved-backup snapshot does not report
+    itself as an upload.
     """
+    noun, log_noun = _STREAM_SOURCE_WORDING[source]
     dest_dir.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix="ecm-restore-", suffix=".zip", dir=str(dest_dir))
     tmp_path = Path(tmp_name)
@@ -4841,18 +4863,18 @@ async def _stream_upload_to_temp(file: UploadFile, dest_dir: Path) -> Path:
                 try:
                     chunk = await file.read(_RESTORE_UPLOAD_CHUNK)
                 except Exception as exc:  # noqa: BLE001 - any read error is a 400
-                    raise HTTPException(status_code=400, detail="Failed to read uploaded artifact") from exc
+                    raise HTTPException(
+                        status_code=400, detail=f"Failed to read {noun.lower()}"
+                    ) from exc
                 if not chunk:
                     break
                 total += len(chunk)
                 if total > _RESTORE_MAX_UPLOAD_BYTES:
                     logger.warning(
-                        "[BACKUP] Refusing restore: upload exceeded size cap (%d bytes max)",
-                        _RESTORE_MAX_UPLOAD_BYTES,
+                        "[BACKUP] Refusing restore: %s exceeded size cap (%d bytes max)",
+                        log_noun, _RESTORE_MAX_UPLOAD_BYTES,
                     )
-                    raise HTTPException(
-                        status_code=413, detail="Uploaded artifact is too large"
-                    )
+                    raise HTTPException(status_code=413, detail=f"{noun} is too large")
                 out.write(chunk)
     except BaseException:
         try:
@@ -4867,7 +4889,7 @@ async def _stream_upload_to_temp(file: UploadFile, dest_dir: Path) -> Path:
             tmp_path.unlink()
         except OSError:
             pass
-        raise HTTPException(status_code=400, detail="Uploaded artifact is empty")
+        raise HTTPException(status_code=400, detail=f"{noun} is empty")
 
     logger.info("[BACKUP] Streamed restore artifact to temp (%d bytes)", total)
     return tmp_path
@@ -7150,6 +7172,35 @@ class RestoreDbasSavedRequest(BaseModel):
     passphrase: Optional[str] = None
 
 
+# Serializes saved-restore snapshot copies (each up to the size cap) within one
+# process; held from snapshot creation until the restore task is scheduled.
+_SAVED_RESTORE_SNAPSHOT_LOCK = asyncio.Lock()
+# Headroom left free on the config volume after a snapshot copy, so the copy
+# cannot take the space SQLite and logs need.
+_SNAPSHOT_FREE_SPACE_MARGIN_BYTES = 64 * 1024 * 1024
+
+
+def _require_snapshot_free_space(dest_dir: Path, size: int) -> None:
+    """Refuse (HTTP 507) before copying when the snapshot would not fit."""
+    try:
+        fs = os.statvfs(dest_dir)
+    except OSError as exc:
+        # Unmeasurable is not a refusal; the copy's ENOSPC handling still applies.
+        logger.warning("[BACKUP] Could not measure restore snapshot free space: %s", exc)
+        return
+    available = fs.f_bavail * fs.f_frsize
+    needed = size + _SNAPSHOT_FREE_SPACE_MARGIN_BYTES
+    if available < needed:
+        logger.warning(
+            "[BACKUP] Refusing saved restore: %d bytes free, %d needed for snapshot",
+            available, needed,
+        )
+        raise HTTPException(
+            status_code=507,
+            detail="Not enough free space on the config volume to snapshot the saved backup",
+        )
+
+
 @router.post("/restore-dbas-saved")
 async def restore_dbas_saved(
     req: RestoreDbasSavedRequest,
@@ -7179,8 +7230,8 @@ async def restore_dbas_saved(
 
 
     Takes ``{"filename": "ecm-backup-<ts>.zip", "confirm_apply": false,
-    "passphrase": null}``, resolves the filename to its saved
-    ``/config/backups/`` path through the strict regex + containment guard, then
+    "passphrase": null}``, selects and snapshots a no-follow regular file from
+    ``/config/backups/`` before queuing, then
     kicks :class:`tasks.dbas_restore.DbasRestoreTask` in the background (the SAME
     fire-and-forget pattern as POST /restore-dbas) and returns its ``task_id`` so
     the caller can poll ``/api/tasks/{task_id}`` for the terminal RestoreReport.
@@ -7191,9 +7242,8 @@ async def restore_dbas_saved(
     old-format ZIPs.
 
     DRY-RUN is default-ON: without ``confirm_apply=True`` the run is a counts-only
-    plan that makes ZERO mutation. ``cleanup_artifact`` is DELIBERATELY False
-    here — the artifact is the operator's SAVED backup, NOT a throwaway temp, so
-    it MUST survive the restore.
+    plan that makes ZERO mutation. The task consumes a private temporary snapshot;
+    only that snapshot is cleaned up. The operator's SAVED backup is retained.
     """
     # The APPLY carve-out, raised BEFORE the filename is resolved so a refused
     # caller learns nothing about which artifacts exist on disk.
@@ -7216,56 +7266,146 @@ async def restore_dbas_saved(
     # NB: req.passphrase is intentionally NOT logged here (and is excluded from
     # the task's get_config) — it must never surface in a log line or response.
 
-    # Path resolution by TRUSTED ENUMERATION (CodeQL py/path-injection,
-    # CWE-22/23/36/73/99). Unlike restore_saved_backup — whose validated path is
-    # consumed in-function — this path ESCAPES as the dbas_restore task's
-    # ``artifact_path`` (used to open the file in another function), so an
-    # in-function containment barrier is not tracked to that sink. Instead of
-    # building a path FROM the request, we enumerate the real saved backups (a
-    # trusted filesystem source) and select the matching one: the path we use
-    # then originates from ``iterdir()`` — a direct-child listing of BACKUPS_DIR,
-    # so no traversal is representable and the user value never reaches the sink.
-    # Layer 1 (defense in depth): strict zip-only regex allowlist (fullmatch).
+    # Select from the direct-child listing, then bind the file descriptor before
+    # any await. Enumeration or is_file alone cannot stop symlink rebinding.
+    # Regression coverage: tests/routers/test_saved_restore_binding.py.
     if not _BACKUP_ZIP_FILENAME_RE.fullmatch(filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    # Layer 2: select from the trusted directory listing (breaks the taint flow —
-    # the chosen Path comes from iterdir, not from the request body).
     saved_backups = {}
     try:
         for entry in BACKUPS_DIR.iterdir():
-            if entry.is_file():
-                saved_backups[entry.name] = entry
+            saved_backups[entry.name] = entry
     except OSError:
         raise HTTPException(status_code=404, detail="Backup not found")
     path = saved_backups.get(filename)
     if path is None:
         raise HTTPException(status_code=404, detail="Backup not found")
 
-    # Kick the restore task against the SAVED path. cleanup_artifact=False so the
-    # operator's saved backup is NOT deleted after the restore.
-    parameters = {
-        "artifact_path": str(path),
-        "confirm_apply": bool(req.confirm_apply),
-        "cleanup_artifact": False,
-        "channel_reattach_mode": reattach_mode.value,
-    }
-    # Forward the passphrase only when present (encrypted artifact). The task
-    # excludes it from get_config so it is never persisted or logged.
-    if req.passphrase:
-        parameters["passphrase"] = req.passphrase
-
     try:
-        from task_engine import get_engine
-
-        engine = get_engine()
-        # Fire-and-forget: schedule as a background asyncio task and return the
-        # task id immediately. The caller polls /api/tasks/{id} for progress.
-        asyncio.create_task(
-            engine.run_task(DBAS_RESTORE_TASK_ID, parameters=parameters, run_id=run_id)
+        directory_fd = os.open(
+            BACKUPS_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         )
-    except Exception as exc:
-        logger.exception("[BACKUP] Failed to schedule DBAS restore-from-saved task: %s", exc)
-        raise HTTPException(status_code=500, detail="Failed to start restore")
+        try:
+            descriptor = os.open(
+                path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                dir_fd=directory_fd,
+            )
+        finally:
+            os.close(directory_fd)
+    except OSError:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    try:
+        source_info = os.fstat(descriptor)
+        if not stat.S_ISREG(source_info.st_mode):
+            raise HTTPException(status_code=404, detail="Backup not found")
+        source = os.fdopen(descriptor, "rb")
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+    # Reuse bounded streaming (including its size cap and cancellation cleanup),
+    # in an owner-only directory outside the operator-writable backup listing.
+    # Decrypt/header/manifest reads later all use these same snapshot bytes.
+    with source:
+        from restore_snapshot_storage import (
+            PrivateRestoreSnapshot,
+            prepare_private_parent,
+        )
+
+        try:
+            prepare_private_parent(_DBAS_RESTORE_TMP_DIR)
+        except OSError as exc:
+            logger.error("[BACKUP] Refusing saved restore: unsafe snapshot parent: %s", exc)
+            raise HTTPException(status_code=500, detail="Failed to start restore")
+        _sweep_stale_restore_temps(_DBAS_RESTORE_TMP_DIR)
+        # The streaming copy still enforces the cap; refusing on fstat first
+        # avoids copying up to the cap only to discard it.
+        if source_info.st_size > _RESTORE_MAX_UPLOAD_BYTES:
+            logger.warning(
+                "[BACKUP] Refusing saved restore: backup exceeds size cap (%d bytes max)",
+                _RESTORE_MAX_UPLOAD_BYTES,
+            )
+            raise HTTPException(status_code=413, detail="Saved backup is too large")
+        _require_snapshot_free_space(_DBAS_RESTORE_TMP_DIR, source_info.st_size)
+
+        try:
+            from task_engine import get_engine
+
+            engine = get_engine()
+            active_tasks = engine.get_status().get("active_tasks", ())
+        except Exception as exc:
+            logger.exception("[BACKUP] Failed to query task engine for saved restore: %s", exc)
+            raise HTTPException(status_code=500, detail="Failed to start restore")
+        # The engine refuses a duplicate run only after the copy, so preview
+        # callers could otherwise stack full-size copies. Same text as the
+        # engine's ALREADY_RUNNING result.
+        if DBAS_RESTORE_TASK_ID in active_tasks:
+            logger.warning("[BACKUP] Refusing saved restore: a DBAS restore is already running")
+            raise HTTPException(status_code=409, detail="Task is already running")
+        # One snapshot copy per process at a time. No await separates locked()
+        # from acquire(), and an uncontended acquire does not suspend.
+        if _SAVED_RESTORE_SNAPSHOT_LOCK.locked():
+            logger.warning("[BACKUP] Refusing saved restore: another snapshot is being prepared")
+            raise HTTPException(
+                status_code=409, detail="A saved restore is already being prepared"
+            )
+        await _SAVED_RESTORE_SNAPSHOT_LOCK.acquire()
+        try:
+            try:
+                snapshot = PrivateRestoreSnapshot(_DBAS_RESTORE_TMP_DIR)
+            except OSError as exc:
+                # The constructor removes its own directory on failure.
+                logger.exception("[BACKUP] Could not create saved restore snapshot: %s", exc)
+                raise HTTPException(status_code=500, detail="Failed to start restore")
+            try:
+                snapshot_path = await _stream_upload_to_temp(
+                    UploadFile(file=source), Path(snapshot.name), source="saved"
+                )
+            except OSError as exc:
+                snapshot.cleanup()
+                logger.exception("[BACKUP] Could not copy saved restore snapshot: %s", exc)
+                raise HTTPException(status_code=500, detail="Failed to start restore")
+            except BaseException:
+                snapshot.cleanup()
+                raise
+
+            parameters = {
+                "artifact_path": str(snapshot_path),
+                "confirm_apply": bool(req.confirm_apply),
+                "cleanup_artifact": True,
+                "channel_reattach_mode": reattach_mode.value,
+            }
+            # Forward the passphrase only when present (encrypted artifact). The
+            # task excludes it from get_config so it is never persisted or logged.
+            if req.passphrase:
+                parameters["passphrase"] = req.passphrase
+
+            scheduled = None
+            try:
+                async def run_bound_restore():
+                    # Even task-not-found/ALREADY_RUNNING never reaches execute's
+                    # cleanup. The wrapper owns this directory on every exit path.
+                    with snapshot:
+                        return await engine.run_task(
+                            DBAS_RESTORE_TASK_ID, parameters=parameters, run_id=run_id
+                        )
+
+                scheduled = run_bound_restore()
+                task = asyncio.create_task(scheduled)
+                # A task cancelled before its first step never enters the with
+                # block. The completion callback also owns cleanup, even if task
+                # refs survive.
+                task.add_done_callback(lambda _task: snapshot.cleanup())
+            except Exception as exc:
+                if scheduled is not None:
+                    scheduled.close()
+                snapshot.cleanup()
+                logger.exception(
+                    "[BACKUP] Failed to schedule DBAS restore-from-saved task: %s", exc
+                )
+                raise HTTPException(status_code=500, detail="Failed to start restore")
+        finally:
+            _SAVED_RESTORE_SNAPSHOT_LOCK.release()
 
     return {
         "status": "started",

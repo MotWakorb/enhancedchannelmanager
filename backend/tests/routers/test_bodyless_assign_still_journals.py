@@ -96,6 +96,10 @@ async def _post(async_client, client, journal_double, body):
     with patch("routers.channels.get_client", return_value=client), \
          patch("routers.channels.get_settings", return_value=_settings()), \
          patch("routers.channels.journal", journal_double):
+        # The caller read each channel on its `_BEFORE` number.
+        body = {**body, "expected_numbers": {
+            cid: _BEFORE[cid] for cid in body["channel_ids"]
+        }}
         return await async_client.post("/api/channels/assign-numbers", json=body)
 
 

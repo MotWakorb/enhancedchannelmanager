@@ -1,0 +1,47 @@
+{
+  "status": "AUTOMATED_FROZEN_RUST_SOURCE_INPUT_DELIVERY_VERIFIED_LOCALLY_NATIVE_FINAL_CHECKS_PENDING",
+  "reviewed_producer_helper_sha256": "ee5c94b7733bd7e0ef17cf5867d965ab64d745a90f2b1595cebbdb099fefc2c0",
+  "consumer_helper_sha256": "f40463552f9e1cddfc4e1d07967c26c97994fa84b71885385a676166732f2e34",
+  "automated_producer": {
+    "architecture_executed": "amd64",
+    "successful_https_acquisitions": 551,
+    "delivered_files": 562,
+    "bundle_bytes": 558968555,
+    "registry_archives": 546,
+    "registry_source_regular_members": 29957,
+    "registry_source_bytes": 545635396,
+    "original_upstream_compiler_source_versions": ["1.95.0", "1.96.0"],
+    "compiler_recipe_source_inputs_verified_per_version": 12,
+    "independent_builder_gpg_verifications": 2,
+    "release_key_fingerprint": "108F66205EAEB0AAA8DD5E1C85AB96E6FA1BE5FE",
+    "receipt_sha256": "52606ad8115a6c5556b0635bf36615239857a252cd6f87cde01e139b6e3f593a",
+    "scope": "Successful real network acquisition followed by isolated original release-signature verification and the independent offline input consumer. Current reviewed helpers include subsequent formatting/import/error-reporting and live-ELF-helper factoring; fresh current-script automated-bundle rechecks are separately pending, not inferred from this earlier process."
+  },
+  "independent_consumer": {
+    "input": "Separately assembled original retained archive/evidence bundle, not the producer's receipt/status",
+    "conditions": "Native AMD64, no network, nonroot UID/GID 3000:3000, read-only root and input mounts",
+    "receipt_sha256": "83db1e8c33cf081a52f470e93de2231a1657dac594c087561efa7ebd652bf17b",
+    "selected_elfs": "rav1e joins its conservative auditable graph to original sources; glycin-image-rs, glycin-svg and libglycin remain explicitly missing auditable metadata. This is not exact compiled-feature or complete linkage clearance.",
+    "current_automated_bundle_paired_data_rechecks": "Pending independent completion; neither this receipt nor cross-architecture data verification claims native ARM execution."
+  },
+  "container_metadata_comparison": {
+    "scope": "All automated source/evidence member bytes match retained originals. Raw recipe tar containers differ in invocation-time mtime/pax metadata from Git archive of tree subjects; their complete pinned Git trees, member bytes and modes independently match. A naive raw-container byte-equality assertion was rejected, not used as passing evidence, and no authenticity check was relaxed.",
+    "receipt_sha256": "ca1429dbc9bba68bcf876b5f5016396e09e63e105b3f447ea6da5133f269cfde"
+  },
+  "negative_controls": {
+    "actual_full_consumer": "DENIED same-size single-byte corruption in a delivered cfg-if original archive with authenticated external graph and every other input unchanged",
+    "actual_denial_receipt_sha256": "5985fdb4291694a0760a2f1967fb66095327b04785e3d922fd5ff304f1342f5b",
+    "live_elf_hash_bypass": "A disposable bypass of the installed ELF hash check makes the same-size mutation regression fail with DID NOT RAISE InputError",
+    "live_elf_mutant_log_sha256": "f4def57a30aa5820f202701b13b42bd3b6e64d25927a723c39c32b6dc3d457bd"
+  },
+  "regression_tests": {
+    "layer": "Native AMD64 Alpine component/source/consumer/workflow subset, not the complete backend or final-image gate",
+    "modules": 44,
+    "passed": 749,
+    "log_sha256": "0988918dfd681c679070cd236acccf784eaeed9f2d3bddb3a77d4b2d12fb15f0"
+  },
+  "candidate_integration": "Builder-only Rust source stage inherits the saved pre-Git runtime subject and authenticated external bundle, keeps Git/GPG/keyring out of the final stage, copies only the verified bundle/receipt, and adds a native offline unprivileged live APK/inventory/selected ELF source consumer. Fresh paired immutable-image execution remains required; full aggregate runtime gate and failure propagation unchanged.",
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-producer-20261109/rust-01-{output,work}, /home/lecaptainc/.cache/ecm-alpine-delivery-20261109/rust-inputs-01, /home/lecaptainc/.cache/ecm-alpine-retained-20261109/rust-*",
+  "scope": "Complete frozen Rust input delivery only. Missing auditable metadata, historical compiler-to-target build attestation, complete static linkage/attribution, owned and wheel/compiler support joins, aggregate source/security and MCP/final acceptance are not cleared. No source/recipe/build script/compiler/target program executed by the source tools, and no runtime trust/repository change.",
+  "full_runtime_source_acceptance": false
+}

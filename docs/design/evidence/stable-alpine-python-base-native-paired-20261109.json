@@ -1,0 +1,44 @@
+{
+  "status": "PAIRED_NATIVE_PYTHON_BASE_LIVE_FILE_CORRESPONDENCE_PASSED_AGGREGATE_SOURCE_FAILED",
+  "run_id": 42681901847,
+  "head_sha": "011378d6b02738f1b6ed67044397534638ab703b",
+  "actual_source_commit": "f508fcad9e3c005fd894f038a8e79e49e89aeb90",
+  "architectures": {
+    "amd64": {
+      "artifact_id": 13705845097,
+      "artifact_sha256": "f3fe652acbd564a4c931c2077259b61d6ec017d2ad37ffa0278012284245e4a2",
+      "image_id": "sha256:173a89ba072a788bc9ffe716e24eee40174240a19dfa3106233b47902539e37f",
+      "live_python_base_receipt_sha256": "dc66055fe61d549a33dbf89744a583d5d5d6b4118480ee2c1f18b37fef698259",
+      "runtime_receipt_sha256": "003a4c2ee2ffb2e879fbefada789bf317ef01d3e5e2ed6ea940edee78afdfb4b"
+    },
+    "arm64": {
+      "artifact_id": 13704673746,
+      "artifact_sha256": "feb322ff4e09f11694cddfafc5d8a961249ee25d870ec32a76e22e6a2b68d229",
+      "image_id": "sha256:5030699ff39421a35b0d64bffab3fe4f5befb4a6ad294a0eed24b7f97033af64",
+      "live_python_base_receipt_sha256": "492641c7571e55d7c94e68b874c421a7c36e0be21a62bf1e946934fc2ce018be",
+      "runtime_receipt_sha256": "1f67cd47db2a652a18d67aa25f84e513a42e0c5db3cb3d64c3fbc8f27917ca51"
+    }
+  },
+  "verified_per_native_architecture": {
+    "base_files_and_symlinks": 1502,
+    "base_directories": 214,
+    "delivered_python_source_evidence_files": 16,
+    "original_cpython_byte_copies": 970,
+    "original_bundled_pip_byte_copies": 416,
+    "original_oci_recipe_outputs_not_reproduced": 102,
+    "additional_paths_reported_not_cleared": 202,
+    "additional_bytecode_paths": 149,
+    "additional_non_bytecode_paths": 53,
+    "additional_directories_reported_not_cleared": 12,
+    "external_packages_live_source_check": 117,
+    "bootstrap_identity_persistence_scenarios_passed": 2,
+    "functional_metadata_runtime_checks_passed": 27
+  },
+  "remaining_runtime_failures_both_architectures": {
+    "native_source_and_artifact_integrity": "AssertionError: missing regular file: index.json"
+  },
+  "raw_paired_receipt_sha256": "1aaa937a216bddecc2d48c2dfb052ba13ce468766ce597a2bcac43a3ad949289",
+  "retention": "/home/lecaptainc/.cache/ecm-alpine-retained-20261109/native-python-base-live-correspondence-paired-42681901847.json and alpine-python-base-integrated-{amd64,arm64}-42681901847-02/; original ZIPs retained and independently rehashed",
+  "scope": "Actual native unprivileged offline immutable final-candidate Python-base installed-file checks, not only cross-architecture data verification. Additional final-image paths include bytecode AND owned native outputs/notices, unlike the earlier diagnostic test image; all remain reported for the aggregate consumer. Both complete runtime gates remain failed. No complete compiler/nested/owned/wheel source, attribution/advisory, MCP or final acceptance. No merge, publication or deployment.",
+  "full_runtime_source_acceptance": false
+}

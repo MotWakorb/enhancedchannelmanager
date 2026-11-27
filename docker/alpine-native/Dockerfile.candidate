@@ -1,0 +1,129 @@
+# Full application integration candidate only. Never substitutes for completed
+# source/advisory gates, and does not switch either production Dockerfile.
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS frontend-builder
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=$GIT_COMMIT
+COPY frontend/ ./
+RUN npm run build
+
+FROM python:3.12-alpine3.24@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7 AS python-builder
+COPY scripts/alpine_repository_policy.py /proof/source/scripts/alpine_repository_policy.py
+RUN python /proof/source/scripts/alpine_repository_policy.py \
+    && apk upgrade --no-cache && apk add --no-cache binutils
+COPY --from=proof-wheels / /proof/wheels/
+COPY backend/requirements.txt /proof/source/backend/requirements.txt
+COPY scripts/inventory_musllinux_wheels.py scripts/verify_musllinux_gnu.py /proof/source/scripts/
+COPY docker/python-third-party/ /proof/source/docker/python-third-party/
+RUN --network=none python -m venv /opt/venv \
+    && /opt/venv/bin/python -m pip install --no-index --only-binary=:all: --require-hashes \
+        --find-links=/proof/wheels -r /proof/wheels/requirements.txt \
+    && /opt/venv/bin/python -m pip check \
+    && case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \
+    && /opt/venv/bin/python /proof/source/scripts/inventory_musllinux_wheels.py --verify --arch "$arch" \
+        --wheels-dir /proof/wheels --site-packages /opt/venv/lib/python3.12/site-packages \
+        --installed-python /opt/venv/bin/python > /proof/installed-wheel-bindings.json
+
+FROM python:3.12-alpine3.24@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7 AS runtime-base
+RUN --mount=type=bind,source=scripts,target=/build-scripts \
+    --mount=type=bind,from=native-packages,target=/native-packages \
+    python /build-scripts/alpine_repository_policy.py \
+    && apk upgrade --no-cache \
+    && apk add --no-cache bash coreutils shadow findutils grep sed tar gzip tzdata ca-certificates \
+    && python -c 'import json,subprocess; from pathlib import Path; p=json.loads(Path("/native-packages/package-output.json").read_text()); subprocess.run(["/sbin/apk","add","--no-cache",*p["external_dependencies"]],check=True)'
+RUN --network=none --mount=type=bind,source=scripts,target=/build-scripts \
+    --mount=type=bind,source=docker/alpine-busybox/manifest.json,target=/build-policy/manifest.json \
+    --mount=type=bind,from=native-packages,target=/native-packages \
+    --mount=type=bind,from=busybox-packages,target=/busybox-packages \
+    case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \
+    && mkdir -p /usr/share/ecm/provenance /usr/share/ecm/sources \
+    && python /build-scripts/install_alpine_native.py --arch "$arch" --packages-dir /native-packages \
+        --evidence-file /usr/share/ecm/provenance/native-installed.json \
+    && python /build-scripts/install_busybox_provider.py --arch "$arch" --packages-dir /busybox-packages \
+        --manifest /build-policy/manifest.json --evidence-file /usr/share/ecm/provenance/busybox-installed.json \
+    && python /build-scripts/probe_busybox_runtime.py --output-file /usr/share/ecm/provenance/busybox-runtime.json \
+    && cp /native-packages/package-output.json /usr/share/ecm/provenance/native-package.json \
+    && cp /busybox-packages/build-output.json /usr/share/ecm/provenance/busybox-package.json \
+    && cp -a /busybox-packages/sources /usr/share/ecm/sources/busybox \
+    && python -c 'import json,shutil; from pathlib import Path; out=Path("/usr/share/ecm/provenance"); [shutil.copy2(root/json.loads((root/receipt).read_text())["public_key"]["file"],out/name) for root,receipt,name in [(Path("/native-packages"),"package-output.json","native-signing-public-key.pub"),(Path("/busybox-packages"),"build-output.json","busybox-signing-public-key.pub")]]' \
+    && python /build-scripts/retain_alpine_owned_evidence.py --native-packages /native-packages \
+        --busybox-packages /busybox-packages --arch "$arch" \
+        --output-dir /usr/share/ecm/provenance/owned-signatures \
+    && apk query --from installed --format json --all-matches '*' > /usr/share/ecm/provenance/installed-apks.json \
+    && cp /lib/apk/db/installed /usr/share/ecm/provenance/installed-apk-database.txt
+COPY docker/alpine-busybox/source-replay/ /usr/share/ecm/provenance/busybox-source-replay/
+
+FROM runtime-base AS apk-source-builder
+# Select the saved runtime subject before adding builder-only Git. Never query
+# this stage's expanded installed set as the runtime source-delivery subject.
+RUN --mount=type=bind,source=scripts,target=/build-scripts \
+    mkdir /proof \
+    && python -c 'import json; from pathlib import Path; Path("/proof/runtime-inventory.json").write_text(json.dumps({"packages":json.loads(Path("/usr/share/ecm/provenance/installed-apks.json").read_text()),"installed_database":Path("/usr/share/ecm/provenance/installed-apk-database.txt").read_text()},sort_keys=True,indent=2)+"\n")' \
+    && apk add --no-cache git \
+    && python /build-scripts/prepare_alpine_external_sources.py \
+        --runtime-inventory /proof/runtime-inventory.json --architecture "$(uname -m)" \
+        --output-dir /proof/external-sources --work-dir /proof/source-work \
+        --receipt-file /proof/external-source-receipt.json
+
+FROM apk-source-builder AS rust-source-builder
+# The exact pre-builder runtime capture and independently authenticated external
+# source graph are inherited; builder GPG and Git never reach the final stage.
+RUN --mount=type=bind,source=scripts,target=/build-scripts \
+    apk add --no-cache gnupg \
+    && python /build-scripts/prepare_alpine_rust_sources.py \
+        --external-root /proof/external-sources --runtime-inventory /proof/runtime-inventory.json \
+        --output-dir /proof/rust-sources --work-dir /proof/rust-source-work \
+        --receipt-file /proof/rust-source-receipt.json
+
+FROM runtime-base AS python-base-source-builder
+RUN --mount=type=bind,source=scripts,target=/build-scripts \
+    mkdir /proof \
+    && apk add --no-cache gnupg \
+    && case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac \
+    && python /build-scripts/prepare_alpine_python_base.py --architecture "$arch" \
+        --output-dir /proof/python-base-sources --work-dir /proof/python-base-work \
+        --receipt-file /proof/python-base-source-receipt.json
+
+FROM runtime-base AS application-candidate
+LABEL io.ecm.alpine.source-and-advisory-closure=pending
+ARG GIT_COMMIT=unknown
+ARG ECM_VERSION=unknown
+ARG RELEASE_CHANNEL=latest
+ENV GIT_COMMIT=$GIT_COMMIT ECM_VERSION=$ECM_VERSION RELEASE_CHANNEL=$RELEASE_CHANNEL
+WORKDIR /app
+RUN groupadd --gid 1000 appuser \
+    && useradd --uid 1000 --gid appuser --create-home --shell /bin/bash appuser
+COPY --from=python-builder /opt/venv /opt/venv
+COPY --from=python-builder /proof/installed-wheel-bindings.json /usr/share/ecm/provenance/installed-wheel-bindings.json
+COPY --from=gnu-sources / /usr/share/ecm/sources/wheel-gnu/
+COPY --from=apk-source-builder /proof/external-sources/ /usr/share/ecm/sources/apk/
+COPY --from=apk-source-builder /proof/external-source-receipt.json /usr/share/ecm/provenance/external-sources.json
+COPY --from=python-base-source-builder /proof/python-base-sources/ /usr/share/ecm/sources/python-base/
+COPY --from=python-base-source-builder /proof/python-base-source-receipt.json /usr/share/ecm/provenance/python-base-sources.json
+COPY --from=rust-source-builder /proof/rust-sources/ /usr/share/ecm/sources/rust/
+COPY --from=rust-source-builder /proof/rust-source-receipt.json /usr/share/ecm/provenance/rust-sources.json
+COPY scripts/verify_alpine_external_sources.py scripts/verify_alpine_python_base.py scripts/verify_alpine_rust_sources.py scripts/alpine_rust_source_inputs.py scripts/alpine_rust_auditable.py scripts/alpine_source_inventory.py scripts/alpine_source_inputs.py scripts/alpine_apk_v2.py scripts/verify_musllinux_gnu.py /usr/share/ecm/sources/verification/
+ENV PATH="/opt/venv/bin:$PATH"
+COPY backend/ /app/
+COPY --from=frontend-builder /app/frontend/dist /app/static
+COPY docker/python-third-party/notices/ /usr/share/doc/ecm/python-third-party/
+COPY docker/python-third-party/sources/ /usr/share/ecm/sources/python/
+COPY docker/python-third-party/component-manifest.json docker/python-third-party/SOURCE-AVAILABILITY.txt /usr/share/doc/ecm/python-third-party/
+COPY docker/python-third-party/artifact-index/ /usr/share/doc/ecm/python-third-party/artifact-index/
+COPY docker/trust/ /usr/share/ecm/sources/trust/
+COPY docker/alpine-native/Dockerfile.candidate /usr/share/ecm/sources/trust/Dockerfile.candidate
+RUN --network=none mkdir -p /config /config/tls /config/uploads/logos /run/ecm \
+    && chown -R appuser:appuser /config /app \
+    && chown appuser:appuser /run/ecm \
+    && chmod 700 /config/tls /run/ecm \
+    && sed -i 's/\r$//' /app/entrypoint.sh \
+    && chmod +x /app/entrypoint.sh \
+    && /opt/venv/bin/python -m pip check \
+    && resdet -V && ffmpeg -version && ffprobe -version
+ENV PUID=1000 PGID=1000 CONFIG_DIR=/config ECM_PORT=6100 ECM_HTTPS_PORT=6143
+EXPOSE 6100 6143
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+  CMD /opt/venv/bin/python -c "import urllib.request, os; port = os.environ.get('ECM_PORT', '6100'); urllib.request.urlopen(f'http://localhost:{port}/api/health')" || exit 1
+ENTRYPOINT ["/app/entrypoint.sh"]

@@ -23,6 +23,7 @@ def runtime(test_engine, tmp_path, monkeypatch):
     task = DbasRestoreTask()
     registry = Mock()
     registry.get_task_instance.return_value = task
+    registry.list_task_ids.return_value = [task.task_id]
     monkeypatch.setattr(task_engine, 'get_registry', lambda: registry)
     monkeypatch.setattr(task_engine, 'get_session', factory)
     monkeypatch.setattr(task_engine, 'get_engine', lambda: engine)
@@ -80,13 +81,21 @@ async def test_trigger_identity_matches_progress_and_persisted_terminal_history(
             assert str(UUID(run_id)) == run_id
             await asyncio.wait_for(entered.wait(), 2)
             assert task._progress.to_dict()['run_id'] == run_id
-            # A second accepted transport request is rejected by the existing
-            # engine lock. Its token must never relabel the running singleton.
+            # An overlapping upload is accepted and rejected by the engine lock;
+            # an overlapping saved restore is refused before it copies anything.
+            # Neither token may relabel the running singleton.
             overlap = await trigger()
-            assert overlap.json()['run_id'] != run_id
+            if flow == 'uploaded':
+                overlap_run_id = overlap.json()['run_id']
+                assert overlap_run_id != run_id
+            else:
+                assert overlap.status_code == 409
+                assert overlap.json()['detail'] == 'Task is already running'
+                overlap_run_id = None
             await asyncio.sleep(0)
             assert task._progress.to_dict()['run_id'] == run_id
-            assert any(result.error == 'ALREADY_RUNNING' for result in results)
+            if flow == 'uploaded':
+                assert any(result.error == 'ALREADY_RUNNING' for result in results)
             release.set()
             await asyncio.wait_for(finished.wait(), 3)
             assert task._progress.to_dict()['status'] == outcome
@@ -100,7 +109,7 @@ async def test_trigger_identity_matches_progress_and_persisted_terminal_history(
             finished.clear()
             rerun = await trigger()
             await asyncio.wait_for(finished.wait(), 3)
-            assert rerun.json()['run_id'] not in {run_id, overlap.json()['run_id']}
+            assert rerun.json()['run_id'] not in {run_id, overlap_run_id}
             assert task._progress.to_dict()['run_id'] == rerun.json()['run_id']
             assert engine.get_task_history('dbas_restore')[0]['details']['run_id'] == rerun.json()['run_id']
         finally:

@@ -5,6 +5,7 @@ import type { TaskStatus, TaskSchedule, TaskScheduleCreate, TaskScheduleUpdate, 
 import type { EPGSource, M3UAccount, ChannelGroup } from '../types';
 import type { ChannelPipelineRule } from '../types/channelPipeline';
 import { logger } from '../utils/logger';
+import { isDisplayableM3UAccount } from '../utils/m3uAccountVisibility';
 import { ScheduleEditor } from './ScheduleEditor';
 import { ModalOverlay } from './ModalOverlay';
 import { useOwnedDialog } from '../hooks/useOwnedDialog';
@@ -156,7 +157,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
     }
 
     // M3U accounts (for m3u_refresh) - exclude "custom" account
-    const filteredM3uAccounts = m3uAccounts.filter(a => a.name.toLowerCase() !== 'custom');
+    const filteredM3uAccounts = m3uAccounts.filter(isDisplayableM3UAccount);
     if (filteredM3uAccounts.length > 0) {
       options['m3u_accounts'] = filteredM3uAccounts.map(a => ({
         value: a.id,

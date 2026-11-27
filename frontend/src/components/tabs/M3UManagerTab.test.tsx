@@ -6,7 +6,7 @@
  *   - "Stream Profiles" toolbar button opens StreamProfilesListModal (bead hq3de.j).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { M3UManagerTab } from './M3UManagerTab';
 import { NotificationProvider } from '../../contexts/NotificationContext';
 import type { M3UAccount } from '../../types';
@@ -188,6 +188,50 @@ describe('M3UManagerTab', () => {
       expect(
         heading.compareDocumentPosition(emptyState) & Node.DOCUMENT_POSITION_FOLLOWING
       ).toBeTruthy();
+    });
+  });
+
+  // The empty state must tell "no accounts exist" apart from "accounts exist
+  // but every one is filtered out".
+  describe('empty state vs filtered-out accounts', () => {
+    it('does not claim there are no accounts when only the hidden "custom" account exists', async () => {
+      vi.mocked(api.getM3UAccounts).mockResolvedValue([makeAccount({ id: 1, name: 'custom', status: 'error' })]);
+      vi.mocked(api.getServerGroups).mockResolvedValue([]);
+
+      renderWithProviders(<M3UManagerTab />);
+
+      await screen.findByRole('heading', { level: 3, name: 'No M3U accounts to display' });
+      expect(screen.queryByText('No M3U Accounts', { selector: 'h3' })).not.toBeInTheDocument();
+      expect(screen.getByText(/hidden custom account/)).toBeInTheDocument();
+      expect(screen.getByText(/Add an M3U account to start importing streams\./)).toBeInTheDocument();
+      const emptyState = screen.getByRole('heading', { level: 3, name: 'No M3U accounts to display' }).closest('.empty-state') as HTMLElement;
+      expect(within(emptyState).getByRole('button', { name: /Add M3U Account/ })).toBeInTheDocument();
+    });
+
+    it('still renders the absolute empty state when no accounts exist at all', async () => {
+      vi.mocked(api.getM3UAccounts).mockResolvedValue([]);
+      vi.mocked(api.getServerGroups).mockResolvedValue([]);
+
+      renderWithProviders(<M3UManagerTab />);
+
+      await screen.findByRole('heading', { level: 3, name: 'No M3U Accounts' });
+      expect(screen.getByText('Add an M3U account to start importing streams.')).toBeInTheDocument();
+    });
+
+    it('renders the "No matching" branch when the server-group filter hides every account', async () => {
+      vi.mocked(api.getM3UAccounts).mockResolvedValue([makeAccount({ id: 2, name: 'Provider A', server_group: null })]);
+      vi.mocked(api.getServerGroups).mockResolvedValue([{ id: 7, name: 'Group Seven' }] as never);
+
+      renderWithProviders(<M3UManagerTab />);
+      await screen.findByText('Provider A');
+
+      fireEvent.click(screen.getByText('All Server Groups'));
+      fireEvent.click(await screen.findByText('Group Seven'));
+
+      await screen.findByRole('heading', { level: 3, name: 'No matching M3U accounts' });
+      expect(screen.getByText('No accounts belong to the selected server group.')).toBeInTheDocument();
+      expect(screen.queryByText('Add an M3U account to start importing streams.')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Clear filters' })).toBeInTheDocument();
     });
   });
 

@@ -403,6 +403,16 @@ interface MockChannelPipelineExecution {
         channel_ids: number[]
         message: string
       }
+    | {
+        /** GH #1018 — predicted (dry-run) pending-merge deferrals. */
+        type: 'pending_merge_deferral_predicted'
+        predicted: true
+        stream_count: number
+        action_count: number
+        pending_merge_ids: number[]
+        new_row_count: number
+        message: string
+      }
   )[]
   /** enhancedchannelmanager-7wuhd — pure-event_sync run flag. */
   is_event_sync?: boolean

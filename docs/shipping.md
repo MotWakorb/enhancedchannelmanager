@@ -79,6 +79,27 @@ cd frontend && npm run build
 
 The version-bump commit lands via PR like every other change to `dev`. The branch protection rule applies regardless of how trivial the diff is. This was surfaced by `bd-i6a1m`'s tag-stone bump (commit `c479b99a`, `0.16.0-0058 → 0.16.0-0059`), which was rejected on direct push and had to merge via [PR #175](https://github.com/MotWakorb/enhancedchannelmanager/pull/175). Tag-stone bumps follow the same §6 PR flow as feature work; there is no fast-path exemption.
 
+**Alpine source preflight is separate from version agreement.** The three version
+files are also exact byte/mode inputs in
+`docker/alpine-native/application-source.json`. After an approved application
+edit or version bump, review the complete inventory, update only the changed
+files' SHA-256 values (and executable flags only if intentionally changed), then
+update that manifest's exact `MANIFEST_SHA256` pin in
+`scripts/verify_alpine_application_source.py`. The verifier intentionally has no
+automatic resealing command: keep the file set and compatibility records intact,
+and never exempt or normalize version declarations. Run the actual native-CI
+preflight before compilation, with a fresh evidence path:
+
+```bash
+python3 scripts/verify_alpine_application_source.py --output-file <fresh-evidence-path>
+scripts/backend-gate.sh --subset tests/unit/test_version_touchpoint_consistency.py tests/unit/test_verify_alpine_application_source.py
+```
+
+The latter module exercises the real evidence-producing CLI and rejects stale
+version bytes at each touchpoint. Regenerate and verify `sbom/dev/` **after** the
+manifest and pin are final, preserving its existing creation timestamp. Neither
+this source-only preflight nor the targeted subset replaces fresh native CI.
+
 ### 4. Close the Bead
 
 ```bash
@@ -215,9 +236,17 @@ builds and scans no longer wait on a polling job: a wedged test runner cannot
 hide image-build evidence. After its required test jobs succeed, the **Tests**
 workflow calls `publish-images.yml` as the reusable **Publish Verified Dev
 Images** job. That called workflow publishes only when the exact-SHA build
-evidence is successful and the SHA is still the current `dev` head. There is
-no separate **Publish Verified Images** Actions run on the dev path. Until
-publication succeeds, mutable tags retain their last known-good image.
+evidence is successful and the SHA is still the current `dev` head. Standalone
+**Publish Verified Images** runs still appear on the dev path, triggered when
+Tests or Build completes; they publish nothing and skip at **Authorize
+Exact-SHA Publication**. Each skipped run gets a concurrency group of its own,
+so it cannot cancel the reusable publisher. Standalone `workflow_run` runs
+execute the default branch's copy of `publish-images.yml`, which may key its
+group on the branch name, so the reusable dev lane is named
+`publish-images-dev:reusable`: `:` is not allowed in git ref names, so no
+branch-derived group can match it (bead
+`enhancedchannelmanager-9iagf`). Until publication succeeds, mutable tags
+retain their last known-good image.
 
 The published `:dev` tag has silently lagged `dev` four times, from four unrelated causes:
 

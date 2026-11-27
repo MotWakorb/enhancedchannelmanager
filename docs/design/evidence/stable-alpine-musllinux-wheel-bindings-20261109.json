@@ -1,0 +1,39 @@
+{
+  "actual_results": {
+    "amd64_installed": {
+      "architecture": "amd64",
+      "distributions": 74,
+      "native_ELFs": 48,
+      "scope": "Artifact/notice/raw-SBOM verification only; not corresponding-source or advisory clearance.",
+      "status": "INSTALLED_WHEEL_ARTIFACT_BINDINGS_ONLY"
+    },
+    "arm64_archive_only": {
+      "architecture": "arm64",
+      "distributions": 74,
+      "native_ELFs": 45,
+      "scope": "Artifact/notice/raw-SBOM verification only; not corresponding-source or advisory clearance.",
+      "status": "WHEEL_ARTIFACT_BINDINGS_ONLY"
+    }
+  },
+  "inventories": {
+    "amd64": "415442890522d9c70f4137a04261f3f198d646febc5a8368602d653fda98825d",
+    "arm64": "d6888db24297168b5479a6255bb58463bb07c3f24bf167cbf6d90a82b5bcc803"
+  },
+  "negative_control": {
+    "changed_only": "delivered notice cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14",
+    "reason": "delivered wheel notice/SBOM identity mismatch",
+    "result": "DENIED"
+  },
+  "recorded_utc": "2026-11-09T00:10:55.329137+00:00",
+  "scope": "Actual local wheel/archive/installed-payload attribution only. Not ARM execution, whole-image approval, corresponding-source or advisory clearance.",
+  "script_sha256": "a2540c97eaa0b1beb0c9811d7872f99ee1e6ae4784dc69faf2d0530e7366aa59",
+  "selection": {
+    "native_ELFs": {
+      "amd64": 48,
+      "arm64": 45
+    },
+    "packages_per_architecture": 74,
+    "requirements_sha256": "c4ff84ae271e902235e2d4024066b0d3e679fce8ccc403ce3b6e9e544518bf0e",
+    "whole_wheels": 96
+  }
+}

@@ -1,4 +1,4 @@
-FROM python:3.12-alpine@sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31
+FROM python:3.12-alpine3.24@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7
 
 WORKDIR /app
 
@@ -6,11 +6,14 @@ WORKDIR /app
 # manifest was published. The digest makes the input reviewable; this upgrade
 # step closes fixed OS advisories until the next intentional digest refresh.
 # Alpine v3.24 secdb requires libuuid 2.42.3-r1 for CVE-2026-78408.
+# Its vendor backport fixes CVE-2026-107891 in both musl packages at 1.2.6-r3.
 RUN apk upgrade --no-cache \
     && apk add --no-cache \
         'libcrypto3>=3.5.8-r0' \
         'libssl3>=3.5.8-r0' \
         'libuuid>=2.42.3-r1' \
+        'musl>=1.2.6-r3' \
+        'musl-utils>=1.2.6-r3' \
     && addgroup -g 1000 appgroup \
     && adduser -D -u 1000 -G appgroup appuser
 

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "baseline_image": "sha256:904aaf96a17a11c8d9c90e833df6dc6ea65d8bcc90c39507090a400791401c8a",
+  "baseline_application": "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531",
+  "scope": "Recorded real native AMD64 outputs, not independent old-ARM-baseline or full application/security proof",
+  "metadata_sha256": "8e3e558a7024b122fbafe65b57a0eaf6ddcce59a6c6ef8e8688acc79e2e8546e",
+  "frames": {
+    "synthetic.c2": "c5b0e1b7dcb002585af4525f843563e54e5529b75d385bc6c513b16beebca074",
+    "synthetic.jxl": "522ca5a2926e8622b539ef51509b243fa9f652b4d72837f7263ca8abf79a381e",
+    "synthetic.mod": "c548059f73d3c54ec5c79e32cf502d4309fb257c617c592ee2595dfc4a74365a",
+    "synthetic.svg": "b3f24f7e07521c12602ea7dc81fce095d974583f25d6d63b72f5746bcd485aba",
+    "synthetic.vgm": "08d1c00911d0d9ddf59d5e510306cb888b0aff6745ae0e985ac7c81f417312c2"
+  },
+  "capabilities": {
+    "encoders": "be43d17ef9bd2c0b8163ff975ab9dc43ae49941d1b60c31034e6b438344537ac",
+    "decoders": "3ac9b12bedbe8273b99ed9f3ee039f75a926f2621c3cb357f8f91b195e901f0c",
+    "demuxers": "6578c611e6f6d5ad41290a7949fb53190097658898c45d70049d2de4497b9308",
+    "muxers": "667632f0df121ee2194f4e25e95ef01a7f4bcbc7870fb0189cdd1da3585b4df6",
+    "filters": "4e807167b6334f806f365bdd56e5f443ca6f259319110adcfeb6f7b8a8ac8536",
+    "protocols": "f4225d9c3c525ab30e7df4cd330821569da53e983f04711ca87eda1db3de3064"
+  }
+}

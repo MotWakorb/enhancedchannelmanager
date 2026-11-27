@@ -549,6 +549,8 @@ class M3UChangeDetector:
         self,
         since: datetime,
         m3u_account_id: Optional[int] = None,
+        *,
+        apply_view_exclusions: bool = False,
     ) -> List[M3UChangeLog]:
         """
         Get all change logs since a given time.
@@ -561,6 +563,9 @@ class M3UChangeDetector:
             List of M3UChangeLog entries
         """
         query = self.db.query(M3UChangeLog).filter(M3UChangeLog.change_time >= since)
+        if apply_view_exclusions:
+            from m3u_change_exclusions import visible_changes
+            query = visible_changes(query)
 
         if m3u_account_id is not None:
             query = query.filter(M3UChangeLog.m3u_account_id == m3u_account_id)
@@ -571,6 +576,8 @@ class M3UChangeDetector:
         self,
         since: datetime,
         m3u_account_id: Optional[int] = None,
+        *,
+        apply_view_exclusions: bool = False,
     ) -> Dict:
         """
         Get aggregated summary of changes since a given time.
@@ -582,7 +589,10 @@ class M3UChangeDetector:
         Returns:
             Summary dict with counts by type
         """
-        changes = self.get_changes_since(since, m3u_account_id)
+        changes = (
+            self.get_changes_since(since, m3u_account_id, apply_view_exclusions=True)
+            if apply_view_exclusions else self.get_changes_since(since, m3u_account_id)
+        )
 
         summary = {
             "total_changes": len(changes),

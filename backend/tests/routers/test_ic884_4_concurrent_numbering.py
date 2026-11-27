@@ -20,6 +20,7 @@ says otherwise.
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from routers.channels import BulkCommitRequest, _run_bulk_commit
 
@@ -97,12 +98,14 @@ class TestExpectationHonoured:
         assert result["success"] is True
 
     @pytest.mark.asyncio
-    async def test_an_operation_sending_no_expectation_is_unchanged(self):
-        """Invariant 7: every existing caller behaves exactly as it did."""
+    async def test_an_operation_sending_no_expectation_is_refused(self):
+        """A missing expectation is refused, never assumed: a renumber of an
+        existing channel that makes no claim about its current number cannot
+        be checked, so it is not written. See ``test_renumber_baselines.py``."""
         client = make_client()
-        result = await run_ops(client, [renumber(1, 20)])
-        assert result["success"] is True
-        assert patched_numbers(client) == [(1, 20)]
+        with pytest.raises(ValidationError, match="without expectedNumber"):
+            await run_ops(client, [renumber(1, 20)])
+        assert patched_numbers(client) == []
 
 
 class TestExpectationRefused:

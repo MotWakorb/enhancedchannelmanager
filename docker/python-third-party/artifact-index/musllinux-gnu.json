@@ -1,0 +1,2017 @@
+{
+  "objects": [
+    {
+      "expected_sha256": "767fb99107fa5e41168413b1eed9d73191c94126c37526263e1af1f1f898788f",
+      "gcc_version": "14.2.0",
+      "members": [
+        {
+          "path": "bcrypt.libs/libgcc_s-2d945d6c.so.1",
+          "wheel": "bcrypt-5.0.0-cp39-abi3-musllinux_1_2_aarch64.whl",
+          "wheel_sha256": "3ca8a166b1140436e058298a34d88032ab62f15aae1c598580333dc21d27ef10"
+        },
+        {
+          "path": "greenlet.libs/libgcc_s-2d945d6c.so.1",
+          "wheel": "greenlet-3.5.5-cp312-cp312-musllinux_1_2_aarch64.whl",
+          "wheel_sha256": "27493374cff1d1b7919dc8126547f2aea582737e3046147b434b1e12de56389b"
+        },
+        {
+          "path": "rapidfuzz.libs/libgcc_s-2d945d6c.so.1",
+          "wheel": "rapidfuzz-3.14.5-cp312-cp312-musllinux_1_2_aarch64.whl",
+          "wheel_sha256": "09d6c9ba091854f07817055d795d604179c12a8f308ba4c7d56f3719dfea1646"
+        }
+      ],
+      "original": {
+        "architecture": "aarch64",
+        "bytes": 133008,
+        "evidence": {
+          "control_index_checksum": "Q1gWAlqlkuoc3AxelSD9Lh3Fi3gX0=",
+          "elf_bytes": 133008,
+          "elf_member": "usr/lib/libgcc_s.so.1",
+          "elf_sha256": "2d945d6ce360769b41fbffc652c2440014bbd69416f13fe206fbac19d32c9431",
+          "file": "repository/aarch64/libgcc-14.2.0-r6.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "964023",
+            "Connection": "close",
+            "Content-Length": "67013",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Sun, 08 Nov 2026 21:42:20 GMT",
+            "Etag": "\"681e14c8-105c5\"",
+            "Last-Modified": "Fri, 09 May 2025 14:44:24 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.27.1",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "7, 0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams2100105-AMS, cache-chi-kigq8000026-CHI",
+            "X-Timer": "S1794174140.429787,VS0,VE1"
+          },
+          "index_package": {
+            "A": "aarch64",
+            "C": "Q1gWAlqlkuoc3AxelSD9Lh3Fi3gX0=",
+            "D": "so:libc.musl-aarch64.so.1",
+            "I": "133008",
+            "L": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+            "P": "libgcc",
+            "S": "67013",
+            "T": "GNU C compiler runtime libraries",
+            "U": "https://gcc.gnu.org",
+            "V": "14.2.0-r6",
+            "c": "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266",
+            "m": "Ariadne Conill <ariadne@dereferenced.org>",
+            "o": "gcc",
+            "p": "so:libgcc_s.so.1=1",
+            "t": "1746799641"
+          },
+          "metadata": {
+            "arch": [
+              "aarch64"
+            ],
+            "builddate": [
+              "1746799641"
+            ],
+            "commit": [
+              "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266"
+            ],
+            "datahash": [
+              "8d454db3ad6a1a36fb4b967a7c2027b1f42d1cd81530b374c96adb49243a0fad"
+            ],
+            "depend": [
+              "so:libc.musl-aarch64.so.1"
+            ],
+            "license": [
+              "GPL-2.0-or-later AND LGPL-2.1-or-later"
+            ],
+            "maintainer": [
+              "Ariadne Conill <ariadne@dereferenced.org>"
+            ],
+            "origin": [
+              "gcc"
+            ],
+            "packager": [
+              "Unknown"
+            ],
+            "pkgdesc": [
+              "GNU C compiler runtime libraries"
+            ],
+            "pkgname": [
+              "libgcc"
+            ],
+            "pkgver": [
+              "14.2.0-r6"
+            ],
+            "provides": [
+              "so:libgcc_s.so.1=1"
+            ],
+            "replaces": [
+              "libstdc++",
+              "binutils"
+            ],
+            "size": [
+              "133008"
+            ],
+            "url": [
+              "https://gcc.gnu.org"
+            ]
+          },
+          "sha256": "ba1835eec3ad8a120efd3d5020e561d53553a0513763a08f509e3ce6d4baa9ca",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/libgcc-14.2.0-r6.apk"
+        },
+        "member": "usr/lib/libgcc_s.so.1",
+        "provider_kind": "signed-alpine-apk",
+        "sha256": "2d945d6ce360769b41fbffc652c2440014bbd69416f13fe206fbac19d32c9431"
+      },
+      "profile": "soname-only",
+      "soname": "libgcc_s-2d945d6c.so.1",
+      "source_closure": "alpine-gcc-14",
+      "tool_version": "0.17.2"
+    },
+    {
+      "expected_sha256": "c8f934f958f22b3b9c8e790fde6bc2d2f55ab9ae8b9f5eea65425b20271782d0",
+      "gcc_version": "14.2.0",
+      "members": [
+        {
+          "path": "bcrypt.libs/libgcc_s-0cd532bd.so.1",
+          "wheel": "bcrypt-5.0.0-cp39-abi3-musllinux_1_2_x86_64.whl",
+          "wheel_sha256": "61afc381250c3182d9078551e3ac3a41da14154fbff647ddf52a769f588c4172"
+        },
+        {
+          "path": "greenlet.libs/libgcc_s-0cd532bd.so.1",
+          "wheel": "greenlet-3.5.5-cp312-cp312-musllinux_1_2_x86_64.whl",
+          "wheel_sha256": "12e2ee66c2aba86133f10fd99d6a8856c6d351ffb7be0e4d52ef2cc5fbb705b2"
+        },
+        {
+          "path": "rapidfuzz.libs/libgcc_s-0cd532bd.so.1",
+          "wheel": "rapidfuzz-3.14.5-cp312-cp312-musllinux_1_2_x86_64.whl",
+          "wheel_sha256": "0ebd1a18e2e47bc0b292a07e6ed9c3642f8aaa672d12253885f599b50807a4f9"
+        }
+      ],
+      "original": {
+        "architecture": "x86_64",
+        "bytes": 173920,
+        "evidence": {
+          "control_index_checksum": "Q1aUWRHcKxNIXpdGDZ3ycWrRoKoy0=",
+          "elf_bytes": 173920,
+          "elf_member": "usr/lib/libgcc_s.so.1",
+          "elf_sha256": "0cd532bd6739a5419c5a14e8897ad4e9de0df77c9f4e8e6ba202e369a8c8b4e5",
+          "file": "repository/x86_64/libgcc-14.2.0-r6.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "357564",
+            "Connection": "close",
+            "Content-Length": "81560",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Sun, 08 Nov 2026 21:42:20 GMT",
+            "Etag": "\"681e5dd9-13e98\"",
+            "Last-Modified": "Fri, 09 May 2025 19:56:09 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.27.1",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "33, 4",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams21044-AMS, cache-chi-kigq8000114-CHI",
+            "X-Timer": "S1794174140.428237,VS0,VE0"
+          },
+          "index_package": {
+            "A": "x86_64",
+            "C": "Q1aUWRHcKxNIXpdGDZ3ycWrRoKoy0=",
+            "D": "so:libc.musl-x86_64.so.1",
+            "I": "173920",
+            "L": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+            "P": "libgcc",
+            "S": "81560",
+            "T": "GNU C compiler runtime libraries",
+            "U": "https://gcc.gnu.org",
+            "V": "14.2.0-r6",
+            "c": "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266",
+            "m": "Ariadne Conill <ariadne@dereferenced.org>",
+            "o": "gcc",
+            "p": "so:libgcc_s.so.1=1",
+            "t": "1746799641"
+          },
+          "metadata": {
+            "arch": [
+              "x86_64"
+            ],
+            "builddate": [
+              "1746799641"
+            ],
+            "commit": [
+              "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266"
+            ],
+            "datahash": [
+              "29a0d61d59d2eb32172165ec6f080769891578648fc2f41d2f68d9526f3ebffd"
+            ],
+            "depend": [
+              "so:libc.musl-x86_64.so.1"
+            ],
+            "license": [
+              "GPL-2.0-or-later AND LGPL-2.1-or-later"
+            ],
+            "maintainer": [
+              "Ariadne Conill <ariadne@dereferenced.org>"
+            ],
+            "origin": [
+              "gcc"
+            ],
+            "packager": [
+              "Buildozer <alpine-devel@lists.alpinelinux.org>"
+            ],
+            "pkgdesc": [
+              "GNU C compiler runtime libraries"
+            ],
+            "pkgname": [
+              "libgcc"
+            ],
+            "pkgver": [
+              "14.2.0-r6"
+            ],
+            "provides": [
+              "so:libgcc_s.so.1=1"
+            ],
+            "replaces": [
+              "libstdc++",
+              "binutils"
+            ],
+            "size": [
+              "173920"
+            ],
+            "url": [
+              "https://gcc.gnu.org"
+            ]
+          },
+          "sha256": "04f3467bc967e705221a843fe4d3de5850db826e571686e0c0ed453d38cb5c59",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/x86_64/libgcc-14.2.0-r6.apk"
+        },
+        "member": "usr/lib/libgcc_s.so.1",
+        "provider_kind": "signed-alpine-apk",
+        "sha256": "0cd532bd6739a5419c5a14e8897ad4e9de0df77c9f4e8e6ba202e369a8c8b4e5"
+      },
+      "profile": "soname-only",
+      "soname": "libgcc_s-0cd532bd.so.1",
+      "source_closure": "alpine-gcc-14",
+      "tool_version": "0.17.2"
+    },
+    {
+      "expected_sha256": "35d3a03b621ff2ba18dcf4a727cd42b016b5ae332f37fb963c2a3f5744e1c046",
+      "gcc_version": "14.2.0",
+      "members": [
+        {
+          "path": "cryptography.libs/libgcc_s-2d945d6c.so.1",
+          "wheel": "cryptography-50.0.2-cp311-abi3-musllinux_1_2_aarch64.whl",
+          "wheel_sha256": "25784ce8b9621c90c643efb9e1e2162ab3b0224cae446ad5e70e7fcb1ce18b51"
+        }
+      ],
+      "original": {
+        "architecture": "aarch64",
+        "bytes": 133008,
+        "evidence": {
+          "control_index_checksum": "Q1gWAlqlkuoc3AxelSD9Lh3Fi3gX0=",
+          "elf_bytes": 133008,
+          "elf_member": "usr/lib/libgcc_s.so.1",
+          "elf_sha256": "2d945d6ce360769b41fbffc652c2440014bbd69416f13fe206fbac19d32c9431",
+          "file": "repository/aarch64/libgcc-14.2.0-r6.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "964023",
+            "Connection": "close",
+            "Content-Length": "67013",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Sun, 08 Nov 2026 21:42:20 GMT",
+            "Etag": "\"681e14c8-105c5\"",
+            "Last-Modified": "Fri, 09 May 2025 14:44:24 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.27.1",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "7, 0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams2100105-AMS, cache-chi-kigq8000026-CHI",
+            "X-Timer": "S1794174140.429787,VS0,VE1"
+          },
+          "index_package": {
+            "A": "aarch64",
+            "C": "Q1gWAlqlkuoc3AxelSD9Lh3Fi3gX0=",
+            "D": "so:libc.musl-aarch64.so.1",
+            "I": "133008",
+            "L": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+            "P": "libgcc",
+            "S": "67013",
+            "T": "GNU C compiler runtime libraries",
+            "U": "https://gcc.gnu.org",
+            "V": "14.2.0-r6",
+            "c": "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266",
+            "m": "Ariadne Conill <ariadne@dereferenced.org>",
+            "o": "gcc",
+            "p": "so:libgcc_s.so.1=1",
+            "t": "1746799641"
+          },
+          "metadata": {
+            "arch": [
+              "aarch64"
+            ],
+            "builddate": [
+              "1746799641"
+            ],
+            "commit": [
+              "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266"
+            ],
+            "datahash": [
+              "8d454db3ad6a1a36fb4b967a7c2027b1f42d1cd81530b374c96adb49243a0fad"
+            ],
+            "depend": [
+              "so:libc.musl-aarch64.so.1"
+            ],
+            "license": [
+              "GPL-2.0-or-later AND LGPL-2.1-or-later"
+            ],
+            "maintainer": [
+              "Ariadne Conill <ariadne@dereferenced.org>"
+            ],
+            "origin": [
+              "gcc"
+            ],
+            "packager": [
+              "Unknown"
+            ],
+            "pkgdesc": [
+              "GNU C compiler runtime libraries"
+            ],
+            "pkgname": [
+              "libgcc"
+            ],
+            "pkgver": [
+              "14.2.0-r6"
+            ],
+            "provides": [
+              "so:libgcc_s.so.1=1"
+            ],
+            "replaces": [
+              "libstdc++",
+              "binutils"
+            ],
+            "size": [
+              "133008"
+            ],
+            "url": [
+              "https://gcc.gnu.org"
+            ]
+          },
+          "sha256": "ba1835eec3ad8a120efd3d5020e561d53553a0513763a08f509e3ce6d4baa9ca",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/libgcc-14.2.0-r6.apk"
+        },
+        "member": "usr/lib/libgcc_s.so.1",
+        "provider_kind": "signed-alpine-apk",
+        "sha256": "2d945d6ce360769b41fbffc652c2440014bbd69416f13fe206fbac19d32c9431"
+      },
+      "producer_sbom": {
+        "authority": false,
+        "bom-ref": "pkg:apk/NotpineForGHA/libgcc@14.2.0-r6#933a623c9e323e83b1734e630a342f206999adc096732a3fea9896fa0181ea29",
+        "explanation": "Raw publisher identity retained, not used to authenticate corresponding source; ARM NotpineForGHA is not silently rewritten.",
+        "name": "libgcc",
+        "purl": "pkg:apk/NotpineForGHA/libgcc@14.2.0-r6",
+        "type": "library",
+        "version": "14.2.0-r6"
+      },
+      "profile": "soname-only",
+      "soname": "libgcc_s-2d945d6c.so.1",
+      "source_closure": "alpine-gcc-14",
+      "tool_version": "0.19.3"
+    },
+    {
+      "expected_sha256": "42b5f2c8ca13e5e173d837f5117a04b6c042437548112bde7879251ae8dcff8f",
+      "gcc_version": "14.2.0",
+      "members": [
+        {
+          "path": "cryptography.libs/libgcc_s-0cd532bd.so.1",
+          "wheel": "cryptography-50.0.2-cp311-abi3-musllinux_1_2_x86_64.whl",
+          "wheel_sha256": "85d0d9a31b9098e98534226d5686b47264b95e62ce459dc2e62fdfc809f9fe93"
+        }
+      ],
+      "original": {
+        "architecture": "x86_64",
+        "bytes": 173920,
+        "evidence": {
+          "control_index_checksum": "Q1aUWRHcKxNIXpdGDZ3ycWrRoKoy0=",
+          "elf_bytes": 173920,
+          "elf_member": "usr/lib/libgcc_s.so.1",
+          "elf_sha256": "0cd532bd6739a5419c5a14e8897ad4e9de0df77c9f4e8e6ba202e369a8c8b4e5",
+          "file": "repository/x86_64/libgcc-14.2.0-r6.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "357564",
+            "Connection": "close",
+            "Content-Length": "81560",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Sun, 08 Nov 2026 21:42:20 GMT",
+            "Etag": "\"681e5dd9-13e98\"",
+            "Last-Modified": "Fri, 09 May 2025 19:56:09 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.27.1",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "33, 4",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams21044-AMS, cache-chi-kigq8000114-CHI",
+            "X-Timer": "S1794174140.428237,VS0,VE0"
+          },
+          "index_package": {
+            "A": "x86_64",
+            "C": "Q1aUWRHcKxNIXpdGDZ3ycWrRoKoy0=",
+            "D": "so:libc.musl-x86_64.so.1",
+            "I": "173920",
+            "L": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+            "P": "libgcc",
+            "S": "81560",
+            "T": "GNU C compiler runtime libraries",
+            "U": "https://gcc.gnu.org",
+            "V": "14.2.0-r6",
+            "c": "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266",
+            "m": "Ariadne Conill <ariadne@dereferenced.org>",
+            "o": "gcc",
+            "p": "so:libgcc_s.so.1=1",
+            "t": "1746799641"
+          },
+          "metadata": {
+            "arch": [
+              "x86_64"
+            ],
+            "builddate": [
+              "1746799641"
+            ],
+            "commit": [
+              "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266"
+            ],
+            "datahash": [
+              "29a0d61d59d2eb32172165ec6f080769891578648fc2f41d2f68d9526f3ebffd"
+            ],
+            "depend": [
+              "so:libc.musl-x86_64.so.1"
+            ],
+            "license": [
+              "GPL-2.0-or-later AND LGPL-2.1-or-later"
+            ],
+            "maintainer": [
+              "Ariadne Conill <ariadne@dereferenced.org>"
+            ],
+            "origin": [
+              "gcc"
+            ],
+            "packager": [
+              "Buildozer <alpine-devel@lists.alpinelinux.org>"
+            ],
+            "pkgdesc": [
+              "GNU C compiler runtime libraries"
+            ],
+            "pkgname": [
+              "libgcc"
+            ],
+            "pkgver": [
+              "14.2.0-r6"
+            ],
+            "provides": [
+              "so:libgcc_s.so.1=1"
+            ],
+            "replaces": [
+              "libstdc++",
+              "binutils"
+            ],
+            "size": [
+              "173920"
+            ],
+            "url": [
+              "https://gcc.gnu.org"
+            ]
+          },
+          "sha256": "04f3467bc967e705221a843fe4d3de5850db826e571686e0c0ed453d38cb5c59",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/x86_64/libgcc-14.2.0-r6.apk"
+        },
+        "member": "usr/lib/libgcc_s.so.1",
+        "provider_kind": "signed-alpine-apk",
+        "sha256": "0cd532bd6739a5419c5a14e8897ad4e9de0df77c9f4e8e6ba202e369a8c8b4e5"
+      },
+      "producer_sbom": {
+        "authority": false,
+        "bom-ref": "pkg:apk/alpine/libgcc@14.2.0-r6#933a623c9e323e83b1734e630a342f206999adc096732a3fea9896fa0181ea29",
+        "explanation": "Raw publisher identity retained, not used to authenticate corresponding source; ARM NotpineForGHA is not silently rewritten.",
+        "name": "libgcc",
+        "purl": "pkg:apk/alpine/libgcc@14.2.0-r6",
+        "type": "library",
+        "version": "14.2.0-r6"
+      },
+      "profile": "soname-only",
+      "soname": "libgcc_s-0cd532bd.so.1",
+      "source_closure": "alpine-gcc-14",
+      "tool_version": "0.19.3"
+    },
+    {
+      "expected_sha256": "74d419612500998317744231a2b322e296836f4a111fdb48196f136d17f0f030",
+      "gcc_version": "14.2.0",
+      "members": [
+        {
+          "path": "greenlet.libs/libstdc++-85f2cd6d.so.6.0.33",
+          "wheel": "greenlet-3.5.5-cp312-cp312-musllinux_1_2_aarch64.whl",
+          "wheel_sha256": "27493374cff1d1b7919dc8126547f2aea582737e3046147b434b1e12de56389b"
+        }
+      ],
+      "original": {
+        "architecture": "aarch64",
+        "bytes": 2754992,
+        "evidence": {
+          "control_index_checksum": "Q1m+yT9cA6w+D55pj502hftj3qOVY=",
+          "elf_bytes": 2754992,
+          "elf_member": "usr/lib/libstdc++.so.6.0.33",
+          "elf_sha256": "85f2cd6db79578ab58be4d12b7df7482ebc003a37496c7544956d9157f8a2b3f",
+          "file": "repository/aarch64/libstdc++-14.2.0-r6.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "2169688",
+            "Connection": "close",
+            "Content-Length": "906209",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Sun, 08 Nov 2026 21:42:20 GMT",
+            "Etag": "\"681e14c9-dd3e1\"",
+            "Last-Modified": "Fri, 09 May 2025 14:44:25 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.27.1",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "7, 0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams2100093-AMS, cache-chi-kigq8000072-CHI",
+            "X-Timer": "S1794174140.429930,VS0,VE1"
+          },
+          "index_package": {
+            "A": "aarch64",
+            "C": "Q1m+yT9cA6w+D55pj502hftj3qOVY=",
+            "D": "so:libc.musl-aarch64.so.1 so:libgcc_s.so.1",
+            "I": "2754992",
+            "L": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+            "P": "libstdc++",
+            "S": "906209",
+            "T": "GNU C++ standard runtime library",
+            "U": "https://gcc.gnu.org",
+            "V": "14.2.0-r6",
+            "c": "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266",
+            "m": "Ariadne Conill <ariadne@dereferenced.org>",
+            "o": "gcc",
+            "p": "so:libstdc++.so.6=6.0.33",
+            "t": "1746799641"
+          },
+          "metadata": {
+            "arch": [
+              "aarch64"
+            ],
+            "builddate": [
+              "1746799641"
+            ],
+            "commit": [
+              "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266"
+            ],
+            "datahash": [
+              "db2cffde66ab660f21e10a808b96a24c0e903db56b495922eff7ae1d3864254f"
+            ],
+            "depend": [
+              "so:libc.musl-aarch64.so.1",
+              "so:libgcc_s.so.1"
+            ],
+            "license": [
+              "GPL-2.0-or-later AND LGPL-2.1-or-later"
+            ],
+            "maintainer": [
+              "Ariadne Conill <ariadne@dereferenced.org>"
+            ],
+            "origin": [
+              "gcc"
+            ],
+            "packager": [
+              "Unknown"
+            ],
+            "pkgdesc": [
+              "GNU C++ standard runtime library"
+            ],
+            "pkgname": [
+              "libstdc++"
+            ],
+            "pkgver": [
+              "14.2.0-r6"
+            ],
+            "provides": [
+              "so:libstdc++.so.6=6.0.33"
+            ],
+            "replaces": [
+              "libstdc++",
+              "binutils"
+            ],
+            "size": [
+              "2754992"
+            ],
+            "url": [
+              "https://gcc.gnu.org"
+            ]
+          },
+          "sha256": "0d2f054057a4f932e985a129eccb79908b40964185139a0a609aed3032aba064",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/libstdc++-14.2.0-r6.apk"
+        },
+        "member": "usr/lib/libstdc++.so.6.0.33",
+        "provider_kind": "signed-alpine-apk",
+        "sha256": "85f2cd6db79578ab58be4d12b7df7482ebc003a37496c7544956d9157f8a2b3f"
+      },
+      "profile": "auditwheel-6.7-immediate-origin",
+      "replace_needed": {
+        "new": "libgcc_s-2d945d6c.so.1",
+        "old": "libgcc_s.so.1"
+      },
+      "soname": "libstdc++-85f2cd6d.so.6.0.33",
+      "source_closure": "alpine-gcc-14",
+      "tool_version": "0.17.2"
+    },
+    {
+      "expected_sha256": "e43bc58c5e9fde5230e0aab5a9927a4d01a034d9f1d760856682b4d1695da3c0",
+      "gcc_version": "14.2.0",
+      "members": [
+        {
+          "path": "greenlet.libs/libstdc++-5d72f927.so.6.0.33",
+          "wheel": "greenlet-3.5.5-cp312-cp312-musllinux_1_2_x86_64.whl",
+          "wheel_sha256": "12e2ee66c2aba86133f10fd99d6a8856c6d351ffb7be0e4d52ef2cc5fbb705b2"
+        }
+      ],
+      "original": {
+        "architecture": "x86_64",
+        "bytes": 2771336,
+        "evidence": {
+          "control_index_checksum": "Q17fXKwemP/k+zYJ9I3tg7Nb7BTJ0=",
+          "elf_bytes": 2771336,
+          "elf_member": "usr/lib/libstdc++.so.6.0.33",
+          "elf_sha256": "5d72f927924ae6b0b27febbab7598e0684b3cce9b377ef93315be96e11812f3a",
+          "file": "repository/x86_64/libstdc++-14.2.0-r6.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "1584917",
+            "Connection": "close",
+            "Content-Length": "942558",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Sun, 08 Nov 2026 21:42:20 GMT",
+            "Etag": "\"681e5dd9-e61de\"",
+            "Last-Modified": "Fri, 09 May 2025 19:56:09 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.27.1",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "50, 493",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams21053-AMS, cache-chi-kigq8000031-CHI",
+            "X-Timer": "S1794174140.427104,VS0,VE0"
+          },
+          "index_package": {
+            "A": "x86_64",
+            "C": "Q17fXKwemP/k+zYJ9I3tg7Nb7BTJ0=",
+            "D": "so:libc.musl-x86_64.so.1 so:libgcc_s.so.1",
+            "I": "2771336",
+            "L": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+            "P": "libstdc++",
+            "S": "942558",
+            "T": "GNU C++ standard runtime library",
+            "U": "https://gcc.gnu.org",
+            "V": "14.2.0-r6",
+            "c": "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266",
+            "m": "Ariadne Conill <ariadne@dereferenced.org>",
+            "o": "gcc",
+            "p": "so:libstdc++.so.6=6.0.33",
+            "t": "1746799641"
+          },
+          "metadata": {
+            "arch": [
+              "x86_64"
+            ],
+            "builddate": [
+              "1746799641"
+            ],
+            "commit": [
+              "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266"
+            ],
+            "datahash": [
+              "0a9a950c10001e2266b1e85d7f2093712994ef695b048856a050069d920d7b92"
+            ],
+            "depend": [
+              "so:libc.musl-x86_64.so.1",
+              "so:libgcc_s.so.1"
+            ],
+            "license": [
+              "GPL-2.0-or-later AND LGPL-2.1-or-later"
+            ],
+            "maintainer": [
+              "Ariadne Conill <ariadne@dereferenced.org>"
+            ],
+            "origin": [
+              "gcc"
+            ],
+            "packager": [
+              "Buildozer <alpine-devel@lists.alpinelinux.org>"
+            ],
+            "pkgdesc": [
+              "GNU C++ standard runtime library"
+            ],
+            "pkgname": [
+              "libstdc++"
+            ],
+            "pkgver": [
+              "14.2.0-r6"
+            ],
+            "provides": [
+              "so:libstdc++.so.6=6.0.33"
+            ],
+            "replaces": [
+              "libstdc++",
+              "binutils"
+            ],
+            "size": [
+              "2771336"
+            ],
+            "url": [
+              "https://gcc.gnu.org"
+            ]
+          },
+          "sha256": "939f7c99898f3e8154207a17f4acbe8bc40437e1bb1b43f5525620ca9e452a2e",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/x86_64/libstdc++-14.2.0-r6.apk"
+        },
+        "member": "usr/lib/libstdc++.so.6.0.33",
+        "provider_kind": "signed-alpine-apk",
+        "sha256": "5d72f927924ae6b0b27febbab7598e0684b3cce9b377ef93315be96e11812f3a"
+      },
+      "profile": "auditwheel-6.7-immediate-origin",
+      "replace_needed": {
+        "new": "libgcc_s-0cd532bd.so.1",
+        "old": "libgcc_s.so.1"
+      },
+      "soname": "libstdc++-5d72f927.so.6.0.33",
+      "source_closure": "alpine-gcc-14",
+      "tool_version": "0.17.2"
+    },
+    {
+      "expected_sha256": "f33db50df5fb0591ee20b789e7f26cb4593e3a36a3dcd45c668d5af03a3f5a87",
+      "gcc_version": "12.4.0",
+      "members": [
+        {
+          "path": "hypothesis.libs/libgcc_s-0bf60adc.so.1",
+          "wheel": "hypothesis-6.165.10-cp312-cp312-musllinux_1_2_aarch64.whl",
+          "wheel_sha256": "e9acb2c4d9cb532c3fedea74159f7b923c8c036328c9239b4049e7aa073bdd81"
+        }
+      ],
+      "original": {
+        "architecture": "aarch64",
+        "bytes": 491648,
+        "evidence": {
+          "elf_bytes": 491648,
+          "elf_member": "usr/local/musl/aarch64-unknown-linux-musl/lib/libgcc_s.so.1",
+          "elf_sha256": "0bf60adc8e990861bcc846bdb16ce7e31ba0d82c01be2d6338e41ff14a6b6b52",
+          "layer": {
+            "digest": "sha256:92e57c9abe9f8d0da2bccb9d4c4a16b8c23e5c790d88f1be91524420271ea51b",
+            "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+            "size": 81790962
+          },
+          "layer_diff_id": "sha256:b26480ff5310cfbacdb67c4ccc412b652b6022d0544db08c6c7abdf3f04ce4fd",
+          "metadata": {
+            "arch": [
+              "aarch64"
+            ],
+            "pkgname": [
+              "libgcc"
+            ],
+            "version": [
+              "12.4.0"
+            ]
+          },
+          "metadata_receipts": [
+            {
+              "bytes": 1079,
+              "headers": {
+                "Content-Length": "1079",
+                "Content-Type": "application/vnd.docker.distribution.manifest.list.v2+json",
+                "Date": "Sun, 08 Nov 2026 22:20:35 GMT",
+                "ETag": "\"sha256:02e790506c5f15a533bc05b3af8719b16a8a2314480f6f0fdc0166432035d9b4\"",
+                "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+                "X-GitHub-Request-Id": "A034:3D67C8:BA9132:DB6A7E:6AF0F5B3",
+                "connection": "close",
+                "docker-content-digest": "sha256:02e790506c5f15a533bc05b3af8719b16a8a2314480f6f0fdc0166432035d9b4",
+                "docker-distribution-api-version": "registry/2.0",
+                "x-github-edge-region": "iad"
+              },
+              "sha256": "02e790506c5f15a533bc05b3af8719b16a8a2314480f6f0fdc0166432035d9b4",
+              "url": "https://ghcr.io/v2/rust-cross/rust-musl-cross/manifests/aarch64-musl"
+            },
+            {
+              "bytes": 3660,
+              "headers": {
+                "Content-Length": "3660",
+                "Content-Type": "application/vnd.docker.distribution.manifest.v2+json",
+                "Date": "Sun, 08 Nov 2026 22:20:35 GMT",
+                "ETag": "\"sha256:c9403b20663fca32f703b4201672120d8a634d5ebcaf95d013f0140382432a17\"",
+                "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+                "X-GitHub-Request-Id": "A048:1BAE:F73894:1254A8E:6AF0F5B3",
+                "connection": "close",
+                "docker-content-digest": "sha256:c9403b20663fca32f703b4201672120d8a634d5ebcaf95d013f0140382432a17",
+                "docker-distribution-api-version": "registry/2.0",
+                "x-github-edge-region": "iad"
+              },
+              "sha256": "c9403b20663fca32f703b4201672120d8a634d5ebcaf95d013f0140382432a17",
+              "url": "https://ghcr.io/v2/rust-cross/rust-musl-cross/manifests/sha256:c9403b20663fca32f703b4201672120d8a634d5ebcaf95d013f0140382432a17"
+            },
+            {
+              "bytes": 13490,
+              "headers": {
+                "Accept-Ranges": "bytes",
+                "Age": "0",
+                "Connection": "close",
+                "Content-Disposition": "",
+                "Content-Length": "13490",
+                "Content-Type": "application/octet-stream",
+                "Date": "Sun, 08 Nov 2026 22:20:36 GMT",
+                "ETag": "\"0x8DED723ABAB0657\"",
+                "Last-Modified": "Wed, 01 Jul 2026 03:48:53 GMT",
+                "Server": "Windows-Azure-Blob/1.0 Microsoft-HTTPAPI/2.0",
+                "Strict-Transport-Security": "max-age=31536000",
+                "Via": "1.1 varnish, 1.1 varnish",
+                "X-Cache": "HIT, MISS",
+                "X-Cache-Hits": "1, 0",
+                "X-Fastly-Request-ID": "14e48abde07b8d3d0869dd718f0eafa5f4472e89",
+                "X-Served-By": "cache-iad-kcgs7200057-IAD, cache-chi-klot8100086-CHI",
+                "x-ms-access-tier": "Hot",
+                "x-ms-access-tier-inferred": "true",
+                "x-ms-blob-type": "BlockBlob",
+                "x-ms-copy-completion-time": "Wed, 01 Jul 2026 03:48:53 GMT",
+                "x-ms-copy-id": "dafe88f3-73ea-497b-bcb1-12daa8657f36",
+                "x-ms-copy-progress": "13490/13490",
+                "x-ms-copy-status": "success",
+                "x-ms-creation-time": "Wed, 01 Jul 2026 03:48:53 GMT",
+                "x-ms-last-access-time": "Sun, 08 Nov 2026 12:13:41 GMT",
+                "x-ms-lease-state": "available",
+                "x-ms-lease-status": "unlocked",
+                "x-ms-request-id": "4c898ae4-301e-0062-4ccf-6f75f9000000",
+                "x-ms-server-encrypted": "true",
+                "x-ms-version": "2025-01-05"
+              },
+              "sha256": "2ee72ff321f80897aaa0f296f17e478ae9db98716eba4b388a12c5fb713661cc",
+              "url": "https://ghcr.io/v2/rust-cross/rust-musl-cross/blobs/sha256:2ee72ff321f80897aaa0f296f17e478ae9db98716eba4b388a12c5fb713661cc"
+            }
+          ],
+          "provider": "rust-cross/rust-musl-cross",
+          "scope": "Digest-verified original in official OCI. Exact repaired ELF match and full source graph remain separate."
+        },
+        "member": "usr/local/musl/aarch64-unknown-linux-musl/lib/libgcc_s.so.1",
+        "provider_kind": "official-rust-cross-oci",
+        "sha256": "0bf60adc8e990861bcc846bdb16ce7e31ba0d82c01be2d6338e41ff14a6b6b52"
+      },
+      "profile": "soname-only",
+      "soname": "libgcc_s-0bf60adc.so.1",
+      "source_closure": "rust-cross-gcc-12",
+      "tool_version": "0.19.3"
+    },
+    {
+      "expected_sha256": "91a43de5877248a317d14faa35490ef474a1b33a83e235b52fb1eabf7108108e",
+      "gcc_version": "12.4.0",
+      "members": [
+        {
+          "path": "hypothesis.libs/libgcc_s-f685abf1.so.1",
+          "wheel": "hypothesis-6.165.10-cp312-cp312-musllinux_1_2_x86_64.whl",
+          "wheel_sha256": "8660572b2d424bf5369ea8990985225f70bd1615b76ecd9c25588a3b9307009f"
+        }
+      ],
+      "original": {
+        "architecture": "x86_64",
+        "bytes": 528832,
+        "evidence": {
+          "elf_bytes": 528832,
+          "elf_member": "usr/local/musl/x86_64-unknown-linux-musl/lib/libgcc_s.so.1",
+          "elf_sha256": "f685abf10f5e598c5fe7869915bfe476984bb73bee0fbf11a9c2bbb4ebd8a32e",
+          "layer": {
+            "digest": "sha256:ecd1ad45eb5e09ef23da317f0814568fcf3c3c74583a6c730c7ed7f15532b65d",
+            "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+            "size": 85531879
+          },
+          "layer_diff_id": "sha256:c69f2007604c99f27320ec8f16ef446e4bb8b88b32bb0e8f4ee9f413357a953f",
+          "metadata": {
+            "arch": [
+              "x86_64"
+            ],
+            "pkgname": [
+              "libgcc"
+            ],
+            "version": [
+              "12.4.0"
+            ]
+          },
+          "metadata_receipts": [
+            {
+              "bytes": 1079,
+              "headers": {
+                "Content-Length": "1079",
+                "Content-Type": "application/vnd.docker.distribution.manifest.list.v2+json",
+                "Date": "Sun, 08 Nov 2026 22:20:35 GMT",
+                "ETag": "\"sha256:3f1010eb48311dfde5d51f011163451940af34bd317355c4a8652ce6b4b61051\"",
+                "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+                "X-GitHub-Request-Id": "A040:3A52F5:D41A62:F4F59B:6AF0F5B3",
+                "connection": "close",
+                "docker-content-digest": "sha256:3f1010eb48311dfde5d51f011163451940af34bd317355c4a8652ce6b4b61051",
+                "docker-distribution-api-version": "registry/2.0",
+                "x-github-edge-region": "iad"
+              },
+              "sha256": "3f1010eb48311dfde5d51f011163451940af34bd317355c4a8652ce6b4b61051",
+              "url": "https://ghcr.io/v2/rust-cross/rust-musl-cross/manifests/x86_64-musl"
+            },
+            {
+              "bytes": 3660,
+              "headers": {
+                "Content-Length": "3660",
+                "Content-Type": "application/vnd.docker.distribution.manifest.v2+json",
+                "Date": "Sun, 08 Nov 2026 22:20:35 GMT",
+                "ETag": "\"sha256:fb7229c2a7dd84957e3a46f8bec7d01c4ec7c295ad159606623093a0a9286253\"",
+                "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+                "X-GitHub-Request-Id": "A04C:187358:BCEAD8:DDD22A:6AF0F5B3",
+                "connection": "close",
+                "docker-content-digest": "sha256:fb7229c2a7dd84957e3a46f8bec7d01c4ec7c295ad159606623093a0a9286253",
+                "docker-distribution-api-version": "registry/2.0",
+                "x-github-edge-region": "iad"
+              },
+              "sha256": "fb7229c2a7dd84957e3a46f8bec7d01c4ec7c295ad159606623093a0a9286253",
+              "url": "https://ghcr.io/v2/rust-cross/rust-musl-cross/manifests/sha256:fb7229c2a7dd84957e3a46f8bec7d01c4ec7c295ad159606623093a0a9286253"
+            },
+            {
+              "bytes": 13452,
+              "headers": {
+                "Accept-Ranges": "bytes",
+                "Age": "0",
+                "Connection": "close",
+                "Content-Disposition": "",
+                "Content-Length": "13452",
+                "Content-Type": "application/octet-stream",
+                "Date": "Sun, 08 Nov 2026 22:20:36 GMT",
+                "ETag": "\"0x8DED7243512D5B8\"",
+                "Last-Modified": "Wed, 01 Jul 2026 03:52:44 GMT",
+                "Server": "Windows-Azure-Blob/1.0 Microsoft-HTTPAPI/2.0",
+                "Strict-Transport-Security": "max-age=31536000",
+                "Via": "1.1 varnish, 1.1 varnish",
+                "X-Cache": "HIT, MISS",
+                "X-Cache-Hits": "1, 0",
+                "X-Fastly-Request-ID": "67163c8b8c7ab46f30955d2d0f37be50f936e850",
+                "X-Served-By": "cache-iad-kiad7000177-IAD, cache-chi-klot8100129-CHI",
+                "x-ms-access-tier": "Hot",
+                "x-ms-access-tier-inferred": "true",
+                "x-ms-blob-type": "BlockBlob",
+                "x-ms-copy-completion-time": "Wed, 01 Jul 2026 03:52:44 GMT",
+                "x-ms-copy-id": "f7f51a37-0940-4f64-8486-becae5adaeb7",
+                "x-ms-copy-progress": "13452/13452",
+                "x-ms-copy-status": "success",
+                "x-ms-creation-time": "Wed, 01 Jul 2026 03:52:44 GMT",
+                "x-ms-last-access-time": "Sun, 08 Nov 2026 11:41:26 GMT",
+                "x-ms-lease-state": "available",
+                "x-ms-lease-status": "unlocked",
+                "x-ms-request-id": "f85909c3-501e-0055-03cf-6fb7c2000000",
+                "x-ms-server-encrypted": "true",
+                "x-ms-version": "2025-01-05"
+              },
+              "sha256": "06552ba17ddb5338175d83af2c65e035d2a3aa938c886a8d585046e18e7c2731",
+              "url": "https://ghcr.io/v2/rust-cross/rust-musl-cross/blobs/sha256:06552ba17ddb5338175d83af2c65e035d2a3aa938c886a8d585046e18e7c2731"
+            }
+          ],
+          "provider": "rust-cross/rust-musl-cross",
+          "scope": "Digest-verified original in official OCI. Exact repaired ELF match and full source graph remain separate."
+        },
+        "member": "usr/local/musl/x86_64-unknown-linux-musl/lib/libgcc_s.so.1",
+        "provider_kind": "official-rust-cross-oci",
+        "sha256": "f685abf10f5e598c5fe7869915bfe476984bb73bee0fbf11a9c2bbb4ebd8a32e"
+      },
+      "profile": "soname-only",
+      "soname": "libgcc_s-f685abf1.so.1",
+      "source_closure": "rust-cross-gcc-12",
+      "tool_version": "0.19.3"
+    },
+    {
+      "expected_sha256": "f5f857e58a62c2d1ddb222cc2f3efb3f0f638c8106ae2b5e57b50e52baf0be99",
+      "gcc_version": "12.4.0",
+      "members": [
+        {
+          "path": "pydantic_core.libs/libgcc_s-0bf60adc.so.1",
+          "wheel": "pydantic_core-2.46.4-cp312-cp312-musllinux_1_1_aarch64.whl",
+          "wheel_sha256": "b2f69dec1725e79a012d920df1707de5caf7ed5e08f3be4435e25803efc47458"
+        },
+        {
+          "path": "watchfiles.libs/libgcc_s-0bf60adc.so.1",
+          "wheel": "watchfiles-1.2.0-cp312-cp312-musllinux_1_1_aarch64.whl",
+          "wheel_sha256": "2cb93af48550faf1cea04c303107c8b75833de7013e57ce27d3b8d21d8d0f58c"
+        }
+      ],
+      "original": {
+        "architecture": "aarch64",
+        "bytes": 491648,
+        "evidence": {
+          "elf_bytes": 491648,
+          "elf_member": "usr/local/musl/aarch64-unknown-linux-musl/lib/libgcc_s.so.1",
+          "elf_sha256": "0bf60adc8e990861bcc846bdb16ce7e31ba0d82c01be2d6338e41ff14a6b6b52",
+          "layer": {
+            "digest": "sha256:92e57c9abe9f8d0da2bccb9d4c4a16b8c23e5c790d88f1be91524420271ea51b",
+            "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+            "size": 81790962
+          },
+          "layer_diff_id": "sha256:b26480ff5310cfbacdb67c4ccc412b652b6022d0544db08c6c7abdf3f04ce4fd",
+          "metadata": {
+            "arch": [
+              "aarch64"
+            ],
+            "pkgname": [
+              "libgcc"
+            ],
+            "version": [
+              "12.4.0"
+            ]
+          },
+          "metadata_receipts": [
+            {
+              "bytes": 1079,
+              "headers": {
+                "Content-Length": "1079",
+                "Content-Type": "application/vnd.docker.distribution.manifest.list.v2+json",
+                "Date": "Sun, 08 Nov 2026 22:20:35 GMT",
+                "ETag": "\"sha256:02e790506c5f15a533bc05b3af8719b16a8a2314480f6f0fdc0166432035d9b4\"",
+                "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+                "X-GitHub-Request-Id": "A034:3D67C8:BA9132:DB6A7E:6AF0F5B3",
+                "connection": "close",
+                "docker-content-digest": "sha256:02e790506c5f15a533bc05b3af8719b16a8a2314480f6f0fdc0166432035d9b4",
+                "docker-distribution-api-version": "registry/2.0",
+                "x-github-edge-region": "iad"
+              },
+              "sha256": "02e790506c5f15a533bc05b3af8719b16a8a2314480f6f0fdc0166432035d9b4",
+              "url": "https://ghcr.io/v2/rust-cross/rust-musl-cross/manifests/aarch64-musl"
+            },
+            {
+              "bytes": 3660,
+              "headers": {
+                "Content-Length": "3660",
+                "Content-Type": "application/vnd.docker.distribution.manifest.v2+json",
+                "Date": "Sun, 08 Nov 2026 22:20:35 GMT",
+                "ETag": "\"sha256:c9403b20663fca32f703b4201672120d8a634d5ebcaf95d013f0140382432a17\"",
+                "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+                "X-GitHub-Request-Id": "A048:1BAE:F73894:1254A8E:6AF0F5B3",
+                "connection": "close",
+                "docker-content-digest": "sha256:c9403b20663fca32f703b4201672120d8a634d5ebcaf95d013f0140382432a17",
+                "docker-distribution-api-version": "registry/2.0",
+                "x-github-edge-region": "iad"
+              },
+              "sha256": "c9403b20663fca32f703b4201672120d8a634d5ebcaf95d013f0140382432a17",
+              "url": "https://ghcr.io/v2/rust-cross/rust-musl-cross/manifests/sha256:c9403b20663fca32f703b4201672120d8a634d5ebcaf95d013f0140382432a17"
+            },
+            {
+              "bytes": 13490,
+              "headers": {
+                "Accept-Ranges": "bytes",
+                "Age": "0",
+                "Connection": "close",
+                "Content-Disposition": "",
+                "Content-Length": "13490",
+                "Content-Type": "application/octet-stream",
+                "Date": "Sun, 08 Nov 2026 22:20:36 GMT",
+                "ETag": "\"0x8DED723ABAB0657\"",
+                "Last-Modified": "Wed, 01 Jul 2026 03:48:53 GMT",
+                "Server": "Windows-Azure-Blob/1.0 Microsoft-HTTPAPI/2.0",
+                "Strict-Transport-Security": "max-age=31536000",
+                "Via": "1.1 varnish, 1.1 varnish",
+                "X-Cache": "HIT, MISS",
+                "X-Cache-Hits": "1, 0",
+                "X-Fastly-Request-ID": "14e48abde07b8d3d0869dd718f0eafa5f4472e89",
+                "X-Served-By": "cache-iad-kcgs7200057-IAD, cache-chi-klot8100086-CHI",
+                "x-ms-access-tier": "Hot",
+                "x-ms-access-tier-inferred": "true",
+                "x-ms-blob-type": "BlockBlob",
+                "x-ms-copy-completion-time": "Wed, 01 Jul 2026 03:48:53 GMT",
+                "x-ms-copy-id": "dafe88f3-73ea-497b-bcb1-12daa8657f36",
+                "x-ms-copy-progress": "13490/13490",
+                "x-ms-copy-status": "success",
+                "x-ms-creation-time": "Wed, 01 Jul 2026 03:48:53 GMT",
+                "x-ms-last-access-time": "Sun, 08 Nov 2026 12:13:41 GMT",
+                "x-ms-lease-state": "available",
+                "x-ms-lease-status": "unlocked",
+                "x-ms-request-id": "4c898ae4-301e-0062-4ccf-6f75f9000000",
+                "x-ms-server-encrypted": "true",
+                "x-ms-version": "2025-01-05"
+              },
+              "sha256": "2ee72ff321f80897aaa0f296f17e478ae9db98716eba4b388a12c5fb713661cc",
+              "url": "https://ghcr.io/v2/rust-cross/rust-musl-cross/blobs/sha256:2ee72ff321f80897aaa0f296f17e478ae9db98716eba4b388a12c5fb713661cc"
+            }
+          ],
+          "provider": "rust-cross/rust-musl-cross",
+          "scope": "Digest-verified original in official OCI. Exact repaired ELF match and full source graph remain separate."
+        },
+        "member": "usr/local/musl/aarch64-unknown-linux-musl/lib/libgcc_s.so.1",
+        "provider_kind": "official-rust-cross-oci",
+        "sha256": "0bf60adc8e990861bcc846bdb16ce7e31ba0d82c01be2d6338e41ff14a6b6b52"
+      },
+      "profile": "soname-only",
+      "soname": "libgcc_s-0bf60adc.so.1",
+      "source_closure": "rust-cross-gcc-12",
+      "tool_version": "0.17.2"
+    },
+    {
+      "expected_sha256": "ad9894a62fa7c3cb4d48e25e37ebebdd14c400c08c6877fbde04cd195a9174ab",
+      "gcc_version": "12.4.0",
+      "members": [
+        {
+          "path": "pydantic_core.libs/libgcc_s-f685abf1.so.1",
+          "wheel": "pydantic_core-2.46.4-cp312-cp312-musllinux_1_1_x86_64.whl",
+          "wheel_sha256": "fbdb89b3e1c94a30cc5edfce477c6e6a5dc4d8f84665b455c27582f211a1c72c"
+        },
+        {
+          "path": "watchfiles.libs/libgcc_s-f685abf1.so.1",
+          "wheel": "watchfiles-1.2.0-cp312-cp312-musllinux_1_1_x86_64.whl",
+          "wheel_sha256": "2995c176de7692b86a2e4c58d9ec718f753150a979cb4a754e2b4ffa38e70906"
+        }
+      ],
+      "original": {
+        "architecture": "x86_64",
+        "bytes": 528832,
+        "evidence": {
+          "elf_bytes": 528832,
+          "elf_member": "usr/local/musl/x86_64-unknown-linux-musl/lib/libgcc_s.so.1",
+          "elf_sha256": "f685abf10f5e598c5fe7869915bfe476984bb73bee0fbf11a9c2bbb4ebd8a32e",
+          "layer": {
+            "digest": "sha256:ecd1ad45eb5e09ef23da317f0814568fcf3c3c74583a6c730c7ed7f15532b65d",
+            "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+            "size": 85531879
+          },
+          "layer_diff_id": "sha256:c69f2007604c99f27320ec8f16ef446e4bb8b88b32bb0e8f4ee9f413357a953f",
+          "metadata": {
+            "arch": [
+              "x86_64"
+            ],
+            "pkgname": [
+              "libgcc"
+            ],
+            "version": [
+              "12.4.0"
+            ]
+          },
+          "metadata_receipts": [
+            {
+              "bytes": 1079,
+              "headers": {
+                "Content-Length": "1079",
+                "Content-Type": "application/vnd.docker.distribution.manifest.list.v2+json",
+                "Date": "Sun, 08 Nov 2026 22:20:35 GMT",
+                "ETag": "\"sha256:3f1010eb48311dfde5d51f011163451940af34bd317355c4a8652ce6b4b61051\"",
+                "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+                "X-GitHub-Request-Id": "A040:3A52F5:D41A62:F4F59B:6AF0F5B3",
+                "connection": "close",
+                "docker-content-digest": "sha256:3f1010eb48311dfde5d51f011163451940af34bd317355c4a8652ce6b4b61051",
+                "docker-distribution-api-version": "registry/2.0",
+                "x-github-edge-region": "iad"
+              },
+              "sha256": "3f1010eb48311dfde5d51f011163451940af34bd317355c4a8652ce6b4b61051",
+              "url": "https://ghcr.io/v2/rust-cross/rust-musl-cross/manifests/x86_64-musl"
+            },
+            {
+              "bytes": 3660,
+              "headers": {
+                "Content-Length": "3660",
+                "Content-Type": "application/vnd.docker.distribution.manifest.v2+json",
+                "Date": "Sun, 08 Nov 2026 22:20:35 GMT",
+                "ETag": "\"sha256:fb7229c2a7dd84957e3a46f8bec7d01c4ec7c295ad159606623093a0a9286253\"",
+                "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+                "X-GitHub-Request-Id": "A04C:187358:BCEAD8:DDD22A:6AF0F5B3",
+                "connection": "close",
+                "docker-content-digest": "sha256:fb7229c2a7dd84957e3a46f8bec7d01c4ec7c295ad159606623093a0a9286253",
+                "docker-distribution-api-version": "registry/2.0",
+                "x-github-edge-region": "iad"
+              },
+              "sha256": "fb7229c2a7dd84957e3a46f8bec7d01c4ec7c295ad159606623093a0a9286253",
+              "url": "https://ghcr.io/v2/rust-cross/rust-musl-cross/manifests/sha256:fb7229c2a7dd84957e3a46f8bec7d01c4ec7c295ad159606623093a0a9286253"
+            },
+            {
+              "bytes": 13452,
+              "headers": {
+                "Accept-Ranges": "bytes",
+                "Age": "0",
+                "Connection": "close",
+                "Content-Disposition": "",
+                "Content-Length": "13452",
+                "Content-Type": "application/octet-stream",
+                "Date": "Sun, 08 Nov 2026 22:20:36 GMT",
+                "ETag": "\"0x8DED7243512D5B8\"",
+                "Last-Modified": "Wed, 01 Jul 2026 03:52:44 GMT",
+                "Server": "Windows-Azure-Blob/1.0 Microsoft-HTTPAPI/2.0",
+                "Strict-Transport-Security": "max-age=31536000",
+                "Via": "1.1 varnish, 1.1 varnish",
+                "X-Cache": "HIT, MISS",
+                "X-Cache-Hits": "1, 0",
+                "X-Fastly-Request-ID": "67163c8b8c7ab46f30955d2d0f37be50f936e850",
+                "X-Served-By": "cache-iad-kiad7000177-IAD, cache-chi-klot8100129-CHI",
+                "x-ms-access-tier": "Hot",
+                "x-ms-access-tier-inferred": "true",
+                "x-ms-blob-type": "BlockBlob",
+                "x-ms-copy-completion-time": "Wed, 01 Jul 2026 03:52:44 GMT",
+                "x-ms-copy-id": "f7f51a37-0940-4f64-8486-becae5adaeb7",
+                "x-ms-copy-progress": "13452/13452",
+                "x-ms-copy-status": "success",
+                "x-ms-creation-time": "Wed, 01 Jul 2026 03:52:44 GMT",
+                "x-ms-last-access-time": "Sun, 08 Nov 2026 11:41:26 GMT",
+                "x-ms-lease-state": "available",
+                "x-ms-lease-status": "unlocked",
+                "x-ms-request-id": "f85909c3-501e-0055-03cf-6fb7c2000000",
+                "x-ms-server-encrypted": "true",
+                "x-ms-version": "2025-01-05"
+              },
+              "sha256": "06552ba17ddb5338175d83af2c65e035d2a3aa938c886a8d585046e18e7c2731",
+              "url": "https://ghcr.io/v2/rust-cross/rust-musl-cross/blobs/sha256:06552ba17ddb5338175d83af2c65e035d2a3aa938c886a8d585046e18e7c2731"
+            }
+          ],
+          "provider": "rust-cross/rust-musl-cross",
+          "scope": "Digest-verified original in official OCI. Exact repaired ELF match and full source graph remain separate."
+        },
+        "member": "usr/local/musl/x86_64-unknown-linux-musl/lib/libgcc_s.so.1",
+        "provider_kind": "official-rust-cross-oci",
+        "sha256": "f685abf10f5e598c5fe7869915bfe476984bb73bee0fbf11a9c2bbb4ebd8a32e"
+      },
+      "profile": "soname-only",
+      "soname": "libgcc_s-f685abf1.so.1",
+      "source_closure": "rust-cross-gcc-12",
+      "tool_version": "0.17.2"
+    },
+    {
+      "expected_sha256": "5634fa1f7ac66c8529d366a459fe6c268cfc2e27d4678385649606391fcac9e2",
+      "gcc_version": "14.2.0",
+      "members": [
+        {
+          "path": "rapidfuzz.libs/libstdc++-85f2cd6d.so.6.0.33",
+          "wheel": "rapidfuzz-3.14.5-cp312-cp312-musllinux_1_2_aarch64.whl",
+          "wheel_sha256": "09d6c9ba091854f07817055d795d604179c12a8f308ba4c7d56f3719dfea1646"
+        }
+      ],
+      "original": {
+        "architecture": "aarch64",
+        "bytes": 2754992,
+        "evidence": {
+          "control_index_checksum": "Q1m+yT9cA6w+D55pj502hftj3qOVY=",
+          "elf_bytes": 2754992,
+          "elf_member": "usr/lib/libstdc++.so.6.0.33",
+          "elf_sha256": "85f2cd6db79578ab58be4d12b7df7482ebc003a37496c7544956d9157f8a2b3f",
+          "file": "repository/aarch64/libstdc++-14.2.0-r6.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "2169688",
+            "Connection": "close",
+            "Content-Length": "906209",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Sun, 08 Nov 2026 21:42:20 GMT",
+            "Etag": "\"681e14c9-dd3e1\"",
+            "Last-Modified": "Fri, 09 May 2025 14:44:25 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.27.1",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "7, 0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams2100093-AMS, cache-chi-kigq8000072-CHI",
+            "X-Timer": "S1794174140.429930,VS0,VE1"
+          },
+          "index_package": {
+            "A": "aarch64",
+            "C": "Q1m+yT9cA6w+D55pj502hftj3qOVY=",
+            "D": "so:libc.musl-aarch64.so.1 so:libgcc_s.so.1",
+            "I": "2754992",
+            "L": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+            "P": "libstdc++",
+            "S": "906209",
+            "T": "GNU C++ standard runtime library",
+            "U": "https://gcc.gnu.org",
+            "V": "14.2.0-r6",
+            "c": "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266",
+            "m": "Ariadne Conill <ariadne@dereferenced.org>",
+            "o": "gcc",
+            "p": "so:libstdc++.so.6=6.0.33",
+            "t": "1746799641"
+          },
+          "metadata": {
+            "arch": [
+              "aarch64"
+            ],
+            "builddate": [
+              "1746799641"
+            ],
+            "commit": [
+              "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266"
+            ],
+            "datahash": [
+              "db2cffde66ab660f21e10a808b96a24c0e903db56b495922eff7ae1d3864254f"
+            ],
+            "depend": [
+              "so:libc.musl-aarch64.so.1",
+              "so:libgcc_s.so.1"
+            ],
+            "license": [
+              "GPL-2.0-or-later AND LGPL-2.1-or-later"
+            ],
+            "maintainer": [
+              "Ariadne Conill <ariadne@dereferenced.org>"
+            ],
+            "origin": [
+              "gcc"
+            ],
+            "packager": [
+              "Unknown"
+            ],
+            "pkgdesc": [
+              "GNU C++ standard runtime library"
+            ],
+            "pkgname": [
+              "libstdc++"
+            ],
+            "pkgver": [
+              "14.2.0-r6"
+            ],
+            "provides": [
+              "so:libstdc++.so.6=6.0.33"
+            ],
+            "replaces": [
+              "libstdc++",
+              "binutils"
+            ],
+            "size": [
+              "2754992"
+            ],
+            "url": [
+              "https://gcc.gnu.org"
+            ]
+          },
+          "sha256": "0d2f054057a4f932e985a129eccb79908b40964185139a0a609aed3032aba064",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/libstdc++-14.2.0-r6.apk"
+        },
+        "member": "usr/lib/libstdc++.so.6.0.33",
+        "provider_kind": "signed-alpine-apk",
+        "sha256": "85f2cd6db79578ab58be4d12b7df7482ebc003a37496c7544956d9157f8a2b3f"
+      },
+      "profile": "auditwheel-6.6-immediate-no-rpath",
+      "replace_needed": {
+        "new": "libgcc_s-2d945d6c.so.1",
+        "old": "libgcc_s.so.1"
+      },
+      "soname": "libstdc++-85f2cd6d.so.6.0.33",
+      "source_closure": "alpine-gcc-14",
+      "tool_version": "0.17.2"
+    },
+    {
+      "expected_sha256": "7e88311ec981d7f0fa0be6bffae1e1f048bfe90879d9af2f2e589c2513377a19",
+      "gcc_version": "14.2.0",
+      "members": [
+        {
+          "path": "rapidfuzz.libs/libstdc++-5d72f927.so.6.0.33",
+          "wheel": "rapidfuzz-3.14.5-cp312-cp312-musllinux_1_2_x86_64.whl",
+          "wheel_sha256": "0ebd1a18e2e47bc0b292a07e6ed9c3642f8aaa672d12253885f599b50807a4f9"
+        }
+      ],
+      "original": {
+        "architecture": "x86_64",
+        "bytes": 2771336,
+        "evidence": {
+          "control_index_checksum": "Q17fXKwemP/k+zYJ9I3tg7Nb7BTJ0=",
+          "elf_bytes": 2771336,
+          "elf_member": "usr/lib/libstdc++.so.6.0.33",
+          "elf_sha256": "5d72f927924ae6b0b27febbab7598e0684b3cce9b377ef93315be96e11812f3a",
+          "file": "repository/x86_64/libstdc++-14.2.0-r6.apk",
+          "headers": {
+            "Accept-Ranges": "bytes",
+            "Age": "1584917",
+            "Connection": "close",
+            "Content-Length": "942558",
+            "Content-Security-Policy": "script-src 'self'",
+            "Content-Type": "application/octet-stream",
+            "Date": "Sun, 08 Nov 2026 21:42:20 GMT",
+            "Etag": "\"681e5dd9-e61de\"",
+            "Last-Modified": "Fri, 09 May 2025 19:56:09 GMT",
+            "Referrer-Policy": "origin-when-cross-origin",
+            "Server": "nginx/1.27.1",
+            "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+            "Vary": "Origin",
+            "Via": "1.1 varnish, 1.1 varnish",
+            "X-Cache": "HIT, HIT",
+            "X-Cache-Hits": "50, 493",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "X-Served-By": "cache-ams21053-AMS, cache-chi-kigq8000031-CHI",
+            "X-Timer": "S1794174140.427104,VS0,VE0"
+          },
+          "index_package": {
+            "A": "x86_64",
+            "C": "Q17fXKwemP/k+zYJ9I3tg7Nb7BTJ0=",
+            "D": "so:libc.musl-x86_64.so.1 so:libgcc_s.so.1",
+            "I": "2771336",
+            "L": "GPL-2.0-or-later AND LGPL-2.1-or-later",
+            "P": "libstdc++",
+            "S": "942558",
+            "T": "GNU C++ standard runtime library",
+            "U": "https://gcc.gnu.org",
+            "V": "14.2.0-r6",
+            "c": "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266",
+            "m": "Ariadne Conill <ariadne@dereferenced.org>",
+            "o": "gcc",
+            "p": "so:libstdc++.so.6=6.0.33",
+            "t": "1746799641"
+          },
+          "metadata": {
+            "arch": [
+              "x86_64"
+            ],
+            "builddate": [
+              "1746799641"
+            ],
+            "commit": [
+              "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266"
+            ],
+            "datahash": [
+              "0a9a950c10001e2266b1e85d7f2093712994ef695b048856a050069d920d7b92"
+            ],
+            "depend": [
+              "so:libc.musl-x86_64.so.1",
+              "so:libgcc_s.so.1"
+            ],
+            "license": [
+              "GPL-2.0-or-later AND LGPL-2.1-or-later"
+            ],
+            "maintainer": [
+              "Ariadne Conill <ariadne@dereferenced.org>"
+            ],
+            "origin": [
+              "gcc"
+            ],
+            "packager": [
+              "Buildozer <alpine-devel@lists.alpinelinux.org>"
+            ],
+            "pkgdesc": [
+              "GNU C++ standard runtime library"
+            ],
+            "pkgname": [
+              "libstdc++"
+            ],
+            "pkgver": [
+              "14.2.0-r6"
+            ],
+            "provides": [
+              "so:libstdc++.so.6=6.0.33"
+            ],
+            "replaces": [
+              "libstdc++",
+              "binutils"
+            ],
+            "size": [
+              "2771336"
+            ],
+            "url": [
+              "https://gcc.gnu.org"
+            ]
+          },
+          "sha256": "939f7c99898f3e8154207a17f4acbe8bc40437e1bb1b43f5525620ca9e452a2e",
+          "url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/x86_64/libstdc++-14.2.0-r6.apk"
+        },
+        "member": "usr/lib/libstdc++.so.6.0.33",
+        "provider_kind": "signed-alpine-apk",
+        "sha256": "5d72f927924ae6b0b27febbab7598e0684b3cce9b377ef93315be96e11812f3a"
+      },
+      "profile": "auditwheel-6.6-immediate-no-rpath",
+      "replace_needed": {
+        "new": "libgcc_s-0cd532bd.so.1",
+        "old": "libgcc_s.so.1"
+      },
+      "soname": "libstdc++-5d72f927.so.6.0.33",
+      "source_closure": "alpine-gcc-14",
+      "tool_version": "0.17.2"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "Complete binary GNU-runtime correspondence map for unchanged 96-wheel musllinux selection. Not whole wheel/source/advisory/runtime approval. Source closure is independently fail-closed.",
+  "source_closures": {
+    "alpine-gcc-14": {
+      "delivery_status": "REQUIRES_VERIFIED_DELIVERY",
+      "evidence": {
+        "aports_tar_sha256": "eff491821c8408e04dae8f93b775f3e07f701475e4b6ede12a57517093706db3",
+        "archive_bytes": 92306460,
+        "archive_sha256": "a7b39bc69cbf9e25826c5a60ab26477001f7c08d85cec04bc0e29cabed6f3cc9",
+        "archive_sha512": "932bdef0cda94bacedf452ab17f103c0cb511ff2cec55e9112fc0328cbf1d803b42595728ea7b200e0a057c03e85626f937012e49a7515bc5dd256b2bf4bc396",
+        "archive_url": "https://gcc.gnu.org/pub/gcc/releases/gcc-14.2.0/gcc-14.2.0.tar.xz",
+        "authority": "Signature-verified v3.22 index/package origin commit, Git object-verified APKBUILD and all local source files",
+        "commit": "fbf60319be3bbaf6dd32ef55cc6fb7189e05c266",
+        "headers": {
+          "Accept-Ranges": "bytes",
+          "Connection": "close",
+          "Content-Length": "92306460",
+          "Content-Security-Policy": "default-src 'self' http: https:",
+          "Content-Type": "application/x-xz",
+          "Date": "Sun, 08 Nov 2026 21:46:52 GMT",
+          "ETag": "\"5807c1c-61e9b44d77900\"",
+          "Last-Modified": "Thu, 01 Aug 2024 08:48:04 GMT",
+          "Server": "nginx",
+          "Strict-Transport-Security": "max-age=16070400",
+          "Vary": "Git-Protocol"
+        },
+        "scope": "Corresponding source of verified Alpine14.2.0-r6 originals only; actual post-repair wheel ELF transformation joins and GNU12.4 remain separate.",
+        "source_manifest_sha512": [
+          [
+            "932bdef0cda94bacedf452ab17f103c0cb511ff2cec55e9112fc0328cbf1d803b42595728ea7b200e0a057c03e85626f937012e49a7515bc5dd256b2bf4bc396",
+            "gcc-14.2.0.tar.xz"
+          ],
+          [
+            "1ecffba1b07d60e1b4422302b032bbea918b674c8e12b30aa6965b544d700ce86b61e9f7b8d402c6caf59257f491a394dd0912f0948565d6eae9335ee54f3b35",
+            "0001-posix_memalign.patch"
+          ],
+          [
+            "1d102a7b17683909dde4d8591dd889149299e77a2b2003cdc0635dc816666be940e41ae534b469485391a9bed183cd5cd337f130e4e1ecb62cb9ad86c4a081db",
+            "0002-gcc-poison-system-directories.patch"
+          ],
+          [
+            "3f24bb6a50d3c45b71ea05590e32fe3e69b91377ab185352891d5035c76ed193117c6d0b314a4c364bcf136b9a9dd5c926d6c7c30ab436976c121ebfea8d3ddd",
+            "0003-specs-turn-on-Wl-z-now-by-default.patch"
+          ],
+          [
+            "17a2993027d3ddf8595952ebcae425695ddc7b1cf73b384d2e55fddecb9cbf3f6482860a502ff69b14075e12badf27300fd3039f3a9005e851fd8d121d258c2b",
+            "0004-Turn-on-D_FORTIFY_SOURCE-2-by-default-for-C-C-ObjC-O.patch"
+          ],
+          [
+            "444550e55491ff89fe8cbbb4b73d017c9c147cdce1ad5c0561fe7d6ab3834515a814c7676c408cfeec18e1aaace27b3c26a2ffe4a75042285df5124976c38672",
+            "0005-On-linux-targets-pass-as-needed-by-default-to-the-li.patch"
+          ],
+          [
+            "5a5f57e4e45745bb4d9d63d7d410fe9dd56ce12dbd70c376dd45015909307faf02391e75368e4e7404591614a874cee41b20652cf27be234765d6db97ceb4e7e",
+            "0006-Enable-Wformat-and-Wformat-security-by-default.patch"
+          ],
+          [
+            "3a2b22388398a93dae7787e794cd580b9c577326f286241e086120c1fcfdd9228c2e00407088ebb163fb1acc21722c199071343551c989a958dc3c845b15132d",
+            "0007-Enable-Wtrampolines-by-default.patch"
+          ],
+          [
+            "7535de1c552544e3a51cbb00b5e08ac59edbf3bdcfce2a63b9f319fada3f3676f47e3a00c75d91bcefd14500555ea0844f18c130ff46b20f416ea76071e5af39",
+            "0008-Disable-ssp-on-nostdlib-nodefaultlibs-and-ffreestand.patch"
+          ],
+          [
+            "93d03afd83dee5f7129c36a7b81fa8fd323476507e2f53a4fbe40a026037e7dfafa23591145d7af5848d9a322d212497947a0f58ef828734552e6a6dabd00cfa",
+            "0009-Ensure-that-msgfmt-doesn-t-encounter-problems-during.patch"
+          ],
+          [
+            "da9eaf2f0ddbec5ee14dc26053936587e6c76fbf16846db804a18cf4d318579426ebcc566aed02daf8e34f60c08b61f5d3959305886dca9bbcdc84db057258d9",
+            "0010-Don-t-declare-asprintf-if-defined-as-a-macro.patch"
+          ],
+          [
+            "35b9aafe7eee8138cb7aad7164a8f77c15ccdce26843cee78b5871ef91d76cad22ed0871b20f51c4b89b71afd9cfe4ba4227086e158c466558513708fe7d2a1a",
+            "0011-libiberty-copy-PIC-objects-during-build-process.patch"
+          ],
+          [
+            "9d43f844fad0ac6e1c35a2b6f461f9278ae09e468f2c9ae8adc43accbe6934994aa10d3a433644d1393a4a76e3caed69e3191db7f3c0c24b4e7a0a0a0cbac3f1",
+            "0012-libgcc_s.patch"
+          ],
+          [
+            "91dde3079c1400c124ab5604597f5857185d075809649603aa3641a4581b34029bfcbd4281a5bd925d1c5e6e3b1f5f3322efda34345c6930652d685a6c9525f4",
+            "0013-nopie.patch"
+          ],
+          [
+            "0b50ad15115192699efa9fda3d4fb1c2fa95da06d7880ba34615b40c19a8256e1fe364da39f5c70dc22fbccf21db2de5900932afef68948722eeb25e435262f8",
+            "0014-ada-fix-shared-linking.patch"
+          ],
+          [
+            "00097c7106625ccf02149a757366f434c48f2abe824bb8b4bf067d29308889cb6039a5e5b2d3bd2683617693b47707d549252c56eea6bc3cdc2450a8d14f46a7",
+            "0015-build-fix-CXXFLAGS_FOR_BUILD-passing.patch"
+          ],
+          [
+            "7f0bc42b93a389b614054e700b851abfbc53db391aa10cbdf6990d41396b293af78980bb39f1cf0967184d3fbf3d46ac7c7f096717b8f193ea34cbf7f37d7e91",
+            "0016-add-fortify-headers-paths.patch"
+          ],
+          [
+            "0841acbce81250f8cb140a75ff62958dfcab3bed792822baf1fe4193dd62633648343f4b66df886c12338eed88a98e591b968131416460f9f0274046019bb8ef",
+            "0017-Alpine-musl-package-provides-libssp_nonshared.a.-We-.patch"
+          ],
+          [
+            "589d538bdf692559e475e53c79869734dede0eb15228cab9ca901c9db81b0e78a0e532b20dfb05ca584ea19ff4bedd83e139ddca912a26b446c5eb6905180536",
+            "0018-DP-Use-push-state-pop-state-for-gold-as-well-when-li.patch"
+          ],
+          [
+            "2213e07bab6f5d8d3d39c732f5385f46cc8f0c84e35054139fdaf13051252d7bf11f647f54aa8456b532166b008fff0656d8f41278e34ba868dd6fe427427a3a",
+            "0019-aarch64-disable-multilib-support.patch"
+          ],
+          [
+            "a9567947471c3ba8a547a79c55e183974554bf823d9a97a165c966d7b3caad8789980e096e3b78452ece5de062bd9bb006af464bbf0c5a35b689eac3ee21e5c5",
+            "0020-s390x-disable-multilib-support.patch"
+          ],
+          [
+            "f382eb5f7c2c60c5a23fac587c9629a3059d7be0898e97a1feaf9b9cbe1ef4693cc1177eb29333e8b7944fa17487478e73958be45d5782ccb9ef501961fb9a96",
+            "0021-ppc64-le-disable-multilib-support.patch"
+          ],
+          [
+            "44ab86feb8e41e7c2b2e27accdf46194c9b80ee6a39543303dc04824f669d9fad182aabd40c9c7f6c265cf9bb71be830c257be115dc9d701d54eca3aa9ef174e",
+            "0022-x86_64-disable-multilib-support.patch"
+          ],
+          [
+            "abf845792433a21fed5dd06167b9f6cf5e8f8026a409acce93824e466c5148e192bf5f404a271931fe4b65283499329bf67bb01019f2f3e02501f20619404e6c",
+            "0023-riscv-disable-multilib-support.patch"
+          ],
+          [
+            "ab88a2f63e3545bbc36537aa9a86f2c6c35e41bbf702d6e13743a405cdac4f901eed5737189b780da96647fea9f5d863fdc76373f25a00064106dcb5514d6d87",
+            "0024-always-build-libgcc_eh.a.patch"
+          ],
+          [
+            "8fdbe0c8bf4ca60f458a33e59027de03d15ac91933fe46d8ca62119346d20b9bc2447c0bf22bceb63d0cf8613ab61512d9197f4e6c2224af473b63ef9f254295",
+            "0025-ada-libgnarl-compatibility-for-musl.patch"
+          ],
+          [
+            "684bf2db12aa45e8db7a895ab0f227b4e4351f611b4fcc6e1745d7ad94d31b3554f39d8cf9e2203520b3c6ee35cf309b417d4a842e7a8cd55a2b2accb23f2f24",
+            "0026-ada-musl-support-fixes.patch"
+          ],
+          [
+            "3f9a406d7d2ce34951215ffbcadb49a45e55ad5c24ab9097c0e5e92383e43b876872ccd2a7e7def2833ab204975ee5733f8bcf90934db9fa9c4f6f56c62081f6",
+            "0027-configure-Add-enable-autolink-libatomic-use-in-LINK_.patch"
+          ],
+          [
+            "720a4001f9a1fa4122e456077ecff8d3eb8af7c83d0a81f9da6a6cca05b23664206a82a349e34482c48bfe40e99aa5f21567613d0913f6a24f282bc84a994496",
+            "0028-configure-fix-detection-of-atomic-builtins-in-libato.patch"
+          ],
+          [
+            "2044c23b23726965c0a6fd39f616cc464badd650947cb40495eeabd906a3af629878c1d28b403b8eb46b30a1a0ba39083023290d62f0c99ccf070063226e3f8f",
+            "0029-libstdc-do-not-throw-exceptions-for-non-C-locales-on.patch"
+          ],
+          [
+            "58e8415612e1042329ad114471852c19f6bf15bf3bfd7cd81ceeafa75778bcc28410a01071a7c8cbf12b8f549acd85723215772813deedb8f266e28b9e01a353",
+            "0030-gdc-unconditionally-link-libgphobos-against-libucont.patch"
+          ],
+          [
+            "d47b559075f40d526235f47b91da1d0cf6bfe6c5b7311bbfe08af9dd6e8f27e6c7cd82e3b2d529aab0536246fc56e2d42c089b22cacb0e7f09ca4a9d07556994",
+            "0031-druntime-link-against-libucontext-on-all-platforms.patch"
+          ],
+          [
+            "b325035cb7122d79c6b42ca6d3fc9e02319ed2f7cddb0639dff25d2798d2ce63812cd623462cdf95e21c9ffbf2412193f8b9fc89a4c36fa5a6a041661ac7399d",
+            "0032-libgnat-time_t-is-always-64-bit-on-musl-libc.patch"
+          ],
+          [
+            "c474f34e6f9a4239d486a65141a133dbe8ce91427d502a57a9fd6eb403478a2b5715ba74f24c1cc0761e16eec77ba2c1ca921fb7d7bc1e040fc3703fc9559e75",
+            "0033-libphobos-do-not-use-LFS64-symbols.patch"
+          ],
+          [
+            "c4482ffc36e7894b2140800159f4cbc9a3e9011e43a69b69f4fa92d5a11e2ee645c7e21df4423dd1e0636e8890849a5719647bfbdf84f951d638f8f488cb718c",
+            "0034-libgo-fix-lfs64-use.patch"
+          ],
+          [
+            "65df1d489e8d07a811f39e27fd29e3b2b4164fbc2c5fdc16a5142886d94a96e3fb28ccf4f20dd297ba6540ef8ea1ac3eb65a4279494639bf2f0f8376a3896cc3",
+            "0035-loongarch-disable-multilib-support.patch"
+          ],
+          [
+            "06f64544fd8bc4b6c8b06410c5198aa8fb4e82c232afc0cad83b2c69ac5d39399968206defa78297222700cd18e7fd7e8244afa76d343406a01f657c86306453",
+            "0036-libphobos-add-riscv64-and-loongarch64-support.patch"
+          ],
+          [
+            "a30148fb2cfa9a5800df4aed73f6b1b3b5d5817d768835a2574216f5818e6d6070199bacfe964f0d15b70eab7e2310c40b55e354f65360efce90e15d40287639",
+            "0037-arm-fix-signedness-of-vld1q-intrinsic-parms.patch"
+          ],
+          [
+            "00319c9770362520e8e93bd03fda1769dfa3622eba77d620e11d8af45a38e6d804a5e924046ae388e1cfaea605696e89c343fca507aaaa5edd58d80744fff14f",
+            "fix-arm64.patch"
+          ],
+          [
+            "815265826742400f86336f0c2d3e4edc37398dbc6505ee81107c0103c13ac0f406cff851438d2323033c6c6d0c0323765ee15b975eab8d1dd465f9e988168fb9",
+            "ppc64le-quadmath.patch"
+          ],
+          [
+            "ea55e0fa6813fc95c4ca2e87f059182edc54dc61515ebb92bf6eb31dbbd176d0fe81edcc7ea28d32f84ca37e8d48a544623d3d9bc94aa41ffc0859326a616aa2",
+            "riscv64-improve-build-time.patch"
+          ]
+        ]
+      },
+      "source_files": [
+        {
+          "bytes": 204800,
+          "path": "gcc-aports-fbf60319.tar",
+          "sha256": "eff491821c8408e04dae8f93b775f3e07f701475e4b6ede12a57517093706db3"
+        },
+        {
+          "bytes": 18002,
+          "path": "notices/COPYING",
+          "sha256": "231f7edcc7352d7734a96eef0b8030f77982678c516876fcb81e25b32d68564c"
+        },
+        {
+          "bytes": 35147,
+          "path": "notices/COPYING3",
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+        },
+        {
+          "bytes": 26527,
+          "path": "notices/COPYING.LIB",
+          "sha256": "a9bdde5616ecdd1e980b44f360600ee8783b1f99b8cc83a2beb163a0a390e861"
+        },
+        {
+          "bytes": 7639,
+          "path": "notices/COPYING3.LIB",
+          "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c"
+        },
+        {
+          "bytes": 3324,
+          "path": "notices/COPYING.RUNTIME",
+          "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+        },
+        {
+          "bytes": 92306460,
+          "path": "gcc-14.2.0.tar.xz",
+          "sha256": "a7b39bc69cbf9e25826c5a60ab26477001f7c08d85cec04bc0e29cabed6f3cc9"
+        },
+        {
+          "bytes": 140694,
+          "path": "correspondence-proof.json.gz",
+          "sha256": "455ae02944801828bcdadb38c50636d7d44ab20e635a0ee589428c48b8fabdc0"
+        }
+      ],
+      "status": "AUTHENTICATED_PROVIDER_SOURCE"
+    },
+    "rust-cross-gcc-12": {
+      "delivery_status": "REQUIRES_VERIFIED_DELIVERY",
+      "gcc_version": "12.4.0",
+      "original_build_revision": "UNKNOWN_UNPINNED_CHECKOUT_REMOVED_BY_PUBLISHER",
+      "prior_status": "UNRESOLVED_BUILD_RECIPE_REVISION",
+      "reason": "Corresponding source established independently by complete original ELF reproduction on both targets, not by inferring the removed producer checkout.",
+      "reproduction": {
+        "arm_version_map_generator": "upstream mkmap-symver.awk executed with mawk; full-ELF result exact",
+        "execution_scope": "Native AMD64 compiler host. ARM target built/compared, not executed.",
+        "originals": {
+          "amd64": "f685abf10f5e598c5fe7869915bfe476984bb73bee0fbf11a9c2bbb4ebd8a32e",
+          "arm64": "0bf60adc8e990861bcc846bdb16ce7e31ba0d82c01be2d6338e41ff14a6b6b52"
+        },
+        "proof_sha256": "d4dc98548ff7c23851862501240112cb21debb3a9a9d884a90835462f6da04c8",
+        "source_recipe_commit": "227df8b99103f9c59f6570babf892978e293082f"
+      },
+      "source_files": [
+        {
+          "bytes": 1832960,
+          "path": "musl-cross-make-227df8b9.tar",
+          "sha256": "63df6cde6d77fa176b6387d655d9ed33678555613e32bd1b7f4a25808fd7780e"
+        },
+        {
+          "bytes": 18002,
+          "path": "notices/COPYING",
+          "sha256": "231f7edcc7352d7734a96eef0b8030f77982678c516876fcb81e25b32d68564c"
+        },
+        {
+          "bytes": 35147,
+          "path": "notices/COPYING3",
+          "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+        },
+        {
+          "bytes": 26527,
+          "path": "notices/COPYING.LIB",
+          "sha256": "a9bdde5616ecdd1e980b44f360600ee8783b1f99b8cc83a2beb163a0a390e861"
+        },
+        {
+          "bytes": 7639,
+          "path": "notices/COPYING3.LIB",
+          "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c"
+        },
+        {
+          "bytes": 3324,
+          "path": "notices/COPYING.RUNTIME",
+          "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+        },
+        {
+          "bytes": 51342242,
+          "path": "upstream/binutils-2.44.tar.gz",
+          "sha256": "0cdd76777a0dfd3dd3a63f215f030208ddb91c2361d2bcc02acec0f1c16b6a2e"
+        },
+        {
+          "bytes": 36159,
+          "path": "upstream/config.sub",
+          "sha256": "75d5d255a2a273b6e651f82eecfabf6cbcd8eaeae70e86b417384c8f4a58d8d3"
+        },
+        {
+          "bytes": 83377372,
+          "path": "upstream/gcc-12.4.0.tar.xz",
+          "sha256": "704f652604ccbccb14bdabf3478c9511c89788b12cb3bbffded37341916a9175"
+        },
+        {
+          "bytes": 2094196,
+          "path": "upstream/gmp-6.3.0.tar.xz",
+          "sha256": "a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898"
+        },
+        {
+          "bytes": 1081424,
+          "path": "upstream/linux-headers-4.19.88-2.tar.xz",
+          "sha256": "dc7abf734487553644258a3822cfd429d74656749e309f2b25f09f4282e05588"
+        },
+        {
+          "bytes": 773573,
+          "path": "upstream/mpc-1.3.1.tar.gz",
+          "sha256": "ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8"
+        },
+        {
+          "bytes": 1505596,
+          "path": "upstream/mpfr-4.2.2.tar.xz",
+          "sha256": "b67ba0383ef7e8a8563734e2e889ef5ec3c3b898a01d00fa0a6869ad81c6ce01"
+        },
+        {
+          "bytes": 1080786,
+          "path": "upstream/musl-1.2.5.tar.gz",
+          "sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4"
+        },
+        {
+          "bytes": 2251,
+          "path": "config/x86_64-config.mak",
+          "sha256": "fc89439a174ddb5ea6dcdc3d64b6f63524f1178710619e4f96e5e6da5307d9d4"
+        },
+        {
+          "bytes": 2251,
+          "path": "config/aarch64-config.mak",
+          "sha256": "fc89439a174ddb5ea6dcdc3d64b6f63524f1178710619e4f96e5e6da5307d9d4"
+        },
+        {
+          "bytes": 2033427,
+          "path": "correspondence-proof.json.gz",
+          "sha256": "d4dc98548ff7c23851862501240112cb21debb3a9a9d884a90835462f6da04c8"
+        },
+        {
+          "bytes": 2493,
+          "path": "linker-maps/aarch64-libgcc.map",
+          "sha256": "b7a95d6a5f404af2da844449f8feab387fd4bae123303faf193e5e5c553e1f76"
+        },
+        {
+          "bytes": 2955,
+          "path": "reproduction.json",
+          "sha256": "f612452891f356718fa4a5100ade129fb00858effc87ca10359d6c57d1ab0219"
+        }
+      ],
+      "status": "REPRODUCED_CORRESPONDING_SOURCE"
+    }
+  },
+  "tools": {
+    "0.17.2": {
+      "file": "patchelf-0.17.2",
+      "provenance": {
+        "artifacts": [
+          {
+            "bytes": 482846,
+            "filename": "patchelf-0.17.2.4-py3-none-manylinux1_x86_64.manylinux_2_5_x86_64.musllinux_1_1_x86_64.whl",
+            "sha256": "d9b35ebfada70c02679ad036407d9724ffe1255122ba4ac5e4be5868618a5689",
+            "url": "https://files.pythonhosted.org/packages/7e/19/f7821ef31aab01fa7dc8ebe697ece88ec4f7a0fdd3155dab2dfee4b00e5c/patchelf-0.17.2.4-py3-none-manylinux1_x86_64.manylinux_2_5_x86_64.musllinux_1_1_x86_64.whl"
+          },
+          {
+            "bytes": 149629,
+            "filename": "patchelf-0.17.2.4.tar.gz",
+            "sha256": "970ee5cd8af33e5ea2099510b2f9013fa1b8d5cd763bf3fd3961281c18101a09",
+            "url": "https://files.pythonhosted.org/packages/2c/a3/fdd3fa938c864aa2f11dd0b7f08befeda983d2dcdee44da493c6977a653f/patchelf-0.17.2.4.tar.gz"
+          }
+        ],
+        "release": "0.17.2.4",
+        "scope": "Ephemeral comparison tool only, not installed in an ECM/MCP runtime."
+      },
+      "scope": "Comparison-only native AMD64 tool, never shipped as runtime provider.",
+      "sha256": "f2a22996ad184a5329cdc98a2bf7df5badda683894ab9a64c969ac951a05d772"
+    },
+    "0.19.3": {
+      "file": "patchelf-0.19.3",
+      "provenance": {
+        "artifacts": [
+          {
+            "bytes": 550510,
+            "filename": "patchelf-0.19.3.0-py3-none-manylinux1_x86_64.manylinux_2_5_x86_64.musllinux_1_1_x86_64.whl",
+            "sha256": "1668a30fcc414debbb1604cd0a361b2f28a33a0ff6e74a74bc71766ee746e21f",
+            "url": "https://files.pythonhosted.org/packages/b3/d8/b261671a4064a145ae8129c5585ac79d121d852055043d03b66ee0aa4653/patchelf-0.19.3.0-py3-none-manylinux1_x86_64.manylinux_2_5_x86_64.musllinux_1_1_x86_64.whl"
+          },
+          {
+            "bytes": 380620,
+            "filename": "patchelf-0.19.3.0.tar.gz",
+            "sha256": "568ede62875dc8e30ee0eb2920da5d39e6aebb43216c48d7362f80384217fee8",
+            "url": "https://files.pythonhosted.org/packages/7c/99/1f5174c64fc0ed2e6e7da7ef59ae4d36ec694256ef93aa2c08231cbe1dbc/patchelf-0.19.3.0.tar.gz"
+          }
+        ],
+        "binary_sha256": "bc38d10bf747fb2e14c48e1d28e789035cd5b44f4eb04706b8c2078e54522c6d",
+        "scope": "Hash-pinned temporary comparison tool and corresponding source only; not an application runtime provider.",
+        "version": "0.19.3.0"
+      },
+      "scope": "Comparison-only native AMD64 tool, never shipped as runtime provider.",
+      "sha256": "bc38d10bf747fb2e14c48e1d28e789035cd5b44f4eb04706b8c2078e54522c6d"
+    }
+  },
+  "wheel_selection": {
+    "aiofiles-25.1.0-py3-none-any.whl": "abe311e527c862958650f9438e859c1fa7568a141b22abcd015e120e86a85695",
+    "aiohappyeyeballs-2.7.1-py3-none-any.whl": "9243213661e29250eb41368e5daa826fc017156c3b8a11440826b2e3ed376472",
+    "aiohttp-3.14.5-cp312-cp312-musllinux_1_2_aarch64.whl": "19e2ba471507c34f8252402ab50f5ab512398b9ea8c8f1cb26beb3f75793ba30",
+    "aiohttp-3.14.5-cp312-cp312-musllinux_1_2_x86_64.whl": "3be7dd397d64ca3e1869626fa9318aaebb54b7bf93bc72d7a205448d83e4f748",
+    "aiosignal-1.4.0-py3-none-any.whl": "053243f8b92b990551949e63930a839ff0cf0b0ebbe0597b0f3fb19e1a0fe82e",
+    "alembic-1.18.5-py3-none-any.whl": "06d8ba9d04558022f5395e9317de03d270f3dced49cee01f89fe7a13c26f14bc",
+    "annotated_doc-0.0.5-py3-none-any.whl": "117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101",
+    "annotated_types-0.8.0-py3-none-any.whl": "f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0",
+    "anyio-4.14.2-py3-none-any.whl": "9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494",
+    "attrs-26.1.0-py3-none-any.whl": "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309",
+    "bcrypt-5.0.0-cp39-abi3-musllinux_1_2_aarch64.whl": "3ca8a166b1140436e058298a34d88032ab62f15aae1c598580333dc21d27ef10",
+    "bcrypt-5.0.0-cp39-abi3-musllinux_1_2_x86_64.whl": "61afc381250c3182d9078551e3ac3a41da14154fbff647ddf52a769f588c4172",
+    "boto3-1.43.78-py3-none-any.whl": "893f06a171469618e17de78dc927aca6e74fcf45a70d2c5918e9ac9919e96cc9",
+    "botocore-1.43.78-py3-none-any.whl": "ddd020493235e264b3bd12606f239a3d3b2dd7cfb1d25a0691061183c290c228",
+    "certifi-2026.10.19-py3-none-any.whl": "42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b",
+    "cffi-2.1.1-cp312-cp312-musllinux_1_2_aarch64.whl": "208f941bb9d18e768138677f0a6d2ce01f590df56043dda1df1535ac57c88517",
+    "cffi-2.1.1-cp312-cp312-musllinux_1_2_x86_64.whl": "210019b6c7cf07f081b4c54635c8cf744377001350e29cc0f81c4377b4797735",
+    "click-8.4.2-py3-none-any.whl": "e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76",
+    "coverage-7.15.4-cp312-cp312-musllinux_1_2_aarch64.whl": "e98dcc55d572b38e69d117da7e8e8efb8500f1f5eaf81ecd460a63220790b839",
+    "coverage-7.15.4-cp312-cp312-musllinux_1_2_x86_64.whl": "c2de40895718f91951b86712b4c5b694acaf9a0a49be13874896f599a1eed3f4",
+    "croniter-6.2.4-py3-none-any.whl": "8ef3d544107a5c05a150a2d78f8bf5a8eb9c5c4d93405a736b824109574e3f4d",
+    "cryptography-50.0.2-cp311-abi3-musllinux_1_2_aarch64.whl": "25784ce8b9621c90c643efb9e1e2162ab3b0224cae446ad5e70e7fcb1ce18b51",
+    "cryptography-50.0.2-cp311-abi3-musllinux_1_2_x86_64.whl": "85d0d9a31b9098e98534226d5686b47264b95e62ce459dc2e62fdfc809f9fe93",
+    "deprecated-1.3.1-py2.py3-none-any.whl": "597bfef186b6f60181535a29fbe44865ce137a5079f295b479886c82729d5f3f",
+    "dnspython-2.9.0-py3-none-any.whl": "9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9",
+    "email_validator-2.3.0-py3-none-any.whl": "80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4",
+    "fastapi-0.136.1-py3-none-any.whl": "a6e9d7eeada96c93a4d69cb03836b44fa34e2854accb7244a1ece36cd4781c3f",
+    "frozenlist-1.8.0-cp312-cp312-musllinux_1_2_aarch64.whl": "405e8fe955c2280ce66428b3ca55e12b3c4e9c336fb2103a4937e891c69a4a29",
+    "frozenlist-1.8.0-cp312-cp312-musllinux_1_2_x86_64.whl": "776f352e8329135506a1d6bf16ac3f87bc25b28e765949282dcc627af36123aa",
+    "greenlet-3.5.5-cp312-cp312-musllinux_1_2_aarch64.whl": "27493374cff1d1b7919dc8126547f2aea582737e3046147b434b1e12de56389b",
+    "greenlet-3.5.5-cp312-cp312-musllinux_1_2_x86_64.whl": "12e2ee66c2aba86133f10fd99d6a8856c6d351ffb7be0e4d52ef2cc5fbb705b2",
+    "h11-0.16.0-py3-none-any.whl": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86",
+    "httpcore-1.0.9-py3-none-any.whl": "2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55",
+    "httptools-0.8.0-cp312-cp312-musllinux_1_2_aarch64.whl": "ef7c3c97f4311c7be57e2986629df89d49cb434dbff78eafcd48c2bff986b15a",
+    "httptools-0.8.0-cp312-cp312-musllinux_1_2_x86_64.whl": "a1afd7c9fbff0d9f5d489c4ce2768bd09c84a46ddefc7161e6aa82ae35c85745",
+    "httpx-0.28.1-py3-none-any.whl": "d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad",
+    "hypothesis-6.165.10-cp312-cp312-musllinux_1_2_aarch64.whl": "e9acb2c4d9cb532c3fedea74159f7b923c8c036328c9239b4049e7aa073bdd81",
+    "hypothesis-6.165.10-cp312-cp312-musllinux_1_2_x86_64.whl": "8660572b2d424bf5369ea8990985225f70bd1615b76ecd9c25588a3b9307009f",
+    "idna-3.19-py3-none-any.whl": "815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4",
+    "iniconfig-2.3.0-py3-none-any.whl": "f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12",
+    "jmespath-1.1.0-py3-none-any.whl": "a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64",
+    "josepy-2.2.0-py3-none-any.whl": "63e9dd116d4078778c25ca88f880cc5d95f1cab0099bebe3a34c2e299f65d10b",
+    "limits-5.8.0-py3-none-any.whl": "ae1b008a43eb43073c3c579398bd4eb4c795de60952532dc24720ab45e1ac6b8",
+    "mako-1.4.1-py3-none-any.whl": "a359d9a94a541213958742b2698d0a7757bb83551767bc468a74b9905aba9617",
+    "markupsafe-3.0.3-cp312-cp312-musllinux_1_2_aarch64.whl": "be8813b57049a7dc738189df53d69395eba14fb99345e0a5994914a3864c8a4b",
+    "markupsafe-3.0.3-cp312-cp312-musllinux_1_2_x86_64.whl": "77f0643abe7495da77fb436f50f8dab76dbc6e5fd25d39589a0f1fe6548bfa2b",
+    "multidict-6.9.1-cp312-cp312-musllinux_1_2_aarch64.whl": "1a8adfcaf96f587ab138476eaddef95f29b8a2a8a9afbfea8d2fd62180995d02",
+    "multidict-6.9.1-cp312-cp312-musllinux_1_2_x86_64.whl": "c148e8b596000dd3e4bfe206e70f3e666be18d72032e0012555f2373c52e35d6",
+    "packaging-26.3-py3-none-any.whl": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+    "pluggy-1.6.0-py3-none-any.whl": "e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746",
+    "prometheus_client-0.26.0-py3-none-any.whl": "fa93d06737aa02bacd05794768508bb97d2fbee28cb3bca04eaae92f0ca953d6",
+    "propcache-0.5.2-cp312-cp312-musllinux_1_2_aarch64.whl": "80168e2ebe4d3ec6599d10ad8f520304ae1cad9b6c5a95372aef1b66b7bfb53a",
+    "propcache-0.5.2-cp312-cp312-musllinux_1_2_x86_64.whl": "c80f4ba3e8f00189165999a742ee526ebeccedf6c3f7beb0c7df821e9772435a",
+    "py_cpuinfo2-10.1.1-py3-none-any.whl": "adc53396bfb206e6498d078ec2ab407f85799ecd819584ac36a8f80a2d4d762d",
+    "pycparser-3.0-py3-none-any.whl": "b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992",
+    "pydantic-2.13.4-py3-none-any.whl": "45a282cde31d808236fd7ea9d919b128653c8b38b393d1c4ab335c62924d9aba",
+    "pydantic_core-2.46.4-cp312-cp312-musllinux_1_1_aarch64.whl": "b2f69dec1725e79a012d920df1707de5caf7ed5e08f3be4435e25803efc47458",
+    "pydantic_core-2.46.4-cp312-cp312-musllinux_1_1_x86_64.whl": "fbdb89b3e1c94a30cc5edfce477c6e6a5dc4d8f84665b455c27582f211a1c72c",
+    "pygments-2.21.0-py3-none-any.whl": "2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9",
+    "pyjwt-2.15.1-py3-none-any.whl": "42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193",
+    "pytest-9.1.1-py3-none-any.whl": "37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c",
+    "pytest_asyncio-1.4.0-py3-none-any.whl": "933ca923a23075a87fb7070c0ec272a6848489824d887c85c812670932835aa1",
+    "pytest_benchmark-5.3.0-py3-none-any.whl": "920ab1dfcffa718d49aa15ba144c7e357bda59216a0dc308016cc1c7236f719d",
+    "pytest_cov-7.1.0-py3-none-any.whl": "a0461110b7865f9a271aa1b51e516c9a95de9d696734a2f71e3e78f46e1d4678",
+    "python_dateutil-2.9.0.post0-py2.py3-none-any.whl": "a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427",
+    "python_dotenv-1.2.3-py3-none-any.whl": "904552145e8bfed22162c09dab1c2b9b54fefa7b23ba780f4f26ca0316b0f0d9",
+    "python_multipart-0.0.32-py3-none-any.whl": "ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23",
+    "pytz-2026.3.post1-py2.py3-none-any.whl": "dd95840dd199baea12d9cc096a1d452caa6596a1c1e4b5f3dbd1541855d5e815",
+    "pyyaml-6.0.3-cp312-cp312-musllinux_1_2_aarch64.whl": "8dc52c23056b9ddd46818a57b78404882310fb473d63f17b07d5c40421e47f8e",
+    "pyyaml-6.0.3-cp312-cp312-musllinux_1_2_x86_64.whl": "41715c910c881bc081f1e8872880d3c650acf13dfa8214bad49ed4cede7c34ea",
+    "rapidfuzz-3.14.5-cp312-cp312-musllinux_1_2_aarch64.whl": "09d6c9ba091854f07817055d795d604179c12a8f308ba4c7d56f3719dfea1646",
+    "rapidfuzz-3.14.5-cp312-cp312-musllinux_1_2_x86_64.whl": "0ebd1a18e2e47bc0b292a07e6ed9c3642f8aaa672d12253885f599b50807a4f9",
+    "regex-2026.7.19-cp312-cp312-musllinux_1_2_aarch64.whl": "1d793a7988e04fcb1e2e135567443d82173225d657419ec09414a9b5a145b986",
+    "regex-2026.7.19-cp312-cp312-musllinux_1_2_x86_64.whl": "dbe6493fbd27321b1d1f2dd4f5c7e5bd4d8b1d7cab7f32fd67db3d0b2ed8248a",
+    "respx-0.23.1-py2.py3-none-any.whl": "b18004b029935384bccfa6d7d9d74b4ec9af73a081cc28600fffc0447f4b8c1a",
+    "s3transfer-0.19.2-py3-none-any.whl": "d8168eccca828cbb2cd573675333f3bddd254313a9c42494b84c76b539e8ba25",
+    "six-1.17.0-py2.py3-none-any.whl": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+    "slowapi-0.1.10-py3-none-any.whl": "3acb61561dc9d687e3d3669362ff6a439de9ba44e2fed3a9c165da26b4b83e28",
+    "sortedcontainers-2.4.0-py2.py3-none-any.whl": "a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0",
+    "sqlalchemy-2.0.52-cp312-cp312-musllinux_1_2_aarch64.whl": "37a4d548327b6cab9c7d8cdb4e0e82feabee0110c4d150059068e2d1cfbd99ee",
+    "sqlalchemy-2.0.52-cp312-cp312-musllinux_1_2_x86_64.whl": "e49f51a5d59857a7a0dcaf9469febf7197d9394bd88f00d69c2c4e848112cdbf",
+    "starlette-1.6.0-py3-none-any.whl": "a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c",
+    "typing_extensions-4.16.0-py3-none-any.whl": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+    "typing_inspection-0.4.4-py3-none-any.whl": "65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147",
+    "urllib3-2.8.0-py3-none-any.whl": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3",
+    "uvicorn-0.52.4-py3-none-any.whl": "f86e41a149d7d05a9969337e3946a9c171c06a5d42680896daaba624aeac8da1",
+    "uvloop-0.22.1-cp312-cp312-musllinux_1_2_aarch64.whl": "e047cc068570bac9866237739607d1313b9253c3051ad84738cbb095be0537b2",
+    "uvloop-0.22.1-cp312-cp312-musllinux_1_2_x86_64.whl": "512fec6815e2dd45161054592441ef76c830eddaad55c8aa30952e6fe1ed07c0",
+    "watchfiles-1.2.0-cp312-cp312-musllinux_1_1_aarch64.whl": "2cb93af48550faf1cea04c303107c8b75833de7013e57ce27d3b8d21d8d0f58c",
+    "watchfiles-1.2.0-cp312-cp312-musllinux_1_1_x86_64.whl": "2995c176de7692b86a2e4c58d9ec718f753150a979cb4a754e2b4ffa38e70906",
+    "websockets-17.0.1-cp312-cp312-musllinux_1_2_aarch64.whl": "ffad64ce7ad3703d652a3fd9af26238377d24ce52c6ad8ff35d26d82f61f493f",
+    "websockets-17.0.1-cp312-cp312-musllinux_1_2_x86_64.whl": "6db9e5bf3649ab506c6ae8a3ac85a00fb1ae3816d75962771b2df8adbc5d40d2",
+    "wrapt-2.3.0-cp312-cp312-musllinux_1_2_aarch64.whl": "418f54bb09d1762db02c7009b4051149893af3153a87f92d70356703c11eea02",
+    "wrapt-2.3.0-cp312-cp312-musllinux_1_2_x86_64.whl": "3da470536bf9645143323dd41b32db55c6f4304ad382094c1a1da8a92061e10d",
+    "yarl-1.25.1-cp312-cp312-musllinux_1_2_aarch64.whl": "e80f557716fd765439577131e526b8942ffc2c07bdbc5e39fa62f660ba1e963f",
+    "yarl-1.25.1-cp312-cp312-musllinux_1_2_x86_64.whl": "68782fdb4027b8d1eee25ec35e9a6db05e863b899eb0310b3a33b6c3fef55707"
+  }
+}

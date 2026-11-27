@@ -1,0 +1,48 @@
+Index: codec2-1.2.0/src/CMakeLists.txt
+===================================================================
+--- codec2-1.2.0.orig/src/CMakeLists.txt
++++ codec2-1.2.0/src/CMakeLists.txt
+@@ -385,3 +385,43 @@ install(TARGETS codec2 EXPORT codec2-con
+     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+     PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/codec2 COMPONENT dev
+ )
++
++install(TARGETS
++    c2enc
++    c2dec
++    c2sim
++    fdmdv_get_test_bits
++    fdmdv_mod
++    fdmdv_demod
++    fdmdv_put_test_bits
++    freedv_tx
++    freedv_rx
++    freedv_data_raw_tx
++    freedv_data_raw_rx
++    freedv_data_tx
++    freedv_data_rx
++    freedv_mixed_tx
++    freedv_mixed_rx
++    fsk_mod
++    fsk_demod
++    fsk_get_test_bits
++    fsk_put_test_bits
++    framer
++    deframer
++    cohpsk_mod
++    ofdm_get_test_bits
++    ofdm_put_test_bits
++    ofdm_mod
++    ofdm_demod
++    vhf_deframe_c2
++    vhf_frame_c2
++    cohpsk_demod
++    cohpsk_get_test_bits
++    cohpsk_put_test_bits
++    ch
++    tollr
++    ldpc_noise
++    ldpc_enc
++    ldpc_dec
++    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
++)

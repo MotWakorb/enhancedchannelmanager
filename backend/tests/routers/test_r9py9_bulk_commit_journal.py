@@ -98,7 +98,8 @@ class TestPerChannelRows:
     async def test_update_that_changes_nothing_writes_no_row(self):
         client = make_client([{"id": 7, "name": "Doctest ABC", "channel_number": 100}])
         _result, journal_mock = await run_ops(client, [
-            {"type": "updateChannel", "channelId": 7, "data": {"channel_number": 100}},
+            {"type": "updateChannel", "channelId": 7, "data": {"channel_number": 100},
+             "expectedNumber": {"number": 100}},
         ])
 
         assert rows_from(journal_mock) == []
@@ -199,7 +200,8 @@ class TestPerChannelRows:
             {"id": 2, "name": "Bravo", "channel_number": 51},
         ])
         _result, journal_mock = await run_ops(client, [
-            {"type": "bulkAssignChannelNumbers", "channelIds": [1, 2], "startingNumber": 10},
+            {"type": "bulkAssignChannelNumbers", "channelIds": [1, 2], "startingNumber": 10,
+             "expectedNumbers": {1: 50, 2: 51}},
         ])
 
         rows = rows_from(journal_mock)

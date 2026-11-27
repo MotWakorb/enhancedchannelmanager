@@ -1,0 +1,55 @@
+name: Codec2 Native ARM Numerical Investigation
+
+on:
+  push:
+    branches: ['feat/stable-alpine-runtime-20261108']
+    paths:
+      - '.github/workflows/codec2-numeric-diagnostic.yml'
+      - 'scripts/diagnose_codec2_numeric.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  investigate:
+    name: ARM numeric variants (diagnostic only, never acceptance)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Prepare pinned inputs and independent original ARM execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(uname -m)" = aarch64
+          python3 scripts/prepare_alpine_native_cache.py --output-dir "$RUNNER_TEMP/codec-inputs"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/13639733957/zip" > "$RUNNER_TEMP/original-arm.zip"
+          echo '1ce3dda15bf53dda829ca137089632d6c17deb3d29ebd238f9a7d20ee6e5effd  '"$RUNNER_TEMP/original-arm.zip" | sha256sum -c -
+      - name: Build unchanged baseline codec recipe
+        run: |
+          docker buildx build --platform linux/arm64 --progress plain \
+            --build-context owned-cache="$RUNNER_TEMP/codec-inputs" \
+            --file docker/alpine-native/Dockerfile.codecs --target codec-builder \
+            --load --tag ecm-arm-numeric-diagnostic:local .
+      - name: Investigate copied sources without changing recipes or goldens
+        run: |
+          mkdir "$RUNNER_TEMP/codec-diagnostic"
+          docker run --rm --network none --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
+            --mount type=bind,src="$GITHUB_WORKSPACE/scripts",dst=/diagnostic/scripts,readonly \
+            --mount type=bind,src="$RUNNER_TEMP/original-arm.zip",dst=/diagnostic/original.zip,readonly \
+            --mount type=bind,src="$RUNNER_TEMP/codec-diagnostic",dst=/diagnostic/output \
+            --entrypoint /usr/local/bin/python ecm-arm-numeric-diagnostic:local \
+            /diagnostic/scripts/diagnose_codec2_numeric.py --source-dir /proof/work/codec2 \
+            --probe /diagnostic/scripts/alpine_codec_matrix.py --reference-zip /diagnostic/original.zip \
+            --output-dir /diagnostic/output/variants
+      - name: Retain diagnostic variants including original failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: codec2-arm-numeric-diagnostic-${{ github.sha }}
+          path: ${{ runner.temp }}/codec-diagnostic/
+          retention-days: 14
+          if-no-files-found: error

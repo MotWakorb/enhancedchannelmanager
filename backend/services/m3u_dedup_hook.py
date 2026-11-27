@@ -33,11 +33,13 @@ not yet resolved), the §D5 partial unique index raises
 INFO, and returns the same "skip channel creation" signal — the
 prior pending row is still authoritative.
 
-Dry-run handling: the hook is bypassed when ``dry_run=True``. A
-preview must not mutate the queue. The auto-creation executor's
-own dry-run branch handles the simulated-channel bookkeeping; the
-hook simply returns ``DedupHookResult(enqueued=False)`` so the
-preview shows the would-create action verbatim.
+Dry-run handling: the WRITE path is bypassed when ``dry_run=True`` — a
+preview must not mutate the queue, so ``check_and_enqueue_pending_merge``
+returns ``DedupHookResult(enqueued=False)``. A dry-run preview instead
+calls :func:`predict_pending_merge` (GH #1018), which runs the same
+decision (:func:`find_pending_merge_candidate`) and the same §D5 row
+lookup (:func:`find_authoritative_pending_row`) read-only, so the preview
+predicts the deferral the live run would apply and names the blocking row.
 """
 from __future__ import annotations
 
@@ -148,6 +150,145 @@ class EnqueueResult:
     candidate: MatchResult
 
 
+@dataclass(frozen=True)
+class PendingMergePrediction:
+    """Read-only outcome of :func:`predict_pending_merge` (GH #1018).
+
+    What a live M3U-refresh run would decide for one stream, computed for a
+    dry-run preview without touching the queue.
+
+    Attributes
+    ----------
+    deferred:
+        True when a live run would skip channel creation and leave the
+        stream behind a pending merge. False when it would create.
+    candidate:
+        The ``MatchResult`` that drives the deferral; ``None`` when not
+        deferred.
+    merge_id:
+        The id of the existing ``status='pending'`` row the live run would
+        collide with (§D5) and stay blocked behind. ``None`` when deferred
+        but no such row exists yet: the live run would INSERT a new one, so
+        there is no authoritative id to report until it does.
+    """
+
+    deferred: bool
+    candidate: Optional[MatchResult] = None
+    merge_id: Optional[int] = None
+
+
+def find_pending_merge_candidate(
+    *,
+    stream_name: str,
+    candidates: list[tuple],
+    threshold: float,
+    triggered_by: str,
+) -> Optional[MatchResult]:
+    """The bulk-M3U create-versus-defer decision, shared by live and preview.
+
+    Returns the ``MatchResult`` a stream would be deferred behind, or
+    ``None`` when the stream should be created. Applies the ADR-008 §D1
+    trigger gate (only ``m3u_refresh`` defers) and the matcher with its
+    §D2 floor clamp. Pure: no database access, so the live hook
+    (:func:`check_and_enqueue_pending_merge`) and the dry-run prediction
+    (:func:`predict_pending_merge`) cannot drift apart (GH #1018).
+    """
+    if triggered_by != M3U_REFRESH_TRIGGERED_BY:
+        # Auto-creation runs from scheduled / manual / API paths predate
+        # the dedup epic and stay on the legacy "always create" semantics.
+        # Only M3U refresh enqueues pending merges per ADR-008 §D1.
+        logger.debug(
+            "[DEDUP] Hook bypassed for stream=%r (triggered_by=%r != %r)",
+            stream_name, triggered_by, M3U_REFRESH_TRIGGERED_BY,
+        )
+        return None
+
+    if not candidates:
+        # Empty target group — nothing to match against. The auto-creation
+        # pipeline proceeds with normal channel creation.
+        return None
+
+    # Stringify channel ids before passing to the matcher. The matcher
+    # signature is list[tuple[str, str]]; Dispatcharr returns int ids
+    # from get_channels() (ADR-008 §D8 stores them as TEXT regardless
+    # of integer vs UUID upstream representation).
+    str_candidates: list[tuple[str, str]] = [
+        (str(cid), cname) for cid, cname in candidates
+    ]
+
+    # ``None`` here is the silent-refusal branch per ADR-008 §D2 (below
+    # the floor) and the no-match branch (no candidate scored above the
+    # clamped threshold): the stream is created.
+    return find_candidate(
+        stream_name=stream_name,
+        candidates=str_candidates,
+        threshold=threshold,
+    )
+
+
+def find_authoritative_pending_row(
+    db_session,
+    *,
+    stream_name: str,
+    candidate_channel_id: str,
+):
+    """The ``status='pending'`` row that is authoritative for a pair (§D5).
+
+    The same lookup the live enqueue uses after a partial-unique-index
+    collision, so the preview names exactly the row the live run would be
+    blocked behind. Terminal (merged / dismissed) rows are history and never
+    block. Read-only. Returns ``None`` when no pending row exists.
+    """
+    from models import PendingMerge
+
+    return (
+        db_session.query(PendingMerge)
+        .filter(
+            PendingMerge.stream_name == stream_name,
+            PendingMerge.candidate_channel_id == candidate_channel_id,
+            PendingMerge.status == "pending",
+        )
+        .order_by(PendingMerge.created_at.asc(), PendingMerge.id.asc())
+        .first()
+    )
+
+
+def predict_pending_merge(
+    *,
+    stream_name: str,
+    candidates: list[tuple],
+    threshold: float,
+    triggered_by: str,
+    db_session,
+) -> PendingMergePrediction:
+    """Predict the live hook's decision for a dry-run preview (GH #1018).
+
+    Mutation-free: never inserts, updates, dismisses or resolves a queue
+    row, writes no journal row and moves no metric. Uses the same decision
+    (:func:`find_pending_merge_candidate`) and the same §D5 row lookup
+    (:func:`find_authoritative_pending_row`) as the live path, so a preview
+    and the live run agree for the same persisted queue state.
+    """
+    match = find_pending_merge_candidate(
+        stream_name=stream_name,
+        candidates=candidates,
+        threshold=threshold,
+        triggered_by=triggered_by,
+    )
+    if match is None:
+        return PendingMergePrediction(deferred=False)
+    existing = find_authoritative_pending_row(
+        db_session,
+        stream_name=stream_name,
+        candidate_channel_id=match.candidate_channel_id,
+    )
+    return PendingMergePrediction(
+        deferred=True,
+        candidate=match,
+        merge_id=int(existing.id) if existing is not None else None,
+    )
+
+
 def enqueue_pending_merge(
     *,
     stream_name: str,
@@ -242,15 +383,10 @@ def enqueue_pending_merge(
         # candidate_channel_id) pair already exists. Roll back, look up
         # the authoritative existing row, and return its id idempotently.
         db_session.rollback()
-        existing = (
-            db_session.query(PendingMerge)
-            .filter(
-                PendingMerge.stream_name == stream_name,
-                PendingMerge.candidate_channel_id == match.candidate_channel_id,
-                PendingMerge.status == "pending",
-            )
-            .order_by(PendingMerge.created_at.asc(), PendingMerge.id.asc())
-            .first()
+        existing = find_authoritative_pending_row(
+            db_session,
+            stream_name=stream_name,
+            candidate_channel_id=match.candidate_channel_id,
         )
         if existing is None:  # pragma: no cover — defensive; the IntegrityError implies one exists
             raise
@@ -370,39 +506,13 @@ def check_and_enqueue_pending_merge(
         )
         return DedupHookResult(enqueued=False)
 
-    if triggered_by != M3U_REFRESH_TRIGGERED_BY:
-        # Auto-creation runs from scheduled / manual / API paths predate
-        # the dedup epic and stay on the legacy "always create" semantics.
-        # Only M3U refresh enqueues pending merges per ADR-008 §D1.
-        logger.debug(
-            "[DEDUP] Hook bypassed for stream=%r (triggered_by=%r != %r)",
-            stream_name, triggered_by, M3U_REFRESH_TRIGGERED_BY,
-        )
-        return DedupHookResult(enqueued=False)
-
-    if not candidates:
-        # Empty target group — nothing to match against. The auto-creation
-        # pipeline proceeds with normal channel creation.
-        return DedupHookResult(enqueued=False)
-
-    # Stringify channel ids before passing to the matcher. The matcher
-    # signature is list[tuple[str, str]]; Dispatcharr returns int ids
-    # from get_channels() (ADR-008 §D8 stores them as TEXT regardless
-    # of integer vs UUID upstream representation).
-    str_candidates: list[tuple[str, str]] = [
-        (str(cid), cname) for cid, cname in candidates
-    ]
-
-    match: Optional[MatchResult] = find_candidate(
+    match = find_pending_merge_candidate(
         stream_name=stream_name,
-        candidates=str_candidates,
+        candidates=candidates,
         threshold=threshold,
+        triggered_by=triggered_by,
     )
     if match is None:
-        # No candidate above threshold — proceed with normal channel
-        # creation. This is the silent-refusal branch per ADR-008 §D2
-        # (below the floor) and the no-match branch (no candidate
-        # scored above the clamped threshold).
         return DedupHookResult(enqueued=False)
 
     # Delegate the INSERT → §D5 idempotency → §D6 journal → BD-M metric to

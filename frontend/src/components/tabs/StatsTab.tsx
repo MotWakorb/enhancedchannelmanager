@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { ChannelStatsResponse, SystemEvent, BandwidthSummary, M3UAccount, ChannelWatchStats, TopWatchedSortBy, EPGProgram } from '../../types';
 import * as api from '../../services/api';
 import { logger } from '../../utils/logger';
+import { isActiveDisplayableM3UAccount } from '../../utils/m3uAccountVisibility';
 import { getProgramStart, getProgramEnd, buildProgramsByTvgId, findCurrentProgram } from '../../utils/epgProgram';
 import {
   LineChart,
@@ -742,15 +743,6 @@ export function StatsTab() {
   //      payload where the backend resolver didn't populate the field.
   //   3. Otherwise → "Unknown" bucket.
   const m3uConnectionStats = (() => {
-    // Predicate: an M3U account that should appear as its own badge.
-    // Active accounts with the name "custom" are provider-internal
-    // pseudo-accounts that should never surface to the operator as a
-    // first-class capacity badge. Extracting the predicate once prevents
-    // silent divergence between the displayedAccountIds set and the
-    // result filter below (bd-ib3c9).
-    const isDisplayedAccount = (a: { is_active: boolean; name: string }) =>
-      a.is_active && a.name.toLowerCase() !== 'custom';
-
     // Build a map of profile ID -> account ID for the legacy fallback.
     const profileToAccountMap = new Map<number, number>();
     for (const account of m3uAccounts) {
@@ -765,7 +757,7 @@ export function StatsTab() {
     // is_active=false) or hasn't been side-loaded yet.
     const displayedAccountIds = new Set<number>(
       m3uAccounts
-        .filter(isDisplayedAccount)
+        .filter(isActiveDisplayableM3UAccount)
         .map(a => a.id),
     );
 
@@ -810,9 +802,9 @@ export function StatsTab() {
     // behind an `as unknown as number` cast.
     const result: { id: number; name: string; current: number; max: number | null }[] = m3uAccounts
       .filter(account => {
-        const include = isDisplayedAccount(account);
+        const include = isActiveDisplayableM3UAccount(account);
         if (!include) {
-          logger.debug(`Stats Tab M3U Debug: Excluding M3U account "${account.name}" (id=${account.id}) - is_active: ${account.is_active}, name check: ${account.name.toLowerCase() !== 'custom'}`);
+          logger.debug(`Stats Tab M3U Debug: Excluding M3U account "${account.name}" (id=${account.id}) - is_active: ${account.is_active}`);
         }
         return include;
       })

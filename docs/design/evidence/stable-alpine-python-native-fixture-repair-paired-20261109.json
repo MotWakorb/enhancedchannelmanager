@@ -1,0 +1,29 @@
+{
+  "architectures": {
+    "amd64": {
+      "artifact_id": 13698463248,
+      "artifact_sha256": "8a5f6ead6bdc7cb1f76b6fb7b11084fbf2f46ee31f39990963124bb755ec7b91",
+      "job_id": 129327753300,
+      "job_log_sha256": "bcce1ef433cb68ee69f9d49d4858f5440ae374b438094cb12e1eb276da21e045",
+      "passed": 16717,
+      "skipped": 5,
+      "deselected": 2
+    },
+    "arm64": {
+      "artifact_id": 13699352086,
+      "artifact_sha256": "065093f2a63779d470676ace7515f228110052fc4d3dfa637d13b6c2d9ae32f8",
+      "job_id": 129327753944,
+      "job_log_sha256": "dad4cefd118b771fe89a709ba28e9ec6d67d397e32fad46054c8391130adcb09",
+      "passed": 16717,
+      "skipped": 5,
+      "deselected": 2
+    }
+  },
+  "bead": "enhancedchannelmanager-xql87",
+  "head_sha": "d2290f795e6dfa61f14a1297d83e97b4e8125f8a",
+  "original_failed_run": 42657433240,
+  "requirements_sha256": "c4ff84ae271e902235e2d4024066b0d3e679fce8ccc403ce3b6e9e544518bf0e",
+  "run_id": 42665448299,
+  "scope": "Complete unchanged backend gate on both native architectures after platform-fixture repair. All 74 pins and existing assertions retained; no new skips/exclusions. Does not clear full application source, security/advisory or MCP gates. Raw CI job logs retained under /home/lecaptainc/.cache/ecm-alpine-retained-20261109/; artifact hashes above are GitHub descriptors, not independently rehashed downloads.",
+  "status": "PAIRED_NATIVE_PYTHON_GATE_PASSED"
+}

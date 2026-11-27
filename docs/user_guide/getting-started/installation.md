@@ -72,8 +72,15 @@ Watchtower, and `docker compose up --force-recreate`.
    is durable; a bind mount is easier to browse and back up directly.
 2. Start (or recreate) the container with that mount in place.
 3. If you're recreating a container that already holds data you care about,
-   take a backup first (**Settings → Backup & Restore**) before recreating
-   without confirming the mount. ECM's own startup check (next section)
+   copy the whole `/config` directory out first (for example with
+   `docker cp`) before recreating without confirming the mount. Copy while
+   the container is still running, and do not stop or remove it first: a
+   container started with `--rm` is deleted when it stops, and its data goes
+   with it.
+   A Configuration (DBAS) backup from **Settings → Backup & Restore**
+   does not restore ECM's accounts, rules or schedules. The legacy Full
+   Backup restores rules and schedules, but a current one carries no ECM
+   accounts. ECM's own startup check (next section)
    only warns after the fact.
 
 **Result:** the container's own preflight output confirms the mount. See

@@ -1,0 +1,88 @@
+{
+  "build_receipt_sha256": "3761bd8a883d96c37a4109280a72d779efaa001b6c47dc854f2d59926fde9df6",
+  "recipe_sha256": "530f7498262e5c38541513e01ca12b4f6964b61b80273f75ec8956ff5e17a82a",
+  "runtime_inventory": [
+    {
+      "mode": 493,
+      "path": "usr/local/bin/resdet",
+      "sha256": "33085385580e2a169d15e1f4b1ac4a873a12a96cfdd9a57af444f5470597d912",
+      "size": 51528,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "usr/share/doc/resdet/COPYING",
+      "sha256": "11442374dab9d149b54bdb6d76c28cd79bca379d1dbea1151548da4c5ee39756",
+      "size": 885,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "usr/share/doc/resdet/COPYING.LGPL.txt",
+      "sha256": "b634ab5640e258563c536e658cad87080553df6f34f62269a21d554844e58bfe",
+      "size": 26526,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "usr/share/doc/resdet/COPYING.MIT.txt",
+      "sha256": "748c15c2a285ef74aec280f2e72bd98482b96bd0e2da0d8f0fde934fa88e2e16",
+      "size": 1031,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "usr/share/doc/resdet/kissfft/COPYING",
+      "sha256": "a2840585f8411be8e6826a31ef15ae65c950bd74a2437a73b013398a934ad0c6",
+      "size": 246,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "usr/share/doc/resdet/kissfft/LICENSES/BSD-3-Clause",
+      "sha256": "4d6bcab46f27d6d0c878e8305d4bdcfe040d52bf6656b9771f04c9fb9902c0ed",
+      "size": 1830,
+      "type": "file"
+    }
+  ],
+  "scope": "Actual native AMD64 offline component build only. Not signed-package, ARM execution, whole-image or advisory approval.",
+  "source_inventory": [
+    {
+      "mode": 493,
+      "path": "build_alpine_resdet.py",
+      "sha256": "70570374b51526df128b5d7fdb1d120082990db8bcaef93085cb7fec7d1a55d0",
+      "size": 3914,
+      "type": "file"
+    },
+    {
+      "mode": 493,
+      "path": "build_resdet.py",
+      "sha256": "1c73568784cd1821d513cbb155437d9699dbedb9c4a78d02e62dfa76a0628355",
+      "size": 8260,
+      "type": "file"
+    },
+    {
+      "mode": 436,
+      "path": "generate_sbom.py",
+      "sha256": "7dfe2bbd7cf4d660a23a0355382a2c4fb11b7d1032b297415f47e4a400b5daa8",
+      "size": 75870,
+      "type": "file"
+    },
+    {
+      "mode": 436,
+      "path": "native-dependencies.json",
+      "sha256": "530f7498262e5c38541513e01ca12b4f6964b61b80273f75ec8956ff5e17a82a",
+      "size": 1366,
+      "type": "file"
+    },
+    {
+      "mode": 420,
+      "path": "resdet.tar.gz",
+      "sha256": "7c818aae4131b1fb4b36c20d3d8e4009e6ace209468ed8272747e5a42657be3d",
+      "size": 6685870,
+      "type": "file"
+    }
+  ],
+  "verification": "Actual source/runtime inventories rehashed independently; unchanged original version/readers/pixel ceiling and native compiler configuration verified.",
+  "version_output": "resdet version 2.4.3\nlibresdet version 3.2.0\nBuilt with image readers: Y4M\n"
+}
