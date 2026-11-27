@@ -326,7 +326,7 @@ def rewrite_known_credential_segments(
 ) -> str | None:
     """Replace path segments that LITERALLY carry a known credential.
 
-    THE SHAPE THIS EXISTS FOR (bead …-msqf7, measured against a real Xtream Codes
+    THE SHAPE THIS EXISTS FOR (measured against a real Xtream Codes
     provider on 2026-08-20). Every one of the 1,409,363 stream URLs in that
     provider's playlist put the account's username and password in path
     segments — ``/live/<user>/<pass>/<id>.ts`` and the ``movie`` / ``series``
@@ -355,7 +355,7 @@ def rewrite_known_credential_segments(
 
     WHAT THE REPLICA GETS. The scheme, host, port, kind marker and stream id all
     survive; only the credential segments become the sentinel. Blanking the value
-    instead would reproduce bead …-v7d37's outcome one layer down — a replica
+    instead would reproduce the blanked-address outcome one layer down — a replica
     holding streams with nowhere to point and no record of where they pointed.
     The destination reports the rewrite as a post-restore action item
     (``RestoreReport.stream_urls_redacted``) rather than absorbing it silently.

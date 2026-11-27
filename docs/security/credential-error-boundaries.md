@@ -26,8 +26,14 @@ type, without exception text or traceback, preserving its existing log contract.
 Foreign bulk group-creation, operation, outer-run and supervisor errors now use
 fixed public messages. Explicitly typed local validation/recovery failures retain
 their scrubbed actionable guidance; arbitrary upstream `ValueError` text is not
-trusted. Entity IDs/context and the existing accounting/recovery fields
-remain authoritative. A terminal `completed` job can still carry failed
+trusted. Numbering-baseline refusals are local operator guidance and keep
+their exact text: a missing `expectedNumber`/`expectedNumbers`, an unreadable
+lineup, and a stale baseline (with its `concurrentNumberChanges` payload). The
+terminal envelope's per-operation `error` is what the MCP `bulk_commit_channels`
+tool prints verbatim. A `numberingRecovery` entry keeps its exact remaining
+step but carries a fixed reason instead of the upstream error text, and the
+range read-back warning is scrubbed like the other bulk diagnostics. Entity
+IDs/context and the existing accounting/recovery fields remain authoritative. A terminal `completed` job can still carry failed
 operations; `failed` represents a supervisor failure. Neither state promises
 that no upstream writes landed. Check reported results/current state before
 retrying; this patch does not change cancellation, compensation or mutation order.

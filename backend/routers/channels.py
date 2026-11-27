@@ -1988,7 +1988,7 @@ async def _read_back_channels(client, channel_ids, *, log_tag: str = "CHANNELS")
         except Exception as e:
             logger.warning(
                 "[%s] Assigned channel %s but could not read its new number back: %s",
-                log_tag, channel_id, e,
+                log_tag, channel_id, redact_log_diagnostic(str(e)),
             )
             continue
         yield channel_id, observed
@@ -4018,7 +4018,7 @@ async def _run_bulk_commit(
             if expected is None:
                 # The request model refuses this already; consolidation copies
                 # the number-setting operation, so it cannot drop one either.
-                raise ValueError(
+                raise OperatorBulkError(
                     f"Channel {channel_id} was not renumbered: the operation carries "
                     "no expectedNumber, so ECM cannot check whether anybody else "
                     "changed its number first."
@@ -4057,7 +4057,7 @@ async def _run_bulk_commit(
             baselines = op.expectedNumbers or {}
             missing = [cid for cid in existing_ids if cid not in baselines]
             if missing:
-                raise ValueError(
+                raise OperatorBulkError(
                     f"Channels {_format_channel_ids(missing)} were not renumbered: the "
                     "range carries no expectedNumbers entry for them, so ECM cannot "
                     "check whether anybody else changed their numbers first."
@@ -4908,7 +4908,7 @@ async def _run_bulk_commit(
                 "%s did not; writing %s channel(s) back",
                 batch_id, len(compensator.landed), len(compensator.failed), len(steps),
             )
-            unrepaired: list[tuple[NumberingWrite, Exception]] = []
+            unrepaired: list[tuple[NumberingWrite, str]] = []
             for step in steps:
                 try:
                     await client.update_channel(
@@ -4919,7 +4919,12 @@ async def _run_bulk_commit(
                         "[CHANNELS-BULK] Could not put channel %s back on %s: %s",
                         step.channel_id, format_channel_number(step.after), redact_exception(comp_err),
                     )
-                    unrepaired.append((step, comp_err))
+                    # The upstream error text can carry credentials or internal hosts;
+                    # the envelope keeps the step and a fixed reason, the log the detail.
+                    unrepaired.append((
+                        step,
+                        "Dispatcharr did not accept the repair write; check server logs.",
+                    ))
                     continue
                 # The write LANDED, so its row is queued now, exactly as every
                 # other landed write's is. `record_write` and not
