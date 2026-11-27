@@ -1,11 +1,20 @@
 {
   "architecture": "arm64",
   "dependency_security_update": {
-    "bead": "enhancedchannelmanager-w8h34",
-    "previous_inventory_sha256": "d6888db24297168b5479a6255bb58463bb07c3f24bf167cbf6d90a82b5bcc803",
-    "previous_requirements_sha256": "c4ff84ae271e902235e2d4024066b0d3e679fce8ccc403ce3b6e9e544518bf0e",
-    "previous_wheel_sha256": "9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9",
-    "scope": "Pure-Python dnspython 2.9.0 to 2.9.2 only, CVE-2026-128089. All other 73 distribution rows and all native payloads unchanged. selection_manifest_sha256 retains historical GNU/native selection provenance; this overlay supersedes only its dnspython wheel. Not native execution, corresponding-source or image acceptance."
+    "bead": "enhancedchannelmanager-h1186",
+    "earlier_updates": [
+      {
+        "bead": "enhancedchannelmanager-w8h34",
+        "previous_inventory_sha256": "d6888db24297168b5479a6255bb58463bb07c3f24bf167cbf6d90a82b5bcc803",
+        "previous_requirements_sha256": "c4ff84ae271e902235e2d4024066b0d3e679fce8ccc403ce3b6e9e544518bf0e",
+        "previous_wheel_sha256": "9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9",
+        "scope": "Pure-Python dnspython 2.9.0 to 2.9.2 only, CVE-2026-128089. All other 73 distribution rows and all native payloads unchanged. selection_manifest_sha256 retains historical GNU/native selection provenance; this overlay supersedes only its dnspython wheel. Not native execution, corresponding-source or image acceptance."
+      }
+    ],
+    "previous_inventory_sha256": "b0f4dee316ead1eaf0ee853f8f2e9243e170661b7366c37ea8dbeedd903e3559",
+    "previous_requirements_sha256": "c4d19336909ae669f3577fc8da5afd15c265b50b73227c08d7b34eb177151804",
+    "previous_wheel_sha256": "a359d9a94a541213958742b2698d0a7757bb83551767bc468a74b9905aba9617",
+    "scope": "Pure-Python mako 1.4.1 to 1.4.2 only, CVE-2026-102991. All other 73 distribution rows and all native payloads unchanged. selection_manifest_sha256 retains historical GNU/native selection provenance; this overlay and the earlier dnspython overlay supersede only their own pure-Python wheels. Not native execution, corresponding-source or image acceptance."
   },
   "distribution_count": 74,
   "distributions": [
@@ -19690,42 +19699,42 @@
       "version": "5.8.0"
     },
     {
-      "filename": "mako-1.4.1-py3-none-any.whl",
+      "filename": "mako-1.4.2-py3-none-any.whl",
       "members": [
         {
           "bytes": 2942,
-          "path": "mako-1.4.1.dist-info/METADATA",
-          "sha256": "1f427af53f47988519af11a1a04136154eadbda5b9607fe30a64eb653d5118a8"
+          "path": "mako-1.4.2.dist-info/METADATA",
+          "sha256": "32439e6badb760e4d21261c1757305be873728b3e1921a49d7a8f5416dca591e"
         },
         {
           "bytes": 2972,
-          "path": "mako-1.4.1.dist-info/RECORD",
-          "sha256": "abacf4305f9a1f4d59736d8489e89de1c616d82184a0261331e0af74391cd33c"
+          "path": "mako-1.4.2.dist-info/RECORD",
+          "sha256": "6a96045cd163b657319eea436ccc220ea5b304f0cf94a2e5ee8939ed1f004f3b"
         },
         {
           "bytes": 91,
-          "path": "mako-1.4.1.dist-info/WHEEL",
-          "sha256": "2b6eb4118ce7cd7b09601406aa623c553c4476265836f0d9c16f5c061f7efcc0"
+          "path": "mako-1.4.2.dist-info/WHEEL",
+          "sha256": "61532836a2b3111b7ec23519c09df7c41180c27165fb872a6d8913b566b88ad1"
         },
         {
           "bytes": 495,
-          "path": "mako-1.4.1.dist-info/entry_points.txt",
+          "path": "mako-1.4.2.dist-info/entry_points.txt",
           "sha256": "62a02fd834715ae7a1c480d32953fe3b4958d792b653fd2a18ceb8f96c578a4c"
         },
         {
           "bytes": 1098,
-          "path": "mako-1.4.1.dist-info/licenses/LICENSE",
+          "path": "mako-1.4.2.dist-info/licenses/LICENSE",
           "sha256": "8c1d171bc5d341ad9cd33d5e2c39b96a82c7bd49b3ae89a470c37e5822232054"
         },
         {
           "bytes": 5,
-          "path": "mako-1.4.1.dist-info/top_level.txt",
+          "path": "mako-1.4.2.dist-info/top_level.txt",
           "sha256": "2c8b5d1fc7033deb6952ef2b532046dc339b4ba87d19ca6bf63fd62e3d92f91d"
         },
         {
           "bytes": 242,
           "path": "mako/__init__.py",
-          "sha256": "2eef700259e0b682a32fcabd635b6c3212df2b140ee1cafc4f9874f62336991d"
+          "sha256": "1bfccd4eca2c0a4f8eabdcd70bf407c572823b95df86a2cfd1fceca957c7da0d"
         },
         {
           "bytes": 19847,
@@ -19843,9 +19852,9 @@
           "sha256": "f70786b1e414652845d04b6780e7b4fada2c16bac83c4f0a87ac9d7096bc9c46"
         },
         {
-          "bytes": 28869,
+          "bytes": 29234,
           "path": "mako/template.py",
-          "sha256": "869cb055b2aa13f173626bb2ee86768c8d3eb7ad081a374f09cdde554341424d"
+          "sha256": "bb81d4621716ab7bd2d12bce0cb64e3dd3092d1fa5c0712ab0b2b8f27db8951c"
         },
         {
           "bytes": 0,
@@ -19888,34 +19897,34 @@
           "sha256": "3b9e00050ed1898ed77de1ae3f24a50b7339f2a358788750a32d1495cfc5d1ab"
         }
       ],
-      "metadata_sha256": "1f427af53f47988519af11a1a04136154eadbda5b9607fe30a64eb653d5118a8",
+      "metadata_sha256": "32439e6badb760e4d21261c1757305be873728b3e1921a49d7a8f5416dca591e",
       "name": "mako",
       "native_files": [],
       "notices": [
         {
           "bytes": 1098,
-          "path": "mako-1.4.1.dist-info/licenses/LICENSE",
+          "path": "mako-1.4.2.dist-info/licenses/LICENSE",
           "retained_identical_notices": [
-            "wheels/mako-1.4.1.dist-info/licenses/LICENSE"
+            "wheels/mako-1.4.2.dist-info/licenses/LICENSE"
           ],
           "sha256": "8c1d171bc5d341ad9cd33d5e2c39b96a82c7bd49b3ae89a470c37e5822232054"
         }
       ],
       "purelib": true,
       "pypi_artifact": {
-        "metadata_file": "mako-1.4.1.json",
-        "metadata_sha256": "85ae9a5c38c9b08a3bbc9cc871829c0cb535c26c26dfe735996f49f5237553cc",
-        "sha256": "a359d9a94a541213958742b2698d0a7757bb83551767bc468a74b9905aba9617",
-        "url": "https://files.pythonhosted.org/packages/a5/54/12ed58d458474aaab5c3d180173e745a4fe131bb330370596876d19ff60f/mako-1.4.1-py3-none-any.whl",
+        "metadata_file": "mako-1.4.2.pypi.json",
+        "metadata_sha256": "ea1630832738679168c0412482341cc26c7820c7ee56a75add28315f30d75ae2",
+        "sha256": "e70a2a4308952b33a21208bfd6725da79fae5a8c224578f8cfdeb60e5ace03df",
+        "url": "https://files.pythonhosted.org/packages/f0/bb/0e4c30a18858adebc75496ea8a8c3fb65cbf4b36ea1c5028ed8a0a5fa196/mako-1.4.2-py3-none-any.whl",
         "yanked": false
       },
       "sboms": [],
-      "sha256": "a359d9a94a541213958742b2698d0a7757bb83551767bc468a74b9905aba9617",
+      "sha256": "e70a2a4308952b33a21208bfd6725da79fae5a8c224578f8cfdeb60e5ace03df",
       "source_status": "NOT_ESTABLISHED_BY_WHEEL_METADATA",
       "tags": [
         "py3-none-any"
       ],
-      "version": "1.4.1"
+      "version": "1.4.2"
     },
     {
       "filename": "markupsafe-3.0.3-cp312-cp312-musllinux_1_2_aarch64.whl",
@@ -36258,7 +36267,7 @@
     }
   ],
   "native_ELF_count": 45,
-  "requirements_sha256": "c4d19336909ae669f3577fc8da5afd15c265b50b73227c08d7b34eb177151804",
+  "requirements_sha256": "629b817e0dcf38d06462df958eb2aeb6e5b3af5e5d0144014631c23c2af24bd8",
   "schema_version": 1,
   "scope": "Whole-wheel/RECORD/native-byte/notice/raw-SBOM attribution. Not corresponding-source, advisory, installed-image or native-execution approval.",
   "selection_manifest_sha256": "609dac61e58e81d074d7996bcc13dff6620cfa2592f35cd97c6e659fbebdf615"

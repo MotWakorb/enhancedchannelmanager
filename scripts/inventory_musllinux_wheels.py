@@ -24,8 +24,8 @@ __all__ = ["AttributionError", "build", "scan_wheel", "sha256"]
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY_SHA256 = {
-    "amd64": "47ff322325b2502feb87fb2182732493fe50ca7063d59292cce3b885551d9c0f",
-    "arm64": "b0f4dee316ead1eaf0ee853f8f2e9243e170661b7366c37ea8dbeedd903e3559",
+    "amd64": "60d0ad85aa4a73a839e2b8f1343f339f542a2e8465c07efcf1c085cd455c1432",
+    "arm64": "874ff5c7362789797e7b38df6f8605917179df82f57925356c9c47a8e5c35c4b",
 }
 
 

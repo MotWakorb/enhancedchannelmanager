@@ -20,14 +20,14 @@ RECIPE_SHA256 = "947de1caccc41af19eff4ed898e7df9df992bb7c0907b8ac30e6f735a34f425
 PYTHON_SUMS = {
     "sources": "e21e0520773c78b5f16ee56ddb94073a4def902d8656b435fec9dc26eee8e2ab",
     # Complete sorted 557-entry manifest, including the dnspython 2.9.0 notice.
-    "notices": "cc1790cbfca9d206333084155cbf8f1a0c66fb6512615dea692a9c0a5daa903d",
+    "notices": "2ad3c942d6188db55e5fba2dd57804b9c5a40cb52feb603cffc553ae7061ffbe",
 }
 RESDET_SCRIPTS = {
     "build_resdet.py": "1c73568784cd1821d513cbb155437d9699dbedb9c4a78d02e62dfa76a0628355",
 }
 PYTHON_INDEXES = {
-    "x86_64": "dc502820155aafb65e71f0613c90ef33c96dbd6aee1953ab14f078de67e779e5",
-    "aarch64": "079d2a9cdb7623870bed4c1434ac1580e1138433dbc5f91edd42e75d84a02cd8",
+    "x86_64": "fd7d04c8d8f9a9f8b7044c7cd4e3cb5d45f47c8263b775ce56a9eb9bdf4e643d",
+    "aarch64": "0d7a7be1f6a6ea269154b98e2b917709444c54d507e86737e63c4f9cdcb89051",
 }
 FIELDS = ("name", "version", "release", "arch", "vendor", "sourcerpm", "license")
 QUERY = "\\t".join("%{" + field.upper() + "}" for field in FIELDS) + "\\n"

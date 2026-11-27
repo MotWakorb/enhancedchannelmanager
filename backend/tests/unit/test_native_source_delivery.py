@@ -70,11 +70,17 @@ def canonical(value):
     ("amd64", "31125cd9d8edad09e4bb10d6b752e93144e0f73ce185d64d242d9fd593058d4f"),
     ("arm64", "662eaa920099927d04bc855dce78eb5e52601ccfc1bd2f918f06b066090dde56"),
 ])
-def test_dns_only_lock_rebinding_preserves_complete_native_attribution(arch, native_sha256):
+def test_pure_python_lock_rebindings_preserve_complete_native_attribution(arch, native_sha256):
     index = json.loads((ROOT / f"docker/python-third-party/artifact-index/linux-{arch}.json").read_text())
     assert index["lock_sha256"] == digest((ROOT / "backend/requirements.txt").read_bytes())
     assert canonical(index["native_distributions"]) == native_sha256
-    assert index["dependency_security_update"]["bead"] == "enhancedchannelmanager-w8h34"
+    update = index["dependency_security_update"]
+    assert update["pure_python_evidence"] == "artifact-index/mako-1.4.2.json"
+    assert update["previous_lock_sha256"] == "c4d19336909ae669f3577fc8da5afd15c265b50b73227c08d7b34eb177151804"
+    # History is append-only: the earlier DNS rebinding stays recorded.
+    assert [row["pure_python_evidence"] for row in update["earlier_updates"]] == [
+        "artifact-index/dnspython-2.9.2.json"
+    ]
 
 
 def put(root, name, data):
