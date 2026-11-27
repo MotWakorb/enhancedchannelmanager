@@ -4,7 +4,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useChangeHistory } from './useChangeHistory';
-import type { Channel } from '../types';
+import type { Channel, ChangeRecord } from '../types';
+import { HttpError } from '../services/httpClient';
 
 // Mock the API module
 vi.mock('../services/api', () => ({
@@ -347,6 +348,194 @@ describe('useChangeHistory', () => {
       });
 
       expect(result.current.isOperationPending).toBe(false);
+    });
+  });
+  describe('numbering baselines on undo and redo', () => {
+    const conflictMessage = 'Channel was not renumbered: channel 1 is on channel number 150, '
+      + 'and this request expected 300. Somebody else changed it.';
+
+    const conflict = () => new HttpError(conflictMessage, 409, {
+      message: conflictMessage,
+      concurrentNumberChanges: [{ channelId: 1, baselineNumber: 300, serverNumber: 150 }],
+    });
+
+    function renumberRecord(): Omit<ChangeRecord, 'id' | 'timestamp'> {
+      return {
+        type: 'channel_number_update',
+        description: 'Changed channel number from 100 to 300',
+        channelIds: [1],
+        before: [{ id: 1, channel_number: 100, name: 'Channel 1', channel_group_id: 1, streams: [] }],
+        after: [{ id: 1, channel_number: 300, name: 'Channel 1', channel_group_id: 1, streams: [] }],
+      };
+    }
+
+    function reorderRecord(): Omit<ChangeRecord, 'id' | 'timestamp'> {
+      return {
+        type: 'channel_reorder',
+        description: 'Reordered 2 channels starting at 500',
+        channelIds: [1, 2],
+        before: [
+          { id: 1, channel_number: 100, name: 'Channel 1', channel_group_id: 1, streams: [] },
+          { id: 2, channel_number: null, name: 'Channel 2', channel_group_id: 1, streams: [] },
+        ],
+        after: [
+          { id: 1, channel_number: 500, name: 'Channel 1', channel_group_id: 1, streams: [] },
+          { id: 2, channel_number: 501, name: 'Channel 2', channel_group_id: 1, streams: [] },
+        ],
+      };
+    }
+
+    function renderHistory(onServerChanged = vi.fn()) {
+      const rendered = renderHook(() =>
+        useChangeHistory({
+          channels: mockChannels,
+          onChannelsRestore: mockOnChannelsRestore,
+          onError: mockOnError,
+          onServerChanged,
+        })
+      );
+      return { ...rendered, onServerChanged };
+    }
+
+    beforeEach(async () => {
+      const { updateChannel } = await import('../services/api');
+      vi.mocked(updateChannel).mockReset().mockResolvedValue({} as Channel);
+    });
+
+    it('undo of a renumber expects the number the change put the channel on', async () => {
+      const { updateChannel } = await import('../services/api');
+      const { result } = renderHistory();
+      act(() => result.current.recordChange(renumberRecord()));
+
+      await act(async () => { await result.current.undo(); });
+
+      expect(updateChannel).toHaveBeenCalledWith(
+        1, { channel_number: 100, name: 'Channel 1' }, { expectedNumber: 300 },
+      );
+    });
+
+    it('redo of a renumber expects the number undo put back', async () => {
+      const { updateChannel } = await import('../services/api');
+      const { result } = renderHistory();
+      act(() => result.current.recordChange(renumberRecord()));
+      await act(async () => { await result.current.undo(); });
+      vi.mocked(updateChannel).mockClear();
+
+      await act(async () => { await result.current.redo(); });
+
+      expect(updateChannel).toHaveBeenCalledWith(
+        1, { channel_number: 300, name: 'Channel 1' }, { expectedNumber: 100 },
+      );
+    });
+
+    it('undo of a rename carries a baseline, because it rewrites the number too', async () => {
+      const { updateChannel } = await import('../services/api');
+      const { result } = renderHistory();
+      act(() => result.current.recordChange({
+        type: 'channel_name_update',
+        description: 'Renamed',
+        channelIds: [1],
+        before: [{ id: 1, channel_number: 100, name: 'Old', channel_group_id: 1, streams: [] }],
+        after: [{ id: 1, channel_number: 100, name: 'New', channel_group_id: 1, streams: [] }],
+      }));
+
+      await act(async () => { await result.current.undo(); });
+
+      expect(updateChannel).toHaveBeenCalledWith(
+        1, { channel_number: 100, name: 'Old' }, { expectedNumber: 100 },
+      );
+    });
+
+    it('undo and redo of a range reorder carry each channel\'s recorded number', async () => {
+      const { updateChannel } = await import('../services/api');
+      const { result } = renderHistory();
+      act(() => result.current.recordChange(reorderRecord()));
+
+      await act(async () => { await result.current.undo(); });
+      expect(vi.mocked(updateChannel).mock.calls).toEqual([
+        [1, { channel_number: 100 }, { expectedNumber: 500 }],
+        [2, { channel_number: null }, { expectedNumber: 501 }],
+      ]);
+
+      vi.mocked(updateChannel).mockClear();
+      await act(async () => { await result.current.redo(); });
+      expect(vi.mocked(updateChannel).mock.calls).toEqual([
+        [1, { channel_number: 500 }, { expectedNumber: 100 }],
+        [2, { channel_number: 501 }, { expectedNumber: null }],
+      ]);
+    });
+
+    it('a refused undo shows the server\'s reason, drops the entry, and reloads', async () => {
+      const { updateChannel } = await import('../services/api');
+      const { result, onServerChanged } = renderHistory();
+      act(() => result.current.recordChange(renumberRecord()));
+      act(() => result.current.recordChange(renumberRecord()));
+      vi.mocked(updateChannel).mockRejectedValueOnce(conflict());
+
+      await act(async () => { await result.current.undo(); });
+
+      expect(mockOnError).toHaveBeenCalledWith(expect.stringContaining(conflictMessage));
+      // Neither replayable as recorded nor done: off the undo stack, not on redo.
+      expect(result.current.undoCount).toBe(1);
+      expect(result.current.redoCount).toBe(0);
+      expect(onServerChanged).toHaveBeenCalledTimes(1);
+      expect(result.current.isOperationPending).toBe(false);
+    });
+
+    it('a refused redo shows the server\'s reason and drops the entry from redo only', async () => {
+      const { updateChannel } = await import('../services/api');
+      const { result, onServerChanged } = renderHistory();
+      act(() => result.current.recordChange(renumberRecord()));
+      await act(async () => { await result.current.undo(); });
+      vi.mocked(updateChannel).mockRejectedValueOnce(conflict());
+
+      await act(async () => { await result.current.redo(); });
+
+      expect(mockOnError).toHaveBeenCalledWith(expect.stringContaining(conflictMessage));
+      expect(result.current.undoCount).toBe(0);
+      expect(result.current.redoCount).toBe(0);
+      expect(onServerChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('any other undo failure keeps the entry where it was', async () => {
+      const { updateChannel } = await import('../services/api');
+      const { result, onServerChanged } = renderHistory();
+      act(() => result.current.recordChange(renumberRecord()));
+      vi.mocked(updateChannel).mockRejectedValueOnce(new HttpError('Internal server error', 500));
+
+      await act(async () => { await result.current.undo(); });
+
+      expect(mockOnError).toHaveBeenCalledWith('Failed to undo: Changed channel number from 100 to 300');
+      expect(result.current.undoCount).toBe(1);
+      expect(result.current.redoCount).toBe(0);
+      expect(onServerChanged).not.toHaveBeenCalled();
+    });
+
+    it('a 409 that is not a numbering refusal keeps the entry where it was', async () => {
+      const { updateChannel } = await import('../services/api');
+      const { result, onServerChanged } = renderHistory();
+      act(() => result.current.recordChange(renumberRecord()));
+      vi.mocked(updateChannel).mockRejectedValueOnce(new HttpError('Conflict upstream', 409, 'Conflict upstream'));
+
+      await act(async () => { await result.current.undo(); });
+
+      expect(result.current.undoCount).toBe(1);
+      expect(onServerChanged).not.toHaveBeenCalled();
+    });
+
+    it('a refused checkpoint revert shows the server\'s reason and reloads', async () => {
+      const { updateChannel } = await import('../services/api');
+      const { result, onServerChanged } = renderHistory();
+      act(() => result.current.createSavePoint('start'));
+      act(() => result.current.recordChange(renumberRecord()));
+      vi.mocked(updateChannel).mockRejectedValueOnce(conflict());
+
+      await act(async () => {
+        await result.current.revertToSavePoint(result.current.savePoints[0].id);
+      });
+
+      expect(mockOnError).toHaveBeenCalledWith(expect.stringContaining(conflictMessage));
+      expect(onServerChanged).toHaveBeenCalledTimes(1);
     });
   });
 });

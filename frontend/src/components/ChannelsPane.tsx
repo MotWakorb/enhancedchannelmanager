@@ -38,6 +38,7 @@ import {
 import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import type { ChannelDefaults } from './StreamsPane';
 import * as api from '../services/api';
+import { HttpError } from '../services/httpClient';
 import type { GracenoteConflictMode } from '../services/api';
 import { HistoryToolbar } from './HistoryToolbar';
 import { BulkEPGAssignModal, type EPGAssignment } from './BulkEPGAssignModal';
@@ -3506,13 +3507,22 @@ export function ChannelsPane({
         onStageUpdateChannel(channelId, updateData, description, { acknowledgedDuplicate });
       }
     } else {
-      // Normal mode - call API directly
+      // Normal mode - call API directly. The number this pane displayed is
+      // the baseline, so the server refuses a write over a change made since.
+      const shown = channels.find((c) => c.id === channelId);
       try {
-        const updatedChannel = await api.updateChannel(channelId, updateData);
+        const updatedChannel = await api.updateChannel(
+          channelId,
+          updateData,
+          { expectedNumber: shown?.channel_number ?? null },
+        );
         const changeType = nameChanged ? 'channel_name_update' : 'channel_number_update';
         onChannelUpdate(updatedChannel, { type: changeType, description });
       } catch (err) {
         logger.error('Failed to update channel number:', err);
+        if (err instanceof HttpError && err.status === 409) {
+          notifications.error(err.message, 'Channel Number Changed');
+        }
       }
     }
   };
@@ -6836,13 +6846,19 @@ export function ChannelsPane({
               }
             } else {
               try {
-                const updated = await api.updateChannel(channelToEdit.id, changes);
+                // The channel the modal opened on is the one the operator saw.
+                const updated = await api.updateChannel(
+                  channelToEdit.id, changes, api.numberBaselineFor(channelToEdit, changes),
+                );
                 onChannelUpdate(updated, {
                   type: 'channel_metadata_update',
                   description,
                 });
               } catch (err) {
                 logger.error('Failed to update channel:', err);
+                if (err instanceof HttpError && err.status === 409) {
+                  notifications.error(err.message, 'Channel Number Changed');
+                }
               }
             }
             editChannelModal.close();

@@ -213,6 +213,17 @@ session is active. **Done** reviews and commits staged changes. **Cancel**
 discards them. Navigating away with staged changes opens **Exit Edit Mode** so
 the route change cannot silently lose work.
 
+Outside Edit Mode, **Undo** and **Redo** write to Dispatcharr straight away. A
+step that puts a channel number back first checks that the channel is still on
+the number the step recorded. If somebody else has renumbered it since, ECM
+writes nothing for that channel, shows which channel moved and to what, removes
+the step from the history (it can no longer be replayed as recorded), and
+reloads the channel list. For a step that renumbered several channels, the
+channels before the one that moved have already been put back by then; the
+reloaded list shows exactly where each one is. A channel edit made outside Edit
+Mode, from the channel list or the Guide, gets the same check against the
+number shown when you started the edit.
+
 Selecting one or more channels opens the bottom **Selection actions** toolbar.
 Its available actions are **Delete**, **Probe**, **Find Duplicates**,
 **Renumber**, **Assign EPG**, **Merge** (two or more channels), **More**, and

@@ -13,6 +13,7 @@ const testState = vi.hoisted(() => ({
   operatorId: 7,
   onSettingsSaved: null as (() => Promise<void>) | null,
   channelManagerProps: null as ChannelManagerTabProps | null,
+  guideProps: null as Record<string, unknown> | null,
   exitDialogProps: null as Record<string, unknown> | null,
   bulkCommit: vi.fn(),
   resolvedAssignmentPairs: [] as Array<{ channelId: number; streamId: number }>,
@@ -32,6 +33,13 @@ vi.mock('./components/tabs/ChannelManagerTab', () => ({
   ChannelManagerTab: (props: ChannelManagerTabProps) => {
     testState.channelManagerProps = props;
     return <div data-testid="channel-manager" />;
+  },
+}));
+
+vi.mock('./components/tabs/GuideTab', () => ({
+  GuideTab: (props: Record<string, unknown>) => {
+    testState.guideProps = props;
+    return <div data-testid="guide" />;
   },
 }));
 
@@ -98,6 +106,7 @@ vi.mock('./services/api', async (importOriginal) => {
     getM3UStreamMetadata: vi.fn().mockResolvedValue({ count: 0, metadata: {} }),
     bulkCommit: (request: BulkCommitRequest, batchId?: string) => testState.bulkCommit(request, batchId),
     bulkAssignChannelNumbers: vi.fn().mockResolvedValue(undefined),
+    updateChannel: vi.fn(),
   };
 });
 
@@ -136,6 +145,7 @@ describe('App bulk-create staging', () => {
     vi.mocked(api.updateProfileChannel).mockReset();
     vi.mocked(api.bulkUpdateProfileChannels).mockReset();
     testState.channelManagerProps = null;
+    testState.guideProps = null;
     testState.exitDialogProps = null;
     testState.bulkCommit.mockReset();
     testState.resolvedAssignmentPairs = [];
@@ -303,6 +313,93 @@ describe('App bulk-create staging', () => {
       expect(status?.getAttribute('title')).toContain('Somebody else changed it');
     });
     expect(container.querySelector('.service-status')?.getAttribute('title')).toContain('channel 44');
+  });
+
+  describe('direct PATCH numbering writes carry the displayed baseline', () => {
+    const shown: Channel = {
+      id: 44, name: 'Original', channel_number: 80, streams: [],
+      channel_group_id: null, tvg_id: null, tvc_guide_stationid: null, epg_data_id: null,
+      stream_profile_id: null, uuid: 'existing-44', logo_id: null,
+      auto_created: false, auto_created_by: null, auto_created_by_name: null,
+    };
+    const message = 'Channel was not renumbered: channel 44 is on channel number 81, and this '
+      + 'request expected 80. Somebody else changed it.';
+    const conflict = () => new HttpError(message, 409, {
+      message,
+      concurrentNumberChanges: [{ channelId: 44, baselineNumber: 80, serverNumber: 81 }],
+    });
+
+    beforeEach(() => {
+      vi.mocked(api.getChannels).mockResolvedValue({ results: [shown], count: 1, next: null, previous: null });
+      vi.mocked(api.updateChannel).mockReset().mockImplementation(async (id, data) => ({
+        ...shown, id, ...(data as Partial<Channel>),
+      }));
+    });
+
+    async function renderGuide() {
+      window.history.replaceState({}, '', '#guide');
+      const view = render(<App />);
+      await waitFor(() => expect(testState.guideProps).not.toBeNull());
+      await waitFor(() => expect((testState.guideProps!.channels as Channel[]).map(ch => ch.id)).toEqual([44]));
+      return view;
+    }
+
+    type GuideUpdate = (channel: Channel, changes: Record<string, unknown>) => Promise<void>;
+
+    it('the Guide edit sends the number the Guide showed', async () => {
+      await renderGuide();
+      await act(async () => {
+        await (testState.guideProps!.onChannelUpdate as GuideUpdate)(shown, { channel_number: 90 });
+      });
+      expect(api.updateChannel).toHaveBeenCalledWith(44, { channel_number: 90 }, { expectedNumber: 80 });
+    });
+
+    it('the Guide edit sends no baseline when the number is not changed', async () => {
+      await renderGuide();
+      await act(async () => {
+        await (testState.guideProps!.onChannelUpdate as GuideUpdate)(shown, { name: 'Renamed' });
+      });
+      expect(api.updateChannel).toHaveBeenCalledWith(44, { name: 'Renamed' }, undefined);
+    });
+
+    it('a refused Guide edit shows why the server refused it', async () => {
+      vi.mocked(api.updateChannel).mockRejectedValueOnce(conflict());
+      const { container } = await renderGuide();
+      await act(async () => {
+        await expect(
+          (testState.guideProps!.onChannelUpdate as GuideUpdate)(shown, { channel_number: 90 }),
+        ).rejects.toThrow(message);
+      });
+      await waitFor(() => {
+        expect(container.querySelector('.service-status')?.getAttribute('title')).toContain('Somebody else changed it');
+      });
+    });
+
+    it('undo outside Edit Mode expects the number the change recorded, and a refusal reloads', async () => {
+      const { container } = render(<App />);
+      await waitFor(() => expect(testState.channelManagerProps?.channels.map(ch => ch.id)).toEqual([44]));
+      act(() => {
+        testState.channelManagerProps!.onChannelUpdate(
+          { ...shown, channel_number: 90 },
+          { type: 'channel_number_update', description: 'Changed channel number from 80 to 90' },
+        );
+      });
+      await waitFor(() => expect(testState.channelManagerProps!.canUndo).toBe(true));
+      vi.mocked(api.updateChannel).mockRejectedValueOnce(conflict());
+      const readsBefore = vi.mocked(api.getChannels).mock.calls.length;
+
+      await act(async () => { await testState.channelManagerProps!.onUndo(); });
+
+      expect(api.updateChannel).toHaveBeenCalledWith(
+        44, { channel_number: 80, name: 'Original' }, { expectedNumber: 90 },
+      );
+      await waitFor(() => {
+        expect(container.querySelector('.service-status')?.getAttribute('title')).toContain('Somebody else changed it');
+      });
+      await waitFor(() => expect(vi.mocked(api.getChannels).mock.calls.length).toBeGreaterThan(readsBefore));
+      expect(testState.channelManagerProps!.canUndo).toBe(false);
+      expect(testState.channelManagerProps!.canRedo).toBe(false);
+    });
   });
 
   it('numbers mixed mapped and unmapped Create groups by visible natural name', async () => {

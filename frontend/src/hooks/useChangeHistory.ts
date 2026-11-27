@@ -6,6 +6,7 @@ import type {
   HistoryState,
 } from '../types';
 import * as api from '../services/api';
+import { HttpError } from '../services/httpClient';
 import { createSnapshot } from '../utils/channelSnapshot';
 import { generateId } from '../utils/idGenerator';
 import { logger } from '../utils/logger';
@@ -16,6 +17,23 @@ export interface UseChangeHistoryOptions {
   channels: Channel[];
   onChannelsRestore: (channels: Channel[]) => void;
   onError?: (message: string) => void;
+  /**
+   * Called when the server refused a numbering write because a channel moved
+   * after this history recorded it. Some of a multi-channel change may already
+   * have been written by then, so the caller should re-read the lineup rather
+   * than trust the rolled-back view.
+   */
+  onServerChanged?: () => void;
+}
+
+/**
+ * Whether `err` is the server refusing a numbering write over a change made
+ * since the baseline was recorded (409 with `concurrentNumberChanges`).
+ */
+function isNumberConflict(err: unknown): err is HttpError {
+  if (!(err instanceof HttpError) || err.status !== 409) return false;
+  const detail = err.detail as { concurrentNumberChanges?: unknown } | null | undefined;
+  return Array.isArray(detail?.concurrentNumberChanges);
 }
 
 export interface UseChangeHistoryReturn {
@@ -48,6 +66,7 @@ export function useChangeHistory({
   channels,
   onChannelsRestore,
   onError,
+  onServerChanged,
 }: UseChangeHistoryOptions): UseChangeHistoryReturn {
   const [history, setHistory] = useState<HistoryState>({
     baseline: [],
@@ -141,10 +160,12 @@ export function useChangeHistory({
         switch (change.type) {
           case 'channel_number_update':
           case 'channel_name_update':
+            // The number this change left the channel on is the baseline: a
+            // channel moved since then is refused rather than overwritten.
             await api.updateChannel(beforeSnapshot.id, {
               channel_number: beforeSnapshot.channel_number,
               name: beforeSnapshot.name,
-            });
+            }, { expectedNumber: afterSnapshot.channel_number ?? null });
             break;
 
           case 'stream_add': {
@@ -180,7 +201,7 @@ export function useChangeHistory({
           case 'channel_reorder':
             await api.updateChannel(beforeSnapshot.id, {
               channel_number: beforeSnapshot.channel_number,
-            });
+            }, { expectedNumber: afterSnapshot.channel_number ?? null });
             break;
         }
       }
@@ -207,10 +228,11 @@ export function useChangeHistory({
         switch (change.type) {
           case 'channel_number_update':
           case 'channel_name_update':
+            // Undo left the channel on the before number, so that is the baseline.
             await api.updateChannel(afterSnapshot.id, {
               channel_number: afterSnapshot.channel_number,
               name: afterSnapshot.name,
-            });
+            }, { expectedNumber: beforeSnapshot.channel_number ?? null });
             break;
 
           case 'stream_add': {
@@ -240,7 +262,7 @@ export function useChangeHistory({
           case 'channel_reorder':
             await api.updateChannel(afterSnapshot.id, {
               channel_number: afterSnapshot.channel_number,
-            });
+            }, { expectedNumber: beforeSnapshot.channel_number ?? null });
             break;
         }
       }
@@ -291,7 +313,20 @@ export function useChangeHistory({
       // Rollback UI to original state
       onChannelsRestore(originalChannels);
 
-      onError?.(`Failed to undo: ${lastChange.description}`);
+      if (isNumberConflict(err)) {
+        // The entry's recorded numbers no longer describe the server, so it
+        // can never be replayed as recorded: kept, it would refuse on every
+        // press and block the entries behind it; moved to redo, it would claim
+        // an undo that did not happen. It is dropped, and the lineup re-read.
+        setHistory((prev) => ({
+          ...prev,
+          past: prev.past.filter((entry) => entry.id !== lastChange.id),
+        }));
+        onError?.(`Could not undo "${lastChange.description}": ${err.message} It was removed from the undo history.`);
+        onServerChanged?.();
+      } else {
+        onError?.(`Failed to undo: ${lastChange.description}`);
+      }
     } finally {
       setIsOperationPending(false);
     }
@@ -302,6 +337,7 @@ export function useChangeHistory({
     onChannelsRestore,
     executeReverseOperation,
     onError,
+    onServerChanged,
   ]);
 
   // Redo previously undone change
@@ -347,7 +383,17 @@ export function useChangeHistory({
       // Rollback UI to original state
       onChannelsRestore(originalChannels);
 
-      onError?.(`Failed to redo: ${nextChange.description}`);
+      if (isNumberConflict(err)) {
+        // Dropped for the reason a refused undo is: see `undo`.
+        setHistory((prev) => ({
+          ...prev,
+          future: prev.future.filter((entry) => entry.id !== nextChange.id),
+        }));
+        onError?.(`Could not redo "${nextChange.description}": ${err.message} It was removed from the redo history.`);
+        onServerChanged?.();
+      } else {
+        onError?.(`Failed to redo: ${nextChange.description}`);
+      }
     } finally {
       setIsOperationPending(false);
     }
@@ -358,6 +404,7 @@ export function useChangeHistory({
     onChannelsRestore,
     executeForwardOperation,
     onError,
+    onServerChanged,
   ]);
 
   // Create save point
@@ -441,7 +488,12 @@ export function useChangeHistory({
         // Rollback UI to original state
         onChannelsRestore(originalChannels);
 
-        onError?.(`Failed to revert to checkpoint: ${savePoint.name}`);
+        if (isNumberConflict(err)) {
+          onError?.(`Could not revert to checkpoint "${savePoint.name}": ${err.message}`);
+          onServerChanged?.();
+        } else {
+          onError?.(`Failed to revert to checkpoint: ${savePoint.name}`);
+        }
       } finally {
         setIsOperationPending(false);
       }
@@ -454,6 +506,7 @@ export function useChangeHistory({
       onChannelsRestore,
       executeReverseOperation,
       onError,
+      onServerChanged,
     ]
   );
 

@@ -601,6 +601,8 @@ function App() {
     channels,
     onChannelsRestore: setChannels,
     onError: setError,
+    // Called only after render, by which time `loadChannels` is initialised.
+    onServerChanged: () => { void loadChannels(); },
   });
 
   // Every "the operator chose to leave" path ends the same way: honour what
@@ -1908,8 +1910,11 @@ function App() {
     stream_profile_id?: number | null;
   }) => {
     try {
-      // Update the channel via API
-      const updatedChannel = await api.updateChannel(channel.id, changes);
+      // `channel` is the one the Guide showed, so its number is the baseline
+      // the server checks a number change against.
+      const updatedChannel = await api.updateChannel(
+        channel.id, changes, api.numberBaselineFor(channel, changes),
+      );
 
       // Update local state
       setChannels(prev => prev.map(ch =>
@@ -1917,6 +1922,11 @@ function App() {
       ));
     } catch (err) {
       logger.error('Failed to update channel from Guide:', err);
+      // A 409 is the server refusing because the channel moved since the Guide
+      // loaded it; its message names the channel and both numbers.
+      if (err instanceof HttpError && err.status === 409) {
+        setError(err.message);
+      }
       throw err;
     }
   }, []);

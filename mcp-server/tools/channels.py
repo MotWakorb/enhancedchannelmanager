@@ -1,8 +1,10 @@
 """Channel management tools."""
 import asyncio
 import logging
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field
 
 from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
@@ -107,6 +109,18 @@ def _fmt_channel_number(value) -> str:
     if isinstance(value, float):
         return str(int(value)) if value.is_integer() else str(value)
     return str(value)
+
+
+class ExpectedChannelNumber(BaseModel):
+    """The number the agent last read for a channel, ``null`` for none.
+
+    A wrapper rather than a bare number so that ``null`` can mean "I read it
+    and it had no number" while omitting the argument still means "no claim".
+    It is sent as the backend's ``expectedNumber`` in this exact shape.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    number: Annotated[float, Field(strict=True, allow_inf_nan=False)] | None
 
 
 def register(mcp: FastMCP):
@@ -311,10 +325,21 @@ def register(mcp: FastMCP):
         tvg_id: str | None = None,
         logo_id: int | None = None,
         streams: list[int] | None = None,
+        expected_number: ExpectedChannelNumber | None = None,
         confirm: bool = False,
         plan_current_channel: dict | None = None,
     ) -> str:
         """Update an existing channel.
+
+        A NUMBER CHANGE NEEDS ITS BASELINE. Before setting ``channel_number``,
+        call get_channel or list_channels and pass the number you saw as
+        ``expected_number={"number": <that number>}`` (``{"number": null}`` for
+        a channel you saw with no number). ECM refuses the update, writing
+        nothing, if the channel is no longer on that number: somebody else
+        changed it after your read. Read it again and decide before retrying.
+        Do not fetch the number only to fill ``expected_number``; it protects
+        the number you based your change on. Edits that leave
+        ``channel_number`` alone need no baseline.
 
         CONFIRM GATING (bd-onazy): renaming or moving the GROUP of a MANUAL
         channel (``auto_created=False``) is a two-call operation — the first call
@@ -341,9 +366,19 @@ def register(mcp: FastMCP):
                      validates the list is a permutation of the current
                      streams) for pure reordering. Use this only when you
                      intend to set the complete stream membership at once.
+            expected_number: Required with ``channel_number``: the number you
+                     last read for this channel, as ``{"number": n}`` or
+                     ``{"number": null}``. Ignored without ``channel_number``.
             confirm: Set True to apply a gated rename/group-change on a manual
                      channel (see CONFIRM GATING above).
         """
+        if channel_number is not None and expected_number is None:
+            return (
+                f"Channel {channel_id} was not updated: changing channel_number needs "
+                "expected_number, the number you last read for this channel "
+                '(get_channel or list_channels), as {"number": n} or {"number": null} '
+                "for no number. Nothing was sent."
+            )
         try:
             client = get_ecm_client()
             payload = {}
@@ -351,6 +386,7 @@ def register(mcp: FastMCP):
                 payload["name"] = name
             if channel_number is not None:
                 payload["channel_number"] = channel_number
+                payload["expectedNumber"] = {"number": expected_number.number}
             if group_id is not None:
                 # Backend PATCH /api/channels/{id} forwards keys straight to
                 # Dispatcharr, whose channel field is ``channel_group_id``;
@@ -413,6 +449,13 @@ def register(mcp: FastMCP):
             return f"Channel {channel_id} updated."
         except Exception as e:
             logger.error("[MCP] update_channel failed: %s", e)
+            message = str(e)
+            if "HTTP 409" in message:
+                return (
+                    f"Channel {channel_id} was not updated: it is no longer on the number "
+                    "in expected_number, so somebody else changed it after your read. "
+                    f"Re-read the channel and decide before retrying. Detail: {message}"
+                )
             return f"Error updating channel {channel_id}: {e}"
 
     @mcp.tool()

@@ -151,9 +151,41 @@ describe('API Service', () => {
         })
       );
 
-      const result = await updateChannel(1, { channel_number: 200 });
+      const result = await updateChannel(1, { channel_number: 200 }, { expectedNumber: 100 });
 
       expect(result.channel_number).toBe(200);
+    });
+
+    it('sends the baseline beside the fields, wrapped so null is a claim', async () => {
+      const bodies: Record<string, unknown>[] = [];
+      server.use(
+        http.patch('/api/channels/1', async ({ request }) => {
+          bodies.push(await request.json() as Record<string, unknown>);
+          return HttpResponse.json({ id: 1, name: 'Test Channel', channel_number: 200, streams: [] });
+        })
+      );
+
+      await updateChannel(1, { channel_number: 200 }, { expectedNumber: 100 });
+      await updateChannel(1, { channel_number: 200 }, { expectedNumber: null });
+
+      expect(bodies).toEqual([
+        { channel_number: 200, expectedNumber: { number: 100 } },
+        { channel_number: 200, expectedNumber: { number: null } },
+      ]);
+    });
+
+    it('sends no baseline when none is given', async () => {
+      let body: Record<string, unknown> | null = null;
+      server.use(
+        http.patch('/api/channels/1', async ({ request }) => {
+          body = await request.json() as Record<string, unknown>;
+          return HttpResponse.json({ id: 1, name: 'New Name', channel_number: 100, streams: [] });
+        })
+      );
+
+      await updateChannel(1, { name: 'New Name' });
+
+      expect(body).toEqual({ name: 'New Name' });
     });
   });
 
