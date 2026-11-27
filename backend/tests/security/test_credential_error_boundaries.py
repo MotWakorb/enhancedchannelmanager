@@ -705,3 +705,289 @@ async def test_range_read_back_failure_is_scrubbed_in_every_log_sink(
     assert result["operationsApplied"] == 1
     assert SECRET not in str(result) and CAUSE not in str(result)
     assert_safe_logs(log_outputs, "could not read its new number back")
+
+
+# ---------------------------------------------------------------------------
+# Scrub policy for operator-safe bulk errors. Guidance built only from ECM text
+# and integers passes through untouched, so short registered credential values
+# cannot mangle channel numbers in it. Messages that carry names or upstream
+# data stay scrubbed.
+# ---------------------------------------------------------------------------
+
+SHORT_VALUES = ("100", "5", "7")
+
+
+def short_value_client(channels_readable=True):
+    from tests.routers.test_renumber_baselines import make_client
+
+    return make_client(
+        [
+            {"id": 7, "name": "ESPN", "channel_number": 100, "streams": []},
+            {"id": 100, "name": "TNT", "channel_number": 7, "streams": []},
+        ],
+        channels_readable=channels_readable,
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_guidance_survives_short_registered_values(async_client):
+    from log_utils import register_sensitive_values
+
+    register_sensitive_values(*SHORT_VALUES)
+    client = short_value_client()
+    result = await poll_numbering(async_client, client, [renumber_op(7, 40, 5)])
+    error = result["errors"][0]
+    assert error["error"] == (
+        "Channel 7 was not renumbered: it is on channel number 100, and this "
+        "request expected 5. Somebody else changed it. Re-read the channel and "
+        "decide before sending this again."
+    )
+    assert error["concurrentNumberChanges"] == [
+        {"channelId": 7, "baselineNumber": 5, "serverNumber": 100},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unverifiable_guidance_survives_short_registered_values(async_client):
+    from log_utils import register_sensitive_values
+
+    register_sensitive_values(*SHORT_VALUES)
+    client = short_value_client(channels_readable=False)
+    result = await poll_numbering(async_client, client, [renumber_op(100, 40, 5)])
+    assert result["errors"][0]["error"].startswith(
+        "Channel 100 was not renumbered: the channel lineup could not be read"
+    )
+    assert "REDACTED" not in result["errors"][0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_missing_baseline_guidance_survives_short_registered_values():
+    from log_utils import register_sensitive_values
+    from routers.channels import BulkCommitRequest, _run_bulk_commit
+
+    register_sensitive_values(*SHORT_VALUES)
+    request = BulkCommitRequest(
+        operations=[{
+            "type": "bulkAssignChannelNumbers",
+            "channelIds": [7, 100],
+            "startingNumber": 5,
+            "expectedNumbers": {"7": 100, "100": 7},
+        }],
+        continueOnError=True,
+    )
+    request.operations[0].expectedNumbers = {}
+    with (
+        patch("routers.channels.get_client", return_value=short_value_client()),
+        patch("routers.channels.journal"),
+    ):
+        result = await _run_bulk_commit(request, batch_id="batch-short-values")
+    assert result["errors"][0]["error"] == (
+        "Channels 7, 100 were not renumbered: the range carries no expectedNumbers "
+        "entry for them, so ECM cannot check whether anybody else changed their "
+        "numbers first."
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_stream_guidance_survives_short_registered_values(async_client):
+    from log_utils import register_sensitive_values
+
+    register_sensitive_values(*SHORT_VALUES)
+    client = short_value_client()
+    result = await poll_numbering(
+        async_client,
+        client,
+        [{"type": "addStreamToChannel", "channelId": 7, "streamId": 100}],
+    )
+    assert result["errors"][0]["error"] == "Stream 100 does not exist"
+
+
+@pytest.mark.asyncio
+async def test_upstream_bearing_create_error_keeps_scrubbing(async_client):
+    """A create Dispatcharr answered without a usable id names the channel.
+
+    Names are operator/upstream data, so that message stays scrubbed: a
+    registered value of at least four characters is removed. A shorter one is
+    left for the structural URL rules, as in debug bundles, because an
+    unanchored sweep of one to three characters would destroy channel numbers
+    and ids. The malformed id itself is reported only by type.
+    """
+    from log_utils import register_sensitive_values
+
+    register_sensitive_values(SECRET, "tv")
+    client = AsyncMock()
+    client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+    client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+    client.get_channel_groups.return_value = []
+    unregistered = "returned-id-unregistered-0a9f7c"
+    client.create_channel.return_value = {"id": unregistered}
+    with (
+        patch("routers.channels.get_client", return_value=client),
+        patch("routers.channels.journal"),
+    ):
+        envelope = await commit_and_poll(
+            async_client,
+            {
+                "operations": [{
+                    "type": "createChannel",
+                    "tempId": -1,
+                    "name": f"tv {SECRET}",
+                    "normalize": False,
+                }],
+                "continueOnError": True,
+            },
+        )
+    error = envelope["result"]["errors"][0]
+    assert error["applied"] is True
+    assert SECRET not in error["error"]
+    assert unregistered not in str(envelope)
+    assert "'tv ***REDACTED***'" in error["error"]
+    assert "(str)" in error["error"]
+
+
+@pytest.mark.asyncio
+async def test_numbering_recovery_reason_is_the_fixed_text(async_client):
+    client = numbering_client()
+    calls = 0
+
+    async def update_channel(channel_id, data):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"id": channel_id, **data}
+        raise upstream_error("runtime")
+
+    client.update_channel.side_effect = update_channel
+    result = await poll_numbering(
+        async_client, client, [renumber_op(1, 21, 5), renumber_op(2, 22, 6)]
+    )
+    assert result["numberingRecovery"][0]["error"] == (
+        "Dispatcharr did not accept the repair write; check server logs."
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["operation", "mixed", "outer", "group"])
+async def test_bulk_journal_rows_carry_no_upstream_text(async_client, stage):
+    client = AsyncMock()
+    client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+    client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+    client.get_channel_groups.return_value = []
+    created = {"id": 501, "name": "Synthetic Channel"}
+    error = upstream_error("status")
+    if stage == "operation":
+        client.create_channel.side_effect = error
+    elif stage == "mixed":
+        client.create_channel.side_effect = [created, error]
+    else:
+        client.create_channel.return_value = created
+    if stage == "group":
+        client.create_channel_group.side_effect = error
+    operations = [
+        {"type": "createChannel", "tempId": -1, "name": "Synthetic Channel",
+         "normalize": False},
+        {"type": "createChannel", "tempId": -2, "name": "Rejected Channel",
+         "normalize": False},
+    ]
+    body = {"operations": operations, "continueOnError": True}
+    if stage == "group":
+        body["groupsToCreate"] = [{"name": "Synthetic Setup Group"}]
+    from routers import channels
+
+    original_finalize = channels.finalize_bulk_commit_result
+    calls = 0
+
+    def finalize(result, ledger):
+        nonlocal calls
+        calls += 1
+        if stage == "outer" and calls == 1:
+            raise error
+        return original_finalize(result, ledger)
+
+    with (
+        patch("routers.channels.get_client", return_value=client),
+        patch("routers.channels.journal") as journal,
+        patch("routers.channels.finalize_bulk_commit_result", side_effect=finalize),
+    ):
+        envelope = await commit_and_poll(async_client, body)
+    assert envelope["status"] == "completed"
+    assert journal.mock_calls, "the run must reach the journal"
+    recorded = str(journal.mock_calls)
+    assert SECRET not in recorded and CAUSE not in recorded
+    assert HOST not in recorded
+
+
+class SyntheticDBAPIError(Exception):
+    pass
+
+
+def sqlalchemy_style_error():
+    from sqlalchemy.exc import OperationalError
+
+    return OperationalError(
+        "INSERT INTO journal_entries (description) VALUES (?)",
+        (f"http://{HOST}/get.php?username=u&password={SECRET}",),
+        SyntheticDBAPIError("database is locked"),
+    )
+
+
+@pytest.mark.parametrize("failure", ["batch_and_row", "base_exception"])
+def test_journal_write_failures_log_scrubbed_errors_and_rows(log_outputs, failure):
+    from routers.channels import write_journal_rows
+
+    url_secret = "unregistered-row-url-secret-3be1"
+    row = {
+        "category": "channel",
+        "action_type": "create",
+        "entity_id": 501,
+        "entity_name": f"Synthetic {SECRET}",
+        "description": "Created channel",
+        "after_value": {"logo_url": f"http://{HOST}/logo.png?token={url_secret}"},
+    }
+    with patch("routers.channels.journal") as journal:
+        if failure == "batch_and_row":
+            journal.log_entries.side_effect = sqlalchemy_style_error()
+            journal.log_entry.side_effect = sqlalchemy_style_error()
+            assert write_journal_rows([row], batch_id="b-1", log_tag="CHANNELS-BULK") == 1
+        else:
+            journal.log_entries.side_effect = KeyboardInterrupt()
+            with pytest.raises(KeyboardInterrupt):
+                write_journal_rows([row], batch_id="b-1", log_tag="CHANNELS-BULK")
+    for text in log_outputs():
+        assert "UNJOURNALLED MUTATION" in text
+        assert "501" in text
+        assert SECRET not in text and CAUSE not in text
+        assert url_secret not in text
+    if failure == "batch_and_row":
+        console = log_outputs()[0]
+        assert "OperationalError" in console
+        assert "Traceback" in console
+
+
+@pytest.mark.asyncio
+async def test_login_failure_logs_only_the_exception_type(log_outputs):
+    from config import DispatcharrSettings
+    from dispatcharr_client import DispatcharrClient
+
+    unregistered = "unlabelled-login-detail-7d1e44"
+    client = DispatcharrClient(
+        DispatcharrSettings(
+            url=f"http://{HOST}", auth_method="password",
+            username="operator", password="synthetic-login-pass",
+        )
+    )
+    await client._client.aclose()
+
+    def explode(request):
+        raise httpx.ConnectError(f"{unregistered} {HOST}", request=request)
+
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(explode))
+    try:
+        with pytest.raises(httpx.ConnectError):
+            await client._login()
+    finally:
+        await client._client.aclose()
+    for text in log_outputs():
+        assert "Authentication error: ConnectError" in text
+        assert unregistered not in text
+        assert "Traceback" not in text
