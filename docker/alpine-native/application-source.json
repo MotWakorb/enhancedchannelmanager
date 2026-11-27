@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "536179c524461fa0bb625167f9e8838cdd71cf2b1b2f4ef2d2bb8ceb1a386b1e",
+      "sha256": "acab595922c424bd254328cacf21c6cb61abb7db0ca79857f28773e828dba47f",
       "type": "file"
     },
     {
@@ -1098,7 +1098,7 @@
     {
       "executable": false,
       "path": "backend/requirements.txt",
-      "sha256": "c4d19336909ae669f3577fc8da5afd15c265b50b73227c08d7b34eb177151804",
+      "sha256": "629b817e0dcf38d06462df958eb2aeb6e5b3af5e5d0144014631c23c2af24bd8",
       "type": "file"
     },
     {
@@ -1134,7 +1134,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "f5cbed107b21b459dafc87cfcb3ad694ab46ffd2a99a3df32c49b0e10b70bf69",
+      "sha256": "201449fa02d6ea9ddabad7b26e6c5515b16aef47787393b58104d15c205190bc",
       "type": "file"
     },
     {
@@ -1842,7 +1842,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "f3598cdf8c962bab65e247dbbc5b33245e6100c39299fa046ca62d6d1f938eb1",
+      "sha256": "472f29fa2a010ca7be57507ca775021d096aa6dea8f94949fd028a3ef34357bd",
       "type": "file"
     },
     {
@@ -7206,5 +7206,19 @@
     "previous_manifest_sha256": "21e59652be931abd68c396a7d7ebfc5867d4867dfc7d48475192f2da8f11e5b9",
     "scope": "Keep backend-gate runs and the backend e2e suite off the live ECM: the gate runner refuses empty, whole-tree, tests/e2e, @file and --pyargs selections, alternate config files, testpaths and addopts overrides, --noconftest and -p no:skipping in arguments and PYTEST_ADDOPTS before pytest starts; every gate pytest run loads a guard plugin that fails the run when anything collected resolves into tests/e2e without --allow-live-e2e; a subset always passes --ignore=tests/e2e; backend/pytest.ini addopts ignores tests/e2e; the e2e suite is neither collected nor run unless ECM_E2E_LIVE=1; backend/CLAUDE.md documents the refusals; version touchpoints.",
     "version": "0.18.2-0095"
+  },
+  "mako_security_update": {
+    "added_files": [],
+    "base_commit": "e99b0359ec70d5f5199261c01b5a750ea32d5701",
+    "bead": "enhancedchannelmanager-h1186",
+    "changed_files": {
+      "backend/main.py": "536179c524461fa0bb625167f9e8838cdd71cf2b1b2f4ef2d2bb8ceb1a386b1e",
+      "backend/requirements.txt": "c4d19336909ae669f3577fc8da5afd15c265b50b73227c08d7b34eb177151804",
+      "backend/routers/backup.py": "f5cbed107b21b459dafc87cfcb3ad694ab46ffd2a99a3df32c49b0e10b70bf69",
+      "frontend/package.json": "f3598cdf8c962bab65e247dbbc5b33245e6100c39299fa046ca62d6d1f938eb1"
+    },
+    "previous_manifest_sha256": "4c96bbaf25292eb51a2ea7fecddd9321004caa122517c8a0a1318d1ba7045deb",
+    "scope": "Upgrade the backend dependency Mako from 1.4.1 to 1.4.2 for CVE-2026-102991 / GHSA-5639-2j2p-m4mx in backend/requirements.txt, with no other dependency version change; version touchpoints.",
+    "version": "0.18.2-0096"
   }
 }
