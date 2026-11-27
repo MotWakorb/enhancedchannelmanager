@@ -627,13 +627,17 @@ class DbasSyncTask(TaskScheduler):
         from dbas.restore_contracts import RestoreOutcome
 
         is_dry_run = bool(report.is_dry_run)
-        # No realized outcome is not evidence of preview mode. Keep the
-        # report's enum/null contract and use the journal's existing unknown
-        # label for an apply that never computed an outcome.
-        outcome = report.outcome.value if report.outcome else (
-            "dry_run" if is_dry_run else "unknown"
-        )
+        # No realized outcome is not evidence of preview mode. An apply with no
+        # outcome either stopped at a destination-read gate, which the journal
+        # records as aborted, or never computed one, which it records as
+        # unknown. The report's own outcome stays null.
         unreadable = getattr(report, "destination_unreadable", None)
+        if report.outcome:
+            outcome = report.outcome.value
+        elif is_dry_run:
+            outcome = "dry_run"
+        else:
+            outcome = "aborted" if unreadable is not None else "unknown"
         succeeded = unreadable is None and (
             is_dry_run or report.outcome == RestoreOutcome.SUCCESS
         )
@@ -694,6 +698,7 @@ class DbasSyncTask(TaskScheduler):
             error=(
                 None if succeeded
                 else "SYNC_DESTINATION_UNREADABLE" if unreadable is not None
+                else "SYNC_PREFLIGHT_REFUSED" if getattr(report, "preflight_refused", False)
                 else "SYNC_%s" % outcome.upper()
             ),
             started_at=started_at,

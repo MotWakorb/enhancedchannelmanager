@@ -175,6 +175,8 @@ async def test_restore_apply_refused_by_preflight_is_not_labelled_a_preview(
     assert result.details["outcome"] == "unknown"
     assert "outcome=dry_run" not in caplog.text
     assert "mode=apply, outcome=unknown" in caplog.text
+    assert restore_report["preflight_refused"] is True
+    assert result.error == "RESTORE_PREFLIGHT_REFUSED"
 
 
 @pytest.mark.asyncio
@@ -207,6 +209,39 @@ async def test_sync_apply_aborted_at_destination_read_gate_reports_apply_mode(
     assert result.success is False
     assert result.error == "SYNC_DESTINATION_UNREADABLE"
     assert result.details["is_dry_run"] is False
-    assert result.details["outcome"] == "unknown"
+    # The journal row for this cycle records it as aborted; the task agrees.
+    assert result.details["outcome"] == "aborted"
     assert "sync run could not read the destination" in result.message
-    assert "mode=apply, outcome=unknown" in caplog.text
+    assert "mode=apply, outcome=aborted" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_sync_apply_refused_by_preflight_names_the_refusal(tmp_path):
+    """A confirmed sync apply that pre-flight refuses reports why it stopped."""
+    from unittest.mock import patch
+
+    from dbas import restore_orchestrator
+    from tasks import dbas_sync_engine as engine
+    from tests.tasks.test_dbas_sync_destination_readable import _preview
+    from tests.tasks.test_dbas_sync_engine import _empty_dest_client, _sync_target
+
+    real_run_restore = restore_orchestrator.run_restore
+
+    async def refused_by_preflight(**kwargs):
+        return await real_run_restore(**kwargs, max_entities_per_category=0)
+
+    with patch.object(engine, "run_restore", side_effect=refused_by_preflight):
+        report = await _preview(
+            _sync_target(), _empty_dest_client(), tmp_path, confirm_apply=True
+        )
+    assert report.is_dry_run is False
+    assert report.outcome is None
+    assert report.preflight_refused is True
+    assert report.destination_unreadable is None
+
+    result = DbasSyncTask()._result_from_report(datetime.now(UTC), report)
+    assert result.success is False
+    assert result.error == "SYNC_PREFLIGHT_REFUSED"
+    assert result.details["is_dry_run"] is False
+    assert result.details["outcome"] == "unknown"
+    assert result.details["sync_report"]["preflight_refused"] is True

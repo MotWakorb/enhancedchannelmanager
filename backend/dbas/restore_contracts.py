@@ -1389,6 +1389,16 @@ class RestoreReport(BaseModel):
     # that are facts about the SOURCE and do not mean the destination went
     # unread. Sanitized (status code + error class, never a URL, body or
     # credential). ADDITIVE optional — no CONTRACT_VERSION bump.
+    # Pre-flight refused the plan, so nothing ran and no outcome exists. The
+    # refusal reasons are in ``notes``; this is the structured signal callers
+    # map to an error code. ADDITIVE optional — no CONTRACT_VERSION bump.
+    preflight_refused: bool = Field(
+        default=False,
+        description=(
+            "True when pre-flight refused the plan before any importer ran. "
+            "The outcome stays null and the reasons are in notes."
+        ),
+    )
     destination_unreadable: str | None = Field(
         default=None,
         description=(

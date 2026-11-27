@@ -4831,6 +4831,8 @@ export interface RestoreReport {
    * (status code + error class); never a URL, body or credential.
    */
   destination_unreadable?: string | null;
+  /** True when pre-flight refused the plan before any importer ran; the reasons are in `notes`. */
+  preflight_refused?: boolean;
   started_at?: string | null;
   completed_at?: string | null;
   notes: string[];

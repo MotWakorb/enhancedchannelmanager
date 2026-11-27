@@ -461,6 +461,10 @@ class DbasRestoreTask(TaskScheduler):
             success=self._report_succeeded(report, is_apply),
             completed_degraded=self._degraded_not_failed(report, is_apply),
             message=self._summary_message(report, is_apply),
+            error=(
+                "RESTORE_PREFLIGHT_REFUSED"
+                if is_apply and report.preflight_refused else None
+            ),
             started_at=started_at,
             completed_at=datetime.now(timezone.utc),
             total_items=counts.total_items,
