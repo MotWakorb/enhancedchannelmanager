@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": "0.18.2-0096",
+  "version": "0.18.2-0097",
   "created": "2026-11-18T20:52:32Z",
   "kind": "source-manifest",
   "channel": "dev",
@@ -75,7 +75,7 @@
     "docker/alpine-native/Dockerfile.resdet": "sha256:9faead49870765cdac2c0f0050be6d88cf2ba9effc0b1abf3ac454972e8d41ce",
     "docker/alpine-native/Dockerfile.security-libraries": "sha256:d071e8f07fa14b1678d5d4269506140c118a6e2150bce6aae467c670b337a44c",
     "docker/alpine-native/README.md": "sha256:1d47aa3089cd5ef8841523a40383b91175f1496e5d0e5d33ae50d5ab224f9d85",
-    "docker/alpine-native/application-source.json": "sha256:920ebc2abeaa651e4a12ed96d0225a30495458d9abab87c13a333719a07975f5",
+    "docker/alpine-native/application-source.json": "sha256:7f30fcf903b35486b933dfac0d94722b4da87e48feb487ea75d1b757ed36495c",
     "docker/alpine-native/codec-smoke.c": "sha256:ab0a0b4f68141f69a2ad340683d55e329e2ce0f067cd5e1ace898991917f8186",
     "docker/alpine-native/codec2-exports.txt": "sha256:df951fc24bdfcc6c611e35432eec4eb72ef0d2269b6b1132bbfd1da39011b717",
     "docker/alpine-native/codec2_numeric.c": "sha256:b26c5ed3ef94cee03b004ea6bf89e0d0cfa6af4d8df4d927f999f52de0f4ceda",
@@ -180,7 +180,7 @@
     "scripts/diagnose_codec2_numeric.py": "sha256:ff4e4fc7989ed238d3b53fdb4db7bc687a004f741282689c773d97987ae3a112",
     "scripts/fetch_original_baseline.py": "sha256:06071a781af605a90a159b78f5b6b95925dfd4ead8ce123d9d5cfceef283fc59",
     "scripts/gate_runner.py": "sha256:0eefe6832956e227997b9a13f049203bd0db8d5d5da00663cf3d01ecc3d4b8e6",
-    "scripts/generate_sbom.py": "sha256:9265b5a4bdc3281378d6eefdcedba86977efa0ded8588b7b3d2033eaa0fc8a71",
+    "scripts/generate_sbom.py": "sha256:53e5bbe3e93df55bd9884f02b9f4f6df91330f329ef09bd9d9b8b2e61e16fbb7",
     "scripts/image_publish_policy.py": "sha256:9b4546e911e677b1b220f3afaf17bb853cdb69ddd9eff667825ccbd1c7f4be8d",
     "scripts/install_alpine_native.py": "sha256:313a87a75125a38b863494f957d5f02ccd45bfbdf3ab8f1758cbd2347964c25a",
     "scripts/install_busybox_provider.py": "sha256:758e1a520e074b9bfb4acf74af44c911ff12e354a14ba1cee5c1cf463b4a174b",
@@ -203,7 +203,7 @@
     "scripts/retain_alpine_owned_evidence.py": "sha256:4b23c6b321f861a54ddd8f37a0758d7488c5ef35871b603c129c9e8618bf78fc",
     "scripts/retained/package_alpine_native-v1.py.gz": "sha256:fc139f8955cd75e7ee18241e0089074df3db3e259ab4e2497ce4f2da5d030404",
     "scripts/run_alpine_codec_matrix.py": "sha256:10866bb4847123e702646801e68934186a4af01e7af1f5a9778a0ab8e951c3db",
-    "scripts/verify_alpine_application_source.py": "sha256:4b2438f344152e4cc97bc6e757c20553c3edfbf4d0203c651201758e21d92e42",
+    "scripts/verify_alpine_application_source.py": "sha256:140258ee121d6619ace9e766fb13265fe4d81c019caeecf177836d8e257e1ce6",
     "scripts/verify_alpine_external_sources.py": "sha256:fc19460fe6181f3980f05e29455ccc24798cbbbd94ef9563613e8ddc4addd811",
     "scripts/verify_alpine_ffmpeg.py": "sha256:c358af66b7b0704d95461b9413abc74c0717a976af86c7a9752bd8c6d1438e1e",
     "scripts/verify_alpine_owned_sources.py": "sha256:7c463cf8da24f06cea22e7972182ea674029d358990e37c1d652a46e164b8fa3",
@@ -303,7 +303,7 @@
           ]
         ]
       },
-      "sha256": "152d36b18716433bbdc6e8fb3c6c2503df9ea105f93cb6cf41c44587bad0962c"
+      "sha256": "80ca1b1fa2cb353bd5c72f245b476384d73f681e06d5aec49efbf2435480c6a5"
     },
     {
       "path": "mcp.spdx.json",
@@ -314,7 +314,7 @@
         "packages": [],
         "relationships": []
       },
-      "sha256": "1117a837ab2dc244bd894efa21718ad0b23851fbe1305e0bd9bc0a43f7a4b7e9"
+      "sha256": "848912f24a9b79fe0d9e5ed6365450df6a8aaa1ac7634f979e0182ac7295ec83"
     }
   ]
 }

@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "acab595922c424bd254328cacf21c6cb61abb7db0ca79857f28773e828dba47f",
+      "sha256": "e576d749037649aa55f71978aec5df769654b91c351fd9ff27e7f85d7a68600c",
       "type": "file"
     },
     {
@@ -1134,7 +1134,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "201449fa02d6ea9ddabad7b26e6c5515b16aef47787393b58104d15c205190bc",
+      "sha256": "74008064ad3dfae033e9d061746a0942071807a9c54abc507566bda49f6471c1",
       "type": "file"
     },
     {
@@ -1842,7 +1842,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "472f29fa2a010ca7be57507ca775021d096aa6dea8f94949fd028a3ef34357bd",
+      "sha256": "3626b98381ca84f939b4b87ac8b6b99072cc35acb1604fbe6ef0f4740bf9f0d6",
       "type": "file"
     },
     {
@@ -7220,5 +7220,18 @@
     "previous_manifest_sha256": "4c96bbaf25292eb51a2ea7fecddd9321004caa122517c8a0a1318d1ba7045deb",
     "scope": "Upgrade the backend dependency Mako from 1.4.1 to 1.4.2 for CVE-2026-102991 / GHSA-5639-2j2p-m4mx in backend/requirements.txt, with no other dependency version change; version touchpoints.",
     "version": "0.18.2-0096"
+  },
+  "ruff_triage_update": {
+    "added_files": [],
+    "base_commit": "5fc66138d8025ef4ef627b0d8d212ff3cb3c37a8",
+    "bead": "enhancedchannelmanager-2ixgf.5",
+    "changed_files": {
+      "backend/main.py": "acab595922c424bd254328cacf21c6cb61abb7db0ca79857f28773e828dba47f",
+      "backend/routers/backup.py": "201449fa02d6ea9ddabad7b26e6c5515b16aef47787393b58104d15c205190bc",
+      "frontend/package.json": "472f29fa2a010ca7be57507ca775021d096aa6dea8f94949fd028a3ef34357bd"
+    },
+    "previous_manifest_sha256": "920ebc2abeaa651e4a12ed96d0225a30495458d9abab87c13a333719a07975f5",
+    "scope": "Clear triaged Ruff findings without behaviour change: remove an unused import from backend/main.py and annotate one intentional SQL equality comparison in backend/routers/backup.py; version touchpoints.",
+    "version": "0.18.2-0097"
   }
 }
