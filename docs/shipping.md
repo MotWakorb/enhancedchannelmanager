@@ -17,6 +17,8 @@ cd frontend && npm test && npm run build
 
 `scripts/backend-gate.sh` is **the** backend gate — the same invocation CI runs to decide the PR, held there by `backend/tests/unit/test_backend_gate_contract.py`. Do not substitute a hand-typed pytest command: the two that used to circulate differed by 72 collected tests. It also pins the project interpreter, because ambient `python` resolves an older `cryptography` and silently self-skips 9 TLS tests instead of failing, so a green gate can mean 9 fewer tests ran than the command implies. Pin the venv for `py_compile` too. See [`docs/testing.md`](testing.md#what-the-backend-gate-runs).
 
+`scripts/backend-gate.sh --subset <files>` is for focused runs and is not the gate. Name explicit test files. It refuses, before pytest starts, an empty argument, `.`, `tests`, the backend directory, and any path under `tests/e2e`, and it always passes `--ignore=tests/e2e`. Those refusals exist because an empty trailing argument once collected the whole tree and ran `backend/tests/e2e` against the operator's live ECM. That suite also skips unless `ECM_E2E_LIVE=1` is set. Never run it as part of shipping verification. See [`docs/testing.md`](testing.md#the-live-backend-e2e-suite).
+
 **CRITICAL**: If syntax checks or tests fail, fix errors before proceeding. Never commit broken code.
 
 > **Deploying to the dev container** (the local edit→deploy→verify loop, separate from this PR flow): use `scripts/deploy-frontend.sh` for the frontend. It clears stale `/app/static/assets/*` before copying, which a hand-run `docker cp` skips. See CLAUDE.md → "Container-First Development".
