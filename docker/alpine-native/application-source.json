@@ -972,7 +972,7 @@
     {
       "executable": false,
       "path": "backend/journal.py",
-      "sha256": "5e70990ca9f477a91b1050b55f3114680a71b846df9c62eb81d74c8b27b95838",
+      "sha256": "4ab8bfb68c81e1ce07c708bf0044306d2c4777dbea396bf87221196ffe8f84e2",
       "type": "file"
     },
     {
@@ -7141,6 +7141,7 @@
       "backend/cloud_storage/upload_security.py": "21f1b23e38e3ca817f6991a1d5f16a105767274cb6d5f6ab6283b65f0e0bfef0",
       "backend/credential_sentinel.py": "f8d21dc92be8ecc85045eb36ef82af92eafbcb848436e3424ececae6640d211b",
       "backend/dispatcharr_client.py": "d44d7462b445670b5d88bc56c51a82b4cb10100ed4f72dc7ca9c4a8ad6d223da",
+      "backend/journal.py": "5e70990ca9f477a91b1050b55f3114680a71b846df9c62eb81d74c8b27b95838",
       "backend/log_utils.py": "4653482d92d20cfe8c27af17b709f29f99cd9447e3ea2845f3d940be2c68f07a",
       "backend/main.py": "0f7a2367324f88d1cbc536e397a2f48b6b411d14312a811a18f441bd0472bff0",
       "backend/obfuscate.py": "61209ddec5b8fc079e634cc2e8b89f498705fe91d4ef8da359bdf06241804d71",
@@ -7151,7 +7152,7 @@
       "frontend/package.json": "b69f7306a26d3d369b515743fb2a4be98bfac0c77cb09ae39b8e6b43da9cffdc"
     },
     "previous_manifest_sha256": "906bbeae86a0fc5c6d88ccfa47e9a2234cc70cbaf505a82fede8c694200dcfcf",
-    "scope": "Sanitize profile-reconcile, sibling-propagation, bulk-commit and Dispatcharr error diagnostics: scoped log diagnostics compose the credential-pattern, registered-value (four-character minimum) and URL-aware policies, with the URL rules extended to any scheme, bracketed IPv6 hosts, timeshift and extensionless Xtream Codes paths and the pattern rules to JSON, dict and API-key header forms masked whole up to the end of the line; bulk-job, compensation and journal-write failures log scrubbed exception chains and rows without raw tracebacks; Dispatcharr request and login failures log only the exception type; foreign bulk group, operation, run and supervisor failures and numbering-recovery reasons return fixed messages while numbering-baseline refusals and missing-stream guidance keep their exact text and concurrentNumberChanges payload, a non-numeric server number rendering as unreadable; URL query vocabulary and known-credential path rewriting move into the credential_sentinel leaf module, plus 0092 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "scope": "Sanitize profile-reconcile, sibling-propagation, bulk-commit and Dispatcharr error diagnostics: scoped log diagnostics compose the credential-pattern, registered-value (four-character minimum) and URL-aware policies, with the URL rules extended to any scheme, bracketed IPv6 hosts, timeshift and extensionless Xtream Codes paths and the pattern rules to JSON, dict and API-key header forms masked whole up to the end of the line; bulk-job, compensation and journal-write failures log scrubbed exception chains and rows without raw tracebacks; Dispatcharr request and login failures log only the exception type; journal log lines name only the category, action and entity id and a failed journal write logs only the error type; foreign bulk group, operation, run and supervisor failures and numbering-recovery reasons return fixed messages while numbering-baseline refusals and missing-stream guidance keep their exact text and concurrentNumberChanges payload, a non-numeric server number rendering as unreadable; URL query vocabulary and known-credential path rewriting move into the credential_sentinel leaf module, plus 0092 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0092"
   }
 }
