@@ -377,7 +377,7 @@ export function BulkRuleSettingsModal({
           </section>
 
           {probeOnSortError && (
-            <p className="form-hint" style={{ color: 'var(--danger)', marginTop: '8px' }}>
+            <p className="form-hint" style={{ color: 'var(--danger-text)', marginTop: '8px' }}>
               {probeOnSortError}
             </p>
           )}

@@ -24,7 +24,7 @@
   font-size: var(--type-badge-size);
   padding: 0.25rem 0.5rem;
   background-color: transparent;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-radius: 4px;
   color: var(--text-muted);
   white-space: nowrap;
@@ -52,7 +52,7 @@
 
 .task-status-pill.disabled {
   color: var(--text-muted);
-  border-color: var(--border-color);
+  border-color: var(--border-primary);
 }
 
 .task-status-pill-fix-btn {

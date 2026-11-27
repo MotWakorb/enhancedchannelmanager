@@ -2,7 +2,7 @@
 
 .norm-engine-section {
   padding: 1.5rem;
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border-radius: var(--radius-xl);
   border: 1px solid var(--border-primary);
   overflow: hidden;
@@ -130,7 +130,7 @@
 }
 
 .norm-engine-group.dragging {
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border: 1px solid var(--accent-primary);
   box-shadow: var(--shadow-md);
 }
@@ -263,7 +263,7 @@
 /* Rules List */
 .norm-engine-rules {
   padding: 0.5rem;
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border-top: 1px solid var(--border-secondary);
 }
 
@@ -283,7 +283,7 @@
 }
 
 .norm-engine-rule.selected {
-  background: var(--accent-primary-transparent);
+  background: var(--bg-selected);
   border: 1px solid var(--accent-primary);
 }
 
@@ -363,7 +363,7 @@
 
 /* Dragging state */
 .norm-engine-rule.dragging {
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border: 1px solid var(--accent-primary);
   box-shadow: var(--shadow-md);
 }
@@ -388,7 +388,7 @@
 .norm-engine-add-rule:hover {
   border-color: var(--accent-primary);
   color: var(--accent-primary);
-  background: var(--accent-primary-transparent);
+  background: var(--bg-selected);
 }
 
 .norm-engine-add-rule .material-icons {
@@ -545,8 +545,8 @@
 }
 
 .norm-engine-btn-icon.danger:hover {
-  background: var(--status-error-bg);
-  color: var(--status-error-text);
+  background: var(--danger-bg);
+  color: var(--danger-text);
 }
 
 /* Test Panel - Collapsible */
@@ -623,7 +623,7 @@
   align-self: stretch;
   width: 100%;
   padding: 0.75rem;
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
@@ -658,7 +658,7 @@
 .norm-engine-test-result {
   padding: 0.75rem;
   margin-bottom: 0.75rem;
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-lg);
 }
@@ -746,7 +746,7 @@
 }
 
 .norm-engine-modal {
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-xl);
   width: 100%;
@@ -892,7 +892,7 @@
 }
 
 .norm-engine-preview-result.matched .material-icons {
-  color: var(--status-success-text);
+  color: var(--success);
 }
 
 .norm-engine-preview-result.no-match .material-icons {
@@ -973,7 +973,7 @@
 .norm-engine-mode-toggle {
   display: flex;
   gap: 0;
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   overflow: hidden;
@@ -1057,7 +1057,7 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem;
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
 }
@@ -1136,7 +1136,7 @@
 .norm-engine-add-condition:hover {
   border-color: var(--accent-primary);
   color: var(--accent-primary);
-  background: var(--accent-primary-transparent);
+  background: var(--bg-selected);
 }
 
 /* Status/panel glyph -> --icon-status. 16px -> 18px. */
@@ -1243,7 +1243,7 @@
 }
 
 .norm-engine-apply-ok {
-  color: var(--text-tertiary);
+  color: var(--text-muted);
 }
 
 .norm-engine-apply-table select {

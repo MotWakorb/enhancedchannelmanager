@@ -6382,7 +6382,7 @@ export function ChannelsPane({
                         justifyContent: 'space-between',
                         alignItems: 'center',
                         padding: '12px',
-                        borderBottom: '1px solid var(--border-color)',
+                        borderBottom: '1px solid var(--border-primary)',
                       }}
                     >
                       <div>

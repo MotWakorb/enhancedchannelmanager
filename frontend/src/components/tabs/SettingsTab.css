@@ -1435,11 +1435,11 @@
 }
 
 .integration-test-result--success {
-  color: var(--accent-success);
+  color: var(--success);
 }
 
 .integration-test-result--error {
-  color: var(--accent-error);
+  color: var(--danger-text);
 }
 
 /* Leading status glyph on a probe-history row (check_circle / error / warning)
