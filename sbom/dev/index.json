@@ -188,7 +188,7 @@
     "scripts/native_image_gate.py": "sha256:17849a417aba888f132a4e38fd23a9fc43c8e75673e410dd6c00bfca4c4f79d0",
     "scripts/package_alpine_native.py": "sha256:c29b85fde97e02ac05ae0d2888d86ab69714c3d6bd52f8c3fb43ba0913be27d5",
     "scripts/prepare_alpine_baseline.py": "sha256:87655bfe7f646f68d0bc24e113c6382f9556a2e6bcda1fc3d296985b858f5be9",
-    "scripts/prepare_alpine_external_sources.py": "sha256:a58b00a3cc30b76df7b0094881b3a3a5cb4de81fadeb793af9e01cbb56f91120",
+    "scripts/prepare_alpine_external_sources.py": "sha256:d74ae43a7152af5343ab6d52ef66835cc7f8eb57e39c9287b6f2363384f2f7cf",
     "scripts/prepare_alpine_native_cache.py": "sha256:23e8f6c166a285f7c713e31ca53d4a717050a2e2d0f6d8e3a2a924cefa72b717",
     "scripts/prepare_alpine_python_base.py": "sha256:013a951c262b5f134eb1fb9e9efebf648ac2a16a53d4b3565291c004a2e42ecc",
     "scripts/prepare_alpine_rust_sources.py": "sha256:ee5c94b7733bd7e0ef17cf5867d965ab64d745a90f2b1595cebbdb099fefc2c0",
