@@ -97,24 +97,34 @@ _AWS_AKID_RE = re.compile(r"\b((?:AKIA|ASIA)[A-Z0-9]{8,})\b")
 # a word that merely contains one (``max_tokens``) is not followed by the
 # separator and is left alone.
 #
-# The VALUE is masked whole. A quoted value runs to its matching unescaped
-# quote, so a space or an escaped quote inside it cannot end the mask early. A
-# value that opens a list (``"password": ["x"]``, the usual DRF error shape)
-# runs to the closing ``]``, quoted elements included. Every repetition is
-# bounded and its alternatives are disjoint, so the scan stays linear; an
-# unclosed quote or list masks up to the bound. An unquoted value still stops
-# at whitespace, a quote, ``,``, ``}`` or ``&``.
+# The VALUE is masked whole, at any length, but never past the end of its line.
+# A quoted value runs to its matching unescaped quote; a list value (the usual
+# DRF error shape, ``"password": ["x"]``) runs to its closing ``]``, quoted
+# elements and one level of nested lists included. An unclosed value stops at
+# the first newline, so the following log lines and traceback frames survive.
+# A secret that itself contains a literal newline is out of scope. In a
+# backslash-escaped JSON body the value ends only at its own escaped quote; a
+# bare quote of either kind, and a doubly escaped quote, stay inside it. Every
+# repetition after the opener is optional and its alternatives are disjoint,
+# so the scan never backtracks and stays linear. An unquoted value still stops
+# at whitespace, a quote, ``,``, ``}`` or ``&``. Lists nested more than one
+# level deep end the mask at the first inner ``]``.
 _KV_KEYS = (
     r"secret_access_key|aws_secret_access_key|access_key_id|client_secret|"
     r"access_token|secret|password|passwd|api_key|x-api-key|api-key|apikey|token"
 )
+_KV_DQ = r"\"(?:[^\"\\\n]|\\[^\n])*\"?"
+_KV_SQ = r"'(?:[^'\\\n]|\\[^\n])*'?"
+_KV_INNER_LIST = r"\[(?:[^\[\]\"'\\\n]|\\[^\n]|" + _KV_DQ + r"|" + _KV_SQ + r")*\]?"
 _SECRET_KV_RE = re.compile(
-    r"(?i)((?:" + _KV_KEYS + r")\\?['\"]?\s*[:=]\s*)"
+    r"(?i)((?:" + _KV_KEYS + r")\\?['\"]?[ \t]*[:=][ \t]*)"
     r"(?:"
-    r"(?P<list>\[)(?:[^\]\"'\\]|\\.|\"(?:[^\"\\]|\\.){0,1024}\"?|'(?:[^'\\]|\\.){0,1024}'?){0,256}(?P<list_end>\])?"
-    r"|(?P<esc>\\[\"'])(?:[^\"'\\]|\\[^\"']){0,1024}(?P<esc_end>\\[\"'])?"
-    r"|(?P<dq>\")(?:[^\"\\]|\\.){0,1024}(?P<dq_end>\")?"
-    r"|(?P<sq>')(?:[^'\\]|\\.){0,1024}(?P<sq_end>')?"
+    r"(?P<list>\[)(?:[^\[\]\"'\\\n]|\\[^\n]|" + _KV_DQ + r"|" + _KV_SQ + r"|"
+    + _KV_INNER_LIST + r")*(?P<list_end>\])?"
+    r"|(?P<esc>\\(?P<esc_q>[\"']))"
+    r"(?:[^\\\n]|\\\\\\(?P=esc_q)|\\(?!(?P=esc_q))[^\n])*(?P<esc_end>\\(?P=esc_q))?"
+    r"|(?P<dq>\")(?:[^\"\\\n]|\\[^\n])*(?P<dq_end>\")?"
+    r"|(?P<sq>')(?:[^'\\\n]|\\[^\n])*(?P<sq_end>')?"
     r"|[^'\"\s,}&]+"
     r")",
 )

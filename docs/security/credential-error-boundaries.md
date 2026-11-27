@@ -14,8 +14,12 @@ The diagnostic sweep of registered values skips spellings shorter than four
 characters, the same minimum the debug-bundle literal sweep uses; such a value
 is still caught by the structural URL rules but not in free text. The pattern
 layer masks JSON and repr'd-dict credential keys, `token` and API-key header
-forms, masking the whole value: a quoted value to its matching unescaped quote
-and a list to its closing bracket, each bounded so the scan stays linear. A
+forms, masking the whole value at any length: a quoted value to its matching
+unescaped quote and a list to its closing bracket (one level of nesting), but
+never past the end of its line, so an unclosed value cannot swallow the
+following log lines. A secret containing a literal newline is out of scope. An
+escaped-JSON value ends only at its own escaped quote. The scan never
+backtracks and stays linear. A
 registered credential equal to a channel number or id can still appear as that
 number in the unscrubbed numbering guidance, and a non-numeric server number is
 rendered there as "an unreadable channel number" (the `concurrentNumberChanges`
