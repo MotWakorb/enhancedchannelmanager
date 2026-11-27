@@ -256,3 +256,81 @@ def test_pattern_layer_leaves_ordinary_bracketed_and_quoted_text(text):
         assert out == "token: ***REDACTED***, refresh failed"
     else:
         assert out == text
+
+
+# ---------------------------------------------------------------------------
+# Pattern layer: no length cap leaks a tail, and a value never crosses a line.
+# ---------------------------------------------------------------------------
+
+SECRET_TAIL = "S3cretPw-tail-unregistered-77e1"
+
+
+@pytest.mark.parametrize("count", [255, 256, 300])
+def test_long_lists_mask_a_secret_in_the_last_element(count):
+    items = ", ".join(['"x"'] * count + [f'"{SECRET_TAIL}"'])
+    out = redact_secrets(f'{{"password": [{items}], "ok": 1}}')
+    assert SECRET_TAIL not in out
+    assert out == '{"password": [***REDACTED***], "ok": 1}'
+
+
+def test_leading_spaces_inside_a_list_do_not_exhaust_the_mask():
+    out = redact_secrets('{"password": [' + " " * 300 + f'"{SECRET_TAIL}"]}}')
+    assert SECRET_TAIL not in out
+
+
+@pytest.mark.parametrize("length", [1400, 5000])
+def test_long_quoted_tokens_are_masked_whole(length):
+    token = ("eyJ" + "A" * length)[: length - len(SECRET_TAIL)] + SECRET_TAIL
+    out = redact_secrets(f'{{"SessionToken": "{token}", "ok": 1}}')
+    assert SECRET_TAIL not in out and "AAAA" not in out
+    assert out == '{"SessionToken": "***REDACTED***", "ok": 1}'
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "{\\\"password\\\": \\\"S3c'retPw\\\", \\\"ok\\\": 1}",
+        "{\\\"password\\\": \\\"S3c\\\\\\\"retPw\\\", \\\"ok\\\": 1}",
+    ],
+    ids=["other-quote-inside", "doubly-escaped-quote-inside"],
+)
+def test_escaped_json_values_are_masked_to_their_own_closing_quote(text):
+    out = redact_secrets(text)
+    assert "retPw" not in out
+    assert out.endswith(', \\"ok\\": 1}')
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f'{{"password": "{SECRET_TAIL} unclosed\nnext line survives',
+        f"{{'password': '{SECRET_TAIL} unclosed\nnext line survives",
+        f'{{"password": ["{SECRET_TAIL}", "unclosed\nnext line survives',
+        f'{{\\"password\\": \\"{SECRET_TAIL} unclosed\nnext line survives',
+        f"password=\nnext line survives",
+    ],
+    ids=["double", "single", "list", "escaped", "empty-value"],
+)
+def test_an_unclosed_value_stops_at_the_end_of_its_line(text):
+    out = redact_secrets(text)
+    assert SECRET_TAIL not in out
+    assert out.endswith("\nnext line survives")
+
+
+def test_unclosed_value_in_a_traceback_leaves_the_other_frames():
+    text = (
+        "Traceback (most recent call last):\n"
+        '  File "client.py", line 10, in request\n'
+        f'    raise Error(\'{{"password": "{SECRET_TAIL}\')\n'
+        "Error: upstream rejected the login\n"
+    )
+    out = redact_secrets(text)
+    assert SECRET_TAIL not in out
+    assert '  File "client.py", line 10, in request\n' in out
+    assert out.endswith("Error: upstream rejected the login\n")
+
+
+def test_nested_list_is_masked_without_a_stray_bracket():
+    assert redact_secrets('{"password": [["x", "y"], ["z"]], "ok": 1}') == (
+        '{"password": [***REDACTED***], "ok": 1}'
+    )
