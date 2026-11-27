@@ -163,11 +163,50 @@ SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
 SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
 
+RUFF_TRIAGE_FILES = ()
+
+
+def _before_ruff_triage(manifest):
+    key = "ruff_triage_update"
+    update = manifest[key]
+    assert update["base_commit"] == "5fc66138d8025ef4ef627b0d8d212ff3cb3c37a8"
+    assert update["bead"] == "enhancedchannelmanager-2ixgf.5"
+    assert update["version"] == "0.18.2-0097"
+    assert update["previous_manifest_sha256"] == (
+        "920ebc2abeaa651e4a12ed96d0225a30495458d9abab87c13a333719a07975f5"
+    )
+    assert update["added_files"] == []
+    assert set(update["changed_files"]) == set(VERSION_TOUCHPOINTS)
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_ruff_triage_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_ruff_triage(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["ruff_triage_update"] == manifest["ruff_triage_update"]
+
+
 MAKO_SECURITY_FILES = ("backend/requirements.txt",)
 
 
 def _before_mako_security(manifest):
     key = "mako_security_update"
+    manifest = _before_ruff_triage(manifest)
     update = manifest[key]
     assert update["base_commit"] == "e99b0359ec70d5f5199261c01b5a750ea32d5701"
     assert update["bead"] == "enhancedchannelmanager-h1186"

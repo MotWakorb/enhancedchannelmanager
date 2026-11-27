@@ -184,7 +184,8 @@ def test_source_location_requires_a_real_canonical_directory(installer, tmp_path
     evidence = tmp_path / "evidence"
     evidence.mkdir()
     original = tmp_path / "delivered-sources"
-    if mutation == "file": original.write_bytes(b"not a source directory")
+    if mutation == "file":
+        original.write_bytes(b"not a source directory")
     elif mutation in {"link", "parent-link"}:
         real = tmp_path / "real"
         real.mkdir()

@@ -75,7 +75,6 @@ install_ring_buffer()
 from observability import (  # noqa: E402
     install_observability,
     get_metric,
-    get_trace_id,
     set_trace_id,
     reset_trace_id,
     generate_trace_id,
@@ -161,7 +160,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.2-0096",
+    version="0.18.2-0097",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

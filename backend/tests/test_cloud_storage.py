@@ -14,7 +14,6 @@ from cloud_storage.crypto import (
 )
 from cryptography.fernet import Fernet
 
-
 # =============================================================================
 # Adapter factory
 # =============================================================================
@@ -126,12 +125,12 @@ class TestS3Adapter:
         adapter = self._make_adapter()
         mock_client = MagicMock()
         page1 = {
-            "Contents": [{"Key": "k%04d" % i} for i in range(1000)],
+            "Contents": [{"Key": f"k{i:04d}"} for i in range(1000)],
             "IsTruncated": True,
             "NextContinuationToken": "TOKEN-1",
         }
         page2 = {
-            "Contents": [{"Key": "k%04d" % i} for i in range(1000, 1500)],
+            "Contents": [{"Key": f"k{i:04d}"} for i in range(1000, 1500)],
             "IsTruncated": False,
         }
         mock_client.list_objects_v2.side_effect = [page1, page2]
@@ -247,9 +246,11 @@ class TestGDriveTokenUriSSRF:
         from cloud_storage.upload_security import SSRFError
 
         adapter = self._adapter("http://169.254.169.254/token")
-        with patch.object(adapter, "_get_service") as mock_get_service:
-            with pytest.raises(SSRFError):
-                adapter._validate_endpoint()
+        with (
+            patch.object(adapter, "_get_service") as mock_get_service,
+            pytest.raises(SSRFError),
+        ):
+            adapter._validate_endpoint()
         mock_get_service.assert_not_called()
 
     @pytest.mark.asyncio
@@ -330,29 +331,33 @@ class TestDeferredProviderGate:
 class TestCrypto:
     def test_round_trip(self, tmp_path):
         reset_key_cache()
-        with patch("cloud_storage.crypto.KEY_FILE", tmp_path / ".test_key"):
-            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
-                original = {"access_key": "AKID123", "secret": "supersecret"}
-                encrypted = encrypt_credentials(original)
-                assert encrypted != json.dumps(original)  # Not plaintext
-                decrypted = decrypt_credentials(encrypted)
-                assert decrypted == original
-                reset_key_cache()
+        with (
+            patch("cloud_storage.crypto.KEY_FILE", tmp_path / ".test_key"),
+            patch("cloud_storage.crypto.CONFIG_DIR", tmp_path),
+        ):
+            original = {"access_key": "AKID123", "secret": "supersecret"}
+            encrypted = encrypt_credentials(original)
+            assert encrypted != json.dumps(original)  # Not plaintext
+            decrypted = decrypt_credentials(encrypted)
+            assert decrypted == original
+            reset_key_cache()
 
     def test_key_persists(self, tmp_path):
         reset_key_cache()
         key_file = tmp_path / ".test_key"
-        with patch("cloud_storage.crypto.KEY_FILE", key_file):
-            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
-                data = {"key": "value"}
-                encrypted = encrypt_credentials(data)
-                assert key_file.exists()
+        with (
+            patch("cloud_storage.crypto.KEY_FILE", key_file),
+            patch("cloud_storage.crypto.CONFIG_DIR", tmp_path),
+        ):
+            data = {"key": "value"}
+            encrypted = encrypt_credentials(data)
+            assert key_file.exists()
 
-                # Reset and decrypt with persisted key
-                reset_key_cache()
-                decrypted = decrypt_credentials(encrypted)
-                assert decrypted == data
-                reset_key_cache()
+            # Reset and decrypt with persisted key
+            reset_key_cache()
+            decrypted = decrypt_credentials(encrypted)
+            assert decrypted == data
+            reset_key_cache()
 
 
 # =============================================================================
@@ -368,7 +373,6 @@ def _fake_owner_stat(target_path, fake_uid):
     for the target path — every other Path.stat() call delegates to the real
     implementation so chmod/replace/tempfile internals are unaffected.
     """
-    import os
     import pathlib
 
     real_stat = pathlib.Path.stat
@@ -412,6 +416,7 @@ class TestKeyIntegrity:
     def test_existing_key_mode_repaired_to_0600(self, tmp_path):
         import os
         import stat as stat_mod
+
         from cloud_storage import crypto
 
         reset_key_cache()
@@ -421,9 +426,11 @@ class TestKeyIntegrity:
         key_file.chmod(0o644)
         assert stat_mod.S_IMODE(os.stat(key_file).st_mode) == 0o644
 
-        with patch("cloud_storage.crypto.KEY_FILE", key_file):
-            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
-                crypto._load_or_generate_key()
+        with (
+            patch("cloud_storage.crypto.KEY_FILE", key_file),
+            patch("cloud_storage.crypto.CONFIG_DIR", tmp_path),
+        ):
+            crypto._load_or_generate_key()
 
         assert stat_mod.S_IMODE(os.stat(key_file).st_mode) == 0o600
         reset_key_cache()
@@ -432,24 +439,26 @@ class TestKeyIntegrity:
         """The key MUST NOT be regenerated — existing ciphertext must still decrypt."""
         import os
         import stat as stat_mod
-        from cloud_storage import crypto
+
 
         reset_key_cache()
         key_file = tmp_path / ".export_key"
 
-        with patch("cloud_storage.crypto.KEY_FILE", key_file):
-            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
-                # First boot: generate a key and encrypt live credentials.
-                original = {"access_key": "AKID123", "secret": "supersecret"}
-                encrypted = encrypt_credentials(original)
-                key_bytes_before = key_file.read_bytes()
+        with (
+            patch("cloud_storage.crypto.KEY_FILE", key_file),
+            patch("cloud_storage.crypto.CONFIG_DIR", tmp_path),
+        ):
+            # First boot: generate a key and encrypt live credentials.
+            original = {"access_key": "AKID123", "secret": "supersecret"}
+            encrypted = encrypt_credentials(original)
+            key_bytes_before = key_file.read_bytes()
 
-                # Simulate a filesystem permission regression.
-                key_file.chmod(0o644)
-                reset_key_cache()
+            # Simulate a filesystem permission regression.
+            key_file.chmod(0o644)
+            reset_key_cache()
 
-                # Reload: mode must be repaired, key must NOT change.
-                decrypted = decrypt_credentials(encrypted)
+            # Reload: mode must be repaired, key must NOT change.
+            decrypted = decrypt_credentials(encrypted)
 
         assert stat_mod.S_IMODE(os.stat(key_file).st_mode) == 0o600
         assert key_file.read_bytes() == key_bytes_before, "key was regenerated — data loss!"
@@ -459,6 +468,7 @@ class TestKeyIntegrity:
     def test_wrong_owner_unfixable_non_root_fails_closed(self, tmp_path):
         """Non-root process + key owned by another uid -> fail-closed, no regen."""
         import os
+
         from cloud_storage import crypto
 
         reset_key_cache()
@@ -470,13 +480,15 @@ class TestKeyIntegrity:
         fake_uid = os.stat(key_file).st_uid + 4242  # an owner that is not us
         fake_stat = _fake_owner_stat(key_file, fake_uid)
 
-        with patch("cloud_storage.crypto.KEY_FILE", key_file):
-            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
-                # Force a non-root process context and a foreign owner.
-                with patch("cloud_storage.crypto.os.getuid", return_value=1000):
-                    with fake_stat:
-                        with pytest.raises(RuntimeError, match="ownership"):
-                            crypto._load_or_generate_key()
+        # Force a non-root process context and a foreign owner.
+        with (
+            patch("cloud_storage.crypto.KEY_FILE", key_file),
+            patch("cloud_storage.crypto.CONFIG_DIR", tmp_path),
+            patch("cloud_storage.crypto.os.getuid", return_value=1000),
+            fake_stat,
+            pytest.raises(RuntimeError, match="ownership"),
+        ):
+            crypto._load_or_generate_key()
 
         # Must NOT have regenerated / thrashed the key.
         assert key_file.read_bytes() == key_bytes_before
@@ -485,6 +497,7 @@ class TestKeyIntegrity:
     def test_wrong_owner_root_context_does_not_thrash(self, tmp_path):
         """Root process + key owned by another uid -> proceed (ownership advisory)."""
         import os
+
         from cloud_storage import crypto
 
         reset_key_cache()
@@ -496,12 +509,14 @@ class TestKeyIntegrity:
         fake_uid = os.stat(key_file).st_uid + 4242
         fake_stat = _fake_owner_stat(key_file, fake_uid)
 
-        with patch("cloud_storage.crypto.KEY_FILE", key_file):
-            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
-                with patch("cloud_storage.crypto.os.getuid", return_value=0):
-                    with fake_stat:
-                        # Should NOT raise and should NOT regenerate.
-                        key = crypto._load_or_generate_key()
+        with (
+            patch("cloud_storage.crypto.KEY_FILE", key_file),
+            patch("cloud_storage.crypto.CONFIG_DIR", tmp_path),
+            patch("cloud_storage.crypto.os.getuid", return_value=0),
+            fake_stat,
+        ):
+            # Should NOT raise and should NOT regenerate.
+            key = crypto._load_or_generate_key()
 
         assert key == key_bytes_before.strip()
         assert key_file.read_bytes() == key_bytes_before
@@ -511,6 +526,7 @@ class TestKeyIntegrity:
         """No key present -> generate with 0600 and never a world-readable window."""
         import os
         import stat as stat_mod
+
         from cloud_storage import crypto
 
         reset_key_cache()
@@ -526,10 +542,12 @@ class TestKeyIntegrity:
             observed_modes.append(stat_mod.S_IMODE(os.stat(src).st_mode))
             return real_replace(src, dst)
 
-        with patch("cloud_storage.crypto.KEY_FILE", key_file):
-            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
-                with patch("cloud_storage.crypto.os.replace", side_effect=_spy_replace):
-                    crypto._load_or_generate_key()
+        with (
+            patch("cloud_storage.crypto.KEY_FILE", key_file),
+            patch("cloud_storage.crypto.CONFIG_DIR", tmp_path),
+            patch("cloud_storage.crypto.os.replace", side_effect=_spy_replace),
+        ):
+            crypto._load_or_generate_key()
 
         assert key_file.exists()
         assert stat_mod.S_IMODE(os.stat(key_file).st_mode) == 0o600
@@ -544,18 +562,20 @@ class TestKeyIntegrity:
         reset_key_cache()
         key_file = tmp_path / ".export_key"
 
-        with patch("cloud_storage.crypto.KEY_FILE", key_file):
-            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
-                # Encrypt with a real key first.
-                encrypted = encrypt_credentials({"a": "b"})
-                reset_key_cache()
+        with (
+            patch("cloud_storage.crypto.KEY_FILE", key_file),
+            patch("cloud_storage.crypto.CONFIG_DIR", tmp_path),
+        ):
+            # Encrypt with a real key first.
+            encrypted = encrypt_credentials({"a": "b"})
+            reset_key_cache()
 
-                # Corrupt the key file in place (garbled key).
-                key_file.write_bytes(b"not-a-valid-fernet-key")
-                key_file.chmod(0o600)
+            # Corrupt the key file in place (garbled key).
+            key_file.write_bytes(b"not-a-valid-fernet-key")
+            key_file.chmod(0o600)
 
-                # Decrypt must fail-soft -> None, not raise.
-                result = decrypt_credentials(encrypted)
+            # Decrypt must fail-soft -> None, not raise.
+            result = decrypt_credentials(encrypted)
 
         assert result is None
         reset_key_cache()
@@ -565,10 +585,12 @@ class TestKeyIntegrity:
         reset_key_cache()
         key_file = tmp_path / ".export_key"
 
-        with patch("cloud_storage.crypto.KEY_FILE", key_file):
-            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
-                # Valid key, but feed garbage ciphertext.
-                result = decrypt_credentials("this-is-not-a-valid-token")
+        with (
+            patch("cloud_storage.crypto.KEY_FILE", key_file),
+            patch("cloud_storage.crypto.CONFIG_DIR", tmp_path),
+        ):
+            # Valid key, but feed garbage ciphertext.
+            result = decrypt_credentials("this-is-not-a-valid-token")
 
         assert result is None
         reset_key_cache()
@@ -590,6 +612,7 @@ class TestStartupKeyIntegrityProbe:
     def test_happy_path_returns_true_and_is_silent(self, tmp_path, caplog):
         """Valid existing key, correct mode/owner -> True, no ERROR logged."""
         import logging
+
         from cloud_storage import crypto
 
         reset_key_cache()
@@ -597,10 +620,12 @@ class TestStartupKeyIntegrityProbe:
         key_file.write_bytes(Fernet.generate_key())
         key_file.chmod(0o600)
 
-        with patch("cloud_storage.crypto.KEY_FILE", key_file):
-            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
-                with caplog.at_level(logging.ERROR, logger="cloud_storage.crypto"):
-                    result = crypto.verify_key_integrity_at_startup()
+        with (
+            patch("cloud_storage.crypto.KEY_FILE", key_file),
+            patch("cloud_storage.crypto.CONFIG_DIR", tmp_path),
+            caplog.at_level(logging.ERROR, logger="cloud_storage.crypto"),
+        ):
+            result = crypto.verify_key_integrity_at_startup()
 
         assert result is True
         assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
@@ -610,15 +635,18 @@ class TestStartupKeyIntegrityProbe:
         """No key file yet -> probe generates one (same path as first crypto use)."""
         import os
         import stat as stat_mod
+
         from cloud_storage import crypto
 
         reset_key_cache()
         key_file = tmp_path / ".export_key"
         assert not key_file.exists()
 
-        with patch("cloud_storage.crypto.KEY_FILE", key_file):
-            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
-                result = crypto.verify_key_integrity_at_startup()
+        with (
+            patch("cloud_storage.crypto.KEY_FILE", key_file),
+            patch("cloud_storage.crypto.CONFIG_DIR", tmp_path),
+        ):
+            result = crypto.verify_key_integrity_at_startup()
 
         assert result is True
         assert key_file.exists()
@@ -629,6 +657,7 @@ class TestStartupKeyIntegrityProbe:
         """World-readable key at boot -> probe repairs to 0600 and returns True."""
         import os
         import stat as stat_mod
+
         from cloud_storage import crypto
 
         reset_key_cache()
@@ -636,9 +665,11 @@ class TestStartupKeyIntegrityProbe:
         key_file.write_bytes(Fernet.generate_key())
         key_file.chmod(0o644)
 
-        with patch("cloud_storage.crypto.KEY_FILE", key_file):
-            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
-                result = crypto.verify_key_integrity_at_startup()
+        with (
+            patch("cloud_storage.crypto.KEY_FILE", key_file),
+            patch("cloud_storage.crypto.CONFIG_DIR", tmp_path),
+        ):
+            result = crypto.verify_key_integrity_at_startup()
 
         assert result is True
         assert stat_mod.S_IMODE(os.stat(key_file).st_mode) == 0o600
@@ -649,6 +680,7 @@ class TestStartupKeyIntegrityProbe:
         and the lazy path STILL fails closed on actual crypto use."""
         import logging
         import os
+
         from cloud_storage import crypto
 
         reset_key_cache()
@@ -659,19 +691,21 @@ class TestStartupKeyIntegrityProbe:
         fake_uid = os.stat(key_file).st_uid + 4242
         fake_stat = _fake_owner_stat(key_file, fake_uid)
 
-        with patch("cloud_storage.crypto.KEY_FILE", key_file):
-            with patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
-                with patch("cloud_storage.crypto.os.getuid", return_value=1000):
-                    with fake_stat:
-                        with caplog.at_level(
-                            logging.ERROR, logger="cloud_storage.crypto"
-                        ):
-                            # Probe must NOT raise — boot continues.
-                            result = crypto.verify_key_integrity_at_startup()
+        with (
+            patch("cloud_storage.crypto.KEY_FILE", key_file),
+            patch("cloud_storage.crypto.CONFIG_DIR", tmp_path),
+            patch("cloud_storage.crypto.os.getuid", return_value=1000),
+            fake_stat,
+        ):
+            with caplog.at_level(
+                logging.ERROR, logger="cloud_storage.crypto"
+            ):
+                # Probe must NOT raise — boot continues.
+                result = crypto.verify_key_integrity_at_startup()
 
-                        # Lazy path must remain fail-closed for real crypto use.
-                        with pytest.raises(RuntimeError, match="ownership"):
-                            encrypt_credentials({"a": "b"})
+            # Lazy path must remain fail-closed for real crypto use.
+            with pytest.raises(RuntimeError, match="ownership"):
+                encrypt_credentials({"a": "b"})
 
         assert result is False
         error_msgs = [
@@ -749,11 +783,13 @@ class TestCloudTargetCRUD:
             })
         target_id = create_resp.json()["id"]
 
-        with patch("routers.cloud_targets.encrypt_credentials", return_value="enc2"):
-            with patch("routers.cloud_targets.decrypt_credentials", return_value={"bucket_name": "new-bucket"}):
-                response = await async_client.patch(f"/api/cloud-targets/{target_id}", json={
-                    "name": "Updated",
-                })
+        with (
+            patch("routers.cloud_targets.encrypt_credentials", return_value="enc2"),
+            patch("routers.cloud_targets.decrypt_credentials", return_value={"bucket_name": "new-bucket"}),
+        ):
+            response = await async_client.patch(f"/api/cloud-targets/{target_id}", json={
+                "name": "Updated",
+            })
         assert response.status_code == 200
         assert response.json()["name"] == "Updated"
 
