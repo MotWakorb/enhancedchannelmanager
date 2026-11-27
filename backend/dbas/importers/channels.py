@@ -453,10 +453,20 @@ async def import_channels(
                 )
                 continue
 
-            _skip(cat, SkipReason.ALREADY_EXISTS_IDENTICAL, label, source_id, is_dry_run)
+            existing_id = existing.get("id")
+            # The channel row is identical unless its stream attachment has to be
+            # rewritten. That is only known once the apply has resolved the
+            # ordered stream ids, so an apply with archived streams decides the
+            # channel's count in _attach_streams instead of here.
+            attachment_pending = (
+                not is_dry_run
+                and existing_id is not None
+                and bool(_archived_streams(archive_channel))
+            )
+            if not attachment_pending:
+                _skip(cat, SkipReason.ALREADY_EXISTS_IDENTICAL, label, source_id, is_dry_run)
             # Still remap source -> existing dest id so a later profile reattach
             # (and the stream-attachment bead) can resolve this channel.
-            existing_id = existing.get("id")
             source_key = as_int(source_id)
             if source_key is not None and existing_id is not None:
                 remap.add(EntityType.CHANNEL, source_key, int(existing_id))
@@ -476,7 +486,13 @@ async def import_channels(
                         candidate_streams,
                         report,
                         allow_fuzzy_stream_match,
+                        current_stream_ids=_current_stream_ids(existing),
+                        channel_source_id=source_id,
                     )
+            elif attachment_pending:
+                # No source id to remap, so no attachment plan: the channel was
+                # left untouched.
+                _skip(cat, SkipReason.ALREADY_EXISTS_IDENTICAL, label, source_id, is_dry_run)
             continue
 
         # FK remap: rewrite remappable FK ids; unresolved => the channel is not
@@ -588,6 +604,9 @@ class _StreamSlot:
 
     dest_id: int | None = None
     orphan: dict | None = None
+    # A matched slot's archived stream, recorded as a reuse only once the
+    # attachment is known to hold it.
+    reused: dict | None = None
 
 
 @dataclass
@@ -602,6 +621,11 @@ class _ChannelStreamPlan:
     dest_channel_id: int
     label: str
     slots: list[_StreamSlot] = field(default_factory=list)
+    # The destination's ordered stream ids for a channel that already existed;
+    # ``None`` for a channel this run created. Dispatcharr keeps a channel's
+    # streams as an ordered list, so order is part of the comparison.
+    current_stream_ids: list[int] | None = None
+    channel_source_id: object = None
 
 
 async def _fetch_candidate_streams(client: DispatcharrClient) -> list[dict]:
@@ -661,13 +685,17 @@ def _plan_streams(
     candidates: list[dict],
     report: RestoreReport,
     allow_fuzzy: bool = True,
+    *,
+    current_stream_ids: list[int] | None = None,
+    channel_source_id: object = None,
 ) -> None:
     """Build a channel's ordered stream-attach plan via the 4-tier matcher.
 
     For each archived stream (in order) run :func:`match_stream`:
 
-    * a HIT records the matched destination id in the slot and counts the stream
-      as reused (``skipped``), NOT updated, created or ledgered;
+    * a HIT records the matched destination id in the slot; the stream is
+      counted as reused (``skipped``) once the attachment holds it, never as
+      updated, created or ledgered;
     * a MISS records the archived stream as an orphan slot for the batched
       fallback to synthesize.
 
@@ -683,22 +711,21 @@ def _plan_streams(
     if not archived:
         return
 
-    stream_cat = report.category(EntityType.STREAM)
     label = _channel_label(archive_channel)
-    plan = _ChannelStreamPlan(dest_channel_id=dest_channel_id, label=label)
+    plan = _ChannelStreamPlan(
+        dest_channel_id=dest_channel_id,
+        label=label,
+        current_stream_ids=current_stream_ids,
+        channel_source_id=channel_source_id,
+    )
     for archived_stream in archived:
         tier, match_id = match_stream(
             archived_stream, candidates, allow_fuzzy=allow_fuzzy
         )
         if tier != MatchTier.MISS and match_id is not None:
-            plan.slots.append(_StreamSlot(dest_id=match_id))
             # Matching reuses a stream row; only the CHANNEL attachment is
             # written later. It is not a stream-row update.
-            _skip(
-                stream_cat, SkipReason.EXISTING_STREAM_REUSED,
-                archived_stream.get("name") or "<unknown>",
-                archived_stream.get("id"), False,
-            )
+            plan.slots.append(_StreamSlot(dest_id=match_id, reused=archived_stream))
             # A Tier-4 fuzzy hit is LOW-CONFIDENCE: surface it (ruling 1b) so it
             # is not a silent reuse. The stream name is operator-trusted
             # (no secret) — safe to put in a sanitized note.
@@ -760,6 +787,8 @@ async def _attach_streams(
         )
 
     # Pass 2 — resolve each slot to a dest id (matched or synthesized) and attach.
+    channel_cat = report.category(EntityType.CHANNEL)
+    stream_cat = report.category(EntityType.STREAM)
     for plan in plans:
         ordered_ids: list[int] = []
         for slot in plan.slots:
@@ -776,14 +805,29 @@ async def _attach_streams(
             if synthesized is not None:
                 ordered_ids.append(synthesized)
 
-        if not ordered_ids:
+        existing_channel = plan.current_stream_ids is not None
+        if not ordered_ids or ordered_ids == plan.current_stream_ids:
+            # Nothing to write: the channel is left exactly as it was.
+            if existing_channel:
+                _skip(
+                    channel_cat, SkipReason.ALREADY_EXISTS_IDENTICAL,
+                    plan.label, plan.channel_source_id, False,
+                )
+            if ordered_ids:
+                _record_reused(stream_cat, plan)
             continue
         try:
             await client.update_channel(
                 plan.dest_channel_id, {"streams": ordered_ids}
             )
         except Exception as exc:
-            stream_cat = report.category(EntityType.STREAM)
+            if existing_channel:
+                # The rewrite was rejected, so the row kept its current
+                # attachment. The failure is counted once, on the stream layer.
+                _skip(
+                    channel_cat, SkipReason.ALREADY_EXISTS_IDENTICAL,
+                    plan.label, plan.channel_source_id, False,
+                )
             stream_cat.failed += 1
             stream_cat.failure_details.append(
                 FailureDetail(
@@ -800,6 +844,38 @@ async def _attach_streams(
                 plan.dest_channel_id,
                 FailureReason.UPSTREAM_API_ERROR.value,
             )
+            continue
+        _record_reused(stream_cat, plan)
+        if existing_channel:
+            channel_cat.updated += 1
+            report.notes.append(
+                "channel '%s' stream attachment rewritten: %d stream(s) replaced "
+                "by %d in archived order." % (
+                    plan.label, len(plan.current_stream_ids), len(ordered_ids),
+                )
+            )
+
+
+def _record_reused(stream_cat, plan: _ChannelStreamPlan) -> None:
+    """Count each matched stream the channel now holds as a reused row."""
+    for slot in plan.slots:
+        if slot.reused is not None:
+            _skip(
+                stream_cat, SkipReason.EXISTING_STREAM_REUSED,
+                slot.reused.get("name") or "<unknown>",
+                slot.reused.get("id"), False,
+            )
+
+
+def _current_stream_ids(channel: dict) -> list[int]:
+    """The destination channel's ordered stream ids, as Dispatcharr lists them."""
+    ids: list[int] = []
+    for entry in channel.get("streams") or []:
+        value = entry.get("id") if isinstance(entry, dict) else entry
+        stream_id = as_int(value)
+        if stream_id is not None:
+            ids.append(stream_id)
+    return ids
 
 
 def _skip(

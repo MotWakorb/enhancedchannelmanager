@@ -90,13 +90,16 @@ async def test_recorded_stream_matches_are_reused_not_fictitious_row_updates(
     original = dict(recorded)
     client = AsyncMock()
     client.get_streams.return_value = {"results": [recorded], "next": None}
+    # A converged destination already holds the stream; a drifted one holds
+    # nothing, so only the drifted cycle has an attachment to write.
+    held = [] if attach_fails else [recorded["id"]]
     client.get_channels.return_value = {
         "results": [
             {
                 "id": 50,
                 "name": "Recorded lineup",
                 "channel_number": 1,
-                "streams": [recorded["id"]],
+                "streams": held,
             }
         ]
     }
@@ -121,13 +124,21 @@ async def test_recorded_stream_matches_are_reused_not_fictitious_row_updates(
         )
         streams = report.category(EntityType.STREAM)
         assert streams.updated == streams.created == 0
-        assert streams.skipped == 1
-        assert streams.failed == int(attach_fails)
-        assert streams.skip_details[0].reason.value == "existing_stream_reused"
+        if attach_fails:
+            # A rejected attachment is one failure, never also a reuse.
+            assert streams.failed == 1
+            assert streams.skipped == 0
+        else:
+            assert streams.failed == 0
+            assert streams.skipped == 1
+            assert streams.skip_details[0].reason.value == "existing_stream_reused"
         assert recorded == original
     client.update_stream.assert_not_awaited()
     client.create_stream.assert_not_awaited()
-    client.update_channel.assert_awaited_with(50, {"streams": [recorded["id"]]})
+    if attach_fails:
+        client.update_channel.assert_awaited_with(50, {"streams": [recorded["id"]]})
+    else:
+        client.update_channel.assert_not_awaited()
 
 
 @pytest.mark.asyncio
