@@ -51,14 +51,16 @@ function renderPane(options: {
   isEditMode: boolean;
   channelToEdit?: Channel | null;
   first?: Channel;
+  others?: Channel[];
 }) {
   const onChannelUpdate = vi.fn();
+  const onChannelsChange = vi.fn();
   const first = options.first ?? makeChannel(1, 'Alpha', 4);
-  render(
+  const pane = (channels: Channel[]) => (
     <NotificationProvider>
       <ChannelsPane
         channelGroups={groups}
-        channels={[first]}
+        channels={channels}
         streams={[]}
         providers={[]}
         selectedChannelId={null}
@@ -82,10 +84,16 @@ function renderPane(options: {
         onChannelListFiltersChange={vi.fn()}
         externalChannelToEdit={options.channelToEdit ?? null}
         onExternalChannelEditHandled={vi.fn()}
+        onChannelsChange={onChannelsChange}
       />
-    </NotificationProvider>,
+    </NotificationProvider>
   );
-  return { onChannelUpdate };
+  const { rerender } = render(pane([first, ...(options.others ?? [])]));
+  return {
+    onChannelUpdate,
+    onChannelsChange,
+    rerenderWith: (channels: Channel[]) => rerender(pane(channels)),
+  };
 }
 
 function openNumberEditor(): HTMLInputElement {
@@ -123,15 +131,39 @@ describe('inline number editor writing directly', () => {
     expect(api.updateChannel).toHaveBeenCalledWith(1, { channel_number: 7 }, { expectedNumber: null });
   });
 
-  it('shows the server\'s reason when the channel moved, and records nothing', async () => {
+  it('shows the server\'s reason when the channel moved, records nothing, and reloads', async () => {
     vi.mocked(api.updateChannel).mockRejectedValueOnce(new HttpError(CONFLICT, 409, { message: CONFLICT }));
-    const { onChannelUpdate } = renderPane({ isEditMode: true });
+    const { onChannelUpdate, onChannelsChange } = renderPane({ isEditMode: true });
     const input = openNumberEditor();
     fireEvent.change(input, { target: { value: '7' } });
     await act(async () => { fireEvent.blur(input); });
 
     expect(await screen.findByText(CONFLICT)).toBeInTheDocument();
     expect(onChannelUpdate).not.toHaveBeenCalled();
+    expect(onChannelsChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the number shown when the duplicate warning opened, not one loaded later', async () => {
+    const beta = { ...makeChannel(2, 'Beta', 7), channel_group_id: null };
+    const { rerenderWith } = renderPane({ isEditMode: true, others: [beta] });
+    fireEvent.click(document.querySelector('.group-header') as HTMLElement);
+    const alphaCell = Array.from(document.querySelectorAll('.channel-number'))
+      .find((cell) => cell.textContent?.trim() === '4') as HTMLElement;
+    fireEvent.doubleClick(alphaCell);
+    const input = document.querySelector('.channel-number-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '7' } });
+    await act(async () => { fireEvent.blur(input); });
+    expect(screen.getByRole('button', { name: 'Use It Anyway' })).toBeInTheDocument();
+
+    // A reload lands while the warning is open and shows Alpha somewhere else.
+    rerenderWith([makeChannel(1, 'Alpha', 9), beta]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Use It Anyway' }));
+    });
+
+    expect(api.updateChannel).toHaveBeenCalledWith(
+      1, { channel_number: 7 }, { expectedNumber: 4 },
+    );
   });
 });
 
@@ -163,9 +195,9 @@ describe('Edit Channel modal outside Edit Mode', () => {
     expect(api.updateChannel).toHaveBeenCalledWith(1, { name: 'Alpha HD' }, undefined);
   });
 
-  it('shows the server\'s reason when the channel moved', async () => {
+  it('shows the server\'s reason when the channel moved, and reloads', async () => {
     vi.mocked(api.updateChannel).mockRejectedValueOnce(new HttpError(CONFLICT, 409, { message: CONFLICT }));
-    const { onChannelUpdate } = renderPane({ isEditMode: false, channelToEdit: makeChannel(1, 'Alpha', 4) });
+    const { onChannelUpdate, onChannelsChange } = renderPane({ isEditMode: false, channelToEdit: makeChannel(1, 'Alpha', 4) });
     await waitFor(() => expect(numberInput()).not.toBeNull());
     fireEvent.change(numberInput(), { target: { value: '7' } });
     await act(async () => {
@@ -174,5 +206,6 @@ describe('Edit Channel modal outside Edit Mode', () => {
 
     expect(await screen.findByText(CONFLICT)).toBeInTheDocument();
     expect(onChannelUpdate).not.toHaveBeenCalled();
+    expect(onChannelsChange).toHaveBeenCalledTimes(1);
   });
 });

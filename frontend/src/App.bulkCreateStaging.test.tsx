@@ -362,9 +362,10 @@ describe('App bulk-create staging', () => {
       expect(api.updateChannel).toHaveBeenCalledWith(44, { name: 'Renamed' }, undefined);
     });
 
-    it('a refused Guide edit shows why the server refused it', async () => {
+    it('a refused Guide edit shows why the server refused it, and reloads', async () => {
       vi.mocked(api.updateChannel).mockRejectedValueOnce(conflict());
       const { container } = await renderGuide();
+      const readsBefore = vi.mocked(api.getChannels).mock.calls.length;
       await act(async () => {
         await expect(
           (testState.guideProps!.onChannelUpdate as GuideUpdate)(shown, { channel_number: 90 }),
@@ -373,6 +374,7 @@ describe('App bulk-create staging', () => {
       await waitFor(() => {
         expect(container.querySelector('.service-status')?.getAttribute('title')).toContain('Somebody else changed it');
       });
+      await waitFor(() => expect(vi.mocked(api.getChannels).mock.calls.length).toBeGreaterThan(readsBefore));
     });
 
     it('undo outside Edit Mode expects the number the change recorded, and a refusal reloads', async () => {

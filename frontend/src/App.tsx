@@ -1381,6 +1381,13 @@ function App() {
     }
   };
 
+  // For callbacks memoised once (the Guide edit) that must reload with the
+  // current filters rather than the ones of the render that created them.
+  const loadChannelsRef = useRef(loadChannels);
+  useEffect(() => {
+    loadChannelsRef.current = loadChannels;
+  });
+
   const loadChannelInventoryTotal = async () => {
     setChannelInventoryState((current) => ({ ...current, state: 'loading' }));
     try {
@@ -1926,6 +1933,8 @@ function App() {
       // loaded it; its message names the channel and both numbers.
       if (err instanceof HttpError && err.status === 409) {
         setError(err.message);
+        // Show the number the server holds, which the refusal just named.
+        void loadChannelsRef.current();
       }
       throw err;
     }

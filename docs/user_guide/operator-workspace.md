@@ -213,16 +213,26 @@ session is active. **Done** reviews and commits staged changes. **Cancel**
 discards them. Navigating away with staged changes opens **Exit Edit Mode** so
 the route change cannot silently lose work.
 
-Outside Edit Mode, **Undo** and **Redo** write to Dispatcharr straight away. A
-step that puts a channel number back first checks that the channel is still on
-the number the step recorded. If somebody else has renumbered it since, ECM
-writes nothing for that channel, shows which channel moved and to what, removes
-the step from the history (it can no longer be replayed as recorded), and
-reloads the channel list. For a step that renumbered several channels, the
-channels before the one that moved have already been put back by then; the
-reloaded list shows exactly where each one is. A channel edit made outside Edit
-Mode, from the channel list or the Guide, gets the same check against the
-number shown when you started the edit.
+Outside Edit Mode, **Undo** and **Redo** write to Dispatcharr straight away.
+This applies to the steps they replay: channel-number changes, renames and
+range renumbers. A step that puts a channel number back first checks that the
+channel is still on the number the step recorded. If somebody else has
+renumbered it since, ECM writes nothing for that step, shows which channel
+moved and to what, removes the step from the history (it can no longer be
+replayed as recorded), and reloads the channel list. Undoing a rename that left
+the number alone sends only the name, so it still works after a renumber.
+
+For a step that renumbers several channels, ECM reads every one of them before
+writing any, and refuses the whole step if one has moved. That narrows the
+window but cannot close it: Dispatcharr has no way to make several channel
+writes conditional at once, so a change landing between those reads and the
+writes is still caught only channel by channel, after the channels before it
+have been written. The reloaded list then shows where each one is.
+
+A number change made outside Edit Mode from the inline number editor, the
+**Edit Channel** dialog or the Guide is checked the same way against the number
+shown when you started the edit. If it is refused, ECM shows why and reloads the
+channel list.
 
 Selecting one or more channels opens the bottom **Selection actions** toolbar.
 Its available actions are **Delete**, **Probe**, **Find Duplicates**,

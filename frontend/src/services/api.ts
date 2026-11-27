@@ -186,6 +186,11 @@ export async function getChannels(params?: {
   return fetchJson(`${API_BASE}/channels${query}`, { signal: params?.signal });
 }
 
+/** One channel as the server holds it now. */
+export async function getChannel(channelId: number): Promise<Channel> {
+  return fetchJson(`${API_BASE}/channels/${channelId}`);
+}
+
 export async function getChannelStreams(channelId: number): Promise<Stream[]> {
   return fetchJson(`${API_BASE}/channels/${channelId}/streams`);
 }
