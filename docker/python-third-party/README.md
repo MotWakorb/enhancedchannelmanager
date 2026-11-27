@@ -16,7 +16,7 @@ checked, and its text matches the retained 2.8.0 notice. The old 2.8.0 entry in
 the historical x86 snapshot is not evidence for the new package. No native
 architecture evidence or final-image verification is silently refreshed.
 
-**Current security update (0069, w8h34):** dnspython 2.9.2 fixes
+**Earlier security update (0069, w8h34):** dnspython 2.9.2 fixes
 CVE-2026-128089. `artifact-index/dnspython-2.9.2.json` records the actual
 PyPI download and its bundled ISC notice (identical to the retained notice).
 The recorded PyPI response is `dnspython-2.9.2.pypi.json`. Both musllinux
@@ -29,6 +29,22 @@ exact hash-bound, ELF-free DNS replacement; changed hashes, native payloads,
 or other unreviewed pure wheels still fail. The manylinux attribution indexes
 also bind the updated lock with explicit history, retaining all 22 native
 distribution rows per architecture unchanged. No native runtime acceptance is inferred.
+
+**Current security update (h1186):** Mako 1.4.2 fixes CVE-2026-102991.
+`artifact-index/mako-1.4.2.json` records the actual PyPI wheel download, its
+whole-wheel hash and its bundled MIT notice, which is byte-identical to the
+1.4.1 notice; the retained notice now lives at
+`notices/wheels/mako-1.4.2.dist-info/licenses/LICENSE`. The recorded PyPI
+response is `mako-1.4.2.pypi.json`. Both musllinux inventories bind the new
+wheel's whole hash and every RECORD member and retain all other 73 distribution
+rows byte-for-byte; their `dependency_security_update` records the preceding
+inventory/lock/wheel identities and keeps the dnspython record under
+`earlier_updates`. The installed GNU consumer recognizes only the exact
+hash-bound, ELF-free Mako and DNS replacements. The manylinux attribution
+indexes bind the new lock with the same history and retain all 22 native
+distribution rows per architecture unchanged. `musllinux-gnu.json` and the
+historical x86 component snapshot still name Mako 1.4.1 as historical selection
+provenance, not as the current lock. No native runtime acceptance is inferred.
 
 The proposed accompanying-image source path is `/usr/share/ecm/sources/python/`; integration and recipient access remain **not implemented or verified here**. Keep the source/notice files for components actually shipped and preserve ECM's separate CC0 root license.
 

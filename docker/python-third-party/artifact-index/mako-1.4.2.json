@@ -1,0 +1,30 @@
+{
+  "name": "mako",
+  "version": "1.4.2",
+  "bead": "enhancedchannelmanager-h1186",
+  "scope": "Public PyPI whole-wheel, RECORD/member and bundled notice verification. Pure-Python security update only; no native execution, source correspondence or whole-image acceptance claim.",
+  "pypi_metadata": {
+    "url": "https://pypi.org/pypi/mako/1.4.2/json",
+    "file": "mako-1.4.2.pypi.json",
+    "sha256": "ea1630832738679168c0412482341cc26c7820c7ee56a75add28315f30d75ae2"
+  },
+  "wheel": {
+    "filename": "mako-1.4.2-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/f0/bb/0e4c30a18858adebc75496ea8a8c3fb65cbf4b36ea1c5028ed8a0a5fa196/mako-1.4.2-py3-none-any.whl",
+    "sha256": "e70a2a4308952b33a21208bfd6725da79fae5a8c224578f8cfdeb60e5ace03df",
+    "bytes": 80163,
+    "root_is_purelib": true,
+    "tag": "py3-none-any",
+    "native_files": [],
+    "metadata_sha256": "32439e6badb760e4d21261c1757305be873728b3e1921a49d7a8f5416dca591e"
+  },
+  "license": {
+    "expression": "MIT",
+    "wheel_path": "mako-1.4.2.dist-info/licenses/LICENSE",
+    "sha256": "8c1d171bc5d341ad9cd33d5e2c39b96a82c7bd49b3ae89a470c37e5822232054",
+    "delivered_path": "artifact-index/musllinux/payloads/8c1d171bc5d341ad9cd33d5e2c39b96a82c7bd49b3ae89a470c37e5822232054",
+    "retained_notice_path": "notices/wheels/mako-1.4.2.dist-info/licenses/LICENSE",
+    "equal_to_retained_1_4_1_notice_text": true
+  },
+  "historical_snapshot": "Supersedes only the mako 1.4.1 pure-Python row. All 73 other musllinux distribution records and all native/GNU correspondence evidence are unchanged. The historical x86 component snapshot and GNU wheel selection still name 1.4.1 as provenance, not as the current lock."
+}

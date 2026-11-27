@@ -163,11 +163,52 @@ SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
 SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
 
+MAKO_SECURITY_FILES = ("backend/requirements.txt",)
+
+
+def _before_mako_security(manifest):
+    key = "mako_security_update"
+    update = manifest[key]
+    assert update["base_commit"] == "e99b0359ec70d5f5199261c01b5a750ea32d5701"
+    assert update["bead"] == "enhancedchannelmanager-h1186"
+    assert update["version"] == "0.18.2-0096"
+    assert update["previous_manifest_sha256"] == (
+        "4c96bbaf25292eb51a2ea7fecddd9321004caa122517c8a0a1318d1ba7045deb"
+    )
+    assert update["added_files"] == []
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(MAKO_SECURITY_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_mako_security_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_mako_security(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["mako_security_update"] == manifest["mako_security_update"]
+
+
 GATE_E2E_SAFETY_FILES = ("backend/CLAUDE.md", "backend/pytest.ini")
 
 
 def _before_gate_e2e_safety(manifest):
     key = "gate_e2e_safety_update"
+    manifest = _before_mako_security(manifest)
     update = manifest[key]
     assert update["base_commit"] == "fb4d471d738526ed2f5e41407606aa1fa74f92dd"
     assert update["bead"] == "enhancedchannelmanager-j0j6w"

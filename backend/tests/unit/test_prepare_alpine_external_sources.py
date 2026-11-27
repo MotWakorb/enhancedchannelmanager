@@ -78,6 +78,15 @@ def test_current_krb5_route_is_exact_official_original_source_not_a_version_subs
     }
 
 
+def test_current_libffi_route_is_the_recipe_declared_release_not_a_version_substitution(producer):
+    # The URL is the APKBUILD source= URL and the digest is its sha512sums row.
+    route = producer.UPSTREAM_ROUTES[("libffi", "libffi-3.8.2.tar.gz")]
+    assert route == {
+        "sha512": "35e863cb05ee0a36ac8ecaea1754be7931ed41da3b43f1b65e36abc0581de3cd4b0a020b78d20283502acd6d34385584f8bb5d15d94422c2bab444982b957af6",
+        "url": "https://github.com/libffi/libffi/releases/download/v3.8.2/libffi-3.8.2.tar.gz",
+    }
+
+
 def test_wrong_source_bytes_never_try_an_alternate_url(producer, tmp_path, monkeypatch):
     calls = []
 

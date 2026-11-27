@@ -1,12 +1,17 @@
 {
   "generated_utc": "2026-10-24T10:21:14.203598+00:00",
   "status": "Shared x86+expected ARM notice/component coverage complete at file layer; final native ARM CI and whole-image proof remain unperformed.",
-  "lock_sha256": "c4d19336909ae669f3577fc8da5afd15c265b50b73227c08d7b34eb177151804",
+  "lock_sha256": "629b817e0dcf38d06462df958eb2aeb6e5b3af5e5d0144014631c23c2af24bd8",
   "targeted_updates": {
     "dnspython": {
       "version": "2.9.2",
       "evidence": "artifact-index/dnspython-2.9.2.json",
       "scope": "Verified pure-Python security-update wheel, RECORD and bundled ISC license only; historical native architecture/image evidence unchanged."
+    },
+    "mako": {
+      "version": "1.4.2",
+      "evidence": "artifact-index/mako-1.4.2.json",
+      "scope": "Verified pure-Python security-update wheel, RECORD and bundled MIT license only; historical native architecture/image evidence unchanged."
     }
   },
   "locked_distributions": [
@@ -148,7 +153,7 @@
     },
     {
       "name": "mako",
-      "version": "1.4.1"
+      "version": "1.4.2"
     },
     {
       "name": "markupsafe",
