@@ -89,9 +89,60 @@ _AMZ_SECURITY_TOKEN_RE = re.compile(r"(?i)(X-Amz-Security-Token=)([^&\s'\"]+)")
 # AWS access key IDs (AKIA…/ASIA… 16+ alnum) and secret-key-shaped material in
 # key=value or key: value form (access_key_id / secret_access_key / aws_secret…).
 _AWS_AKID_RE = re.compile(r"\b((?:AKIA|ASIA)[A-Z0-9]{8,})\b")
-_SECRET_KV_RE = re.compile(
-    r"(?i)((?:secret_access_key|aws_secret_access_key|access_key_id|client_secret|access_token|secret|password|passwd|api_key)\s*[:=]\s*)(['\"]?)([^'\"\s,}&]+)",
+#
+# The key may be followed by its own closing quote (optionally backslash-escaped)
+# so JSON and repr'd dict bodies (``"password": "x"``, ``{'token': 'x'}``,
+# ``{\"password\": \"x\"}``) mask like ``password=x`` does. ``token`` and the
+# API-key header spellings (``X-API-Key``, ``api-key``, ``apikey``) are keys too;
+# a word that merely contains one (``max_tokens``) is not followed by the
+# separator and is left alone.
+#
+# The VALUE is masked whole, at any length, but never past the end of its line.
+# A quoted value runs to its matching unescaped quote; a list value (the usual
+# DRF error shape, ``"password": ["x"]``) runs to its closing ``]``, quoted
+# elements and one level of nested lists included. An unclosed value stops at
+# the first newline, so the following log lines and traceback frames survive.
+# A secret that itself contains a literal newline is out of scope. In a
+# backslash-escaped JSON body the value ends only at its own escaped quote; a
+# bare quote of either kind, and a doubly escaped quote, stay inside it. Every
+# repetition after the opener is optional and its alternatives are disjoint,
+# so the scan never backtracks and stays linear. An unquoted value still stops
+# at whitespace, a quote, ``,``, ``}`` or ``&``. Lists nested more than one
+# level deep end the mask at the first inner ``]``.
+#
+# The SEPARATOR alone may span any whitespace, line breaks and non-breaking
+# spaces included, so pretty-printed JSON (``"password":\n  "x"``) is caught.
+# Accepted cost: a key with no value on its line masks the first word of the
+# next line (``password:\nChannel 100 moved`` loses ``Channel``); the value
+# branches still stop at ``\n``, so the rest of that line survives.
+_KV_KEYS = (
+    r"secret_access_key|aws_secret_access_key|access_key_id|client_secret|"
+    r"access_token|secret|password|passwd|api_key|x-api-key|api-key|apikey|token"
 )
+_KV_DQ = r"\"(?:[^\"\\\n]|\\[^\n])*\"?"
+_KV_SQ = r"'(?:[^'\\\n]|\\[^\n])*'?"
+_KV_INNER_LIST = r"\[(?:[^\[\]\"'\\\n]|\\[^\n]|" + _KV_DQ + r"|" + _KV_SQ + r")*\]?"
+_SECRET_KV_RE = re.compile(
+    r"(?i)((?:" + _KV_KEYS + r")\\?['\"]?\s*[:=]\s*)"
+    r"(?:"
+    r"(?P<list>\[)(?:[^\[\]\"'\\\n]|\\[^\n]|" + _KV_DQ + r"|" + _KV_SQ + r"|"
+    + _KV_INNER_LIST + r")*(?P<list_end>\])?"
+    r"|(?P<esc>\\(?P<esc_q>[\"']))"
+    r"(?:[^\\\n]|\\\\\\(?P=esc_q)|\\(?!(?P=esc_q))[^\n])*(?P<esc_end>\\(?P=esc_q))?"
+    r"|(?P<dq>\")(?:[^\"\\\n]|\\[^\n])*(?P<dq_end>\")?"
+    r"|(?P<sq>')(?:[^'\\\n]|\\[^\n])*(?P<sq_end>')?"
+    r"|[^'\"\s,}&]+"
+    r")",
+)
+
+
+def _mask_kv_value(match: "re.Match[str]") -> str:
+    """Keep the key and the value's own delimiters; replace what they enclose."""
+    for opener, closer in (("list", "list_end"), ("esc", "esc_end"), ("dq", "dq_end"), ("sq", "sq_end")):
+        if match.group(opener) is not None:
+            return match.group(1) + match.group(opener) + _MASK + (match.group(closer) or "")
+    return match.group(1) + _MASK
+
 
 # Order is significant — signed-URL params and KV pairs first, then the broad
 # token sweeps, so a value matched by an earlier rule is not double-processed
@@ -150,8 +201,10 @@ def redact_secrets(text: str) -> str:
         for rule in _MASK_RULES:
             if rule is _AWS_AKID_RE:
                 out = rule.sub(_MASK, out)
-            elif rule in (_AUTH_HEADER_RE, _SECRET_KV_RE):
-                # Keep the header/key name + any opening quote; redact the value.
+            elif rule is _SECRET_KV_RE:
+                out = rule.sub(_mask_kv_value, out)
+            elif rule is _AUTH_HEADER_RE:
+                # Keep the header name + any opening quote; redact the value.
                 out = rule.sub(lambda m: m.group(1) + (m.group(2) or "") + _MASK, out)
             else:
                 out = rule.sub(lambda m: m.group(1) + _MASK, out)

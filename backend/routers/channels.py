@@ -54,6 +54,7 @@ from config import get_settings
 from csv_handler import parse_csv, generate_csv, generate_template, CSVParseError
 from database import get_session
 from dispatcharr_client import get_client, logo_was_reused, strip_logo_reuse_marker, upstream_http_exception
+from log_utils import redact_exception, redact_log_diagnostic
 from match_fold import fold_match_key
 from normalization_engine import get_normalization_engine
 from cloud_storage.upload_security import redact_secrets
@@ -243,11 +244,11 @@ def write_journal_rows(
                 "[%s] Batch journal write failed for %s row(s) "
                 "(batch=%s); retrying one at a time", log_tag, len(rows), batch_id,
             )
-        except Exception as batch_err:
-            logger.exception(
+        except Exception as batch_err:  # noqa: BLE001 - retry per row; log the scrubbed chain
+            logger.error(
                 "[%s] Batch journal write raised for %s row(s) "
                 "(batch=%s); retrying one at a time: %s",
-                log_tag, len(rows), batch_id, batch_err,
+                log_tag, len(rows), batch_id, redact_exception(batch_err),
             )
 
         unwritten = 0
@@ -255,10 +256,10 @@ def write_journal_rows(
             row = pending[0]
             try:
                 written = journal.log_entry(**row) is not None
-            except Exception as row_err:
-                logger.exception(
+            except Exception as row_err:  # noqa: BLE001 - report the row below; log the scrubbed chain
+                logger.error(
                     "[%s] Journal row raised (batch=%s): %s",
-                    log_tag, batch_id, row_err,
+                    log_tag, batch_id, redact_exception(row_err),
                 )
                 written = False
             # Resolved either way: written, or about to be reported below.
@@ -267,13 +268,15 @@ def write_journal_rows(
                 continue
             unwritten += 1
             logger.error(
-                "[%s] UNJOURNALLED MUTATION (batch=%s): %s", log_tag, batch_id, row,
+                "[%s] UNJOURNALLED MUTATION (batch=%s): %s",
+                log_tag, batch_id, redact_log_diagnostic(str(row)),
             )
         return unwritten
     except BaseException:
         for row in pending:
             logger.error(
-                "[%s] UNJOURNALLED MUTATION (batch=%s): %s", log_tag, batch_id, row,
+                "[%s] UNJOURNALLED MUTATION (batch=%s): %s",
+                log_tag, batch_id, redact_log_diagnostic(str(row)),
             )
         raise
 
@@ -1987,7 +1990,7 @@ async def _read_back_channels(client, channel_ids, *, log_tag: str = "CHANNELS")
         except Exception as e:
             logger.warning(
                 "[%s] Assigned channel %s but could not read its new number back: %s",
-                log_tag, channel_id, e,
+                log_tag, channel_id, redact_log_diagnostic(str(e)),
             )
             continue
         yield channel_id, observed
@@ -2617,6 +2620,21 @@ def _patch_number_baseline(data: dict) -> Optional[ExpectedChannelNumber]:
         ]) from None
 
 
+def _server_number_phrase(value: Any) -> str:
+    """Where the server says a channel is, for guidance that is never scrubbed.
+
+    The server's value is upstream data. A number (or no number) is rendered as
+    usual; anything else is not echoed, because the guidance it lands in passes
+    through unredacted. The structured ``concurrentNumberChanges`` payload keeps
+    the value as read.
+    """
+    if value is None or (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+    ):
+        return f"channel number {format_channel_number(value)}"
+    return "an unreadable channel number"
+
+
 def _stale_baselines_message(
     stale: list[dict],
     *,
@@ -2625,8 +2643,8 @@ def _stale_baselines_message(
 ) -> str:
     """Name each moved channel, in the wording the single-channel refusal uses."""
     moved = "; ".join(
-        f"channel {change['channelId']} is on channel number "
-        f"{format_channel_number(change['serverNumber'])}, and this request expected "
+        f"channel {change['channelId']} is on "
+        f"{_server_number_phrase(change['serverNumber'])}, and this request expected "
         f"{format_channel_number(change['baselineNumber'])}"
         for change in stale
     )
@@ -2856,9 +2874,9 @@ async def bulk_commit_operations(request: BulkCommitRequest, http_request: Reque
             raise
         except Exception as e:  # noqa: BLE001 — supervisor must catch broadly
             job.status = "failed"
-            job.error = f"{type(e).__name__}: {e}"
+            job.error = "Bulk commit failed; check server logs and current state before retrying."
             job.completed_at = time.time()
-            logger.exception("[CHANNELS-BULK] Job %s failed: %s", job_id, e)
+            logger.error("[CHANNELS-BULK] Job %s failed: %s", job_id, redact_exception(e))
 
     task = asyncio.create_task(_runner(), name=f"bulk-commit-{job_id}")
     _BULK_COMMIT_BACKGROUND_TASKS.add(task)
@@ -3093,7 +3111,32 @@ async def _run_bulk_commit(
     # ``backend/channel_number_apply.py``.
     compensator = NumberingCompensator()
 
-    class MalformedCreateResponseError(Exception):
+    class OperatorBulkError(Exception):
+        """Trusted local validation/recovery text, never arbitrary upstream errors.
+
+        ``scrub`` decides whether the message is redacted before it reaches the
+        envelope. It stays on for any message that interpolates names or
+        upstream data. Only a class whose every message is ECM text plus ids
+        and channel numbers turns it off: the registered-value sweep has no
+        context, so a short registered credential would otherwise rewrite the
+        very numbers the operator needs to act on.
+        """
+
+        scrub = True
+
+    class MissingChannelNumberBaselineError(OperatorBulkError):
+        """A numbering write reached the executor without the caller's baseline."""
+
+        # Unscrubbed: a registered credential equal to a channel number or id shows as that number.
+        scrub = False
+
+    class MissingStreamError(OperatorBulkError):
+        """An addStreamToChannel names a stream id the catalog does not hold."""
+
+        # Unscrubbed: a registered credential equal to a channel number or id shows as that number.
+        scrub = False
+
+    class MalformedCreateResponseError(OperatorBulkError):
         """Dispatcharr accepted a create but answered without a usable id.
 
         The channel EXISTS. This is raised so the operation stops early and is
@@ -3103,7 +3146,7 @@ async def _run_bulk_commit(
         the channel twice.
         """
 
-    class UnresolvedGroupError(Exception):
+    class UnresolvedGroupError(OperatorBulkError):
         """A group id that was never resolved to a real Dispatcharr group.
 
         Negative ids are the frontend's staging placeholders. Dispatcharr
@@ -3125,7 +3168,7 @@ async def _run_bulk_commit(
             )
         return group_id
 
-    class UnresolvedChannelError(Exception):
+    class UnresolvedChannelError(OperatorBulkError):
         """A channel id that is still a frontend staging placeholder.
 
         ``resolve_id`` maps a negative temp id onto the real id its
@@ -3134,7 +3177,7 @@ async def _run_bulk_commit(
         path segment is how a caller-supplied id reaches Dispatcharr unchecked.
         """
 
-    class ConcurrentChannelNumberChangeError(Exception):
+    class ConcurrentChannelNumberChangeError(OperatorBulkError):
         """The channel is not on the number the caller said it was on.
 
         Bead ``enhancedchannelmanager-ic884.4``. Raised INSTEAD of the PATCH, so
@@ -3144,12 +3187,15 @@ async def _run_bulk_commit(
         numbering plan that stopped part way is exactly what this is.
         """
 
+        # Unscrubbed: a registered credential equal to a channel number or id shows as that number.
+        scrub = False
+
         def __init__(self, message: str, changes: list[dict]):
             super().__init__(message)
             #: ``{"channelId", "baselineNumber", "serverNumber"}`` per channel.
             self.changes = changes
 
-    class UnverifiableChannelNumberError(Exception):
+    class UnverifiableChannelNumberError(OperatorBulkError):
         """The caller asked for a check the executor could not run.
 
         The lineup read failed, so there is nothing to compare the caller's
@@ -3159,6 +3205,9 @@ async def _run_bulk_commit(
         not the "a failed lookup never accuses" rule — nothing is being accused
         of not existing; the check itself is being reported as unavailable.
         """
+
+        # Unscrubbed: a registered credential equal to a channel number or id shows as that number.
+        scrub = False
 
     def reject_unresolved_channel(channel_id: int, label: str) -> int:
         """Return ``channel_id``, or raise if it is still a staging placeholder."""
@@ -3235,10 +3284,10 @@ async def _run_bulk_commit(
                 },
                 batch_id=batch_id,
             )
-        except Exception as summary_err:
-            logger.exception(
+        except Exception as summary_err:  # noqa: BLE001 - record journal residue; log the scrubbed chain
+            logger.error(
                 "[CHANNELS-BULK] Summary journal row raised (batch=%s): %s",
-                batch_id, summary_err,
+                batch_id, redact_exception(summary_err),
             )
             summary = None
         if summary is None:
@@ -3430,7 +3479,7 @@ async def _run_bulk_commit(
                 else:
                     logger.debug("[CHANNELS-BULK] All %s referenced channels exist", len(referenced_channel_ids))
             except Exception as e:
-                logger.warning("[CHANNELS-BULK] Failed to fetch channels for validation: %s", e)
+                logger.warning("[CHANNELS-BULK] Failed to fetch channels for validation: %s", redact_log_diagnostic(str(e)))
 
         if referenced_stream_ids:
             try:
@@ -3442,7 +3491,7 @@ async def _run_bulk_commit(
                 streams_resolved = True
                 logger.debug("[CHANNELS-BULK] Loaded %s of %s referenced streams", len(existing_streams), len(referenced_stream_ids))
             except Exception as e:
-                logger.warning("[CHANNELS-BULK] Failed to fetch streams for validation: %s", e)
+                logger.warning("[CHANNELS-BULK] Failed to fetch streams for validation: %s", redact_log_diagnostic(str(e)))
 
         if referenced_profile_ids:
             try:
@@ -3452,7 +3501,7 @@ async def _run_bulk_commit(
                 profiles_resolved = True
                 logger.debug("[CHANNELS-BULK] Loaded %s channel profiles", len(existing_profile_ids))
             except Exception as e:
-                logger.warning("[CHANNELS-BULK] Failed to fetch channel profiles for validation: %s", e)
+                logger.warning("[CHANNELS-BULK] Failed to fetch channel profiles for validation: %s", redact_log_diagnostic(str(e)))
 
         if referenced_hidden_group_ids:
             try:
@@ -3467,7 +3516,7 @@ async def _run_bulk_commit(
                 hidden_groups_resolved = True
                 logger.debug("[CHANNELS-BULK] %s of %s referenced groups are hidden", len(hidden_group_ids), len(referenced_hidden_group_ids))
             except Exception as e:
-                logger.warning("[CHANNELS-BULK] Failed to read hidden groups for validation: %s", e)
+                logger.warning("[CHANNELS-BULK] Failed to read hidden groups for validation: %s", redact_log_diagnostic(str(e)))
 
         # Simulate stream operations in their actual execution sequence. Temp
         # channels start empty at their create; existing channels start from the
@@ -3874,7 +3923,7 @@ async def _run_bulk_commit(
                                     logger.debug("[CHANNELS-BULK] Found existing group '%s' -> ID %s", group_name, g['id'])
                                     break
                         except Exception as find_err:
-                            logger.debug("[CHANNELS-BULK] Failed to search for existing group: %s", find_err)
+                            logger.debug("[CHANNELS-BULK] Failed to search for existing group: %s", redact_log_diagnostic(str(find_err)))
                     else:
                         # Non-duplicate error - abort the run.
                         #
@@ -3887,10 +3936,10 @@ async def _run_bulk_commit(
                         # makes the envelope say a step failed without claiming
                         # an operation did — none was attempted
                         # (bead enhancedchannelmanager-kz089, fix round 2).
-                        logger.error("[CHANNELS-BULK] Failed to create group '%s': %s", group_name, e)
+                        logger.error("[CHANNELS-BULK] Failed to create group '%s': %s", group_name, redact_exception(e))
                         result["errors"].append({
                             "operationId": f"create-group-{group_name}",
-                            "error": str(e)
+                            "error": "Channel group creation failed; check server logs for details."
                         })
                         ledger.record_setup_failure()
                         return finish()
@@ -4014,7 +4063,7 @@ async def _run_bulk_commit(
             if expected is None:
                 # The request model refuses this already; consolidation copies
                 # the number-setting operation, so it cannot drop one either.
-                raise ValueError(
+                raise MissingChannelNumberBaselineError(
                     f"Channel {channel_id} was not renumbered: the operation carries "
                     "no expectedNumber, so ECM cannot check whether anybody else "
                     "changed its number first."
@@ -4029,8 +4078,8 @@ async def _run_bulk_commit(
             if _same_channel_number_or_both_unset(current, expected.number):
                 return
             raise ConcurrentChannelNumberChangeError(
-                f"Channel {channel_id} was not renumbered: it is on channel number "
-                f"{format_channel_number(current)}, and this request expected "
+                f"Channel {channel_id} was not renumbered: it is on "
+                f"{_server_number_phrase(current)}, and this request expected "
                 f"{format_channel_number(expected.number)}. Somebody else changed it. "
                 "Re-read the channel and decide before sending this again.",
                 [{
@@ -4053,7 +4102,7 @@ async def _run_bulk_commit(
             baselines = op.expectedNumbers or {}
             missing = [cid for cid in existing_ids if cid not in baselines]
             if missing:
-                raise ValueError(
+                raise MissingChannelNumberBaselineError(
                     f"Channels {_format_channel_ids(missing)} were not renumbered: the "
                     "range carries no expectedNumbers entry for them, so ECM cannot "
                     "check whether anybody else changed their numbers first."
@@ -4154,7 +4203,7 @@ async def _run_bulk_commit(
                         f"addStreamToChannel for '{temp_channel_names.get(op.channelId, f'Channel {op.channelId}')}'",
                     )
                     if stream_is_missing(op.streamId):
-                        raise ValueError(f"Stream {op.streamId} does not exist")
+                        raise MissingStreamError(f"Stream {op.streamId} does not exist")
                     logger.debug("[CHANNELS-BULK] [%s/%s] addStreamToChannel: channel_id=%s, stream_id=%s", idx+1, len(request.operations), channel_id, op.streamId)
                     channel = await client.get_channel(channel_id)
                     current_streams = channel.get("streams", [])
@@ -4230,7 +4279,7 @@ async def _run_bulk_commit(
                             "[CHANNELS-BULK] reorderChannelStreams rejected for channel %s: %s",
                             channel_id, perm_error,
                         )
-                        raise ValueError(
+                        raise OperatorBulkError(
                             f"Cannot reorder streams for channel {channel_id}: {perm_error}"
                         )
                     channel_name = channel.get("name") or channel_name_of(channel_id)
@@ -4425,7 +4474,7 @@ async def _run_bulk_commit(
                             logo_id = await resolve_logo_id(op.logoUrl, channel_name)
                             logger.debug("[CHANNELS-BULK] Resolved logo ID %s for channel '%s'", logo_id, op.name)
                         except Exception as logo_err:
-                            logger.warning("[CHANNELS-BULK] Failed to create/find logo for channel '%s': %s", channel_name, logo_err)
+                            logger.warning("[CHANNELS-BULK] Failed to create/find logo for channel '%s': %s", channel_name, redact_log_diagnostic(str(logo_err)))
                             # Continue without logo
 
                     # Create the channel
@@ -4502,7 +4551,7 @@ async def _run_bulk_commit(
                     if not isinstance(created_id, int) or isinstance(created_id, bool):
                         raise MalformedCreateResponseError(
                             f"Dispatcharr accepted the create for '{channel_name}' but returned "
-                            f"no usable channel id ({created_id!r}). The channel exists; ECM "
+                            f"no usable channel id ({type(created_id).__name__}). The channel exists; ECM "
                             f"cannot map temp id {op.tempId} to it, so any operation in this "
                             "batch that referenced it will fail. Do not retry the create — "
                             "reconcile against Dispatcharr instead."
@@ -4739,7 +4788,7 @@ async def _run_bulk_commit(
                     # the batch. Pydantic's discriminated union makes this
                     # unreachable from the wire; it is the backstop for a new
                     # operation model added without a branch.
-                    raise ValueError(
+                    raise OperatorBulkError(
                         f"Unsupported bulk-commit operation type '{op.type}'"
                     )
 
@@ -4747,12 +4796,16 @@ async def _run_bulk_commit(
                 if request.returnSettledOperationIndexes:
                     settled.add(idx)
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - classify operation accounting and log the scrubbed chain
                 # Build detailed error info with channel/stream names
                 error_details = {
                     "operationId": op_id,
                     "operationType": op.type,
-                    "error": str(e),
+                    "error": (
+                        (redact_log_diagnostic(str(e)) if e.scrub else str(e))
+                        if isinstance(e, OperatorBulkError)
+                        else "Operation failed; check server logs and the reported results before retrying."
+                    ),
                 }
                 if isinstance(e, ConcurrentChannelNumberChangeError):
                     error_details["concurrentNumberChanges"] = e.changes
@@ -4813,7 +4866,7 @@ async def _run_bulk_commit(
                 # Log with detailed context
                 channel_info = f" (channel: {error_details.get('channelName', 'N/A')})" if 'channelName' in error_details else ""
                 stream_info = f" (stream: {error_details.get('streamName', 'N/A')})" if 'streamName' in error_details else ""
-                logger.exception("[CHANNELS-BULK] Operation %s failed%s%s: %s", op_id, channel_info, stream_info, e)
+                logger.error("[CHANNELS-BULK] Operation %s failed%s%s: %s", op_id, channel_info, stream_info, redact_exception(e))
 
                 if ledger.persisted:
                     # The upstream write LANDED and only ECM's bookkeeping after
@@ -4830,7 +4883,7 @@ async def _run_bulk_commit(
                         settled.add(idx)
                     logger.error(
                         "[CHANNELS-BULK] Operation %s APPLIED upstream but could not be "
-                        "recorded; do not retry it: %s", op_id, e,
+                        "recorded; do not retry it: %s", op_id, redact_log_diagnostic(str(e)),
                     )
                 else:
                     # The operation's own outcome did not happen — a group that
@@ -4846,7 +4899,7 @@ async def _run_bulk_commit(
                             "[CHANNELS-BULK] Operation %s FAILED after landing "
                             "upstream writes of its own; those writes stay "
                             "landed and the caller has to reconcile before "
-                            "retrying: %s", op_id, e,
+                            "retrying: %s", op_id, redact_log_diagnostic(str(e)),
                         )
                     ledger.record_failed()
                 result["errors"].append(error_details)
@@ -4900,18 +4953,23 @@ async def _run_bulk_commit(
                 "%s did not; writing %s channel(s) back",
                 batch_id, len(compensator.landed), len(compensator.failed), len(steps),
             )
-            unrepaired: list[tuple[NumberingWrite, Exception]] = []
+            unrepaired: list[tuple[NumberingWrite, str]] = []
             for step in steps:
                 try:
                     await client.update_channel(
                         step.channel_id, {"channel_number": step.after}
                     )
                 except Exception as comp_err:  # noqa: BLE001 — every failure is reportable
-                    logger.exception(
+                    logger.error(
                         "[CHANNELS-BULK] Could not put channel %s back on %s: %s",
-                        step.channel_id, format_channel_number(step.after), comp_err,
+                        step.channel_id, format_channel_number(step.after), redact_exception(comp_err),
                     )
-                    unrepaired.append((step, comp_err))
+                    # The upstream error text can carry credentials or internal hosts;
+                    # the envelope keeps the step and a fixed reason, the log the detail.
+                    unrepaired.append((
+                        step,
+                        "Dispatcharr did not accept the repair write; check server logs.",
+                    ))
                     continue
                 # The write LANDED, so its row is queued now, exactly as every
                 # other landed write's is. `record_write` and not
@@ -4977,11 +5035,11 @@ async def _run_bulk_commit(
         # (bead enhancedchannelmanager-e9e5o, fix round 4).
         return finish()
 
-    except Exception as e:
-        logger.exception("[CHANNELS-BULK] Unexpected error (batch=%s): %s", batch_id, e)
+    except Exception as e:  # noqa: BLE001 - preserve landed-write accounting and log the scrubbed chain
+        logger.error("[CHANNELS-BULK] Unexpected error (batch=%s): %s", batch_id, redact_exception(e))
         result["errors"].append({
             "operationId": "bulk-commit",
-            "error": str(e)
+            "error": "Bulk commit could not finish; check the reported results before retrying."
         })
         # Not an operation failure — the run itself fell over, possibly with
         # every operation already applied. `aborted_run` relaxes the
@@ -4996,10 +5054,10 @@ async def _run_bulk_commit(
             # envelope more than the audit, so that raise falls back to the raw
             # counts rather than propagating.
             return finish()
-        except Exception as finish_err:
-            logger.exception(
+        except Exception as finish_err:  # noqa: BLE001 - return actual ledger counts after finalization failure
+            logger.error(
                 "[CHANNELS-BULK] Could not finalize a crashed batch (batch=%s): %s",
-                batch_id, finish_err,
+                batch_id, redact_exception(finish_err),
             )
             result["operationsApplied"] = ledger.applied
             result["operationsFailed"] = ledger.failed
@@ -5053,14 +5111,14 @@ async def _run_bulk_commit(
         try:
             flush_journal()
         except Exception as flush_err:  # noqa: BLE001 — must not mask the unwind
-            logger.exception(
+            logger.error(
                 "[CHANNELS-BULK] Journal flush failed while unwinding "
-                "(batch=%s): %s", batch_id, flush_err,
+                "(batch=%s): %s", batch_id, redact_exception(flush_err),
             )
         except BaseException as flush_base:
-            logger.exception(
+            logger.error(
                 "[CHANNELS-BULK] Journal flush raised a BaseException "
-                "(batch=%s): %s", batch_id, flush_base,
+                "(batch=%s): %s", batch_id, redact_exception(flush_base),
             )
             if not unwinding_base_exception:
                 raise

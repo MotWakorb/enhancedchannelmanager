@@ -11,7 +11,7 @@ import stat
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_SHA256 = "906bbeae86a0fc5c6d88ccfa47e9a2234cc70cbaf505a82fede8c694200dcfcf"
+MANIFEST_SHA256 = "c9f2145851d3c04ef2a43a1f1c56a99bb7817b7809c60ce629afb24577589685"
 IGNORED_DIRECTORIES = frozenset(
     {
         "node_modules",
@@ -159,6 +159,7 @@ def verify(root: Path, manifest: dict) -> dict:
         "saved_restore_snapshot_update": manifest.get("saved_restore_snapshot_update"),
         "patch_number_baselines_update": manifest.get("patch_number_baselines_update"),
         "yaml_budgets_update": manifest.get("yaml_budgets_update"),
+        "credential_error_boundaries_update": manifest.get("credential_error_boundaries_update"),
         "adaptations": [
             row
             for row in rows
