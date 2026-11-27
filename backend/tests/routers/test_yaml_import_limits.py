@@ -380,3 +380,51 @@ async def test_scheduled_yaml_backup_never_writes_an_unrestorable_export(tmp_pat
     assert result.success is False
     assert "exceeds the backup size limit" in result.message
     assert not list(tmp_path.glob("*.yaml"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,module,key",
+    [
+        ("/api/tags/import", "tags", "tags"),
+        ("/api/normalization/import", "normalization", "normalization_rules"),
+        ("/api/dummy-epg/profiles/import/yaml", "dummy_epg", "profiles"),
+    ],
+)
+@pytest.mark.parametrize("document", ["42", '"text"', "null", "my tags normalization_rules profiles"])
+async def test_import_scalar_document_is_a_clean_400(
+    async_client, path, module, key, document
+):
+    with patch(f"routers.{module}.get_session") as session:
+        response = await async_client.post(
+            path, json={"yaml_content": document, "overwrite": False}
+        )
+    assert response.status_code == 400
+    assert key in response.json()["detail"]
+    session.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,module,document,key",
+    [
+        ("/api/tags/import", "tags", "tags: 42", "groups"),
+        ("/api/tags/import", "tags", "tags: some groups", "groups"),
+        ("/api/normalization/import", "normalization", "normalization_rules: 42", "groups"),
+        ("/api/normalization/import", "normalization", "normalization_rules: groups", "groups"),
+        ("/api/tags/import", "tags", "tags: {groups: 42}", "groups"),
+        ("/api/normalization/import", "normalization", "normalization_rules: {groups: 42}", "groups"),
+        ("/api/dummy-epg/profiles/import/yaml", "dummy_epg", "profiles: 42", "profiles"),
+        ("/api/dummy-epg/profiles/import/yaml", "dummy_epg", "profiles: some text", "profiles"),
+    ],
+)
+async def test_import_scalar_section_is_a_clean_400(
+    async_client, path, module, document, key
+):
+    with patch(f"routers.{module}.get_session") as session:
+        response = await async_client.post(
+            path, json={"yaml_content": document, "overwrite": False}
+        )
+    assert response.status_code == 400
+    assert key in response.json()["detail"]
+    session.assert_not_called()

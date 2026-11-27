@@ -1058,12 +1058,16 @@ async def import_normalization_rules(request: ImportRulesRequest):
     except yaml.YAMLError as e:
         raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
 
-    if not data or "normalization_rules" not in data:
+    if not isinstance(data, dict) or "normalization_rules" not in data:
         raise HTTPException(status_code=400, detail="Missing 'normalization_rules' key in YAML")
 
     rules_data = data["normalization_rules"]
-    if "groups" not in rules_data:
+    if not isinstance(rules_data, dict) or "groups" not in rules_data:
         raise HTTPException(status_code=400, detail="Missing 'groups' key in normalization_rules")
+    if not isinstance(rules_data["groups"], list):
+        raise HTTPException(
+            status_code=400, detail="'groups' in normalization_rules must be a list"
+        )
 
     try:
         from models import NormalizationRuleGroup, NormalizationRule, TagGroup

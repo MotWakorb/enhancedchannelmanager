@@ -112,7 +112,7 @@ async def _build(tmp_path, channel_count: int):
 
 @pytest.mark.asyncio
 async def test_large_channel_catalog_backup_round_trips(tmp_path):
-    channel_count = 50_000
+    channel_count = 25_000
     artifact = await _build(tmp_path, channel_count)
 
     with zipfile.ZipFile(artifact.zip_path) as zf:

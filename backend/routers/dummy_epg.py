@@ -842,8 +842,10 @@ async def import_dummy_epg_profiles_yaml(request: ImportYAMLRequest):
         if isinstance(data, list):
             data = {"profiles": data}
 
-        if not data or "profiles" not in data:
+        if not isinstance(data, dict) or "profiles" not in data:
             raise HTTPException(status_code=400, detail="YAML must contain a 'profiles' array or be a list of profiles")
+        if not isinstance(data["profiles"], list):
+            raise HTTPException(status_code=400, detail="'profiles' must be a list of profiles")
 
         # Build group name→id lookup (case-insensitive)
         client = get_client()

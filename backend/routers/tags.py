@@ -463,12 +463,14 @@ async def import_tags(request: ImportTagsRequest):
     except yaml.YAMLError as e:
         raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
 
-    if not data or "tags" not in data:
+    if not isinstance(data, dict) or "tags" not in data:
         raise HTTPException(status_code=400, detail="Missing 'tags' key in YAML")
 
     tags_data = data["tags"]
-    if "groups" not in tags_data:
+    if not isinstance(tags_data, dict) or "groups" not in tags_data:
         raise HTTPException(status_code=400, detail="Missing 'groups' key in tags")
+    if not isinstance(tags_data["groups"], list):
+        raise HTTPException(status_code=400, detail="'groups' in tags must be a list")
 
     try:
         from models import TagGroup, Tag
