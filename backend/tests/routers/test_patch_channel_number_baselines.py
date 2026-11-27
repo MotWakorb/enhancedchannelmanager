@@ -97,6 +97,45 @@ class TestMissingBaseline:
         client.update_channel.assert_not_awaited()
 
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("wrapper", [{}, {"numbr": 5}, {"number": 5, "extra": 1}])
+    async def test_a_wrapper_without_exactly_number_is_a_422(self, async_client, wrapper):
+        # `{}` would otherwise read as a claim of "no number" the caller never
+        # made, and a misspelt key as that same claim.
+        client = make_client(channel_number=None)
+        response, _ = await patch_channel(
+            async_client, client, {"channel_number": 20, "expectedNumber": wrapper},
+        )
+        assert response.status_code == 422, response.text
+        client.get_channel.assert_not_awaited()
+        client.update_channel.assert_not_awaited()
+
+
+class TestBulkCommitWrapperMatches:
+    """The bulk-commit ``updateChannel`` op uses the same wrapper model."""
+
+    @pytest.mark.parametrize("wrapper", [{}, {"numbr": 5}, {"number": 5, "extra": 1}, 5])
+    def test_a_wrapper_without_exactly_number_is_refused(self, wrapper):
+        from pydantic import ValidationError
+
+        from routers.channels import BulkCommitRequest
+
+        with pytest.raises(ValidationError):
+            BulkCommitRequest(operations=[{
+                "type": "updateChannel", "channelId": 1,
+                "data": {"channel_number": 20}, "expectedNumber": wrapper,
+            }])
+
+    def test_an_explicit_null_is_still_a_baseline(self):
+        from routers.channels import BulkCommitRequest
+
+        request = BulkCommitRequest(operations=[{
+            "type": "updateChannel", "channelId": 1,
+            "data": {"channel_number": 20}, "expectedNumber": {"number": None},
+        }])
+        assert request.operations[0].expectedNumber.number is None
+
+
 class TestStaleBaseline:
     @pytest.mark.asyncio
     async def test_a_stale_baseline_is_a_409_with_no_write(self, async_client):

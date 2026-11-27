@@ -18,7 +18,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, PositiveInt, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, ValidationError, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
 from auth import RequireAdminIfEnabled
@@ -656,10 +656,15 @@ class ExpectedChannelNumber(BaseModel):
     the UI.
     """
 
+    #: An object without exactly this key is refused rather than read as a
+    #: claim of "no number": ``{}`` or a misspelt key would otherwise be one.
+    model_config = ConfigDict(extra="forbid")
+
     #: The number READ, so any finite value: a number set outside ECM, such as
     #: ``8.25``, must still be expressible as what the caller saw. The write
     #: contract stays on ``data.channel_number`` (:data:`ChannelNumberBaseline`).
-    number: Optional[ChannelNumberBaseline] = None
+    #: Required, with an explicit ``null`` for "I read no number".
+    number: Optional[ChannelNumberBaseline]
 
 
 # Bulk commit operation types
