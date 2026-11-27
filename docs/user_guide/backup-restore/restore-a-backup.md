@@ -166,6 +166,12 @@ If you want to restore a backup that is already stored locally (not re-uploading
 
 This is the same restore flow as uploading. It runs through the same validation, dry-run, and apply pipeline. The saved file is not deleted by a restore.
 
+Before the restore starts, ECM copies the saved file into a private snapshot under `/config/dbas/restore_uploads/` and restores from that copy, so the saved file can't be swapped out mid-restore. This is also why a few restore requests can be refused before anything runs:
+
+- **Saved backups over 2 GiB are refused** with "Saved backup is too large" (HTTP 413). This is the same 2 GiB limit an uploaded artifact has.
+- **One restore at a time.** While a restore (preview or apply) is running, another one is refused with "Task is already running" (HTTP 409). A second saved restore sent while the first one's snapshot is still being copied is refused with "A saved restore is already being prepared" (HTTP 409). Wait for the running restore to finish, then try again.
+- **Not enough disk space.** If the config volume doesn't have room for the copy plus 64 MiB of headroom, the request is refused with HTTP 507. Free space on `/config`, then retry. An encrypted backup also needs room for its decrypted copy while the restore runs.
+
 On a brand-new install, the server-side backups directory (`/config/backups`) does not exist until ECM has written its first backup, so a freshly rebuilt instance shows an empty Saved Backups list. Restoring an artifact you are holding on your own machine doesn't depend on that directory. Use **Restore from artifact…** (upload) instead.
 
 ---
