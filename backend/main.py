@@ -75,7 +75,6 @@ install_ring_buffer()
 from observability import (  # noqa: E402
     install_observability,
     get_metric,
-    get_trace_id,
     set_trace_id,
     reset_trace_id,
     generate_trace_id,
@@ -174,7 +173,7 @@ async def swagger_redirect():
     return RedirectResponse(url="/api/docs")
 
 
-from fastapi.openapi.utils import get_openapi
+from fastapi.openapi.utils import get_openapi  # noqa: E402 - must follow application setup above
 
 
 def custom_openapi():
@@ -207,7 +206,7 @@ def custom_openapi():
 app.openapi = custom_openapi
 
 # Rate limiting (login endpoints only — configured via @limiter.limit in auth/routes.py)
-from auth.routes import limiter
+from auth.routes import limiter  # noqa: E402 - must follow application setup above
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -586,15 +585,15 @@ def _is_auth_exempt_request(method: str, path: str) -> bool:
     )
 
 
-from auth.settings import get_auth_settings
-from auth.dependencies import (
+from auth.settings import get_auth_settings  # noqa: E402 - must follow application setup above
+from auth.dependencies import (  # noqa: E402 - must follow application setup above
     get_token_from_request,
     decode_token_safe,
     token_matches_user_auth_epoch,
 )
-from auth.mcp_capabilities import is_mcp_route_allowed
-from auth.mcp_service import load_mcp_service_credentials, verify_mcp_service_claim
-from models import User
+from auth.mcp_capabilities import is_mcp_route_allowed  # noqa: E402 - must follow application setup above
+from auth.mcp_service import load_mcp_service_credentials, verify_mcp_service_claim  # noqa: E402 - must follow application setup above
+from models import User  # noqa: E402 - must follow application setup above
 
 
 @app.middleware("http")
@@ -764,8 +763,8 @@ async def deprecated_admin_router_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-import journal as _journal
-from auth.dependencies import _is_mcp_service_token
+import journal as _journal  # noqa: E402 - must follow application setup above
+from auth.dependencies import _is_mcp_service_token  # noqa: E402 - must follow application setup above
 
 
 def _resolve_request_mutation_source(request: Request) -> Optional[str]:
@@ -843,19 +842,19 @@ async def actor_source_middleware(request: Request, call_next):
 
 
 # Include auth router
-from auth.routes import router as auth_router
+from auth.routes import router as auth_router  # noqa: E402 - must follow application setup above
 app.include_router(auth_router)
 
 # Include admin router
-from auth.admin_routes import router as admin_router
+from auth.admin_routes import router as admin_router  # noqa: E402 - must follow application setup above
 app.include_router(admin_router)
 
 # Include TLS router
-from tls.routes import router as tls_router
+from tls.routes import router as tls_router  # noqa: E402 - must follow application setup above
 app.include_router(tls_router)
 
 # Include domain routers
-from routers import all_routers
+from routers import all_routers  # noqa: E402 - must follow application setup above
 for _router in all_routers:
     app.include_router(_router)
 
@@ -863,7 +862,7 @@ for _router in all_routers:
 # loop) because it needs TWO prefixes during the phase 3/4 migration window —
 # the canonical route, and a deprecated alias kept alive until the frontend
 # (phase 4, enhancedchannelmanager-xwwe4) stops calling the old path.
-from routers.channel_pipeline import router as channel_pipeline_router
+from routers.channel_pipeline import router as channel_pipeline_router  # noqa: E402 - must follow application setup above
 app.include_router(channel_pipeline_router, prefix="/api/channel-pipeline", tags=["Channel Pipeline"])
 app.include_router(
     channel_pipeline_router,

@@ -114,7 +114,7 @@ def _resolve_backup_normalization_group_ids(item: dict, session) -> str | None:
     if item.get("normalize_names"):
         from models import NormalizationRuleGroup
         groups = session.query(NormalizationRuleGroup.id).filter(
-            NormalizationRuleGroup.enabled == True
+            NormalizationRuleGroup.enabled == True  # noqa: E712 - SQL equality expression, not a Python truth test
         ).order_by(NormalizationRuleGroup.priority).all()
         return json.dumps([g.id for g in groups]) if groups else None
     return None
