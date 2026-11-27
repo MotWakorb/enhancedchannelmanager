@@ -167,6 +167,7 @@ CREDENTIAL_ERROR_BOUNDARIES_FILES = (
     "backend/cloud_storage/upload_security.py",
     "backend/credential_sentinel.py",
     "backend/dispatcharr_client.py",
+    "backend/journal.py",
     "backend/log_utils.py",
     "backend/obfuscate.py",
     "backend/routers/channels.py",
