@@ -10,6 +10,15 @@ URL-aware obfuscation policy for scoped diagnostics (including unregistered
 retired/encoded credential spellings remain covered. Unknown unlabelled non-URL
 secrets are not guaranteed to be recognized.
 
+The diagnostic sweep of registered values skips spellings shorter than four
+characters, the same minimum the debug-bundle literal sweep uses; such a value
+is still caught by the structural URL rules but not in free text. The pattern
+layer masks JSON and repr'd-dict credential keys, `token` and API-key header
+forms. The URL layer matches any scheme (so `rtmp://`, `ftp://` and `redis://`
+userinfo is destroyed), bracketed IPv6 authorities, extensionless and timeshift
+Xtream Codes paths. Journal-write failures log the scrubbed exception chain and
+the scrubbed row, and a Dispatcharr login failure logs only its exception type.
+
 URL query vocabulary and known-credential path rewriting live in the leaf
 `credential_sentinel` module, shared by backup and diagnostic obfuscation.
 The logging path does not import the backup router to obtain these rules.
@@ -30,7 +39,14 @@ trusted. Numbering-baseline refusals are local operator guidance and keep
 their exact text: a missing `expectedNumber`/`expectedNumbers`, an unreadable
 lineup, and a stale baseline (with its `concurrentNumberChanges` payload). The
 terminal envelope's per-operation `error` is what the MCP `bulk_commit_channels`
-tool prints verbatim. A `numberingRecovery` entry keeps its exact remaining
+tool prints verbatim. Each operator-safe error class declares whether its message is scrubbed.
+Classes whose every message is ECM text plus ids and channel numbers (the
+stale, unverifiable and missing-baseline numbering refusals, and a missing
+stream id) pass through unscrubbed, so a short registered credential cannot
+rewrite the numbers the operator must act on. Classes that interpolate names or
+upstream data (a malformed create response, an unresolved group or channel
+label, a reorder refusal built from upstream stream lists) stay scrubbed. A
+malformed create id is reported only by its type. A `numberingRecovery` entry keeps its exact remaining
 step but carries a fixed reason instead of the upstream error text, and the
 range read-back warning is scrubbed like the other bulk diagnostics. Entity
 IDs/context and the existing accounting/recovery fields remain authoritative. A terminal `completed` job can still carry failed

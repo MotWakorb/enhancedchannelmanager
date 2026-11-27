@@ -191,13 +191,14 @@ def get_registered_sensitive_value_forms() -> tuple[str, ...]:
         return tuple(sorted(_sensitive_value_forms, key=len, reverse=True))
 
 
-def _redact_persistent_string(value: str) -> str:
+def _redact_persistent_string(value: str, min_form_length: int = 0) -> str:
     try:
         from cloud_storage.upload_security import redact_secrets
 
         redacted = redact_secrets(value)
         for form in get_registered_sensitive_value_forms():
-            redacted = redacted.replace(form, "***REDACTED***")
+            if len(form) >= min_form_length:
+                redacted = redacted.replace(form, "***REDACTED***")
         return redacted
     except Exception:  # noqa: BLE001 - preserve recovery without emitting the original value
         return "***REDACTED***"
@@ -209,11 +210,19 @@ def redact_log_diagnostic(value: str) -> str:
     URL-aware obfuscation covers credential query names such as token even when
     their value is unregistered. Unlabelled unknown non-URL secrets remain out
     of scope. Persistence retains its existing policy separately.
+
+    The literal sweep of registered values skips spellings shorter than the
+    debug-bundle minimum: an unanchored replace of a one-to-three character
+    value would rewrite channel numbers, ids and timestamps. Such a value is
+    still removed by the structural URL rules (credential-named query
+    parameter, Xtream Codes path shape, userinfo), but not elsewhere.
     """
     try:
-        from obfuscate import obfuscate_text
+        from obfuscate import _MIN_LITERAL_SWEEP_LENGTH, obfuscate_text
 
-        return obfuscate_text(_redact_persistent_string(value))
+        return obfuscate_text(
+            _redact_persistent_string(value, _MIN_LITERAL_SWEEP_LENGTH)
+        )
     except Exception:  # noqa: BLE001 - never let diagnostic scrubbing interrupt recovery
         return "***REDACTED***"
 

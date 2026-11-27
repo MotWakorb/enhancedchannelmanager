@@ -47,7 +47,6 @@ from channel_number_apply import (
 from channel_number_plan import evaluate_final_numbering
 from channel_group_reparent import (
     UNGROUPED_TARGET_GROUP_NAME,
-    UngroupedTargetUnavailable,
     reparent_group_channels,
 )
 from concurrency import run_cpu_bound
@@ -244,11 +243,11 @@ def write_journal_rows(
                 "[%s] Batch journal write failed for %s row(s) "
                 "(batch=%s); retrying one at a time", log_tag, len(rows), batch_id,
             )
-        except Exception as batch_err:
-            logger.exception(
+        except Exception as batch_err:  # noqa: BLE001 - retry per row; log the scrubbed chain
+            logger.error(
                 "[%s] Batch journal write raised for %s row(s) "
                 "(batch=%s); retrying one at a time: %s",
-                log_tag, len(rows), batch_id, batch_err,
+                log_tag, len(rows), batch_id, redact_exception(batch_err),
             )
 
         unwritten = 0
@@ -256,10 +255,10 @@ def write_journal_rows(
             row = pending[0]
             try:
                 written = journal.log_entry(**row) is not None
-            except Exception as row_err:
-                logger.exception(
+            except Exception as row_err:  # noqa: BLE001 - report the row below; log the scrubbed chain
+                logger.error(
                     "[%s] Journal row raised (batch=%s): %s",
-                    log_tag, batch_id, row_err,
+                    log_tag, batch_id, redact_exception(row_err),
                 )
                 written = False
             # Resolved either way: written, or about to be reported below.
@@ -268,13 +267,15 @@ def write_journal_rows(
                 continue
             unwritten += 1
             logger.error(
-                "[%s] UNJOURNALLED MUTATION (batch=%s): %s", log_tag, batch_id, row,
+                "[%s] UNJOURNALLED MUTATION (batch=%s): %s",
+                log_tag, batch_id, redact_log_diagnostic(str(row)),
             )
         return unwritten
     except BaseException:
         for row in pending:
             logger.error(
-                "[%s] UNJOURNALLED MUTATION (batch=%s): %s", log_tag, batch_id, row,
+                "[%s] UNJOURNALLED MUTATION (batch=%s): %s",
+                log_tag, batch_id, redact_log_diagnostic(str(row)),
             )
         raise
 
@@ -3095,7 +3096,27 @@ async def _run_bulk_commit(
     compensator = NumberingCompensator()
 
     class OperatorBulkError(Exception):
-        """Trusted local validation/recovery text, never arbitrary upstream errors."""
+        """Trusted local validation/recovery text, never arbitrary upstream errors.
+
+        ``scrub`` decides whether the message is redacted before it reaches the
+        envelope. It stays on for any message that interpolates names or
+        upstream data. Only a class whose every message is ECM text plus ids
+        and channel numbers turns it off: the registered-value sweep has no
+        context, so a short registered credential would otherwise rewrite the
+        very numbers the operator needs to act on.
+        """
+
+        scrub = True
+
+    class MissingChannelNumberBaselineError(OperatorBulkError):
+        """A numbering write reached the executor without the caller's baseline."""
+
+        scrub = False
+
+    class MissingStreamError(OperatorBulkError):
+        """An addStreamToChannel names a stream id the catalog does not hold."""
+
+        scrub = False
 
     class MalformedCreateResponseError(OperatorBulkError):
         """Dispatcharr accepted a create but answered without a usable id.
@@ -3148,6 +3169,8 @@ async def _run_bulk_commit(
         numbering plan that stopped part way is exactly what this is.
         """
 
+        scrub = False
+
         def __init__(self, message: str, changes: list[dict]):
             super().__init__(message)
             #: ``{"channelId", "baselineNumber", "serverNumber"}`` per channel.
@@ -3163,6 +3186,8 @@ async def _run_bulk_commit(
         not the "a failed lookup never accuses" rule — nothing is being accused
         of not existing; the check itself is being reported as unavailable.
         """
+
+        scrub = False
 
     def reject_unresolved_channel(channel_id: int, label: str) -> int:
         """Return ``channel_id``, or raise if it is still a staging placeholder."""
@@ -4018,7 +4043,7 @@ async def _run_bulk_commit(
             if expected is None:
                 # The request model refuses this already; consolidation copies
                 # the number-setting operation, so it cannot drop one either.
-                raise OperatorBulkError(
+                raise MissingChannelNumberBaselineError(
                     f"Channel {channel_id} was not renumbered: the operation carries "
                     "no expectedNumber, so ECM cannot check whether anybody else "
                     "changed its number first."
@@ -4057,7 +4082,7 @@ async def _run_bulk_commit(
             baselines = op.expectedNumbers or {}
             missing = [cid for cid in existing_ids if cid not in baselines]
             if missing:
-                raise OperatorBulkError(
+                raise MissingChannelNumberBaselineError(
                     f"Channels {_format_channel_ids(missing)} were not renumbered: the "
                     "range carries no expectedNumbers entry for them, so ECM cannot "
                     "check whether anybody else changed their numbers first."
@@ -4158,7 +4183,7 @@ async def _run_bulk_commit(
                         f"addStreamToChannel for '{temp_channel_names.get(op.channelId, f'Channel {op.channelId}')}'",
                     )
                     if stream_is_missing(op.streamId):
-                        raise OperatorBulkError(f"Stream {op.streamId} does not exist")
+                        raise MissingStreamError(f"Stream {op.streamId} does not exist")
                     logger.debug("[CHANNELS-BULK] [%s/%s] addStreamToChannel: channel_id=%s, stream_id=%s", idx+1, len(request.operations), channel_id, op.streamId)
                     channel = await client.get_channel(channel_id)
                     current_streams = channel.get("streams", [])
@@ -4506,7 +4531,7 @@ async def _run_bulk_commit(
                     if not isinstance(created_id, int) or isinstance(created_id, bool):
                         raise MalformedCreateResponseError(
                             f"Dispatcharr accepted the create for '{channel_name}' but returned "
-                            f"no usable channel id ({created_id!r}). The channel exists; ECM "
+                            f"no usable channel id ({type(created_id).__name__}). The channel exists; ECM "
                             f"cannot map temp id {op.tempId} to it, so any operation in this "
                             "batch that referenced it will fail. Do not retry the create — "
                             "reconcile against Dispatcharr instead."
@@ -4757,8 +4782,8 @@ async def _run_bulk_commit(
                     "operationId": op_id,
                     "operationType": op.type,
                     "error": (
-                        redact_log_diagnostic(str(e))
-                        if isinstance(e, (OperatorBulkError, UngroupedTargetUnavailable))
+                        (redact_log_diagnostic(str(e)) if e.scrub else str(e))
+                        if isinstance(e, OperatorBulkError)
                         else "Operation failed; check server logs and the reported results before retrying."
                     ),
                 }

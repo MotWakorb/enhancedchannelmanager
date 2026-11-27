@@ -89,8 +89,15 @@ _AMZ_SECURITY_TOKEN_RE = re.compile(r"(?i)(X-Amz-Security-Token=)([^&\s'\"]+)")
 # AWS access key IDs (AKIA…/ASIA… 16+ alnum) and secret-key-shaped material in
 # key=value or key: value form (access_key_id / secret_access_key / aws_secret…).
 _AWS_AKID_RE = re.compile(r"\b((?:AKIA|ASIA)[A-Z0-9]{8,})\b")
+#
+# The key may be followed by its own closing quote (optionally backslash-escaped)
+# so JSON and repr'd dict bodies (``"password": "x"``, ``{'token': 'x'}``,
+# ``{\"password\": \"x\"}``) mask like ``password=x`` does. ``token`` and the
+# API-key header spellings (``X-API-Key``, ``api-key``, ``apikey``) are keys too;
+# a word that merely contains one (``max_tokens``) is not followed by the
+# separator and is left alone.
 _SECRET_KV_RE = re.compile(
-    r"(?i)((?:secret_access_key|aws_secret_access_key|access_key_id|client_secret|access_token|secret|password|passwd|api_key)\s*[:=]\s*)(['\"]?)([^'\"\s,}&]+)",
+    r"(?i)((?:secret_access_key|aws_secret_access_key|access_key_id|client_secret|access_token|secret|password|passwd|api_key|x-api-key|api-key|apikey|token)\\?['\"]?\s*[:=]\s*)(\\?['\"]?)([^'\"\s,}&]+)",
 )
 
 # Order is significant — signed-URL params and KV pairs first, then the broad

@@ -991,3 +991,21 @@ async def test_login_failure_logs_only_the_exception_type(log_outputs):
         assert "Authentication error: ConnectError" in text
         assert unregistered not in text
         assert "Traceback" not in text
+
+
+@pytest.mark.asyncio
+async def test_guidance_passes_through_even_for_long_registered_numbers(async_client):
+    """The minimum sweep length is not what protects guidance; the class is."""
+    from log_utils import register_sensitive_values
+    from tests.routers.test_renumber_baselines import make_client
+
+    register_sensitive_values("1000", "2500")
+    client = make_client(
+        [{"id": 2500, "name": "ESPN", "channel_number": 1000, "streams": []}]
+    )
+    result = await poll_numbering(async_client, client, [renumber_op(2500, 40, 999)])
+    assert result["errors"][0]["error"] == (
+        "Channel 2500 was not renumbered: it is on channel number 1000, and this "
+        "request expected 999. Somebody else changed it. Re-read the channel and "
+        "decide before sending this again."
+    )

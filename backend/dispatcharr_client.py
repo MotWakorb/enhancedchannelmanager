@@ -506,7 +506,9 @@ class DispatcharrClient:
             logger.error("[DISPATCHARR] Authentication failed - status: %s", e.response.status_code)
             raise
         except Exception as e:
-            logger.exception("[DISPATCHARR] Authentication error: %s", e)
+            # Type only, as at the request boundary: login error text and its
+            # traceback can carry the credentials or the full request URL.
+            logger.error("[DISPATCHARR] Authentication error: %s", type(e).__name__)
             raise
 
     async def _refresh_access_token(self) -> None:
