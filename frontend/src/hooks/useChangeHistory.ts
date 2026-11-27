@@ -29,6 +29,9 @@ export interface UseChangeHistoryOptions {
 
 type ChannelSnapshot = ChangeRecord['before'][number];
 
+/** Channel reads in flight at once while checking a multi-channel step. */
+const PRE_READ_CONCURRENCY = 8;
+
 /** A history step found, before writing, to describe a channel that has moved. */
 class MovedSinceRecordedError extends Error {}
 
@@ -86,16 +89,38 @@ function formatNumber(value: number | null): string {
 async function refuseIfMoved(
   writes: { channelId: number; expectedNumber: number | null }[],
 ): Promise<void> {
-  const moved: string[] = [];
-  for (const { channelId, expectedNumber } of writes) {
-    const current = (await api.getChannel(channelId)).channel_number ?? null;
-    if (!numbersAgree(current, expectedNumber)) {
-      moved.push(
-        `channel ${channelId} is on channel number ${formatNumber(current)}, `
-        + `and this step expected ${formatNumber(expectedNumber)}`,
-      );
+  // One problem per write, in step order; `null` where the channel still holds
+  // the number the step recorded.
+  const problems: (string | null)[] = new Array(writes.length).fill(null);
+  let next = 0;
+  const readNext = async (): Promise<void> => {
+    while (next < writes.length) {
+      const index = next;
+      next += 1;
+      const { channelId, expectedNumber } = writes[index];
+      let current: number | null;
+      try {
+        current = (await api.getChannel(channelId)).channel_number ?? null;
+      } catch (err) {
+        // Deleted upstream since the step was recorded: there is nothing to
+        // put a number back on, and writing the rest would leave the step
+        // half applied. Any other read failure is not a refusal.
+        if (err instanceof HttpError && err.status === 404) {
+          problems[index] = `channel ${channelId} no longer exists`;
+          continue;
+        }
+        throw err;
+      }
+      if (!numbersAgree(current, expectedNumber)) {
+        problems[index] = `channel ${channelId} is on channel number ${formatNumber(current)}, `
+          + `and this step expected ${formatNumber(expectedNumber)}`;
+      }
     }
-  }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(PRE_READ_CONCURRENCY, writes.length) }, readNext),
+  );
+  const moved = problems.filter((problem): problem is string => problem !== null);
   if (moved.length > 0) {
     throw new MovedSinceRecordedError(
       `${moved.length === 1 ? 'Channel was' : 'Channels were'} not renumbered: `
@@ -105,15 +130,24 @@ async function refuseIfMoved(
 }
 
 /**
- * `prev` with new stacks, dropping save points that point past the new end of
- * `past` and recomputing whether anything is unsaved since the latest one.
+ * `prev` with new stacks, recomputing whether anything is unsaved since the
+ * latest surviving save point.
+ *
+ * Save points past the new end of `past` are dropped. So is every save point at
+ * or after `droppedFrom`, the lowest index in `prev.past` of an entry removed
+ * without being undone: its snapshot holds that entry's channel at a number the
+ * server no longer has, and reverting to it would undo nothing and then show
+ * that number anyway.
  */
 function withStacks(
   prev: HistoryState,
   past: ChangeRecord[],
   future: ChangeRecord[],
+  droppedFrom: number = Infinity,
 ): HistoryState {
-  const savePoints = prev.savePoints.filter((sp) => sp.historyIndex <= past.length);
+  const savePoints = prev.savePoints.filter(
+    (sp) => sp.historyIndex <= past.length && sp.historyIndex < droppedFrom,
+  );
   const saved = savePoints.length > 0 ? savePoints[savePoints.length - 1].historyIndex : 0;
   return { ...prev, past, future, savePoints, hasUnsavedChanges: past.length !== saved };
 }
@@ -403,9 +437,15 @@ export function useChangeHistory({
         // can never be replayed as recorded: kept, it would refuse on every
         // press and block the entries behind it; moved to redo, it would claim
         // an undo that did not happen. It is dropped, and the lineup re-read.
-        setHistory((prev) => withStacks(
-          prev, prev.past.filter((entry) => entry.id !== lastChange.id), prev.future,
-        ));
+        setHistory((prev) => {
+          const dropped = prev.past.findIndex((entry) => entry.id === lastChange.id);
+          return withStacks(
+            prev,
+            prev.past.filter((entry) => entry.id !== lastChange.id),
+            prev.future,
+            dropped === -1 ? Infinity : dropped,
+          );
+        });
         onError?.(`Could not undo "${lastChange.description}": ${err.message} It was removed from the undo history.`);
         onServerChanged?.();
       } else {
@@ -544,9 +584,18 @@ export function useChangeHistory({
           reverted += 1;
         }
 
-        // Restore channels from save point snapshot
+        // Restore, from the save point's snapshot, only the channels the
+        // reverted entries wrote. Any other channel may have changed outside
+        // this history (an entry dropped after a refusal, or an edit undo does
+        // not replay), so its snapshot is not what the server holds; the reload
+        // below shows the server's copy of every channel.
+        const touched = new Set(
+          changesToRevert.flatMap((change) => [...change.before, ...change.after].map((snap) => snap.id)),
+        );
         const restoredChannels = channels.map((ch) => {
-          const snapshot = savePoint.channelSnapshot.find((s) => s.id === ch.id);
+          const snapshot = touched.has(ch.id)
+            ? savePoint.channelSnapshot.find((s) => s.id === ch.id)
+            : undefined;
           if (snapshot) {
             return {
               ...ch,
@@ -560,6 +609,7 @@ export function useChangeHistory({
         });
 
         onChannelsRestore(restoredChannels);
+        onServerChanged?.();
 
         setHistory((prev) => ({
           ...prev,
@@ -578,9 +628,15 @@ export function useChangeHistory({
           // refused one can never be replayed as recorded, so all of them
           // leave the history. Older entries were never touched and stay.
           const gone = new Set(changesToRevert.slice(0, reverted + 1).map((change) => change.id));
-          setHistory((prev) => withStacks(
-            prev, prev.past.filter((entry) => !gone.has(entry.id)), [],
-          ));
+          setHistory((prev) => {
+            const indexes = prev.past.flatMap((entry, index) => (gone.has(entry.id) ? [index] : []));
+            return withStacks(
+              prev,
+              prev.past.filter((entry) => !gone.has(entry.id)),
+              [],
+              indexes.length > 0 ? Math.min(...indexes) : Infinity,
+            );
+          });
           onError?.(`Could not revert to checkpoint "${savePoint.name}": ${err.message}`);
           onServerChanged?.();
         } else {

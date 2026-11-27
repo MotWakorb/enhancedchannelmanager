@@ -545,6 +545,61 @@ describe('useChangeHistory', () => {
       expect(onServerChanged).toHaveBeenCalledTimes(1);
     });
 
+    function wideReorder(count: number): Omit<ChangeRecord, 'id' | 'timestamp'> {
+      const ids = Array.from({ length: count }, (_, index) => index + 1);
+      return {
+        type: 'channel_reorder',
+        description: `Reordered ${count} channels`,
+        channelIds: ids,
+        before: ids.map((id) => ({ id, channel_number: id, name: `Channel ${id}`, channel_group_id: 1, streams: [] })),
+        after: ids.map((id) => ({ id, channel_number: 1000 + id, name: `Channel ${id}`, channel_group_id: 1, streams: [] })),
+      };
+    }
+
+    it('the pre-read runs in parallel, at most eight at a time', async () => {
+      const { getChannel } = await import('../services/api');
+      const ids = Array.from({ length: 12 }, (_, index) => index + 1);
+      server = new Map(ids.map((id) => [id, 1000 + id]));
+      let inFlight = 0;
+      let mostInFlight = 0;
+      vi.mocked(getChannel).mockImplementation(async (id) => {
+        inFlight += 1;
+        mostInFlight = Math.max(mostInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        inFlight -= 1;
+        return { id, channel_number: server.get(id) ?? null } as Channel;
+      });
+      const channels = ids.map((id) => ({ ...mockChannels[0], id, uuid: `uuid-${id}` }));
+      const { result } = renderHook(() => useChangeHistory({
+        channels, onChannelsRestore: mockOnChannelsRestore, onError: mockOnError,
+      }));
+      act(() => result.current.recordChange(wideReorder(12)));
+
+      await act(async () => { await result.current.undo(); });
+
+      expect(getChannel).toHaveBeenCalledTimes(12);
+      expect(mostInFlight).toBe(8);
+    });
+
+    it('a multi-channel step whose channel was deleted upstream writes nothing and drops the entry', async () => {
+      const { updateChannel, getChannel } = await import('../services/api');
+      server = new Map([[1, 500], [2, 501]]);
+      vi.mocked(getChannel).mockImplementation(async (id) => {
+        if (id === 2) throw new HttpError('Not found.', 404, 'Not found.');
+        return { id, channel_number: server.get(id) ?? null } as Channel;
+      });
+      const { result, onServerChanged } = renderHistory();
+      act(() => result.current.recordChange(reorderRecord()));
+
+      await act(async () => { await result.current.undo(); });
+
+      expect(updateChannel).not.toHaveBeenCalled();
+      expect(mockOnError).toHaveBeenCalledWith(expect.stringContaining('channel 2 no longer exists'));
+      expect(result.current.undoCount).toBe(0);
+      expect(result.current.redoCount).toBe(0);
+      expect(onServerChanged).toHaveBeenCalledTimes(1);
+    });
+
     it('the pre-read compares on the tenths grid, as the server does', async () => {
       const { updateChannel } = await import('../services/api');
       server = new Map([[1, 500.0], [2, 501.04]]);
@@ -566,7 +621,10 @@ describe('useChangeHistory', () => {
       expect(getChannel).not.toHaveBeenCalled();
     });
 
-    it('a dropped undo invalidates the save points past the new end and recomputes unsaved', async () => {
+    it('a dropped undo invalidates every save point taken at or after the dropped entry', async () => {
+      // A checkpoint taken just before the dropped entry holds that entry's
+      // channel at a number the server no longer has, and reverting to it
+      // would undo nothing and then show that number anyway.
       const { updateChannel } = await import('../services/api');
       const { result } = renderHistory();
       act(() => result.current.recordChange(renumberRecord()));
@@ -579,15 +637,43 @@ describe('useChangeHistory', () => {
       await act(async () => { await result.current.undo(); });
 
       expect(result.current.undoCount).toBe(2);
-      expect(result.current.savePoints.map((sp) => sp.name)).toEqual(['after first', 'after second']);
-      expect(result.current.hasUnsavedChanges).toBe(false);
+      expect(result.current.savePoints.map((sp) => sp.name)).toEqual(['after first']);
+      expect(result.current.hasUnsavedChanges).toBe(true);
 
       vi.mocked(updateChannel).mockRejectedValueOnce(conflict());
       await act(async () => { await result.current.undo(); });
 
       expect(result.current.undoCount).toBe(1);
-      expect(result.current.savePoints.map((sp) => sp.name)).toEqual(['after first']);
-      expect(result.current.hasUnsavedChanges).toBe(false);
+      expect(result.current.savePoints).toEqual([]);
+      expect(result.current.hasUnsavedChanges).toBe(true);
+    });
+
+    it('a successful checkpoint revert restores only the channels it reverted, then reloads', async () => {
+      // Channel 2 moved outside this history, so the checkpoint's copy of it
+      // is not what the server holds and must not be shown.
+      const { updateChannel } = await import('../services/api');
+      server = new Map([[1, 300], [2, 250]]);
+      const onServerChanged = vi.fn();
+      const onChannelsRestore = vi.fn();
+      const { result, rerender } = renderHook(
+        ({ channels }) => useChangeHistory({ channels, onChannelsRestore, onError: mockOnError, onServerChanged }),
+        { initialProps: { channels: mockChannels } },
+      );
+      act(() => result.current.createSavePoint('start'));
+      act(() => result.current.recordChange(renumberRecord()));
+      rerender({ channels: [
+        { ...mockChannels[0], channel_number: 300 },
+        { ...mockChannels[1], channel_number: 250 },
+      ] });
+
+      await act(async () => {
+        await result.current.revertToSavePoint(result.current.savePoints[0].id);
+      });
+
+      expect(updateChannel).toHaveBeenCalledTimes(1);
+      const restored = onChannelsRestore.mock.calls[onChannelsRestore.mock.calls.length - 1][0] as Channel[];
+      expect(restored.map((ch) => [ch.id, ch.channel_number])).toEqual([[1, 100], [2, 250]]);
+      expect(onServerChanged).toHaveBeenCalledTimes(1);
     });
 
     it('a refused undo shows the server\'s reason, drops the entry, and reloads', async () => {
@@ -700,6 +786,29 @@ describe('useChangeHistory', () => {
       expect(result.current.redoCount).toBe(0);
       expect(result.current.savePoints.map((sp) => sp.name)).toEqual(['one']);
       expect(result.current.hasUnsavedChanges).toBe(true);
+    });
+
+    it('a refused revert also invalidates a save point taken just before the refused entry', async () => {
+      const { updateChannel } = await import('../services/api');
+      const { result } = renderHistory();
+      act(() => result.current.recordChange(renumberOf(1, 100, 110)));
+      act(() => result.current.createSavePoint('one'));
+      act(() => result.current.recordChange(renumberOf(1, 110, 120)));
+      act(() => result.current.createSavePoint('two'));
+      act(() => result.current.recordChange(renumberOf(2, 200, 210)));
+      act(() => result.current.recordChange(renumberOf(2, 210, 220)));
+      // Reverting to 'one': 220 -> 210 lands, the undo of 200 -> 210 (index 2,
+      // taken right after 'two') is refused.
+      vi.mocked(updateChannel)
+        .mockImplementationOnce(async () => ({} as Channel))
+        .mockRejectedValueOnce(conflict());
+
+      await act(async () => {
+        await result.current.revertToSavePoint(result.current.savePoints[0].id);
+      });
+
+      expect(result.current.undoCount).toBe(2);
+      expect(result.current.savePoints.map((sp) => sp.name)).toEqual(['one']);
     });
 
     it('a checkpoint revert refused on its first entry leaves the earlier entries alone', async () => {

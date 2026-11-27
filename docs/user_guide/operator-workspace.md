@@ -219,11 +219,13 @@ range renumbers. A step that puts a channel number back first checks that the
 channel is still on the number the step recorded. If somebody else has
 renumbered it since, ECM writes nothing for that step, shows which channel
 moved and to what, removes the step from the history (it can no longer be
-replayed as recorded), and reloads the channel list. Undoing a rename that left
+replayed as recorded), and reloads the channel list. Any checkpoint taken at or
+after that step is removed as well, since it would show that channel on a
+number the server no longer holds. Undoing a rename that left
 the number alone sends only the name, so it still works after a renumber.
 
 For a step that renumbers several channels, ECM reads every one of them before
-writing any, and refuses the whole step if one has moved. That narrows the
+writing any, and refuses the whole step if one has moved or no longer exists. That narrows the
 window but cannot close it: Dispatcharr has no way to make several channel
 writes conditional at once, so a change landing between those reads and the
 writes is still caught only channel by channel, after the channels before it

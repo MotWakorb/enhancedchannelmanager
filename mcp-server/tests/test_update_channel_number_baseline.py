@@ -203,3 +203,18 @@ async def test_a_missing_baseline_is_refused_before_a_token_is_issued():
     assert "expected_number" in text
     assert "confirmation_token" not in text
     client.call_endpoint.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", [5, {}, {"number": True}, {"numbr": 5}, {"number": 5, "extra": 1}])
+async def test_a_malformed_baseline_is_refused_before_a_token_is_issued(bad):
+    mcp = _registry()
+    client = _client()
+    with patch("tools.channels.get_ecm_client", return_value=client):
+        result = await mcp.call_tool("update_channel", {
+            "channel_id": 1, "channel_number": 20, "expected_number": bad,
+        })
+    text = _text(result)
+    assert "expected_number" in text
+    assert "confirmation_token" not in text
+    client.call_endpoint.assert_not_called()

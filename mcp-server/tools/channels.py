@@ -4,7 +4,7 @@ import logging
 from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from _endpoint_contracts import ENDPOINTS
 from ecm_client import get_ecm_client
@@ -124,18 +124,28 @@ class ExpectedChannelNumber(BaseModel):
 
 
 def missing_number_baseline(arguments: dict) -> str | None:
-    """The refusal for an update_channel call that renumbers without a baseline.
+    """The refusal for an update_channel call that renumbers without a valid baseline.
 
     Shared with the safety wrapper, which must refuse before it issues a
-    confirmation token for a call that could never be confirmed.
+    confirmation token for a call that could never be confirmed, and which sees
+    the raw arguments, so a malformed ``expected_number`` is validated here too.
     """
-    if arguments.get("channel_number") is None or arguments.get("expected_number") is not None:
+    if arguments.get("channel_number") is None:
         return None
+    expected = arguments.get("expected_number")
+    if isinstance(expected, ExpectedChannelNumber):
+        return None
+    if expected is not None:
+        try:
+            ExpectedChannelNumber.model_validate(expected)
+            return None
+        except ValidationError:
+            pass
     return (
         f"Channel {arguments.get('channel_id')} was not updated: changing channel_number "
         "needs expected_number, the number you last read for this channel "
         '(get_channel or list_channels), as {"number": n} or {"number": null} '
-        "for no number. Nothing was sent."
+        "for no number, with no other keys. Nothing was sent."
     )
 
 
