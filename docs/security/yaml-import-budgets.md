@@ -41,12 +41,17 @@ three embedded streams each, 9,996,269 nodes, 104 MiB of YAML.
 | `safe_load_bounded` (compose, check, construct) | 170 s | 7.6 GiB, about 75 times the YAML bytes |
 | `measure_bounded` (compose and check only) | 162 s | 6.9 GiB |
 
-Most of the cost is composition, so a document near the ceiling is expensive
-even when it is accepted. Backup creation parses each category once to redact
-it and then measures the final bytes, so a category near the ceiling costs
-roughly twice the figures above, and restore costs them once more. Parsing runs
-on the request or task's event loop; moving it to a worker thread is tracked
-separately. The ceiling exists to make cost bounded and predictable, not small.
+In short, one parse at the ceiling costs about 170 s and 7.6 GiB. Most of that
+is composition, so a document near the ceiling is expensive even when it is
+accepted. Backup creation parses each category once to redact it and then
+measures the final bytes, so creating a backup with a category near the ceiling
+costs about twice one parse. Restoring it costs one more parse.
+
+These parses run synchronously on the asyncio event loop of the request or task
+that performs them, so while one runs, the ECM process serves nothing else.
+Moving YAML parsing to a worker thread is follow-up bead
+`enhancedchannelmanager-yx2pn`. The ceiling makes this cost bounded and
+predictable. It does not make it small.
 
 ## Byte limits
 
@@ -72,7 +77,8 @@ only by these byte limits.
 
 - Import routes return 400 with "<route> exceeds the import size limit", naming
   the limit, before any database session opens. Malformed YAML still returns
-  "Invalid YAML".
+  "Invalid YAML". A document or section of the wrong shape (a scalar where a
+  mapping or list is required) is a 400, not a server error.
 - `/validate` and `/restore-yaml` return 400 with "YAML export exceeds the
   backup size limit" before any section is restored.
 - DBAS decode raises `ArtifactCategoryRefused`, naming the category. The restore
@@ -97,8 +103,9 @@ only by these byte limits.
   on the four import routes with real-size positive controls, `/validate`,
   `/restore-yaml`, analyze/from-bundle (member, total, count, upload and gzip
   bomb), and the export preflight.
-- `backend/tests/dbas/test_yaml_budget_roundtrip.py`: a 50,000-channel,
-  3-streams-per-channel backup built through the real producer and decoded
+- `backend/tests/dbas/test_yaml_budget_roundtrip.py`: a 25,000-channel,
+  3-streams-per-channel backup (over 1,000,000 composed nodes, so the original
+  single 1M budget would refuse it) built through the real producer and decoded
   through `decode_artifact_to_plan`, creation-side refusal through the backup
   task, and DBAS alias and node refusals failing the restore task before any
   destination call.
