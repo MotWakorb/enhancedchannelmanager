@@ -4457,6 +4457,8 @@ export type RestoreEntityType =
 /** Why an entity was (or would be) skipped. */
 export type RestoreSkipReason =
   | 'existing_stream_reused'
+  /** An existing channel whose differing stream list could not be rewritten; not identical. */
+  | 'stream_attachment_rewrite_failed'
   | 'already_exists_identical'
   /**
    * A destination row was ADOPTED because its NAME matched, with nothing beyond

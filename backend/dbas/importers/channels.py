@@ -405,6 +405,10 @@ async def import_channels(
     except Exception as exc:
         logger.warning("[DBAS-CHANNELS] Could not list existing channels: %s", exc)
 
+    # A preview does not match streams, so an existing channel it reports as
+    # identical may still have its stream list rewritten by the apply.
+    unchecked_attachments = False
+
     # Per-channel stream-attach plans, built during the create loop and resolved
     # after the batched custom-stream fallback runs. Each is a _ChannelStreamPlan
     # carrying the channel's dest id + one ordered slot per archived stream.
@@ -465,6 +469,8 @@ async def import_channels(
             )
             if not attachment_pending:
                 _skip(cat, SkipReason.ALREADY_EXISTS_IDENTICAL, label, source_id, is_dry_run)
+            if is_dry_run and _archived_streams(archive_channel):
+                unchecked_attachments = True
             # Still remap source -> existing dest id so a later profile reattach
             # (and the stream-attachment bead) can resolve this channel.
             source_key = as_int(source_id)
@@ -570,6 +576,12 @@ async def import_channels(
             )
         logger.info("[DBAS-CHANNELS] Restored channel '%s' (id=%s).", label, dest_id)
 
+    if unchecked_attachments:
+        # The counts stay predictions (a create or skip is decided correctly);
+        # only the attachment of an existing channel is unchecked, so this is a
+        # caveat rather than predicted=False, as for channel groups.
+        cat.caveat = CHANNEL_PREVIEW_ATTACHMENT_CAVEAT
+
     if not is_dry_run:
         # Stream layer: synthesize orphans (batched, one fallback state) + attach
         # the matched + synthesized stream ids to each channel in archived order.
@@ -585,6 +597,13 @@ async def import_channels(
 # ---------------------------------------------------------------------------
 # Stream layer (0i2vt.14 integration: matcher al6e3 + fallback ahygg + attach)
 # ---------------------------------------------------------------------------
+
+
+CHANNEL_PREVIEW_ATTACHMENT_CAVEAT = (
+    "Existing channels' stream lists are not compared in a preview, so a "
+    "channel shown as already existing (identical) may still have its streams "
+    "rewritten to match this backup when the restore runs."
+)
 
 
 @dataclass
@@ -822,10 +841,10 @@ async def _attach_streams(
             )
         except Exception as exc:
             if existing_channel:
-                # The rewrite was rejected, so the row kept its current
+                # The rewrite was rejected, so the row kept its current, different
                 # attachment. The failure is counted once, on the stream layer.
                 _skip(
-                    channel_cat, SkipReason.ALREADY_EXISTS_IDENTICAL,
+                    channel_cat, SkipReason.STREAM_ATTACHMENT_REWRITE_FAILED,
                     plan.label, plan.channel_source_id, False,
                 )
             stream_cat.failed += 1

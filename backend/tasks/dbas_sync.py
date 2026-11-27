@@ -840,6 +840,8 @@ class DbasSyncTask(TaskScheduler):
     @staticmethod
     def _summary_message(report, is_dry_run: bool, outcome: str) -> str:
         if is_dry_run:
+            from dbas.restore_contracts import EntityType
+
             predicted = [c for c in report.categories if c.predicted is not False]
             unpredicted = [c for c in report.categories if c.predicted is False]
             total_create = sum(c.would_create for c in predicted)
@@ -859,6 +861,14 @@ class DbasSyncTask(TaskScheduler):
                     + ((" — " + c.caveat) if c.caveat else "")
                     for c in unpredicted
                 )
+            # A predicted category's caveat qualifies its counts. Only CHANNEL's
+            # is shown: its wording is set for the sync target, while the
+            # channel-group caveat still describes an archive restore.
+            caveats += "".join(
+                "; %s: %s" % (c.entity_type.value, c.caveat)
+                for c in predicted
+                if c.caveat and c.entity_type == EntityType.CHANNEL
+            )
             if unpredicted and not predicted:
                 summary = (
                     "Sync dry-run complete: no category counts predicted; "

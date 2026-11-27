@@ -78,6 +78,7 @@ async def _import(client: AsyncMock, *, dry_run: bool = False) -> RestoreReport:
         report=report,
         ledger=RollbackLedger(restore_id="attachment-drift"),
         remap=IdRemapTable(),
+        is_dry_run=dry_run,
     )
     return report
 
@@ -131,4 +132,38 @@ async def test_rejected_attachment_counts_one_failure_and_no_reuse():
     assert streams.failed == 1
     assert streams.skipped == 0
     assert streams.skip_details == []
-    assert report.category(EntityType.CHANNEL).updated == 0
+    channels = report.category(EntityType.CHANNEL)
+    assert channels.updated == channels.failed == 0
+    # The channel is not identical to the archive and its rewrite failed; the
+    # failure itself is counted once, on the stream layer.
+    assert [d.reason.value for d in channels.skip_details] == [
+        "stream_attachment_rewrite_failed"
+    ]
+
+
+RESTORE_WORDS = ("backup", "restore")
+
+
+@pytest.mark.asyncio
+async def test_preview_says_existing_attachments_are_not_compared():
+    report = await _import(_client([103]), dry_run=True)
+
+    channels = report.category(EntityType.CHANNEL)
+    assert channels.would_skip == 1
+    assert _reasons(channels) == [SkipReason.ALREADY_EXISTS_IDENTICAL]
+    # The skip count is still a prediction; only the attachment is unchecked.
+    assert channels.predicted is True
+    caveat = channels.caveat.lower()
+    assert "not compared in a preview" in caveat
+    assert any(word in caveat for word in RESTORE_WORDS)
+
+
+@pytest.mark.asyncio
+async def test_preview_without_existing_attachments_has_no_channel_caveat():
+    client = _client([103])
+    client.get_channels.return_value = {"results": []}
+    report = await _import(client, dry_run=True)
+
+    channels = report.category(EntityType.CHANNEL)
+    assert channels.would_create == 1
+    assert channels.caveat is None

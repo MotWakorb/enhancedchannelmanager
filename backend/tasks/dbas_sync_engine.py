@@ -2397,20 +2397,27 @@ SYNC_STREAM_PREVIEW_CAVEAT = (
     "the sync target's own streams. A stream with no match is created on the "
     "sync target as a placeholder."
 )
+SYNC_CHANNEL_PREVIEW_CAVEAT = (
+    "Existing channels' stream lists are not compared in a preview, so a "
+    "channel shown as identical may still have its streams rewritten on the "
+    "sync target when the sync is applied."
+)
 
 
-def _describe_unpredicted_streams_for_sync(report: RestoreReport) -> None:
-    """Replace the shared importer's restore wording on a sync preview.
+def _describe_preview_caveats_for_sync(report: RestoreReport) -> None:
+    """Replace the shared channels importer's restore wording on a sync preview.
 
-    The channels importer explains the unpredicted STREAM category in terms of
-    a backup being restored. A sync preview has no backup, so its operator
-    summary states the same limit in terms of the sync target.
+    The importer explains its STREAM and CHANNEL preview limits in terms of a
+    backup being restored. A sync preview has no backup, so its operator
+    summary states the same limits in terms of the sync target.
     """
     if not report.is_dry_run:
         return
     for category in report.categories:
         if category.entity_type == EntityType.STREAM and category.predicted is False:
             category.caveat = SYNC_STREAM_PREVIEW_CAVEAT
+        elif category.entity_type == EntityType.CHANNEL and category.caveat:
+            category.caveat = SYNC_CHANNEL_PREVIEW_CAVEAT
 
 
 async def run_sync(
@@ -2589,7 +2596,7 @@ async def run_sync(
 
     # --- 4b. Surface each deduped-out duplicate name as a per-item CONFLICT. ---
     _apply_name_conflict_details(result, excluded_name_conflicts)
-    _describe_unpredicted_streams_for_sync(result)
+    _describe_preview_caveats_for_sync(result)
 
     # --- 4c. A read that failed AFTER the gate still means the report describes
     # a destination it did not fully read (…-jqfxm). The importer that hit it

@@ -272,3 +272,24 @@ async def test_sync_preview_stream_caveat_describes_the_sync_target(tmp_path):
     message = DbasSyncTask()._result_from_report(datetime.now(UTC), report).message
     assert "stream: not predicted" in message
     assert streams.caveat in message
+
+
+@pytest.mark.asyncio
+async def test_sync_preview_channel_caveat_describes_the_sync_target():
+    """The shared importer words the unchecked-attachment caveat for a restore;
+    a sync preview carries and shows its own wording."""
+    from tasks.dbas_sync_engine import _describe_preview_caveats_for_sync
+    from tests.dbas.test_channel_stream_attachment_drift import _client, _import
+
+    report = await _import(_client([103]), dry_run=True)
+    _describe_preview_caveats_for_sync(report)
+
+    channels = report.category(EntityType.CHANNEL)
+    assert channels.predicted is True
+    caveat = channels.caveat.lower()
+    assert "not compared in a preview" in caveat
+    assert "sync target" in caveat
+    assert "backup" not in caveat and "restore" not in caveat
+
+    message = DbasSyncTask()._result_from_report(datetime.now(UTC), report).message
+    assert "channel: " + channels.caveat in message

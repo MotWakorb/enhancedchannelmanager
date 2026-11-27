@@ -539,6 +539,24 @@ describe('RestoreCompleteSummary — stream reattach', () => {
     expect(within(details).queryByText('Already exists (identical)')).not.toBeInTheDocument();
   });
 
+  it('labels a channel whose stream rewrite failed without calling it identical', () => {
+    render(
+      <RestoreCompleteSummary
+        report={appliedReport({
+          categories: [category({
+            entity_type: 'channel',
+            skipped: 1,
+            skip_details: [{ reason: 'stream_attachment_rewrite_failed', label: 'Recorded lineup' }],
+          })],
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('rcs-skip-toggle'));
+    const details = screen.getByTestId('rcs-skip-details');
+    expect(within(details).getByText('Exists; stream list rewrite failed')).toBeInTheDocument();
+    expect(within(details).queryByText('Already exists (identical)')).not.toBeInTheDocument();
+  });
+
   it('labels a reused stream without claiming identical fields or an update', () => {
     render(
       <RestoreCompleteSummary
