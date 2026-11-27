@@ -888,7 +888,7 @@
     {
       "executable": false,
       "path": "backend/dbas/restore_artifact.py",
-      "sha256": "71346dcf3be5d63a7373165cfec31351127dad1b72150cd605d5cf8cabc286df",
+      "sha256": "c34f660cd84692baf9df4a3c086bab3630f4ab29ee8bef1f6a315f44c57dc066",
       "type": "file"
     },
     {
@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "ab3616d884b33661957b1a6df150bf2927940815b3ef66c6d3d7126a81f72d16",
+      "sha256": "0f7a2367324f88d1cbc536e397a2f48b6b411d14312a811a18f441bd0472bff0",
       "type": "file"
     },
     {
@@ -1056,7 +1056,7 @@
     {
       "executable": false,
       "path": "backend/pipeline_yaml_editor.py",
-      "sha256": "06db404a7ebf41b0ead10a8d1c14d038cecbdf60b395ac93af1caf992f35b4a0",
+      "sha256": "70382f5dafdcd2941c511cd29b1c6702c0f6db68ec4d13d23739f9150f457cb4",
       "type": "file"
     },
     {
@@ -1134,7 +1134,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "bfbe70693bb3ce2800d9f414415873b9f00a7518f50f9731916460037fb88cd0",
+      "sha256": "836eb1ec3d4f8427b71afef93e3db14923a689983ba6b8c789a232a7072bf34e",
       "type": "file"
     },
     {
@@ -1152,7 +1152,7 @@
     {
       "executable": false,
       "path": "backend/routers/channel_pipeline.py",
-      "sha256": "9bfcbbbc4a9662f4eead4a45ee4f0723683d14c4ce6df63177b1d04ce07fa3ca",
+      "sha256": "3367f315f1dc62e95cfa76ee9b4ceab3d113f1c4ac484c395f07d4ad1251615f",
       "type": "file"
     },
     {
@@ -1176,7 +1176,7 @@
     {
       "executable": false,
       "path": "backend/routers/dummy_epg.py",
-      "sha256": "c963318026757d2cf58fa95004a1f476239736c9c2dc26aaaec8285dc65bc2ac",
+      "sha256": "0af36d89c3e30cb0d150f9fa99df48458cd555b5688aa6265a761a832f8f6c9c",
       "type": "file"
     },
     {
@@ -1236,7 +1236,7 @@
     {
       "executable": false,
       "path": "backend/routers/normalization.py",
-      "sha256": "9993286adbe59e9e579bd5014afd726c1e10d068111c5a8f66d205c3ac9003ac",
+      "sha256": "bdf112b6a185380d5c7f8b334e486e767f93e02a87cf71064be56bf8f40ed532",
       "type": "file"
     },
     {
@@ -1302,7 +1302,7 @@
     {
       "executable": false,
       "path": "backend/routers/tags.py",
-      "sha256": "351f58e724720b614eacb10c4969f1bf5d3739cfb46b8d56f0444c477244f60e",
+      "sha256": "96f000a46bc6633fc039fdfd67c6df45746c0b81860052303458d8d7b11458c7",
       "type": "file"
     },
     {
@@ -1602,7 +1602,7 @@
     {
       "executable": false,
       "path": "backend/tasks/dbas_restore.py",
-      "sha256": "d273dd260e7f6b3500f0cd8f957609d2a0c56c0601184a20dc2bd521901b854e",
+      "sha256": "0ece934ffaac230a85657184f33afbc3418bebada613a4d14e1cd9110343a01a",
       "type": "file"
     },
     {
@@ -1805,6 +1805,12 @@
     },
     {
       "executable": false,
+      "path": "backend/yaml_safety.py",
+      "sha256": "c3b69f545261a57d52ce6518391d0ed18838b94bfd288e9388909e4a6e36735c",
+      "type": "file"
+    },
+    {
+      "executable": false,
       "path": "frontend/CLAUDE.md",
       "sha256": "ea63f207c4399939d229bd13fe0f2f10ec9f049c3658973d36a30e4bdf840654",
       "type": "file"
@@ -1836,7 +1842,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "ded28a207a81890c5344b9a48c89dad509f959e44884fce0e1c3c55d7d4c1ce9",
+      "sha256": "b69f7306a26d3d369b515743fb2a4be98bfac0c77cb09ae39b8e6b43da9cffdc",
       "type": "file"
     },
     {
@@ -7104,5 +7110,27 @@
     "previous_manifest_sha256": "1eeda3cad795dc28b73450c77489b8d979ac417203256b95a429d7225cdc3e8d",
     "scope": "Require the caller's numbering baseline on PATCH /api/channels/{id}: a body that sets channel_number must carry expectedNumber {number} (the number last read, or null for none), a missing or malformed wrapper is refused with 422 and a moved channel with 409 and concurrentNumberChanges, and the key is removed before forwarding so Dispatcharr and the Journal never see it; make the bulk-commit updateChannel expectedNumber wrapper require number and reject extra keys; send baselines from the inline number editor, the Edit Channel dialog, the Guide channel editor and undo, redo and checkpoint revert outside Edit Mode (multi-channel steps pre-read and refuse as a whole), invalidate checkpoints at or after a step dropped after a refusal and restore only reverted channels on a checkpoint revert, and add an expected_number argument to the MCP update_channel tool that refuses a renumber without a valid one before issuing a confirmation token, plus 0090 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0090"
+  },
+  "yaml_budgets_update": {
+    "added_files": [
+      "backend/yaml_safety.py"
+    ],
+    "base_commit": "3f701e314cea41b8e35057540220c8e51a894023",
+    "bead": "enhancedchannelmanager-10tln",
+    "changed_files": {
+      "backend/dbas/restore_artifact.py": "71346dcf3be5d63a7373165cfec31351127dad1b72150cd605d5cf8cabc286df",
+      "backend/main.py": "ab3616d884b33661957b1a6df150bf2927940815b3ef66c6d3d7126a81f72d16",
+      "backend/pipeline_yaml_editor.py": "06db404a7ebf41b0ead10a8d1c14d038cecbdf60b395ac93af1caf992f35b4a0",
+      "backend/routers/backup.py": "bfbe70693bb3ce2800d9f414415873b9f00a7518f50f9731916460037fb88cd0",
+      "backend/routers/channel_pipeline.py": "9bfcbbbc4a9662f4eead4a45ee4f0723683d14c4ce6df63177b1d04ce07fa3ca",
+      "backend/routers/dummy_epg.py": "c963318026757d2cf58fa95004a1f476239736c9c2dc26aaaec8285dc65bc2ac",
+      "backend/routers/normalization.py": "9993286adbe59e9e579bd5014afd726c1e10d068111c5a8f66d205c3ac9003ac",
+      "backend/routers/tags.py": "351f58e724720b614eacb10c4969f1bf5d3739cfb46b8d56f0444c477244f60e",
+      "backend/tasks/dbas_restore.py": "d273dd260e7f6b3500f0cd8f957609d2a0c56c0601184a20dc2bd521901b854e",
+      "frontend/package.json": "ded28a207a81890c5344b9a48c89dad509f959e44884fce0e1c3c55d7d4c1ce9"
+    },
+    "previous_manifest_sha256": "e553c70116f59779c3276cc1cfe49dbee9e590f2743618c4f29fab9d0105ea16",
+    "scope": "Bound YAML import, restore and backup structure: one shared safe YAML loader (backend/yaml_safety.py) refuses oversized or amplifying structure before any object is built, with an alias expansion cap, a nesting cap and per-path node ceilings for DBAS backups, legacy YAML exports and the tag, normalization, dummy EPG and rule imports; a backup or YAML export that ECM would itself refuse to restore fails with the category and limit named instead of being written; legacy YAML uploads are read in chunks under a size cap; debug-bundle analysis reads the archive as a counted stream capping upload, member count, inflated bytes, tar extended headers and diagnostic members and refusing sparse entries; wrong-shape tag, normalization, dummy EPG and rule imports return 400; backup preflight walks the tree, plus 0091 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0091"
   }
 }
