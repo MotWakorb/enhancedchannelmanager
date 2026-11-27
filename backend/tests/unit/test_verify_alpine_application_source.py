@@ -163,6 +163,56 @@ SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
 SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
 
+SYNC_REPORTING_FILES = (
+    "backend/dbas/importers/channels.py",
+    "backend/dbas/restore_contracts.py",
+    "backend/dbas/restore_orchestrator.py",
+    "backend/tasks/dbas_restore.py",
+    "backend/tasks/dbas_sync.py",
+    "backend/tasks/dbas_sync_engine.py",
+    "frontend/src/components/RestoreCompleteSummary.test.tsx",
+    "frontend/src/components/RestoreCompleteSummary.tsx",
+    "frontend/src/services/api.ts",
+)
+
+
+def _before_sync_reporting(manifest):
+    key = "sync_reporting_update"
+    update = manifest[key]
+    assert update["base_commit"] == "18af2df0397e71908a02a843d9131f680bdcc822"
+    assert update["bead"] == "enhancedchannelmanager-c7ll3"
+    assert update["version"] == "0.18.2-0094"
+    assert update["previous_manifest_sha256"] == (
+        "4e9b0d7e3bd02f82c9e8236f05dcbf7872fdc33a5cc9efdf755a7eb9c15f5911"
+    )
+    assert update["added_files"] == []
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(SYNC_REPORTING_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_sync_reporting_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_sync_reporting(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["sync_reporting_update"] == manifest["sync_reporting_update"]
+
+
 APPLY_ERROR_BOUNDARIES_FILES = (
     "backend/routers/channels.py",
     "backend/routers/m3u.py",
@@ -171,6 +221,7 @@ APPLY_ERROR_BOUNDARIES_FILES = (
 
 def _before_apply_error_boundaries(manifest):
     key = "apply_error_boundaries_update"
+    manifest = _before_sync_reporting(manifest)
     update = manifest[key]
     assert update["base_commit"] == "bd63b0959113668007f4a5aaf44aab26c2afb937"
     assert update["bead"] == "enhancedchannelmanager-jnw1v"

@@ -81,6 +81,9 @@ const ENTITY_LABELS: Record<RestoreEntityType, string> = {
 };
 
 const SKIP_REASON_LABELS: Record<RestoreSkipReason, string> = {
+  existing_stream_reused: 'Reused existing stream (not updated)',
+  stream_attachment_rewrite_failed: 'Exists; stream list rewrite failed',
+  stream_attachment_incomplete: 'Exists; stream list not fully restorable',
   already_exists_identical: 'Already exists (identical)',
   // Deliberately NOT "identical" (bead 3t74w): a channel group is adopted on its
   // NAME with nothing else compared, and the label has to stop short of the
