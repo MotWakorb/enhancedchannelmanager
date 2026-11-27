@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "5742fb3a7855897325fdbc7ac04a69b0639429bf3794e3c764e8ed74002800aa",
+      "sha256": "080388f8db1c0bc9cc25d102bc4b31c949d1f466da9ddb27beed4d2e52cc34b7",
       "type": "file"
     },
     {
@@ -1134,7 +1134,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "28520d8d580f60050fe99518b3fa223cd38ac45d796699227324d17a23f4e70e",
+      "sha256": "ccadae825c259ecd5443cc4f4f3f19ca103af7bd7c2a042377d441975e4c12c0",
       "type": "file"
     },
     {
@@ -1158,7 +1158,7 @@
     {
       "executable": false,
       "path": "backend/routers/channels.py",
-      "sha256": "2ab36e273ec327d4e948387cd35d3df445e718e9eabe029a31a4c88a4e0b877e",
+      "sha256": "9a1c3612b015275d1ca9307a7a09a4cf95b08204852419fbce2f21e3cfdbaf0a",
       "type": "file"
     },
     {
@@ -1224,7 +1224,7 @@
     {
       "executable": false,
       "path": "backend/routers/m3u.py",
-      "sha256": "5cd5e1375e5e84244f5ea548a458f4ddf4291c3447819812acb32f4c2ab579ad",
+      "sha256": "7b8880f063eb6323613270dd2726ee0314164b53fec092c196126a738d1811a6",
       "type": "file"
     },
     {
@@ -1842,7 +1842,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "e985a05a9fb66440ee10a8c02940cd3be17ad0c46dfbd223f6a1c1d45f6985ec",
+      "sha256": "134bc9cb8403f15b996b727a3372deff60e07fadde0794c2d6c09322b562bc62",
       "type": "file"
     },
     {
@@ -7154,5 +7154,20 @@
     "previous_manifest_sha256": "906bbeae86a0fc5c6d88ccfa47e9a2234cc70cbaf505a82fede8c694200dcfcf",
     "scope": "Sanitize profile-reconcile, sibling-propagation, bulk-commit and Dispatcharr error diagnostics: scoped log diagnostics compose the credential-pattern, registered-value (four-character minimum) and URL-aware policies, with the URL rules extended to any scheme, bracketed IPv6 hosts, timeshift and extensionless Xtream Codes paths and the pattern rules to JSON, dict and API-key header forms masked whole up to the end of the line; bulk-job, compensation and journal-write failures log scrubbed exception chains and rows without raw tracebacks; Dispatcharr request and login failures log only the exception type; journal log lines name only the category, action and entity id and a failed journal write logs only the error type; foreign bulk group, operation, run and supervisor failures and numbering-recovery reasons return fixed messages while numbering-baseline refusals and missing-stream guidance keep their exact text and concurrentNumberChanges payload, a non-numeric server number rendering as unreadable; URL query vocabulary and known-credential path rewriting move into the credential_sentinel leaf module, plus 0092 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0092"
+  },
+  "apply_error_boundaries_update": {
+    "added_files": [],
+    "base_commit": "bd63b0959113668007f4a5aaf44aab26c2afb937",
+    "bead": "enhancedchannelmanager-jnw1v",
+    "changed_files": {
+      "backend/main.py": "5742fb3a7855897325fdbc7ac04a69b0639429bf3794e3c764e8ed74002800aa",
+      "backend/routers/backup.py": "28520d8d580f60050fe99518b3fa223cd38ac45d796699227324d17a23f4e70e",
+      "backend/routers/channels.py": "2ab36e273ec327d4e948387cd35d3df445e718e9eabe029a31a4c88a4e0b877e",
+      "backend/routers/m3u.py": "5cd5e1375e5e84244f5ea548a458f4ddf4291c3447819812acb32f4c2ab579ad",
+      "frontend/package.json": "e985a05a9fb66440ee10a8c02940cd3be17ad0c46dfbd223f6a1c1d45f6985ec"
+    },
+    "previous_manifest_sha256": "66646a620c4db4567fcaf834d8f9f31abd6f0a0177c6e8b37f61c031c768bf39",
+    "scope": "Keep normalization and M3U apply diagnostics out of API results and logs: single and bulk channel creation report a failed normalization with a fixed message; M3U group-settings profile-apply, account-list and post-refresh reconcile outcomes use fixed reasons; every logged exception in the M3U router and the normalization, single-create and single-channel update logs pass through the shared diagnostic scrubber; stream metadata no longer returns httpx error text that quotes Xtream Codes credentials, maps a Dispatcharr 4xx on its account read and answers 400 for a missing server URL; M3U account delete reports undeleted groups with the shared group-delete guidance; the refresh-trigger notification carries no exception text; the guided auto-sync toggle no longer raises on a non-4xx status error.",
+    "version": "0.18.2-0093"
   }
 }

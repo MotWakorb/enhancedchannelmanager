@@ -1143,8 +1143,8 @@ async def create_channel(request: CreateChannelRequest, _admin=RequireAdminIfEna
                     if channel_name != request.name:
                         logger.debug("[CHANNELS] Normalized channel name: '%s' -> '%s'", request.name, channel_name)
             except Exception as norm_err:
-                normalization_error = str(norm_err)
-                logger.warning("[CHANNELS] Failed to normalize channel name '%s': %s", request.name, norm_err)
+                normalization_error = "Normalization failed; the original channel name was used."
+                logger.warning("[CHANNELS] Failed to normalize channel name '%s': %s", request.name, redact_log_diagnostic(str(norm_err)))
                 # Continue with the original name, and disclose it below.
 
         data = {"name": channel_name}
@@ -1188,14 +1188,14 @@ async def create_channel(request: CreateChannelRequest, _admin=RequireAdminIfEna
         }], result, context=f"created channel {result.get('id')}")
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - router boundary; log the scrubbed chain
         # Surface actionable Dispatcharr 4xx (e.g. non-existent channel_group_id)
         # instead of masking it as a generic 500 (bd-1wq7z.22).
         mapped = upstream_http_exception(e)
         if mapped is not None:
-            logger.warning("[CHANNELS] Channel creation rejected by Dispatcharr: %s", e)
+            logger.warning("[CHANNELS] Channel creation rejected by Dispatcharr: %s", redact_log_diagnostic(str(e)))
             raise mapped
-        logger.exception("[CHANNELS] Channel creation failed: %s", e)
+        logger.error("[CHANNELS] Channel creation failed: %s", redact_exception(e))
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -4453,14 +4453,14 @@ async def _run_bulk_commit(
                                 if channel_name != op.name:
                                     logger.debug("[CHANNELS-BULK] Normalized channel name: '%s' -> '%s'", op.name, channel_name)
                         except Exception as norm_err:
-                            logger.warning("[CHANNELS-BULK] Failed to normalize channel name '%s': %s", op.name, norm_err)
+                            logger.warning("[CHANNELS-BULK] Failed to normalize channel name '%s': %s", op.name, redact_log_diagnostic(str(norm_err)))
                             # Continue with the original name, and disclose it
                             # once the channel exists.
                             pending_normalization_failure = {
                                 "tempId": op.tempId,
                                 "name": op.name,
                                 "nameApplied": op.name,
-                                "error": str(norm_err),
+                                "error": "Normalization failed; the original channel name was used.",
                             }
 
                     # Handle logo - if logoUrl provided but no logoId, resolve
@@ -5502,14 +5502,14 @@ async def update_channel(channel_id: int, data: dict, _admin=RequireAdminIfEnabl
         return journal_rows_for(rows, result, context=f"channel {channel_id}")
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - router boundary; log the scrubbed chain
         # A missing channel id (or bad group/logo/etc.) surfaces as an upstream
         # 4xx — map it to a clean 4xx instead of an opaque 500 (bd-lq38l.4).
         mapped = upstream_http_exception(e)
         if mapped is not None:
-            logger.warning("[CHANNELS] Update channel %s rejected by Dispatcharr: %s", channel_id, e)
+            logger.warning("[CHANNELS] Update channel %s rejected by Dispatcharr: %s", channel_id, redact_log_diagnostic(str(e)))
             raise mapped
-        logger.exception("[CHANNELS] Failed to update channel %s: %s", channel_id, e)
+        logger.error("[CHANNELS] Failed to update channel %s: %s", channel_id, redact_exception(e))
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

@@ -163,6 +163,52 @@ SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
 SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
 
+APPLY_ERROR_BOUNDARIES_FILES = (
+    "backend/routers/channels.py",
+    "backend/routers/m3u.py",
+)
+
+
+def _before_apply_error_boundaries(manifest):
+    key = "apply_error_boundaries_update"
+    update = manifest[key]
+    assert update["base_commit"] == "bd63b0959113668007f4a5aaf44aab26c2afb937"
+    assert update["bead"] == "enhancedchannelmanager-jnw1v"
+    assert update["version"] == "0.18.2-0093"
+    assert update["previous_manifest_sha256"] == (
+        "66646a620c4db4567fcaf834d8f9f31abd6f0a0177c6e8b37f61c031c768bf39"
+    )
+    assert update["added_files"] == []
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(APPLY_ERROR_BOUNDARIES_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_apply_error_boundaries_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_apply_error_boundaries(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert (
+        result["apply_error_boundaries_update"]
+        == manifest["apply_error_boundaries_update"]
+    )
+
+
 CREDENTIAL_ERROR_BOUNDARIES_FILES = (
     "backend/cloud_storage/upload_security.py",
     "backend/credential_sentinel.py",
@@ -178,6 +224,7 @@ CREDENTIAL_ERROR_BOUNDARIES_FILES = (
 
 def _before_credential_error_boundaries(manifest):
     key = "credential_error_boundaries_update"
+    manifest = _before_apply_error_boundaries(manifest)
     update = manifest[key]
     assert update["base_commit"] == "deb079b868ff71d6aa97556e84bdeddabd63a459"
     assert update["bead"] == "enhancedchannelmanager-ej4um"
