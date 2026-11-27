@@ -108,7 +108,7 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     manifest = verifier.load_manifest(
         ROOT / "docker/alpine-native/application-source.json"
     )
-    assert len(manifest["files"]) == 1100
+    assert len(manifest["files"]) == 1102
     assert (
         manifest["baseline_application_commit"]
         == "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531"
@@ -163,6 +163,67 @@ SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
 SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
 
+PATCH_NUMBER_BASELINES_FILES = (
+    "backend/routers/channels.py",
+    "frontend/src/App.bulkCreateStaging.test.tsx",
+    "frontend/src/App.tsx",
+    "frontend/src/components/ChannelsPane.tsx",
+    "frontend/src/hooks/useChangeHistory.test.ts",
+    "frontend/src/hooks/useChangeHistory.ts",
+    "frontend/src/services/api.test.ts",
+    "frontend/src/services/api.ts",
+    "frontend/src/utils/channelNumberConcurrency.ts",
+    "mcp-server/_endpoint_contracts.py",
+    "mcp-server/tests/test_onazy_destructive_guardrails.py",
+    "mcp-server/tools/_safety_policy.py",
+    "mcp-server/tools/channels.py",
+)
+PATCH_NUMBER_BASELINES_ADDED_FILES = (
+    "frontend/src/components/ChannelsPane.directNumberWrite.test.tsx",
+    "mcp-server/tests/test_update_channel_number_baseline.py",
+)
+
+
+def _before_patch_number_baselines(manifest):
+    key = "patch_number_baselines_update"
+    update = manifest[key]
+    assert update["base_commit"] == "af5a40011bfc73f2cfc29bbfb23ed13bda191269"
+    assert update["bead"] == "enhancedchannelmanager-dtv8p"
+    assert update["version"] == "0.18.2-0090"
+    assert update["previous_manifest_sha256"] == (
+        "1eeda3cad795dc28b73450c77489b8d979ac417203256b95a429d7225cdc3e8d"
+    )
+    assert set(update["added_files"]) == set(PATCH_NUMBER_BASELINES_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(PATCH_NUMBER_BASELINES_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_patch_number_baselines_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_patch_number_baselines(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["patch_number_baselines_update"] == manifest["patch_number_baselines_update"]
+
+
 SAVED_RESTORE_SNAPSHOT_FILES = (
     "backend/routers/backup.py",
     "backend/tasks/dbas_restore.py",
@@ -172,6 +233,7 @@ SAVED_RESTORE_SNAPSHOT_ADDED_FILES = ("backend/restore_snapshot_storage.py",)
 
 def _before_saved_restore_snapshot(manifest):
     key = "saved_restore_snapshot_update"
+    manifest = _before_patch_number_baselines(manifest)
     update = manifest[key]
     assert update["base_commit"] == "deda80c438b3cade69c4a03f20810c9a7f17a3a9"
     assert update["bead"] == "enhancedchannelmanager-0m06f.3.3"
