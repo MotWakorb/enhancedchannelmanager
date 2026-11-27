@@ -158,10 +158,14 @@ measurable RSS growth.
   headers and PAX-format bundles still accepted, extended-header chains, sparse
   entries, the counting reader itself, and the private tarfile hooks the guard
   relies on.
-- `backend/tests/dbas/test_yaml_budget_roundtrip.py`: a 25,000-channel,
-  3-streams-per-channel backup (over 1,000,000 composed nodes, so the original
-  single 1M budget would refuse it) built through the real producer and decoded
-  through `decode_artifact_to_plan`, creation-side refusal through the backup
+- `backend/tests/dbas/test_yaml_budget_roundtrip.py`: a 600-channel,
+  3-streams-per-channel backup built through the real producer and decoded
+  through `decode_artifact_to_plan`, with the exact per-channel node cost of
+  the producer's output (52 nodes) measured to prove the ceiling admits at
+  least 150,000 such channels and that a 25,000-channel catalog (over 1,000,000
+  composed nodes) exceeds the original single 1M budget but fits; the
+  producer refusing one node under a catalog's measured count and admitting it
+  at that count; creation-side refusal through the backup
   task, a credential backup whose dump aliases shared streams, and DBAS alias
   and node refusals failing the restore task before any destination call.
 - `backend/tests/integration/test_pipeline_yaml_editor.py` preserves the

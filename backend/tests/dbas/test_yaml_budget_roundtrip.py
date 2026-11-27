@@ -19,7 +19,13 @@ from routers.backup import (
 )
 from tests.dbas.test_restore_roundtrip import _mock_engine, _seed_journal_db
 from tests.tasks.test_dbas_restore_task import _make_task
-from yaml_safety import ALIAS_EXPANSION_BUDGET, BoundedSafeLoader, measure_bounded
+from yaml_safety import (
+    ALIAS_EXPANSION_BUDGET,
+    BACKUP_MAX_NODES,
+    BoundedSafeLoader,
+    measure_bounded,
+    measure_object,
+)
 
 STREAMS_PER_CHANNEL = 3
 
@@ -110,25 +116,169 @@ async def _build(tmp_path, channel_count: int):
         return await build_backup_artifact(dest_dir=tmp_path)
 
 
-@pytest.mark.asyncio
-async def test_large_channel_catalog_backup_round_trips(tmp_path):
-    channel_count = 25_000
-    artifact = await _build(tmp_path, channel_count)
+ROUND_TRIP_CHANNELS = 600
+BOUNDARY_CHANNELS = 150
+# A 3-stream catalog this size must fit under BACKUP_MAX_NODES. These records
+# cost 52 nodes per channel, about 192,000 channels at the ceiling.
+REQUIRED_CHANNEL_CAPACITY = 150_000
+# The single document budget the backup path had before BACKUP_MAX_NODES.
+ORIGINAL_SINGLE_BUDGET = 1_000_000
+# The catalog the original budget refused and the current one must admit.
+LARGE_CATALOG_CHANNELS = 25_000
 
+
+async def _build_recording_channels(tmp_path, channel_count: int):
+    """Build through the real producer, recording what it checks for channels.
+
+    The producer holds the channels category to ``BACKUP_MAX_NODES`` twice:
+    when it parses the YAML ``build_yaml_export`` returns, so it can redact it,
+    and when it verifies the redacted object it is about to write. Returns the
+    artifact and a dict with that YAML (``text``), the object parsed from it
+    (``parsed``) and the redacted object written (``written``).
+    """
+    real_export = backup_mod.build_yaml_export
+    real_load = backup_mod.safe_load_bounded
+    real_verify = backup_mod._verify_restorable_export
+    recorded = {}
+
+    async def recording_export(sections=None, **kwargs):
+        text = await real_export(sections, **kwargs)
+        if sections == {"channels"}:
+            recorded["text"] = text
+        return text
+
+    def recording_load(stream, **kwargs):
+        loaded = real_load(stream, **kwargs)
+        if stream is recorded.get("text"):
+            recorded["parsed"] = loaded
+        return loaded
+
+    def recording_verify(obj, subject, category=None, **kwargs):
+        if category == "channels":
+            recorded["written"] = obj
+        return real_verify(obj, subject, category, **kwargs)
+
+    with (
+        patch.object(backup_mod, "build_yaml_export", side_effect=recording_export),
+        patch.object(backup_mod, "safe_load_bounded", side_effect=recording_load),
+        patch.object(backup_mod, "_verify_restorable_export", side_effect=recording_verify),
+    ):
+        artifact = await _build(tmp_path, channel_count)
+    return artifact, recorded
+
+
+def _channels_of(document):
+    return document["dispatcharr"]["channels"]
+
+
+def _with_channels(document, channels):
+    return {**document, "dispatcharr": {**document["dispatcharr"], "channels": channels}}
+
+
+def _per_channel_cost(document, channel_count: int) -> tuple[int, int]:
+    """Exact (overhead, nodes per channel) of a channels document's composed size.
+
+    Measured on the producer's real output at three catalog sizes cut from the
+    same records, so the linear cost is checked rather than assumed.
+    """
+    channels = _channels_of(document)
+
+    def nodes(k):
+        return measure_object(_with_channels(document, channels[:k]), max_nodes=10**9)
+
+    half, quarter = channel_count // 2, channel_count // 4
+    per_channel, remainder = divmod(nodes(channel_count) - nodes(half), channel_count - half)
+    assert remainder == 0
+    overhead = nodes(channel_count) - channel_count * per_channel
+    assert overhead >= 0
+    assert nodes(quarter) == overhead + quarter * per_channel
+    return overhead, per_channel
+
+
+@pytest.mark.asyncio
+async def test_large_channel_catalog_fits_the_backup_ceiling_and_round_trips(tmp_path):
+    """A large catalog backs up and restores; the original budget refused it.
+
+    Building a 25,000-channel catalog (over a million nodes) takes minutes, so
+    this round-trips a modest catalog through the real producer and restore
+    decoder, then measures the exact per-channel node cost of the producer's
+    real output and derives what the ceiling admits.
+    """
+    from dbas import restore_artifact
+    import yaml_safety
+
+    # One constant governs both creation and restore.
+    assert backup_mod.BACKUP_MAX_NODES == restore_artifact.BACKUP_MAX_NODES
+    assert restore_artifact.BACKUP_MAX_NODES == yaml_safety.BACKUP_MAX_NODES
+
+    artifact, recorded = await _build_recording_channels(tmp_path, ROUND_TRIP_CHANNELS)
     with zipfile.ZipFile(artifact.zip_path) as zf:
-        composed = measure_bounded(
-            zf.read("categories/channels.yaml"), max_nodes=10**9
-        )
-        # Over the original single 1M budget, which refused this catalog.
-        assert composed > 1_000_000
         manifest = validate_artifact_manifest(zf)
         plan = decode_artifact_to_plan(zf, manifest=manifest)
 
     channels = plan.category(EntityType.CHANNEL).entities
-    assert len(channels) == channel_count
-    assert len(channels[-1]["streams"]) == STREAMS_PER_CHANNEL
-    assert channels[-1]["streams"][0]["name"].startswith("Stream ")
-    assert "url" not in channels[-1]["streams"][0]
+    assert len(channels) == ROUND_TRIP_CHANNELS
+    assert sorted(c["id"] for c in channels) == list(range(ROUND_TRIP_CHANNELS))
+    for channel in channels:
+        streams = channel["streams"]
+        assert [s["name"] for s in streams] == [
+            "Stream %d" % (channel["id"] * STREAMS_PER_CHANNEL + s)
+            for s in range(STREAMS_PER_CHANNEL)
+        ]
+        assert all("url" not in s for s in streams)
+
+    parsed, written = recorded["parsed"], recorded["written"]
+    assert len(_channels_of(parsed)) == ROUND_TRIP_CHANNELS
+    # Restore decoded exactly the object the producer verified and wrote.
+    assert _channels_of(written) == channels
+
+    # Creation checks both objects and restore checks the written one, so the
+    # smaller capacity is the one the ceiling must cover. measure_object counts
+    # what composing the object's dump counts (pinned in test_yaml_safety).
+    capacities = []
+    for document in (parsed, written):
+        overhead, per_channel = _per_channel_cost(document, ROUND_TRIP_CHANNELS)
+        capacities.append((BACKUP_MAX_NODES - overhead) // per_channel)
+    assert min(capacities) >= REQUIRED_CHANNEL_CAPACITY
+
+    # What restore composes for a 25,000-channel catalog: over the original
+    # budget, which refused it, and under the current ceiling.
+    overhead, per_channel = _per_channel_cost(written, ROUND_TRIP_CHANNELS)
+    large_catalog_nodes = overhead + LARGE_CATALOG_CHANNELS * per_channel
+    assert large_catalog_nodes > ORIGINAL_SINGLE_BUDGET
+    assert large_catalog_nodes <= BACKUP_MAX_NODES
+
+
+@pytest.mark.asyncio
+async def test_backup_ceiling_boundary_on_the_real_producer(tmp_path):
+    """The producer refuses one node under the catalog's count and admits it at it."""
+    probe_dir, refused_dir, admitted_dir = (tmp_path / d for d in ("p", "r", "a"))
+    for directory in (probe_dir, refused_dir, admitted_dir):
+        directory.mkdir()
+    artifact, recorded = await _build_recording_channels(probe_dir, BOUNDARY_CHANNELS)
+    with zipfile.ZipFile(artifact.zip_path) as zf:
+        written_nodes = measure_bounded(
+            zf.read("categories/channels.yaml"), max_nodes=10**9
+        )
+    # The producer holds the channels category to both documents' counts.
+    boundary = max(measure_bounded(recorded["text"], max_nodes=10**9), written_nodes)
+
+    with (
+        patch.object(backup_mod, "BACKUP_MAX_NODES", boundary - 1),
+        pytest.raises(BackupNotRestorableError) as error,
+    ):
+        await _build(refused_dir, BOUNDARY_CHANNELS)
+    assert error.value.category == "channels"
+    assert "exceeds the backup size limit" in str(error.value)
+    assert "more than %s YAML nodes" % format(boundary - 1, ",") in str(error.value)
+    assert not list(refused_dir.glob("*.zip"))
+
+    with patch.object(backup_mod, "BACKUP_MAX_NODES", boundary):
+        artifact = await _build(admitted_dir, BOUNDARY_CHANNELS)
+    with zipfile.ZipFile(artifact.zip_path) as zf:
+        assert measure_bounded(
+            zf.read("categories/channels.yaml"), max_nodes=boundary
+        ) == written_nodes
 
 
 @pytest.mark.asyncio
