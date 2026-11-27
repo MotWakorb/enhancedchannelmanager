@@ -5853,7 +5853,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 backgroundColor: 'var(--bg-tertiary)',
                 borderRadius: '6px',
                 marginBottom: '0.5rem',
-                border: '1px solid var(--border-color)'
+                border: '1px solid var(--border-primary)'
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                   <span className="material-icons" style={{
@@ -6138,7 +6138,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   </div>
                 </div>
 
-                <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid var(--border-primary)', borderRadius: '6px' }}>
                   {struckOutStreams.map((stream) => (
                     <label
                       key={stream.stream_id}
@@ -6148,7 +6148,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                         alignItems: 'flex-start',
                         gap: '0.5rem',
                         padding: '0.5rem 0.75rem',
-                        borderBottom: '1px solid var(--border-color)',
+                        borderBottom: '1px solid var(--border-primary)',
                         cursor: 'pointer',
                       }}
                     >
@@ -6271,7 +6271,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 </div>
               </div>
 
-              <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+              <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid var(--border-primary)', borderRadius: '6px' }}>
                 {staleStreams.map((stream) => (
                   <label
                     key={stream.stream_id}
@@ -6281,7 +6281,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       alignItems: 'flex-start',
                       gap: '0.5rem',
                       padding: '0.5rem 0.75rem',
-                      borderBottom: '1px solid var(--border-color)',
+                      borderBottom: '1px solid var(--border-primary)',
                       cursor: 'pointer',
                     }}
                   >
@@ -6377,7 +6377,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               <div style={{
                 maxHeight: '300px',
                 overflowY: 'auto',
-                border: '1px solid var(--border-color)',
+                border: '1px solid var(--border-primary)',
                 borderRadius: '6px',
                 backgroundColor: 'var(--bg-secondary)'
               }}>
@@ -6388,7 +6388,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       display: 'flex',
                       alignItems: 'flex-start',
                       padding: '0.75rem 1rem',
-                      borderBottom: '1px solid var(--border-color)',
+                      borderBottom: '1px solid var(--border-primary)',
                       cursor: 'pointer',
                       backgroundColor: selectedAutoCreatedGroups.has(group.id) ? 'var(--bg-tertiary)' : 'transparent'
                     }}
@@ -6755,7 +6755,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                                   fontSize: '12px',
                                   backgroundColor: 'var(--bg-secondary)',
                                   color: 'var(--text-secondary)',
-                                  border: '1px solid var(--border-color)',
+                                  border: '1px solid var(--border-primary)',
                                   borderRadius: '4px',
                                   cursor: 'pointer',
                                   display: 'flex',
@@ -6777,7 +6777,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                                   fontSize: '12px',
                                   backgroundColor: copiedUrl === stream.url ? 'rgba(46, 204, 113, 0.2)' : 'var(--bg-secondary)',
                                   color: copiedUrl === stream.url ? '#2ecc71' : 'var(--text-secondary)',
-                                  border: '1px solid var(--border-color)',
+                                  border: '1px solid var(--border-primary)',
                                   borderRadius: '4px',
                                   cursor: 'pointer',
                                   display: 'flex',

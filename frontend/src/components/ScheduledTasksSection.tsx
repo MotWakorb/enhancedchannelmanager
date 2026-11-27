@@ -107,7 +107,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
       data-section-label={task.task_name}
       style={{
       backgroundColor: 'var(--bg-secondary)',
-      border: '1px solid var(--border-color)',
+      border: '1px solid var(--border-primary)',
       borderRadius: '8px',
       marginBottom: '1rem',
       overflow: 'visible',
@@ -123,7 +123,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
         flexDirection: 'column',
         gap: '0.35rem',
         padding: '1rem',
-        borderBottom: showHistory ? '1px solid var(--border-color)' : 'none',
+        borderBottom: showHistory ? '1px solid var(--border-primary)' : 'none',
       }}>
         <div style={{
           display: 'flex',
@@ -205,7 +205,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
               padding: '0.5rem 0.75rem',
               backgroundColor: 'var(--bg-tertiary)',
               color: 'var(--text-primary)',
-              border: '1px solid var(--border-color)',
+              border: '1px solid var(--border-primary)',
               borderRadius: '4px',
               cursor: 'pointer',
               fontSize: 'var(--type-body-size)',
@@ -224,7 +224,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
               padding: '0.5rem 0.75rem',
               backgroundColor: 'var(--bg-tertiary)',
               color: 'var(--text-primary)',
-              border: '1px solid var(--border-color)',
+              border: '1px solid var(--border-primary)',
               borderRadius: '4px',
               cursor: 'pointer',
               fontSize: 'var(--type-body-size)',
@@ -386,7 +386,7 @@ function RunNowDialog({ task, onRun, onCancel }: {
                       type="checkbox"
                       checked={selectedGroups.includes(group.id)}
                       onChange={() => toggleGroup(group.id)}
-                      style={{ accentColor: 'var(--accent)' }}
+                      style={{ accentColor: 'var(--accent-primary)' }}
                     />
                     <span style={{ flex: 1, fontSize: 'var(--type-body-size)', color: 'var(--text-primary)' }}>{group.name}</span>
                     <span style={{ fontSize: 'var(--type-meta-size)', color: 'var(--text-secondary)' }}>{group.channel_count} ch</span>

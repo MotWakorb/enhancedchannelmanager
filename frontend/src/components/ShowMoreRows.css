@@ -14,7 +14,7 @@
   font-size: 0.8125rem;
   color: var(--text-secondary);
   background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-radius: 4px;
   cursor: pointer;
 }
