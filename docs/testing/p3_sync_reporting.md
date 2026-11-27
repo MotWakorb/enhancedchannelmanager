@@ -22,8 +22,18 @@ Beads `c7ll3`, `zcnl5`, `cruhd`; candidate based on protected `dev` `0bc12600`.
 - An existing channel's attachment is compared with the destination's ordered
   stream list. An identical list is not rewritten and the channel counts as
   identical. A different list or order is rewritten and counts as a channel
-  update, with a note naming the rewrite. A rejected rewrite is one stream
-  failure and records no reuse.
+  update, with a note naming the rewrite (or saying only the stream order
+  changed). Two archived streams that match one destination row attach it once,
+  so a converged channel is not rewritten every cycle. A rejected rewrite is one
+  stream failure and records no reuse; the channel is skipped as
+  `stream_attachment_rewrite_failed`, not as identical. A channel whose archived
+  streams could not all be resolved, and so was not written, is skipped as
+  `stream_attachment_incomplete`. Both reasons have typed frontend labels.
+- A preview does not match streams, so sync and restore previews carry a CHANNEL
+  caveat, worded for each, saying existing channels' stream lists are not
+  compared and a channel shown as identical may still be rewritten on apply.
+  The counts remain predictions, so CHANNEL stays `predicted=true`, as channel
+  groups do with their own caveat.
 - Preview totals include predicted categories only. Every `predicted=false`
   category and its existing caveat appears in the ordinary summary message, which
   the Sync Targets card already displays. Apply counts and real conflict counts
@@ -80,6 +90,15 @@ This does not prove all categories report zero updates on every converged input.
 
 No disposable Dispatcharr-B was running during verification; production services
 were neither repointed nor mutated. Live two-instance acceptance remains pending.
+
+### Pending live two-instance acceptance
+
+- [ ] Two cycles against a converged destination report zero stream updates and
+  no channel attachment rewrites.
+- [ ] A multi-stream channel whose order is not id-sorted round-trips with no
+  rewrite.
+- [ ] A drifted channel attachment is rewritten once and reported as a channel
+  update; the next cycle reports it identical.
 Historical records are not rewritten. The four P3 items remain candidates pending
 review, protected delivery and appropriate acceptance; existing security/image
 blockers are not waived by local tests or browser replay.

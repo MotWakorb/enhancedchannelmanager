@@ -77,6 +77,30 @@ Further, `PATCH /api/channels/channels/{id}/` declares the path `id` parameter a
 
 **Before proposing optimistic concurrency for a Dispatcharr write, re-run the measurement above against the version you are targeting.** This finding is pinned to 0.28.x. If a later release adds `ETag` or a `modified_at` field, this section is what should change, and the re-record procedure in [The automated sweep (ADR-014)](#the-automated-sweep-adr-014) already captures the schema you would check it in.
 
+## Channel streams ordering
+
+A channel's `streams` list is ordered, and the order is part of what a write sets.
+Read from Dispatcharr's public source at tag `v0.34.1` (commit
+`7448c4ad4e39256c3a810db12fc674ee52147617`) and on `main`, 2026-11-27:
+
+- `apps/channels/models.py`: `Channel.streams` is a `ManyToManyField(Stream,
+  through="ChannelStream")`. `ChannelStream` has `order =
+  models.PositiveIntegerField(default=0)`, `Meta.ordering = ["order"]` and a
+  `UniqueConstraint` on `("channel", "stream")`, so a stream appears on a channel
+  at most once.
+- `apps/channels/serializers.py`: reads build `streams` from
+  `obj.channelstream_set.all()`, which follows that ordering. Writes assign
+  `order` from each id's position in the submitted list (`enumerate`) on create
+  and on update; an update without `streams` leaves the order alone.
+
+Not verified: the channel viewset's prefetch, which the serializer comments say
+also orders by `order`. ECM already depends on this ordering:
+`backend/routers/channels.py::reorder_channel_streams` and the MCP
+`reorder_streams` tool (`mcp-server/tools/channels.py`) set priority purely by
+list position. The DBAS channel importer compares the ordered list before
+rewriting a channel's attachment. A live round-trip check is listed under
+pending acceptance in `docs/testing/p3_sync_reporting.md`.
+
 ## Core Settings (`/api/core/settings/`)
 
 > Added 2026-08-03 alongside the schema correction above — this contract was previously undocumented and its absence was the root cause of bead `q6xjl` (a 404 on every settings-restore key).
