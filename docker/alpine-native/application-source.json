@@ -717,7 +717,7 @@
     {
       "executable": false,
       "path": "backend/cloud_storage/upload_security.py",
-      "sha256": "21f1b23e38e3ca817f6991a1d5f16a105767274cb6d5f6ab6283b65f0e0bfef0",
+      "sha256": "e40fb9ff8c775b01490fe455a9a1c7e47f7ec20a9fb1adc31fd575dc4b7f82b7",
       "type": "file"
     },
     {
@@ -747,7 +747,7 @@
     {
       "executable": false,
       "path": "backend/credential_sentinel.py",
-      "sha256": "f8d21dc92be8ecc85045eb36ef82af92eafbcb848436e3424ececae6640d211b",
+      "sha256": "32ee1e485d5e0bc20ce7e48a5c005e817c798255a5f2b4461e3ee294ddcb6220",
       "type": "file"
     },
     {
@@ -918,7 +918,7 @@
     {
       "executable": false,
       "path": "backend/dispatcharr_client.py",
-      "sha256": "d44d7462b445670b5d88bc56c51a82b4cb10100ed4f72dc7ca9c4a8ad6d223da",
+      "sha256": "4417f6192b3afdf4cc091f11b1175973bc7b10c1fb0cc72b93af783338cecac5",
       "type": "file"
     },
     {
@@ -984,7 +984,7 @@
     {
       "executable": false,
       "path": "backend/log_utils.py",
-      "sha256": "4653482d92d20cfe8c27af17b709f29f99cd9447e3ea2845f3d940be2c68f07a",
+      "sha256": "532eb38ad1fc7202f0eb55410c4689407df4ae9bae7b72624a6379fbdcdeeeda",
       "type": "file"
     },
     {
@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "0f7a2367324f88d1cbc536e397a2f48b6b411d14312a811a18f441bd0472bff0",
+      "sha256": "5742fb3a7855897325fdbc7ac04a69b0639429bf3794e3c764e8ed74002800aa",
       "type": "file"
     },
     {
@@ -1044,7 +1044,7 @@
     {
       "executable": false,
       "path": "backend/obfuscate.py",
-      "sha256": "61209ddec5b8fc079e634cc2e8b89f498705fe91d4ef8da359bdf06241804d71",
+      "sha256": "9b5e61ee468ceb2a44af30dff633a5a46d91447ea60634e270246f36b69aa398",
       "type": "file"
     },
     {
@@ -1134,7 +1134,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "836eb1ec3d4f8427b71afef93e3db14923a689983ba6b8c789a232a7072bf34e",
+      "sha256": "28520d8d580f60050fe99518b3fa223cd38ac45d796699227324d17a23f4e70e",
       "type": "file"
     },
     {
@@ -1158,7 +1158,7 @@
     {
       "executable": false,
       "path": "backend/routers/channels.py",
-      "sha256": "502c89b9ac7b5c8a141d7097ddd544054ef32317fd18a1d71cbb00a48c6330bf",
+      "sha256": "2ab36e273ec327d4e948387cd35d3df445e718e9eabe029a31a4c88a4e0b877e",
       "type": "file"
     },
     {
@@ -1224,7 +1224,7 @@
     {
       "executable": false,
       "path": "backend/routers/m3u.py",
-      "sha256": "60252c1edcb0458d8a7a005ee4b0d6612bf782c079d5403a257a74c074d56d33",
+      "sha256": "5cd5e1375e5e84244f5ea548a458f4ddf4291c3447819812acb32f4c2ab579ad",
       "type": "file"
     },
     {
@@ -1518,7 +1518,7 @@
     {
       "executable": false,
       "path": "backend/services/profile_reconcile.py",
-      "sha256": "48cbf9c1b612c79fc9942b30200548029fc5a28e99559af88d813cc354888376",
+      "sha256": "9dd9b1d3ac3690daff49882582263230ac884a57cd2513ea3e7e4aa38d11dffa",
       "type": "file"
     },
     {
@@ -1842,7 +1842,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "b69f7306a26d3d369b515743fb2a4be98bfac0c77cb09ae39b8e6b43da9cffdc",
+      "sha256": "e985a05a9fb66440ee10a8c02940cd3be17ad0c46dfbd223f6a1c1d45f6985ec",
       "type": "file"
     },
     {
@@ -7132,5 +7132,26 @@
     "previous_manifest_sha256": "e553c70116f59779c3276cc1cfe49dbee9e590f2743618c4f29fab9d0105ea16",
     "scope": "Bound YAML import, restore and backup structure: one shared safe YAML loader (backend/yaml_safety.py) refuses oversized or amplifying structure before any object is built, with an alias expansion cap, a nesting cap and per-path node ceilings for DBAS backups, legacy YAML exports and the tag, normalization, dummy EPG and rule imports; a backup or YAML export that ECM would itself refuse to restore fails with the category and limit named instead of being written; legacy YAML uploads are read in chunks under a size cap; debug-bundle analysis reads the archive as a counted stream capping upload, member count, inflated bytes, tar extended headers and diagnostic members and refusing sparse entries; wrong-shape tag, normalization, dummy EPG and rule imports return 400; backup preflight walks the tree, plus 0091 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0091"
+  },
+  "credential_error_boundaries_update": {
+    "added_files": [],
+    "base_commit": "deb079b868ff71d6aa97556e84bdeddabd63a459",
+    "bead": "enhancedchannelmanager-ej4um",
+    "changed_files": {
+      "backend/cloud_storage/upload_security.py": "21f1b23e38e3ca817f6991a1d5f16a105767274cb6d5f6ab6283b65f0e0bfef0",
+      "backend/credential_sentinel.py": "f8d21dc92be8ecc85045eb36ef82af92eafbcb848436e3424ececae6640d211b",
+      "backend/dispatcharr_client.py": "d44d7462b445670b5d88bc56c51a82b4cb10100ed4f72dc7ca9c4a8ad6d223da",
+      "backend/log_utils.py": "4653482d92d20cfe8c27af17b709f29f99cd9447e3ea2845f3d940be2c68f07a",
+      "backend/main.py": "0f7a2367324f88d1cbc536e397a2f48b6b411d14312a811a18f441bd0472bff0",
+      "backend/obfuscate.py": "61209ddec5b8fc079e634cc2e8b89f498705fe91d4ef8da359bdf06241804d71",
+      "backend/routers/backup.py": "836eb1ec3d4f8427b71afef93e3db14923a689983ba6b8c789a232a7072bf34e",
+      "backend/routers/channels.py": "502c89b9ac7b5c8a141d7097ddd544054ef32317fd18a1d71cbb00a48c6330bf",
+      "backend/routers/m3u.py": "60252c1edcb0458d8a7a005ee4b0d6612bf782c079d5403a257a74c074d56d33",
+      "backend/services/profile_reconcile.py": "48cbf9c1b612c79fc9942b30200548029fc5a28e99559af88d813cc354888376",
+      "frontend/package.json": "b69f7306a26d3d369b515743fb2a4be98bfac0c77cb09ae39b8e6b43da9cffdc"
+    },
+    "previous_manifest_sha256": "906bbeae86a0fc5c6d88ccfa47e9a2234cc70cbaf505a82fede8c694200dcfcf",
+    "scope": "Sanitize profile-reconcile, sibling-propagation, bulk-commit and Dispatcharr error diagnostics: scoped log diagnostics compose the credential-pattern, registered-value (four-character minimum) and URL-aware policies, with the URL rules extended to any scheme, bracketed IPv6 hosts, timeshift and extensionless Xtream Codes paths and the pattern rules to JSON, dict and API-key header forms masked whole up to the end of the line; bulk-job, compensation and journal-write failures log scrubbed exception chains and rows without raw tracebacks; Dispatcharr request and login failures log only the exception type; foreign bulk group, operation, run and supervisor failures and numbering-recovery reasons return fixed messages while numbering-baseline refusals and missing-stream guidance keep their exact text and concurrentNumberChanges payload, a non-numeric server number rendering as unreadable; URL query vocabulary and known-credential path rewriting move into the credential_sentinel leaf module, plus 0092 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "version": "0.18.2-0092"
   }
 }
