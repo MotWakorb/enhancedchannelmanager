@@ -6,6 +6,7 @@ HTML and plain text templates for M3U change digest emails.
 from datetime import datetime
 from typing import List, Dict
 from collections import defaultdict
+from html import escape as _escape_html
 
 from models import M3UChangeLog
 
@@ -244,30 +245,34 @@ class M3UDigestTemplate:
             for account_id, type_changes in by_account.items():
                 html += f"""
             <div class="account-section">
-                <div class="account-header">M3U Account #{account_id}</div>
+                <div class="account-header">M3U Account #{_escape_html(str(account_id))}</div>
 """
                 for change_type, change_list in type_changes.items():
-                    label = self.LABELS.get(change_type, change_type)
+                    # Group and stream names come from M3U providers; every
+                    # interpolated value is escaped (quote=True) so it renders as text.
+                    label = _escape_html(self.LABELS.get(change_type, change_type))
                     html += f"""
                 <div class="change-group">
-                    <span class="change-type {change_type}">{label}</span>
+                    <span class="change-type {_escape_html(change_type)}">{label}</span>
                     <ul class="change-list">
 """
                     for change in change_list[:20]:  # Limit to 20 items per type
+                        count = _escape_html(str(change.count))
                         if change.group_name:
+                            group_name = _escape_html(change.group_name)
                             if change.change_type in ("group_added", "group_removed"):
-                                html += f'<li><strong>{change.group_name}</strong> <span class="stream-count">({change.count} streams)</span></li>\n'
+                                html += f'<li><strong>{group_name}</strong> <span class="stream-count">({count} streams)</span></li>\n'
                             else:
                                 stream_names = change.get_stream_names()
                                 if stream_names:
-                                    names_preview = ", ".join(stream_names[:3])
+                                    names_preview = ", ".join(_escape_html(str(n)) for n in stream_names[:3])
                                     if len(stream_names) > 3:
                                         names_preview += f" and {len(stream_names) - 3} more"
-                                    html += f'<li><strong>{change.group_name}</strong>: {change.count} streams <span class="stream-count">({names_preview})</span></li>\n'
+                                    html += f'<li><strong>{group_name}</strong>: {count} streams <span class="stream-count">({names_preview})</span></li>\n'
                                 else:
-                                    html += f'<li><strong>{change.group_name}</strong>: {change.count} streams</li>\n'
+                                    html += f'<li><strong>{group_name}</strong>: {count} streams</li>\n'
                         else:
-                            html += f'<li>{change.count} items</li>\n'
+                            html += f'<li>{count} items</li>\n'
 
                     if len(change_list) > 20:
                         html += f'<li><em>... and {len(change_list) - 20} more</em></li>\n'
