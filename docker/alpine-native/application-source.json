@@ -105,7 +105,7 @@
     {
       "executable": false,
       "path": "backend/CLAUDE.md",
-      "sha256": "38c308d788fd8928266a7050014440217aff501543e435bd56804d631eb0202c",
+      "sha256": "49cf4bbe5966837a2187bd88295a27ffb81506d56fa0c6103fa68f0246d8399e",
       "type": "file"
     },
     {
@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "d3da996c83e7104ca76007ca764ff674e3939f702fabcaaf749e2d4e608dd80b",
+      "sha256": "536179c524461fa0bb625167f9e8838cdd71cf2b1b2f4ef2d2bb8ceb1a386b1e",
       "type": "file"
     },
     {
@@ -1134,7 +1134,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "39cd56d0f720fb0e9028dbd0f7aa512b94f81bb38ee6d06db3995553cf0684f1",
+      "sha256": "f5cbed107b21b459dafc87cfcb3ad694ab46ffd2a99a3df32c49b0e10b70bf69",
       "type": "file"
     },
     {
@@ -1842,7 +1842,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "1dd8dbd6153f60a17f81c140e540b887e5bbbbd6bf6785c7ce24457d43c54995",
+      "sha256": "f3598cdf8c962bab65e247dbbc5b33245e6100c39299fa046ca62d6d1f938eb1",
       "type": "file"
     },
     {
@@ -7191,5 +7191,19 @@
     "previous_manifest_sha256": "4e9b0d7e3bd02f82c9e8236f05dcbf7872fdc33a5cc9efdf755a7eb9c15f5911",
     "scope": "Make sync and restore reports describe their actual mode and work: gate-aborted sync applies record aborted and pre-flight refusals carry a structured preflight_refused flag mapped to SYNC_PREFLIGHT_REFUSED and RESTORE_PREFLIGHT_REFUSED; matched streams count as reuse; an existing channel's ordered, de-duplicated stream list is compared before any rewrite, a rewrite counts as a channel update, and rejected or unresolved attachments get their own skip reasons with frontend labels; sync preview totals and category counts cover predicted categories only and name every unpredicted category and its caveat, with sync-specific stream and channel caveats; version touchpoints.",
     "version": "0.18.2-0094"
+  },
+  "gate_e2e_safety_update": {
+    "added_files": [],
+    "base_commit": "fb4d471d738526ed2f5e41407606aa1fa74f92dd",
+    "bead": "enhancedchannelmanager-j0j6w",
+    "changed_files": {
+      "backend/CLAUDE.md": "38c308d788fd8928266a7050014440217aff501543e435bd56804d631eb0202c",
+      "backend/main.py": "d3da996c83e7104ca76007ca764ff674e3939f702fabcaaf749e2d4e608dd80b",
+      "backend/routers/backup.py": "39cd56d0f720fb0e9028dbd0f7aa512b94f81bb38ee6d06db3995553cf0684f1",
+      "frontend/package.json": "1dd8dbd6153f60a17f81c140e540b887e5bbbbd6bf6785c7ce24457d43c54995"
+    },
+    "previous_manifest_sha256": "21e59652be931abd68c396a7d7ebfc5867d4867dfc7d48475192f2da8f11e5b9",
+    "scope": "Keep backend-gate subsets and the backend e2e suite off the live ECM: the gate runner refuses empty, whole-tree, tests/e2e, @file and --pyargs selections in arguments and PYTEST_ADDOPTS before pytest starts, a subset always passes --ignore=tests/e2e and runs a named tests/e2e path only with --allow-live-e2e, and the e2e suite skips unless ECM_E2E_LIVE=1; backend/CLAUDE.md documents the refusals; version touchpoints.",
+    "version": "0.18.2-0095"
   }
 }
