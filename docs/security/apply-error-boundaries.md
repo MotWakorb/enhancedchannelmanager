@@ -2,39 +2,76 @@
 
 Beads: `enhancedchannelmanager-jnw1v`, `enhancedchannelmanager-oaoel`.
 
-The normalization failure sources in single and bulk channel creation now return
-the stable message “Normalization failed; the original channel name was used.”
-The create still reports its actual landed outcome, raw name used and explicit
-normalization failure indicator. A rejected create is not listed as successfully
-created with an unnormalized name. No global response/status handler changed.
+This builds on the diagnostic scrubber described in
+[credential-error-boundaries.md](credential-error-boundaries.md):
+`log_utils.redact_log_diagnostic` for a stringified exception and
+`log_utils.redact_exception` for a full exception chain. A handler that used
+`logger.exception` now passes `redact_exception(e)` as an ordinary argument to
+`logger.error`, because raw `exc_info` would append the unscrubbed traceback.
 
-M3U group-settings apply catches return stable retry instructions with the same
-status/group identity. Account-list propagation failures no longer interpolate
-exception text into successful-save warnings or no-write HTTP 503 detail. Existing
-partial sibling-clear journals, primary-preservation rules, per-group continuation
-and safe service-produced degraded/partial outcome categories remain intact.
-The post-refresh note also uses stable prose instead of the caught exception.
+## Normalization apply
 
-Changed router diagnostic catches use the existing `redact_secrets` policy on
-stringified exceptions, followed by the existing log-injection sanitation. Their
-internal host/diagnostic detail remains server-side, not in JSON responses.
-Tests in `test_apply_error_safety.py` cross in-process HTTP serialization and bulk
-terminal polling with distinct internal-host/API-key sentinels; existing disclosure,
-reconcile hooks/service and accounting suites preserve outcome behavior.
+The normalization failure sources in single and bulk channel creation return
+the stable message "Normalization failed; the original channel name was used."
+The create still reports its actual landed outcome, the raw name used and the
+explicit normalization failure indicator. A rejected create is not listed as
+successfully created with an unnormalized name. The MCP `create_channel` and
+`bulk_commit_channels` tools print that message where they used to print the
+engine's exception text. Single create and single-channel PATCH failure logs
+(both the mapped upstream rejection and the 500 path) are scrubbed.
 
-## Scope limits and follow-up
+## M3U router
 
-This is not universal endpoint/log safety. Independent review confirmed two
-**pre-existing, different sources**, tracked separately:
+Profile-apply summary entries (`ecm_profile_apply[].error`) carry fixed
+lower-case reasons that end in the recovery step, because the UI renders them
+as "Saved, but <reason>". The setup read, the per-group reconcile and the outer
+reconcile each have their own reason, with the same status and group identity
+as before. Account-list failures no longer interpolate exception text into the
+propagation warning or the clear's 503 detail. Existing partial sibling-clear
+journals, primary-preservation rules, per-group continuation and service-produced
+degraded/partial categories remain intact. The post-refresh note also uses fixed
+prose.
 
-- `enhancedchannelmanager-5e3r3`: unchanged reconcile-service/sibling catches can
-  still expose credentials to console/ring logs; persistent-log scrubbing is not
-  equivalent to sanitizing those handlers.
-- `enhancedchannelmanager-ej4um`: generic upstream bulk-operation/supervisor
-  failures still return raw exception text, distinct from the normalization
-  exception now removed. Do not rewrite truthful partial accounting to hide it.
+Other M3U changes:
 
-CodeQL alerts 1877/1812 were open on default-branch `main` at the assessment.
-PR-scoped code/tests do not establish closure there. Verify alert state after
-approved merge and analysis of the intended branch; do not dismiss findings to
-manufacture closure. No live Dispatcharr mutation or browser rendering is claimed.
+- Every logged exception in `routers/m3u.py` is scrubbed: refresh polling,
+  change capture, watermark, placeholder rebind, digest, account CRUD (mapped
+  and unmapped), profiles, enforced-global, group settings and the guided
+  auto-sync toggle.
+- Stream metadata: the fetched M3U URL can carry Xtream Codes credentials,
+  and httpx error text quotes the URL. The 502 detail now names only the
+  provider's HTTP status, or says the provider could not be reached. Account
+  read failures in that route now answer the generic 500 instead of a
+  misleading "Failed to fetch M3U file" 502, and the "no server URL" 400 is no
+  longer swallowed into a 500.
+- Profile get/update/delete and upload answered `detail=str(e)` on a 500. The
+  app-wide 500 handler already replaced that text on the wire; the source now
+  states "Internal server error" directly.
+- Account delete: `failed_groups[].error` (response and journal) is a fixed
+  message instead of the upstream text.
+- A failed refresh trigger's notification message and metadata no longer
+  carry the exception text.
+- The guided auto-sync toggle no longer raises `None` (a TypeError) when an
+  upstream status error is not a 4xx; it falls through to the logged 500.
+
+## Scope limits
+
+Mapped upstream 4xx responses (`upstream_http_exception`) still pass the
+upstream validation detail through, by design. Only their log line is scrubbed
+here. Other raw-exception log sites in `routers/channels.py` outside
+normalization, single create and single PATCH are unchanged.
+
+## Verification
+
+`backend/tests/security/test_apply_error_boundaries.py` drives each route or
+background helper with a registered synthetic credential in the exception and
+its cause, then checks the response, notification or summary and the real
+console, ring and persistent handlers. It reuses the fixtures of
+`test_credential_error_boundaries.py`. `backend/tests/routers/test_apply_error_safety.py`
+keeps the original response-boundary cases. The tests were run red against the
+merged tree before the fix; the cases that tree already passed were proved by
+reintroducing the raw `e` in the log call and the raw text in the response.
+
+CodeQL alerts 1877 and 1812 close only after analysis of the merged default
+branch. This is not a browser rendering, a live Dispatcharr test or a
+deployment claim.
