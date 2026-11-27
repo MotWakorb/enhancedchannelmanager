@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -25,6 +26,11 @@ BACKEND_FLAGS = [
     "--ignore=tests/e2e", "--ignore=tests/performance",
     "-m", "not slow", "--tb=short", "--no-header", "-p", "no:warnings",
 ]
+# tests/e2e mutates whatever ECM answers on localhost:6100. pytest reads an
+# empty argument as its working directory, and --ignore does not apply to
+# paths named on the command line, so selections are checked before pytest.
+E2E_IGNORE = "--ignore=tests/e2e"
+LIVE_E2E_FLAG = "--allow-live-e2e"
 _PIN_RE = re.compile(r"([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)==([^\s;*]+)")
 _NAME_RE = re.compile(r"[-_.]+")
 
@@ -88,6 +94,47 @@ def verify_pins(requirements: Path) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def check_selection(backend: Path, tokens: list[str], *, subset: bool,
+                    allow_live_e2e: bool = False, source: str = "argument") -> None:
+    """Refuse pytest arguments that could select the live tests/e2e suite.
+
+    Every token that does not start with '-' is treated as a possible path,
+    including option values, so 'tests' after -k is refused: write -k=tests.
+    A subset may name files or directories, but not a directory that contains
+    tests/e2e, and must name at least one existing path; otherwise pytest falls
+    back to testpaths, the whole tree.
+    """
+    e2e = (backend / "tests/e2e").resolve()
+    named = 0
+    for token in tokens:
+        if not token.strip():
+            raise ValueError(f"Refusing an empty pytest {source}: pytest reads it as the "
+                             "whole backend tree, including the live tests/e2e suite")
+        if token.startswith("@"):
+            raise ValueError(f"Refusing pytest argument file {token!r} ({source}): "
+                             "its contents would bypass the selection checks")
+        if token == "--pyargs" or token.startswith("--pyargs="):
+            raise ValueError(f"Refusing --pyargs ({source}): package names bypass the selection checks")
+        if token == LIVE_E2E_FLAG:
+            raise ValueError(f"{LIVE_E2E_FLAG} is only accepted directly in --subset arguments")
+        if token.startswith("-"):
+            continue
+        path = (backend / token.split("::", 1)[0]).resolve()
+        if path == e2e or e2e in path.parents:
+            if not allow_live_e2e:
+                raise ValueError(f"Refusing {token!r} ({source}): tests/e2e runs against the live "
+                                 f"ECM on localhost:6100; pass --subset {LIVE_E2E_FLAG} only "
+                                 "when that instance may be mutated")
+        elif path in e2e.parents and subset:
+            raise ValueError(f"Refusing {token!r} ({source}): it names the whole test tree, which "
+                             "is not a subset; name test files or a directory below tests/")
+        if path.exists():
+            named += 1
+    if subset and source == "argument" and not named:
+        raise ValueError("Refusing --subset with no explicit test path: pytest would fall back to "
+                         "testpaths, the whole tree")
+
+
 def run_command(argv: list[str], cwd: Path, commands: list[dict]) -> None:
     """One foreground invocation; keep diagnostics and bound heartbeat waits."""
     print(f"RUN {cwd}: {json.dumps(argv)}", flush=True)
@@ -130,11 +177,13 @@ def main(args: list[str]) -> int:
     deps_only = args == ["--check-deps"]
     subset = bool(args and args[0] == "--subset")
     skip = os.environ.get("SKIP_E2E", "0")
+    allow_live_e2e = subset and LIVE_E2E_FLAG in args[1:]
+    selection = [arg for arg in args[1:] if arg != LIVE_E2E_FLAG] if subset else args
     scope = "quality-without-e2e" if quality and skip == "1" else "quality" if quality else "backend"
     if not quality and args:
         scope = "dependencies" if deps_only else "backend-subset" if subset else "backend-custom"
     data = {"run_id": directory.name, "receipt": str(receipt), "tree": str(ROOT),
-            "interpreter": python, "scope": scope, "arguments": args,
+            "interpreter": python, "scope": scope, "arguments": args, "allow_live_e2e": allow_live_e2e,
             "started_at": datetime.now(timezone.utc).isoformat(), "commands": []}
     print("ECM_GATE_START " + json.dumps(data, sort_keys=True), flush=True)
     code = 0
@@ -145,6 +194,10 @@ def main(args: list[str]) -> int:
             raise ValueError("SKIP_E2E must be 0 or 1")
         if scope in ("backend", "quality", "quality-without-e2e") and os.environ.get("PYTEST_ADDOPTS"):
             raise ValueError("Unset PYTEST_ADDOPTS for the canonical gate; it can override selection/coverage")
+        if not quality and not deps_only and args:
+            check_selection(ROOT / "backend", selection, subset=subset, allow_live_e2e=allow_live_e2e)
+            check_selection(ROOT / "backend", shlex.split(os.environ.get("PYTEST_ADDOPTS", "")),
+                            subset=subset, source="PYTEST_ADDOPTS")
         data["requirements_sha256"] = verify_pins(ROOT / "backend/requirements.txt")
         if not deps_only:
             run_command([python, "-c", "import pytest"], ROOT, data["commands"])
@@ -157,8 +210,15 @@ def main(args: list[str]) -> int:
             extra = [] if quality else args
             if subset:
                 print("SUBSET: NOT THE GATE; --no-cov disables whole-tree --cov-fail-under", flush=True)
-                flags = ["--no-cov", "--tb=short", "--no-header", "-p", "no:warnings"]
-                extra = args[1:]
+                # The ignore stays even with the opt-in: it still lets an explicitly
+                # named tests/e2e path run, and nothing else under tests/e2e.
+                flags = ["--no-cov", E2E_IGNORE, "--tb=short", "--no-header", "-p", "no:warnings"]
+                extra = selection
+                if allow_live_e2e:
+                    print("!" * 72 + "\nLIVE E2E: --allow-live-e2e lets this run reach the ECM on "
+                          "localhost:6100 and MUTATE it (notifications, cache, pipeline rules).\n"
+                          "The e2e suite still skips unless ECM_E2E_LIVE=1 is also set.\n" + "!" * 72,
+                          file=sys.stderr, flush=True)
             elif not quality and args:
                 print("CUSTOM: NOT THE UNMODIFIED BACKEND GATE", flush=True)
             if not subset:

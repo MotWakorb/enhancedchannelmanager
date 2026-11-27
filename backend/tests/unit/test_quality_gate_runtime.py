@@ -322,3 +322,111 @@ def test_interruption_has_no_receipt_and_cannot_reuse_previous_success(gate_tree
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGKILL)
         process.wait(timeout=5)
+
+
+# --subset and custom selections must never reach the live tests/e2e suite.
+# pytest reads an empty argument as its working directory (the whole backend
+# tree), and --ignore does not apply to paths named on the command line, so the
+# runner has to refuse those selections before pytest starts.
+@pytest.fixture
+def selection_tree(gate_tree):
+    root, _env = gate_tree
+    for name in ("backend/tests/e2e/test_live.py", "backend/tests/unit/test_unit.py"):
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).touch()
+    return gate_tree
+
+
+def _refused(result, gate_tree, fragment):
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert not calls(gate_tree), "pytest must not start for a refused selection"
+    assert fragment in result.stderr, result.stderr
+    assert receipt(result)["status"] == "failed"
+
+
+@pytest.mark.parametrize("selection, fragment", [
+    ([""], "empty"),
+    (["   "], "empty"),
+    (["tests/test_ok.py", ""], "empty"),
+    (["."], "whole"),
+    (["tests"], "whole"),
+    (["tests/"], "whole"),
+    (["./tests/unit/.."], "whole"),
+    (["..", ], "whole"),
+    (["tests/e2e"], "tests/e2e"),
+    (["tests/e2e/"], "tests/e2e"),
+    (["tests/e2e/test_live.py"], "tests/e2e"),
+    (["tests/e2e/test_live.py::test_case"], "tests/e2e"),
+    (["tests/test_ok.py", "tests/e2e/test_live.py"], "tests/e2e"),
+    (["-k", "anything"], "no explicit test path"),
+    (["@arguments.txt"], "argument file"),
+    (["--pyargs", "tests.e2e"], "--pyargs"),
+])
+def test_subset_refuses_selections_that_reach_live_e2e(selection_tree, selection, fragment):
+    result = invoke(selection_tree, "backend-gate.sh", args=("--subset", *selection))
+    _refused(result, selection_tree, fragment)
+
+
+def test_subset_refuses_the_backend_directory_by_absolute_path(selection_tree):
+    backend = str(selection_tree[0] / "backend")
+    result = invoke(selection_tree, "backend-gate.sh", args=("--subset", backend))
+    _refused(result, selection_tree, "whole")
+
+
+def test_subset_refuses_e2e_paths_smuggled_through_pytest_addopts(selection_tree):
+    result = invoke(selection_tree, "backend-gate.sh", args=("--subset", "tests/test_ok.py"),
+                    PYTEST_ADDOPTS="tests/e2e/test_live.py")
+    _refused(result, selection_tree, "PYTEST_ADDOPTS")
+
+
+@pytest.mark.parametrize("selection", [["tests/test_ok.py"], ["tests/unit"],
+                                       ["tests/test_ok.py", "-k", "some_case"]])
+def test_subset_always_ignores_e2e(selection_tree, selection):
+    result = invoke(selection_tree, "backend-gate.sh", args=("--subset", *selection))
+    assert result.returncode == 0, result.stdout + result.stderr
+    [call] = calls(selection_tree)
+    assert "--ignore=tests/e2e" in call[2]
+    assert "--no-cov" in call[2]
+    assert call[2][-len(selection):] == selection
+    assert receipt(result)["allow_live_e2e"] is False
+
+
+def test_live_e2e_opt_in_runs_the_named_path_with_a_loud_warning(selection_tree):
+    result = invoke(selection_tree, "backend-gate.sh",
+                    args=("--subset", "--allow-live-e2e", "tests/e2e/test_live.py"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    [call] = calls(selection_tree)
+    assert "--allow-live-e2e" not in call[2]
+    assert call[2][-1] == "tests/e2e/test_live.py"
+    assert "--ignore=tests/e2e" in call[2]
+    assert "LIVE E2E" in result.stderr and "localhost:6100" in result.stderr
+    assert "ECM_E2E_LIVE=1" in result.stderr
+    data = receipt(result)
+    assert data["allow_live_e2e"] is True and data["scope"] == "backend-subset"
+
+
+@pytest.mark.parametrize("selection, fragment", [([""], "empty"), (["tests"], "whole"),
+                                                 (["-k", "x"], "no explicit test path")])
+def test_live_e2e_opt_in_still_refuses_empty_and_whole_tree(selection_tree, selection, fragment):
+    result = invoke(selection_tree, "backend-gate.sh",
+                    args=("--subset", "--allow-live-e2e", *selection))
+    _refused(result, selection_tree, fragment)
+
+
+@pytest.mark.parametrize("selection, fragment", [
+    (["tests/e2e/test_live.py"], "tests/e2e"),
+    (["tests/e2e"], "tests/e2e"),
+    ([""], "empty"),
+    (["--allow-live-e2e", "tests/e2e/test_live.py"], "--allow-live-e2e"),
+])
+def test_custom_arguments_cannot_name_live_e2e(selection_tree, selection, fragment):
+    result = invoke(selection_tree, "backend-gate.sh", args=tuple(selection))
+    _refused(result, selection_tree, fragment)
+
+
+def test_custom_arguments_keep_the_canonical_e2e_ignore(selection_tree):
+    result = invoke(selection_tree, "backend-gate.sh", args=("-k", "some_case"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    [call] = calls(selection_tree)
+    assert call[2][:2] == ["--ignore=tests/e2e", "--ignore=tests/performance"]
+    assert receipt(result)["scope"] == "backend-custom"

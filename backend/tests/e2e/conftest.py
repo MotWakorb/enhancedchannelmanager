@@ -1,17 +1,25 @@
 """
 E2E test configuration and shared fixtures.
 
-E2E tests hit the live container at localhost:6100.
-They are skipped automatically when the container is unreachable.
+E2E tests hit the live container at localhost:6100 and mutate it: they mark
+notifications read, clear the cache, and create and run pipeline rules. On a
+developer host that container is the operator's live instance, so reachability
+is not consent. The suite skips unless ECM_E2E_LIVE=1 is set, and also skips
+when the container is unreachable. The probe runs only after the opt-in.
 
-Run: cd backend && python -m pytest tests/e2e/ -q
+Run (only against an instance that may be mutated):
+    ECM_E2E_LIVE=1 scripts/backend-gate.sh --subset --allow-live-e2e tests/e2e
 """
+import os
+from pathlib import Path
 import time
 
 import httpx
 import pytest
 
 BASE_URL = "http://localhost:6100"
+LIVE_OPT_IN_ENV = "ECM_E2E_LIVE"
+_E2E_DIR = Path(__file__).resolve().parent
 AUTH_CREDS = {"username": "e2e_test", "password": "e2e_test_password"}
 
 # Login rate limit: 5/minute.  On rapid reruns we may hit 429 before the
@@ -58,11 +66,29 @@ def _login(client: httpx.Client) -> bool:
     return False
 
 
-# Skip all E2E tests if container is not available
-pytestmark = pytest.mark.skipif(
-    not _container_reachable(),
-    reason="ECM container not reachable at localhost:6100",
-)
+def _live_skip_reason() -> str | None:
+    """Why the live suite must not run here, or None when it may."""
+    if os.environ.get(LIVE_OPT_IN_ENV) != "1":
+        return (f"live e2e is off: it mutates the ECM at {BASE_URL}; set "
+                f"{LIVE_OPT_IN_ENV}=1 only when that instance may be changed")
+    if not _container_reachable():
+        return "ECM container not reachable at localhost:6100"
+    return None
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip every test in this directory unless opted in and reachable.
+
+    A collection hook, because pytestmark in a conftest applies to nothing.
+    """
+    ours = [item for item in items if _E2E_DIR in Path(item.path).resolve().parents]
+    if not ours:
+        return
+    reason = _live_skip_reason()
+    if reason:
+        marker = pytest.mark.skip(reason=reason)
+        for item in ours:
+            item.add_marker(marker)
 
 
 @pytest.fixture(scope="session")
