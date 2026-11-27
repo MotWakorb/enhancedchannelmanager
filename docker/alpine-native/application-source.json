@@ -5148,13 +5148,13 @@
     {
       "executable": false,
       "path": "frontend/src/hooks/useChangeHistory.test.ts",
-      "sha256": "720222db780e6a6c54db88cdc8ebf26ef0c127b62edd26d39abeb74fa3bb5b66",
+      "sha256": "49a3ca78639016243164d6b5aff761533e2c1ee42d6e029c77a9d458ff5de6f8",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/hooks/useChangeHistory.ts",
-      "sha256": "22025b8f5f93fa41cf67de3620f109362c0004511ef5b30742cf34ee7d338211",
+      "sha256": "7c38948f2d6a242cff3752c05f7cf426eda222db98065c6ce10cb9b63a845e49",
       "type": "file"
     },
     {
@@ -6548,7 +6548,7 @@
     {
       "executable": false,
       "path": "mcp-server/tests/test_update_channel_number_baseline.py",
-      "sha256": "6e915a520c324309d564c6a03d9916af608ae04b031d7b6d06a76c4ce0719b76",
+      "sha256": "fc5ffbcac71c5f250245827d53f35ba3a8764d04a2f3967ebb95d685c66865ff",
       "type": "file"
     },
     {
@@ -6602,7 +6602,7 @@
     {
       "executable": false,
       "path": "mcp-server/tools/channels.py",
-      "sha256": "bc94bae5609e39f5518472563c22b0c9fed7ce84c7d77a484927df20120d0ac8",
+      "sha256": "3310103f7e7a546fd4bd9b857d53d87d2120c9069f83643a28f6b8a153254758",
       "type": "file"
     },
     {
@@ -7102,7 +7102,7 @@
       "mcp-server/tools/channels.py": "074e8a1f2530d72821641a4fd52d2f4db77a3a9ce25841ffa108d8caddf9bd40"
     },
     "previous_manifest_sha256": "1eeda3cad795dc28b73450c77489b8d979ac417203256b95a429d7225cdc3e8d",
-    "scope": "Require the caller's numbering baseline on PATCH /api/channels/{id}: a body that sets channel_number must carry expectedNumber {number} (the number last read, or null for none), a missing or malformed wrapper is refused with 422 and a moved channel with 409 and concurrentNumberChanges, and the key is removed before forwarding so Dispatcharr and the Journal never see it; make the bulk-commit updateChannel expectedNumber wrapper require number and reject extra keys; send baselines from the inline number editor, the Edit Channel dialog, the Guide channel editor and undo, redo and checkpoint revert outside Edit Mode (multi-channel steps pre-read and refuse as a whole), and add an expected_number argument to the MCP update_channel tool that refuses a renumber without one before issuing a confirmation token, plus 0090 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
+    "scope": "Require the caller's numbering baseline on PATCH /api/channels/{id}: a body that sets channel_number must carry expectedNumber {number} (the number last read, or null for none), a missing or malformed wrapper is refused with 422 and a moved channel with 409 and concurrentNumberChanges, and the key is removed before forwarding so Dispatcharr and the Journal never see it; make the bulk-commit updateChannel expectedNumber wrapper require number and reject extra keys; send baselines from the inline number editor, the Edit Channel dialog, the Guide channel editor and undo, redo and checkpoint revert outside Edit Mode (multi-channel steps pre-read and refuse as a whole), invalidate checkpoints at or after a step dropped after a refusal and restore only reverted channels on a checkpoint revert, and add an expected_number argument to the MCP update_channel tool that refuses a renumber without a valid one before issuing a confirmation token, plus 0090 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0090"
   }
 }
