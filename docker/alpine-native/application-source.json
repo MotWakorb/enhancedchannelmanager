@@ -828,7 +828,7 @@
     {
       "executable": false,
       "path": "backend/dbas/importers/channels.py",
-      "sha256": "ecc6f4bb8872c1e6389b71fc8305fbd921cc5ae6fe0a88f209481be0a6512824",
+      "sha256": "5d6bad25c387ed41dc92df161af1a7aa79f9d8f4c1aac469e98b87eb3ef7dc99",
       "type": "file"
     },
     {
@@ -894,13 +894,13 @@
     {
       "executable": false,
       "path": "backend/dbas/restore_contracts.py",
-      "sha256": "f705bf2c3d93a3e700d3a4598e15831665f45e218d76f593bd6590c810b0e607",
+      "sha256": "78a5e69ba224628a877bfbfaf667ad81c3a700f0971d9048915661f3f61e0913",
       "type": "file"
     },
     {
       "executable": false,
       "path": "backend/dbas/restore_orchestrator.py",
-      "sha256": "a4eeadb9e82edf6ad8b8a672b02433fbb8ca087330e0c2e43e05fcd2b23080a6",
+      "sha256": "23d2957625b31087664fba5feb6d6cf7075e6ba0525078808abb0f8f39eddc03",
       "type": "file"
     },
     {
@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "5742fb3a7855897325fdbc7ac04a69b0639429bf3794e3c764e8ed74002800aa",
+      "sha256": "d3da996c83e7104ca76007ca764ff674e3939f702fabcaaf749e2d4e608dd80b",
       "type": "file"
     },
     {
@@ -1134,7 +1134,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "28520d8d580f60050fe99518b3fa223cd38ac45d796699227324d17a23f4e70e",
+      "sha256": "39cd56d0f720fb0e9028dbd0f7aa512b94f81bb38ee6d06db3995553cf0684f1",
       "type": "file"
     },
     {
@@ -1158,7 +1158,7 @@
     {
       "executable": false,
       "path": "backend/routers/channels.py",
-      "sha256": "2ab36e273ec327d4e948387cd35d3df445e718e9eabe029a31a4c88a4e0b877e",
+      "sha256": "9a1c3612b015275d1ca9307a7a09a4cf95b08204852419fbce2f21e3cfdbaf0a",
       "type": "file"
     },
     {
@@ -1224,7 +1224,7 @@
     {
       "executable": false,
       "path": "backend/routers/m3u.py",
-      "sha256": "5cd5e1375e5e84244f5ea548a458f4ddf4291c3447819812acb32f4c2ab579ad",
+      "sha256": "7b8880f063eb6323613270dd2726ee0314164b53fec092c196126a738d1811a6",
       "type": "file"
     },
     {
@@ -1602,13 +1602,13 @@
     {
       "executable": false,
       "path": "backend/tasks/dbas_restore.py",
-      "sha256": "0ece934ffaac230a85657184f33afbc3418bebada613a4d14e1cd9110343a01a",
+      "sha256": "cc8e80eb6d262f7f0bc6d674ecc41fc9d9857726a8981db0aee051fd12596c84",
       "type": "file"
     },
     {
       "executable": false,
       "path": "backend/tasks/dbas_sync.py",
-      "sha256": "54872fecfa012eaa66bfad2d3c21d90be25e63b5a12949a8265d5342b725d805",
+      "sha256": "966f96cc9be79bcaa4ac5e44f214a82fedba6f703f8bf1f807e829a59eccf59c",
       "type": "file"
     },
     {
@@ -1620,7 +1620,7 @@
     {
       "executable": false,
       "path": "backend/tasks/dbas_sync_engine.py",
-      "sha256": "70ece33573d849cdd9d29f62d5e519cc11869f408dc646a84a8591642b2c0f60",
+      "sha256": "99d9440c07eeff21e1093b2975a15ccfc4c6cebe3efa8e4091f29cf941ea681d",
       "type": "file"
     },
     {
@@ -1842,7 +1842,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "e985a05a9fb66440ee10a8c02940cd3be17ad0c46dfbd223f6a1c1d45f6985ec",
+      "sha256": "1dd8dbd6153f60a17f81c140e540b887e5bbbbd6bf6785c7ce24457d43c54995",
       "type": "file"
     },
     {
@@ -3054,13 +3054,13 @@
     {
       "executable": false,
       "path": "frontend/src/components/RestoreCompleteSummary.test.tsx",
-      "sha256": "a8878bab88675c9bdba1fa288aa112c109e8ce62e8bed948005c8d7aee7ddcfe",
+      "sha256": "473f2660372b43dee28967df0cc093a328ef9a0c1054c16cee9ff7a3dd67f4b5",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/components/RestoreCompleteSummary.tsx",
-      "sha256": "568725dd4b848469f8742adce37605b4510555bf3b22e5b3428d6770bd93dc40",
+      "sha256": "35fab87e08c46c53715babc087903bbd4bcde210f3700f791e162b3a0626d789",
       "type": "file"
     },
     {
@@ -5448,7 +5448,7 @@
     {
       "executable": false,
       "path": "frontend/src/services/api.ts",
-      "sha256": "2208750cdcf123cbff92322faffba7ca49d37b7d566f5f7f9c486e82a42224ec",
+      "sha256": "44f36b502c928bb845954d60862030fc46ff070e04e3ccc98b87b026c29be243",
       "type": "file"
     },
     {
@@ -7154,5 +7154,42 @@
     "previous_manifest_sha256": "906bbeae86a0fc5c6d88ccfa47e9a2234cc70cbaf505a82fede8c694200dcfcf",
     "scope": "Sanitize profile-reconcile, sibling-propagation, bulk-commit and Dispatcharr error diagnostics: scoped log diagnostics compose the credential-pattern, registered-value (four-character minimum) and URL-aware policies, with the URL rules extended to any scheme, bracketed IPv6 hosts, timeshift and extensionless Xtream Codes paths and the pattern rules to JSON, dict and API-key header forms masked whole up to the end of the line; bulk-job, compensation and journal-write failures log scrubbed exception chains and rows without raw tracebacks; Dispatcharr request and login failures log only the exception type; journal log lines name only the category, action and entity id and a failed journal write logs only the error type; foreign bulk group, operation, run and supervisor failures and numbering-recovery reasons return fixed messages while numbering-baseline refusals and missing-stream guidance keep their exact text and concurrentNumberChanges payload, a non-numeric server number rendering as unreadable; URL query vocabulary and known-credential path rewriting move into the credential_sentinel leaf module, plus 0092 version touchpoints. Retains the prior application inventory and native compatibility history. Not runtime, independent review, advisory, publication or deployed approval.",
     "version": "0.18.2-0092"
+  },
+  "apply_error_boundaries_update": {
+    "added_files": [],
+    "base_commit": "bd63b0959113668007f4a5aaf44aab26c2afb937",
+    "bead": "enhancedchannelmanager-jnw1v",
+    "changed_files": {
+      "backend/main.py": "5742fb3a7855897325fdbc7ac04a69b0639429bf3794e3c764e8ed74002800aa",
+      "backend/routers/backup.py": "28520d8d580f60050fe99518b3fa223cd38ac45d796699227324d17a23f4e70e",
+      "backend/routers/channels.py": "2ab36e273ec327d4e948387cd35d3df445e718e9eabe029a31a4c88a4e0b877e",
+      "backend/routers/m3u.py": "5cd5e1375e5e84244f5ea548a458f4ddf4291c3447819812acb32f4c2ab579ad",
+      "frontend/package.json": "e985a05a9fb66440ee10a8c02940cd3be17ad0c46dfbd223f6a1c1d45f6985ec"
+    },
+    "previous_manifest_sha256": "66646a620c4db4567fcaf834d8f9f31abd6f0a0177c6e8b37f61c031c768bf39",
+    "scope": "Keep normalization and M3U apply diagnostics out of API results and logs: single and bulk channel creation report a failed normalization with a fixed message; M3U group-settings profile-apply, account-list and post-refresh reconcile outcomes use fixed reasons; every logged exception in the M3U router and the normalization, single-create and single-channel update logs pass through the shared diagnostic scrubber; stream metadata no longer returns httpx error text that quotes Xtream Codes credentials, maps a Dispatcharr 4xx on its account read and answers 400 for a missing server URL; M3U account delete reports undeleted groups with the shared group-delete guidance; the refresh-trigger notification carries no exception text; the guided auto-sync toggle no longer raises on a non-4xx status error.",
+    "version": "0.18.2-0093"
+  },
+  "sync_reporting_update": {
+    "added_files": [],
+    "base_commit": "18af2df0397e71908a02a843d9131f680bdcc822",
+    "bead": "enhancedchannelmanager-c7ll3",
+    "changed_files": {
+      "backend/dbas/importers/channels.py": "ecc6f4bb8872c1e6389b71fc8305fbd921cc5ae6fe0a88f209481be0a6512824",
+      "backend/dbas/restore_contracts.py": "f705bf2c3d93a3e700d3a4598e15831665f45e218d76f593bd6590c810b0e607",
+      "backend/dbas/restore_orchestrator.py": "a4eeadb9e82edf6ad8b8a672b02433fbb8ca087330e0c2e43e05fcd2b23080a6",
+      "backend/main.py": "080388f8db1c0bc9cc25d102bc4b31c949d1f466da9ddb27beed4d2e52cc34b7",
+      "backend/routers/backup.py": "ccadae825c259ecd5443cc4f4f3f19ca103af7bd7c2a042377d441975e4c12c0",
+      "backend/tasks/dbas_restore.py": "0ece934ffaac230a85657184f33afbc3418bebada613a4d14e1cd9110343a01a",
+      "backend/tasks/dbas_sync.py": "54872fecfa012eaa66bfad2d3c21d90be25e63b5a12949a8265d5342b725d805",
+      "backend/tasks/dbas_sync_engine.py": "70ece33573d849cdd9d29f62d5e519cc11869f408dc646a84a8591642b2c0f60",
+      "frontend/package.json": "134bc9cb8403f15b996b727a3372deff60e07fadde0794c2d6c09322b562bc62",
+      "frontend/src/components/RestoreCompleteSummary.test.tsx": "a8878bab88675c9bdba1fa288aa112c109e8ce62e8bed948005c8d7aee7ddcfe",
+      "frontend/src/components/RestoreCompleteSummary.tsx": "568725dd4b848469f8742adce37605b4510555bf3b22e5b3428d6770bd93dc40",
+      "frontend/src/services/api.ts": "2208750cdcf123cbff92322faffba7ca49d37b7d566f5f7f9c486e82a42224ec"
+    },
+    "previous_manifest_sha256": "4e9b0d7e3bd02f82c9e8236f05dcbf7872fdc33a5cc9efdf755a7eb9c15f5911",
+    "scope": "Make sync and restore reports describe their actual mode and work: gate-aborted sync applies record aborted and pre-flight refusals carry a structured preflight_refused flag mapped to SYNC_PREFLIGHT_REFUSED and RESTORE_PREFLIGHT_REFUSED; matched streams count as reuse; an existing channel's ordered, de-duplicated stream list is compared before any rewrite, a rewrite counts as a channel update, and rejected or unresolved attachments get their own skip reasons with frontend labels; sync preview totals and category counts cover predicted categories only and name every unpredicted category and its caveat, with sync-specific stream and channel caveats; version touchpoints.",
+    "version": "0.18.2-0094"
   }
 }

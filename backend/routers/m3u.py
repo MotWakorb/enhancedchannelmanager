@@ -23,8 +23,9 @@ from config import (
     validate_url_scheme,
 )
 from database import get_session
+from channel_group_delete import group_delete_failure_detail
 from dispatcharr_client import get_client, upstream_http_exception
-from log_utils import redact_log_diagnostic
+from log_utils import redact_exception, redact_log_diagnostic
 from alert_methods import send_alert
 from tasks.m3u_digest import send_immediate_digest
 from services.m3u_group_state import (
@@ -108,7 +109,7 @@ async def _capture_m3u_changes_after_refresh(account_id: int, account_name: str)
                 if stream_names:
                     stream_names_by_group[group_name] = stream_names
             except Exception as e:
-                logger.warning("[M3U-CHANGE] Could not fetch streams for group '%s': %s", group_name, e)
+                logger.warning("[M3U-CHANGE] Could not fetch streams for group '%s': %s", group_name, redact_log_diagnostic(str(e)))
 
         logger.info("[M3U-CHANGE] Captured stream names for %s groups", len(stream_names_by_group))
 
@@ -166,8 +167,8 @@ async def _capture_m3u_changes_after_refresh(account_id: int, account_name: str)
         finally:
             db.close()
 
-    except Exception as e:
-        logger.exception("[M3U-CHANGE] Failed to capture changes for %s: %s", account_name, e)
+    except Exception as e:  # noqa: BLE001 - best-effort; log the scrubbed chain
+        logger.error("[M3U-CHANGE] Failed to capture changes for %s: %s", account_name, redact_exception(e))
 
 
 def _advance_refresh_watermark() -> None:
@@ -211,7 +212,7 @@ def _advance_refresh_watermark() -> None:
                 settings.last_m3u_refresh_completed_at,
             )
     except Exception as e:  # pragma: no cover — watermark write is best-effort
-        logger.warning("[M3U-REFRESH] Failed to advance refresh watermark: %s", e)
+        logger.warning("[M3U-REFRESH] Failed to advance refresh watermark: %s", redact_log_diagnostic(str(e)))
 
 
 async def _reconcile_profiles_after_refresh(client, account_name: str):
@@ -271,9 +272,9 @@ async def _reconcile_profiles_after_refresh(client, account_name: str):
             )
             return reason
     except Exception as e:
-        logger.warning("[M3U-REFRESH] Profile reconcile failed for '%s': %s", account_name, e)
-        return (f"the channel-profile reconcile failed ({e}) — it will retry on "
-                f"the next scheduled sync")
+        logger.warning("[M3U-REFRESH] Profile reconcile failed for '%s': %s", account_name, redact_log_diagnostic(str(e)))
+        return ("the channel-profile reconcile failed — it will retry on "
+                "the next scheduled sync")
     return None
 
 
@@ -302,7 +303,8 @@ async def _rebind_restore_placeholders(account_name: str) -> None:
         )
     except Exception as e:
         logger.warning(
-            "[M3U-REFRESH] Placeholder rebind after '%s' failed: %s", account_name, e
+            "[M3U-REFRESH] Placeholder rebind after '%s' failed: %s",
+            account_name, redact_log_diagnostic(str(e)),
         )
 
 
@@ -340,7 +342,7 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 current_account = await client.get_m3u_account(account_id)
             except Exception as e:
                 # Account may have been deleted during refresh
-                logger.warning("[M3U-REFRESH] Could not fetch account %s during polling: %s", account_id, e)
+                logger.warning("[M3U-REFRESH] Could not fetch account %s during polling: %s", account_id, redact_log_diagnostic(str(e)))
                 return
 
             current_updated = current_account.get("updated_at") or current_account.get("last_refresh")
@@ -370,7 +372,7 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 try:
                     await send_immediate_digest(account_id)
                 except Exception as e:
-                    logger.warning("[M3U-REFRESH] Failed to send immediate digest for '%s': %s", account_name, e)
+                    logger.warning("[M3U-REFRESH] Failed to send immediate digest for '%s': %s", account_name, redact_log_diagnostic(str(e)))
 
                 journal.log_entry(
                     category="m3u",
@@ -427,7 +429,7 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 try:
                     await send_immediate_digest(account_id)
                 except Exception as e:
-                    logger.warning("[M3U-REFRESH] Failed to send immediate digest for '%s': %s", account_name, e)
+                    logger.warning("[M3U-REFRESH] Failed to send immediate digest for '%s': %s", account_name, redact_log_diagnostic(str(e)))
 
                 journal.log_entry(
                     category="m3u",
@@ -458,8 +460,8 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
 
                 return
 
-    except Exception as e:
-        logger.exception("[M3U-REFRESH] Error polling for '%s' completion: %s", account_name, e)
+    except Exception as e:  # noqa: BLE001 - background task entry; log the scrubbed chain
+        logger.error("[M3U-REFRESH] Error polling for '%s' completion: %s", account_name, redact_exception(e))
 
 
 # -------------------------------------------------------------------------
@@ -486,9 +488,9 @@ async def get_m3u_account(account_id: int):
         # (bd-lq38l.4).
         mapped = upstream_http_exception(e)
         if mapped is not None:
-            logger.warning("[M3U] Fetch M3U account %s rejected by Dispatcharr: %s", account_id, e)
+            logger.warning("[M3U] Fetch M3U account %s rejected by Dispatcharr: %s", account_id, redact_log_diagnostic(str(e)))
             raise mapped
-        logger.exception("[M3U] Failed to fetch M3U account %s: %s", account_id, e)
+        logger.error("[M3U] Failed to fetch M3U account %s: %s", account_id, redact_exception(e))
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -526,11 +528,23 @@ async def get_m3u_stream_metadata(account_id: int):
             # Standard M3U: server_url is the direct URL
             m3u_url = server_url
 
-        # Fetch the M3U file
-        async with httpx.AsyncClient(timeout=60.0) as http_client:
-            response = await http_client.get(m3u_url, follow_redirects=True)
-            response.raise_for_status()
-            m3u_content = response.text
+        # Fetch the M3U file. The URL can carry Xtream Codes credentials, and
+        # httpx error text quotes it, so the response names only the status.
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as http_client:
+                response = await http_client.get(m3u_url, follow_redirects=True)
+                response.raise_for_status()
+                m3u_content = response.text
+        except httpx.HTTPError as e:
+            logger.error(
+                "[M3U] Failed to fetch M3U file for account %s: %s",
+                account_id, redact_log_diagnostic(str(e)),
+            )
+            if isinstance(e, httpx.HTTPStatusError):
+                reason = f"the provider answered HTTP {e.response.status_code}."
+            else:
+                reason = "the provider could not be reached."
+            raise HTTPException(status_code=502, detail=f"Failed to fetch M3U file: {reason}") from None
 
         # Parse EXTINF lines to extract metadata
         # Format: #EXTINF:-1 tvg-id="ID" tvc-guide-stationid="12345" ...,Channel Name
@@ -568,11 +582,17 @@ async def get_m3u_stream_metadata(account_id: int):
         logger.info("[M3U] Parsed M3U metadata for account %s: %s entries with tvg-id", account_id, len(metadata))
         return {"metadata": metadata, "count": len(metadata)}
 
-    except httpx.HTTPError as e:
-        logger.error("[M3U] Failed to fetch M3U file for account %s: %s", account_id, e)
-        raise HTTPException(status_code=502, detail=f"Failed to fetch M3U file: {str(e)}")
-    except Exception as e:
-        logger.exception("[M3U] Failed to parse M3U metadata for account %s: %s", account_id, e)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 - router boundary; log the scrubbed chain
+        mapped = upstream_http_exception(e)
+        if mapped is not None:
+            logger.warning(
+                "[M3U] Stream metadata account %s rejected by Dispatcharr: %s",
+                account_id, redact_log_diagnostic(str(e)),
+            )
+            raise mapped
+        logger.error("[M3U] Failed to parse M3U metadata for account %s: %s", account_id, redact_exception(e))
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -667,9 +687,9 @@ async def upload_m3u_file(file: UploadFile = File(...)):
             "original_name": original_name,
             "size": len(content)
         }
-    except Exception as e:
-        logger.exception("[M3U] Failed to upload M3U file: %s", e)
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+    except Exception as e:  # noqa: BLE001 - router boundary; log the scrubbed chain
+        logger.error("[M3U] Failed to upload M3U file: %s", redact_exception(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.put("/accounts/{account_id}")
@@ -706,9 +726,9 @@ async def update_m3u_account(account_id: int, request: Request):
         # it to a clean 4xx instead of an opaque 500 (bd-lq38l.4).
         mapped = upstream_http_exception(e)
         if mapped is not None:
-            logger.warning("[M3U] Update M3U account %s rejected by Dispatcharr: %s", account_id, e)
+            logger.warning("[M3U] Update M3U account %s rejected by Dispatcharr: %s", account_id, redact_log_diagnostic(str(e)))
             raise mapped
-        logger.exception("[M3U] Failed to update M3U account %s: %s", account_id, e)
+        logger.error("[M3U] Failed to update M3U account %s: %s", account_id, redact_exception(e))
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -753,9 +773,9 @@ async def patch_m3u_account(account_id: int, request: Request):
         # it to a clean 4xx instead of an opaque 500 (bd-lq38l.4).
         mapped = upstream_http_exception(e)
         if mapped is not None:
-            logger.warning("[M3U] Patch M3U account %s rejected by Dispatcharr: %s", account_id, e)
+            logger.warning("[M3U] Patch M3U account %s rejected by Dispatcharr: %s", account_id, redact_log_diagnostic(str(e)))
             raise mapped
-        logger.exception("[M3U] Failed to patch M3U account %s: %s", account_id, e)
+        logger.error("[M3U] Failed to patch M3U account %s: %s", account_id, redact_exception(e))
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -828,8 +848,14 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
                     logger.info("[M3U] Deleted orphaned channel group %s (was associated with M3U '%s')", group_id, account_name)
                 except Exception as group_err:
                     # Group might have channels or other issues - log but don't fail
-                    failed_groups.append({"id": group_id, "error": str(group_err)})
-                    logger.warning("[M3U] Failed to delete channel group %s: %s", group_id, group_err)
+                    failed_groups.append({
+                        "id": group_id,
+                        "error": group_delete_failure_detail(group_err, group_id),
+                    })
+                    logger.warning(
+                        "[M3U] Failed to delete channel group %s: %s",
+                        group_id, redact_log_diagnostic(str(group_err)),
+                    )
 
         # Clean up linked_m3u_accounts in settings
         linked_settings_cleanup_failed = False
@@ -920,9 +946,9 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
         # (bd-lq38l.4).
         mapped = upstream_http_exception(e)
         if mapped is not None:
-            logger.warning("[M3U] Delete M3U account %s rejected by Dispatcharr: %s", account_id, e)
+            logger.warning("[M3U] Delete M3U account %s rejected by Dispatcharr: %s", account_id, redact_log_diagnostic(str(e)))
             raise mapped
-        logger.exception("[M3U] Failed to delete M3U account %s: %s", account_id, e)
+        logger.error("[M3U] Failed to delete M3U account %s: %s", account_id, redact_exception(e))
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -978,10 +1004,11 @@ async def refresh_m3u_account(account_id: int):
         try:
             await send_alert(
                 title="M3U Refresh Failed",
-                message=f"Failed to trigger M3U refresh for account (ID: {account_id}): {str(e)}",
+                message=(f"Failed to trigger M3U refresh for account (ID: {account_id}); "
+                         "check server logs for details."),
                 notification_type="error",
                 source="M3U Refresh",
-                metadata={"account_id": account_id, "error": str(e)},
+                metadata={"account_id": account_id, "error": "refresh trigger failed"},
                 alert_category="m3u_refresh",
                 entity_id=account_id,
             )
@@ -991,9 +1018,9 @@ async def refresh_m3u_account(account_id: int):
         # (bd-lq38l.4).
         mapped = upstream_http_exception(e)
         if mapped is not None:
-            logger.warning("[M3U-REFRESH] Refresh M3U account %s rejected by Dispatcharr: %s", account_id, e)
+            logger.warning("[M3U-REFRESH] Refresh M3U account %s rejected by Dispatcharr: %s", account_id, redact_log_diagnostic(str(e)))
             raise mapped
-        logger.exception("[M3U-REFRESH] Failed to refresh M3U account %s: %s", account_id, e)
+        logger.error("[M3U-REFRESH] Failed to refresh M3U account %s: %s", account_id, redact_exception(e))
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -1125,8 +1152,11 @@ async def get_m3u_profile(account_id: int, profile_id: int):
         logger.debug("[M3U] Fetched profile %s for account %s in %.1fms", profile_id, account_id, elapsed_ms)
         return result
     except Exception as e:
-        logger.warning("[M3U] Failed to fetch profile %s for account %s: %s", profile_id, account_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning(
+            "[M3U] Failed to fetch profile %s for account %s: %s",
+            profile_id, account_id, redact_log_diagnostic(str(e)),
+        )
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/accounts/{account_id}/profiles/{profile_id}/")
@@ -1142,8 +1172,11 @@ async def update_m3u_profile(account_id: int, profile_id: int, request: Request)
         logger.debug("[M3U] Updated profile %s for account %s in %.1fms", profile_id, account_id, elapsed_ms)
         return result
     except Exception as e:
-        logger.warning("[M3U] Failed to update profile %s for account %s: %s", profile_id, account_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning(
+            "[M3U] Failed to update profile %s for account %s: %s",
+            profile_id, account_id, redact_log_diagnostic(str(e)),
+        )
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/accounts/{account_id}/profiles/{profile_id}/")
@@ -1158,8 +1191,11 @@ async def delete_m3u_profile(account_id: int, profile_id: int):
         logger.debug("[M3U] Deleted profile %s for account %s in %.1fms", profile_id, account_id, elapsed_ms)
         return {"status": "deleted"}
     except Exception as e:
-        logger.warning("[M3U] Failed to delete profile %s for account %s: %s", profile_id, account_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning(
+            "[M3U] Failed to delete profile %s for account %s: %s",
+            profile_id, account_id, redact_log_diagnostic(str(e)),
+        )
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # -------------------------------------------------------------------------
@@ -1295,8 +1331,8 @@ async def _apply_enforced_global_save(
         try:
             all_accounts = await client.get_m3u_accounts()
         except Exception as e:  # noqa: BLE001
-            logger.warning("[M3U] enforced-global: could not list accounts: %s", e)
-            account_err = f"account list unavailable ({e})"
+            logger.warning("[M3U] enforced-global: could not list accounts: %s", redact_log_diagnostic(str(e)))
+            account_err = "account list unavailable"
         if not isinstance(all_accounts, list):
             all_accounts = []
 
@@ -1309,8 +1345,8 @@ async def _apply_enforced_global_save(
             try:
                 fresh = await client.get_m3u_accounts()
             except Exception as e:  # noqa: BLE001 - fail closed
-                logger.warning("[M3U] enforced-global clear: fresh account read FAILED: %s", e)
-                return None, f"account list unavailable ({e}); clear NOT applied", False, []
+                logger.warning("[M3U] enforced-global clear: fresh account read FAILED: %s", redact_log_diagnostic(str(e)))
+                return None, "account list unavailable; clear NOT applied", False, []
             if not isinstance(fresh, list):
                 logger.warning("[M3U] enforced-global clear: fresh account read malformed (%r)", type(fresh))
                 return None, "account list unavailable (malformed); clear NOT applied", False, []
@@ -1466,9 +1502,10 @@ async def update_m3u_group_settings(account_id: int, request: Request):
             except Exception as e:
                 # Blocker 3b: a SETUP failure must NOT leave the summary empty
                 # (an empty summary reads as a clean no-op) — emit an error entry.
-                logger.warning("[M3U] group-settings fetch for apply failed: %s", e)
+                logger.warning("[M3U] group-settings fetch for apply failed: %s", redact_log_diagnostic(str(e)))
                 profile_apply_summary.append({
-                    "status": "error", "group_id": None, "error": str(e),
+                    "status": "error", "group_id": None,
+                    "error": "the channel-profile apply could not read group settings; retry the save.",
                 })
 
         if settings_for_apply is not None:
@@ -1530,7 +1567,7 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                 profile_apply_summary.append({
                     "status": "error", "group_id": None,
                     "error": (
-                        f"Profile selection was saved on this account but could NOT be "
+                        f"the profile selection was saved on this account but could NOT be "
                         f"propagated to all M3U accounts ({propagation_error}). Re-save "
                         f"from the listed account(s) to complete the change."
                     ),
@@ -1560,13 +1597,17 @@ async def update_m3u_group_settings(account_id: int, request: Request):
                         profile_apply_summary.append(outcome)
                     except Exception as e:  # noqa: BLE001 - isolate per group
                         logger.warning(
-                            "[M3U] Profile reconcile for group %s failed: %s", gid, e
+                            "[M3U] Profile reconcile for group %s failed: %s", gid, redact_log_diagnostic(str(e))
                         )
-                        profile_apply_summary.append({"status": "error", "group_id": gid, "error": str(e)})
+                        profile_apply_summary.append({
+                            "status": "error", "group_id": gid,
+                            "error": "the channel-profile reconcile for this group failed; retry the save.",
+                        })
             except Exception as e:
-                logger.warning("[M3U] Profile reconcile after group-settings save failed: %s", e)
+                logger.warning("[M3U] Profile reconcile after group-settings save failed: %s", redact_log_diagnostic(str(e)))
                 profile_apply_summary.append({
-                    "status": "error", "group_id": None, "error": str(e),
+                    "status": "error", "group_id": None,
+                    "error": "the channel-profile apply failed; retry the save.",
                 })
         elif changed_selections:
             # Finding D + Round-9 B1 (FAIL CLOSED): a selection CHANGE but the
@@ -1881,12 +1922,13 @@ async def toggle_group_auto_sync(
         }
     except HTTPException:
         raise
-    except httpx.HTTPStatusError as e:
-        raise upstream_http_exception(e)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - router boundary
+        mapped = upstream_http_exception(e) if isinstance(e, httpx.HTTPStatusError) else None
+        if mapped is not None:
+            raise mapped
         logger.warning(
             "[M3U] Guided auto-sync toggle failed for account %s group %s: %s",
-            account_id, channel_group_id, e,
+            account_id, channel_group_id, redact_log_diagnostic(str(e)),
         )
         raise HTTPException(status_code=500, detail="Internal server error")
 
