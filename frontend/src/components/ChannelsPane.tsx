@@ -38,6 +38,7 @@ import {
 import { ChannelProfilesListModal } from './ChannelProfilesListModal';
 import type { ChannelDefaults } from './StreamsPane';
 import * as api from '../services/api';
+import { HttpError } from '../services/httpClient';
 import type { GracenoteConflictMode } from '../services/api';
 import { HistoryToolbar } from './HistoryToolbar';
 import { BulkEPGAssignModal, type EPGAssignment } from './BulkEPGAssignModal';
@@ -335,6 +336,12 @@ interface PendingNumberChange {
   strandsNumberInName: boolean;
   /** Exactly what was typed, so backing out reopens the editor on it. */
   rawText: string;
+  /**
+   * The number the channel showed when the change was decided, so a reload
+   * while this dialog is open cannot change what the write is based on.
+   * `undefined` when the channel was not in the list.
+   */
+  baselineNumber: number | null | undefined;
 }
 
 // ChannelListItem component extracted to ChannelListItem.tsx
@@ -3495,6 +3502,7 @@ export function ChannelsPane({
     channelId: number,
     updateData: { channel_number: number | null; name?: string },
     description: string,
+    baselineNumber: number | null | undefined,
     acknowledgedDuplicate?: DuplicateNumberAcknowledgement,
   ) => {
     const nameChanged = updateData.name !== undefined;
@@ -3506,13 +3514,32 @@ export function ChannelsPane({
         onStageUpdateChannel(channelId, updateData, description, { acknowledgedDuplicate });
       }
     } else {
-      // Normal mode - call API directly
+      // Normal mode - call API directly. The number this pane displayed is
+      // the baseline, so the server refuses a write over a change made since.
+      // A channel this pane did not display has no number anyone saw, and
+      // sending null for it would claim one.
+      if (baselineNumber === undefined) {
+        notifications.error(
+          `Channel ${channelId} is not in the list, so its number was not changed. Reload and try again.`,
+          'Channel Number Not Changed',
+        );
+        return;
+      }
       try {
-        const updatedChannel = await api.updateChannel(channelId, updateData);
+        const updatedChannel = await api.updateChannel(
+          channelId,
+          updateData,
+          { expectedNumber: baselineNumber },
+        );
         const changeType = nameChanged ? 'channel_name_update' : 'channel_number_update';
         onChannelUpdate(updatedChannel, { type: changeType, description });
       } catch (err) {
         logger.error('Failed to update channel number:', err);
+        if (err instanceof HttpError && err.status === 409) {
+          notifications.error(err.message, 'Channel Number Changed');
+          // Show the number the server holds, which the refusal just named.
+          onChannelsChange?.();
+        }
       }
     }
   };
@@ -3578,12 +3605,18 @@ export function ChannelsPane({
         conflicts: conflicts.map((c) => ({ id: c.id, name: c.name })),
         strandsNumberInName,
         rawText: editingChannelNumber,
+        baselineNumber: channel === undefined ? undefined : channel.channel_number ?? null,
       });
       setEditingChannelId(null);
       return;
     }
 
-    await applyChannelNumberChange(channelId, updateData, description);
+    await applyChannelNumberChange(
+      channelId,
+      updateData,
+      description,
+      channel === undefined ? undefined : channel.channel_number ?? null,
+    );
     setEditingChannelId(null);
   };
 
@@ -3596,6 +3629,7 @@ export function ChannelsPane({
       pending.channelId,
       pending.updateData,
       pending.description,
+      pending.baselineNumber,
       // Only a duplicate is acknowledged. Confirming a clear says nothing
       // about any number, and recording one would tell the preflight the
       // operator accepted a collision they were never shown.
@@ -6836,13 +6870,20 @@ export function ChannelsPane({
               }
             } else {
               try {
-                const updated = await api.updateChannel(channelToEdit.id, changes);
+                // The channel the modal opened on is the one the operator saw.
+                const updated = await api.updateChannel(
+                  channelToEdit.id, changes, api.numberBaselineFor(channelToEdit, changes),
+                );
                 onChannelUpdate(updated, {
                   type: 'channel_metadata_update',
                   description,
                 });
               } catch (err) {
                 logger.error('Failed to update channel:', err);
+                if (err instanceof HttpError && err.status === 409) {
+                  notifications.error(err.message, 'Channel Number Changed');
+                  onChannelsChange?.();
+                }
               }
             }
             editChannelModal.close();

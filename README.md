@@ -462,7 +462,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `list_channels` | List channels with optional group/search/stream count filtering |
 | `get_channel` | Get detailed channel info (streams, EPG, logo) |
 | `create_channel` | Create a new channel |
-| `update_channel` | Update channel name, number, or group |
+| `update_channel` | Update channel name, number, or group (a number change takes `expected_number`, the number you last read) |
 | `delete_channel` | Delete a channel |
 | `bulk_delete_channels` | Delete multiple channels at once |
 | `add_stream_to_channel` | Add a stream to a channel |

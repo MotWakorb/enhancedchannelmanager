@@ -262,7 +262,7 @@ export function detectNumberingConflicts({
  *  Deliberately NOT `sameChannelNumber`, which calls `null` different from
  *  everything including itself — correct when asking "do these two channels
  *  collide?", wrong when asking "is this the same value I recorded?". */
-function numbersAgree(a: number | null, b: number | null): boolean {
+export function numbersAgree(a: number | null, b: number | null): boolean {
   if (a === null || b === null) return a === b;
   return sameChannelNumber(a, b);
 }

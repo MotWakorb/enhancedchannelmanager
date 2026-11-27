@@ -16,7 +16,7 @@ All API endpoints require JWT Bearer token authentication. To authenticate in th
 | `POST /api/channels` | Create channel |
 | `GET /api/channels/{id}` | Get channel details |
 | `GET /api/channels/{id}/streams` | Get streams for a channel |
-| `PATCH /api/channels/{id}` | Update channel |
+| `PATCH /api/channels/{id}` | Update channel. A body that sets `channel_number` must carry `expectedNumber`; see [below](#patch-apichannelsid-expectednumber) |
 | `DELETE /api/channels/{id}` | Delete channel |
 | `POST /api/channels/{id}/add-stream` | Add stream to channel |
 | `POST /api/channels/{id}/add-streams` | Add multiple streams to a channel in one Dispatcharr roundtrip (dedup, order preserved) |
@@ -317,27 +317,31 @@ Three properties that are easy to get wrong:
 
 ### Numbering baselines: required on every numbering write to an existing channel
 
-**Breaking change in 0.18.2-0088.** Every write that changes an existing channel's number must carry the number its caller last read for that channel, its *baseline*. ECM refuses a write whose channel has moved since, and refuses a write that carries no baseline rather than assuming one. This holds on both numbering paths:
+**Breaking change in 0.18.2-0088.** `PATCH /api/channels/{id}` joined it in a later build; the CHANGELOG names which. Every write that changes an existing channel's number must carry the number its caller last read for that channel, its *baseline*. ECM refuses a write whose channel has moved since, and refuses a write that carries no baseline rather than assuming one. This holds on every numbering path:
 
 | Path | Field | Required when |
 |-|-|-|
 | `bulk-commit` `updateChannel` | `expectedNumber: {"number": n}` | `data` contains `channel_number` and `channelId` is not negative |
 | `bulk-commit` `bulkAssignChannelNumbers` | `expectedNumbers: {"<channel id>": n, ...}` | for every non-negative id in `channelIds` |
 | `POST /api/channels/assign-numbers` | `expected_numbers: {"<channel id>": n, ...}` | for every id in `channel_ids` |
+| `PATCH /api/channels/{id}` | `expectedNumber: {"number": n}`, in the body beside the channel fields | the body contains `channel_number` |
 
-`n` is any finite number, or `null` for "I read this channel and it had no number". A baseline describes a number you **read**, not one being written, so it is not held to the channel-number write contract: a number set outside ECM, such as `8.25` or `-1`, is a valid baseline and is compared as read. `NaN` and infinity are `422`. The number being written (`data.channel_number`, `startingNumber`, `starting_number`) keeps the write contract exactly as before, so `8.25` there is still `422`. A negative id is a channel created earlier in the same request, which nobody else can have moved, so it takes no baseline and may not carry one. A map entry for a channel the write does not number is also refused, because it would read as protection it does not give. Send the number from your own read of the channel (`GET /api/channels`, `GET /api/channels/{id}`); fetching it immediately before the write only to fill this field defeats the check.
+`n` is any finite number, or `null` for "I read this channel and it had no number". A baseline describes a number you **read**, not one being written, so it is not held to the channel-number write contract: a number set outside ECM, such as `8.25` or `-1`, is a valid baseline. The comparison is on ECM's tenths grid, the same canonical slot used for duplicate detection, not on the exact value: a baseline of `8.21` matches a server number of `8.24`, and `7` matches `7.0`, while `8.2` and `8.3` differ. `NaN` and infinity are `422`. The number being written (`data.channel_number`, `startingNumber`, `starting_number`) keeps the write contract exactly as before, so `8.25` there is still `422`. A negative id is a channel created earlier in the same request, which nobody else can have moved, so it takes no baseline and may not carry one. A map entry for a channel the write does not number is also refused, because it would read as protection it does not give. Send the number from your own read of the channel (`GET /api/channels`, `GET /api/channels/{id}`); fetching it immediately before the write only to fill this field defeats the check.
 
-Callers written before this change get `422` until they send baselines. ECM's own UI, the MCP `assign_channel_numbers` tool and the MCP `bulk_commit_channels` tool's documented operation shapes all send them.
+A body that contains `channel_number` counts as a numbering write whatever value it carries, so clearing the number (`null`) or resending the number the channel already has also needs a baseline. This is the rule `updateChannel` has always applied.
+
+Callers written before this change get `422` until they send baselines. ECM's own UI (including undo and redo outside Edit Mode, the Guide's channel editor and the inline number editor), the MCP `update_channel` and `assign_channel_numbers` tools, and the MCP `bulk_commit_channels` tool's documented operation shapes all send them.
 
 **Refusal shapes.**
 
 - **A missing or misplaced baseline is `422`** before any job starts or anything is written. The error `type` is `missing_channel_number_baseline` and its `msg` names every offending operation index and channel id in one message, for example `Operation 0 (bulkAssignChannelNumbers): expectedNumbers has no baseline for channel(s) 1, 3. Send, for each channel, the number your change was based on (null for no number)`.
 - **A stale baseline on `bulk-commit`** fails only that operation, exactly as a stale `expectedNumber` always has: an ordinary entry in `errors`, counted in `operationsFailed`, with no `applied` flag because nothing landed, and the rest of the batch's numbering put back by the compensation pass. The entry carries `concurrentNumberChanges`, one `{channelId, baselineNumber, serverNumber}` per moved channel, the same shape Edit Mode's keep-mine / take-theirs reconcile binds a decision to. A range is refused **whole**, with no upstream call: its numbers are positional, so there is no partial range to write.
 - **A stale baseline on `POST /api/channels/assign-numbers`** is `409 Conflict` with `detail: {"message": "...", "concurrentNumberChanges": [...]}`, before the upstream assign call. Nothing is written.
+- **A stale baseline on `PATCH /api/channels/{id}`** is the same `409 Conflict` shape, with one entry in `concurrentNumberChanges`, before the upstream PATCH. Nothing in the body is written, including fields other than the number, and no Journal row is written.
 
 The bulk-commit envelope's `createdChannelNumbers` maps each created channel's real id to the number Dispatcharr reported creating it on. A later request that numbers such a channel sends that value as its baseline; Edit Mode does this when one Apply creates channels and then numbers them. The same holds for any plan split across several requests: each request is checked against the lineup as it stands when that request arrives, so a channel an earlier request settled must carry the number it settled on (`settledChannelNumbers`, when `returnSettledOperationIndexes` is set), while a channel no earlier request touched keeps the number you originally read. Edit Mode, which sends a large Apply in requests of 200 operations, does exactly this.
 
-**The check-to-write race is a documented limitation, not compare-and-swap.** Dispatcharr 0.28.x has no conditional write: its schema contains no `If-Match`, `If-None-Match`, `If-Unmodified-Since`, `ETag` or `412`, and neither `Channel` nor `PatchedChannel` carries a version or modified-at field. ECM compares the baseline against its own read (the lineup at the start of a bulk-commit run, or the per-channel reads `assign-numbers` makes just before writing), then writes. A change that lands between that read and the write is still overwritten, and nothing can detect it. What the check closes is the much wider window between the caller's read and ECM's.
+**The check-to-write race is a documented limitation, not compare-and-swap.** Dispatcharr 0.28.x has no conditional write: its schema contains no `If-Match`, `If-None-Match`, `If-Unmodified-Since`, `ETag` or `412`, and neither `Channel` nor `PatchedChannel` carries a version or modified-at field. ECM compares the baseline against its own read (the lineup at the start of a bulk-commit run, the per-channel reads `assign-numbers` makes just before writing, or the read of the channel `PATCH` makes just before its own), then writes. A change that lands between that read and the write is still overwritten, and nothing can detect it. What the check closes is the much wider window between the caller's read and ECM's.
 
 ### `expectedNumber`: refuse to overwrite a change you have not seen
 
@@ -394,7 +398,7 @@ One consequence that surprises people: a `createChannel` records itself as its o
 
 Two key-level checks exist, and they are the only ones:
 
-- `channel_number`, on both paths, is held to ECM's canonical channel-number contract.
+- `channel_number`, on both paths, is held to ECM's canonical channel-number contract. Setting it also requires a baseline: `expectedNumber` beside `data` on the bulk path, and an `expectedNumber` key in the body on `PATCH`, which ECM removes before forwarding. See [Numbering baselines](#numbering-baselines-required-on-every-numbering-write-to-an-existing-channel).
 - `channel_group_id`, on the **bulk path only**, is rejected if it is still a negative staging placeholder.
 
 This is a documented residual rather than an unexamined default, tracked as open bead `enhancedchannelmanager-t683u`. The reasoning for leaving it open is recorded there: an allowlist guessed too narrow would silently refuse an Apply All that used to work. The mitigating change already made is that the journal's change describer is now total over the payload, so the surface is auditable even though it is unconstrained.
@@ -425,6 +429,21 @@ A bulk merge moves each group's combined streams onto the target channel and the
 | `channel_ids` | list[int] | Numbered in this order. |
 | `starting_number` | float, opt | Omitted means Dispatcharr chooses; see below. |
 | `expected_numbers` | map of channel id to any finite number or `null`, **required** | The number you last read for every id in `channel_ids`, and no other ids. A missing map or entry is `422`; a channel that has moved since is `409` with `concurrentNumberChanges` and nothing written. See [Numbering baselines](#numbering-baselines-required-on-every-numbering-write-to-an-existing-channel). |
+
+### `PATCH /api/channels/{id}`: `expectedNumber`
+
+The body is the channel field bag described in [The `data` field bag is unvalidated](#the-data-field-bag-is-unvalidated), plus one ECM key:
+
+```json
+{ "channel_number": 120, "name": "ESPN 120", "expectedNumber": { "number": 101 } }
+```
+
+`expectedNumber` has the shape the bulk-commit `updateChannel` operation uses for the same write: a wrapper whose presence is the claim and whose `number` is any finite number, or `null` for "I read this channel and it had no number". A bare number (`"expectedNumber": 101`) is `422`. ECM removes the key before forwarding the body, so Dispatcharr and the Journal row never see it.
+
+- **Required when the body contains `channel_number`.** Missing is `422` with error `type` `missing_channel_number_baseline` at `loc` `["body", "expectedNumber"]`, before ECM reads or writes anything. A non-finite or boolean `number` is `422` with `type` `channel_number_baseline`.
+- **Ignored when it does not.** A body that leaves the number alone cannot overwrite anyone's change to it, so a baseline sent with it is dropped without being checked, as on `updateChannel`.
+- **Checked before the write.** ECM already reads the channel before patching it, for the Journal. The baseline is compared against that read. A mismatch is the `409` described in [Numbering baselines](#numbering-baselines-required-on-every-numbering-write-to-an-existing-channel). If the channel cannot be read, nothing is written.
+- **The write contract is separate.** `channel_number` itself is still held to the canonical channel-number contract, and an out-of-contract number is `400` whether or not a baseline is present.
 
 ### `POST /api/channels/assign-numbers`: omitting `starting_number` costs N extra reads
 

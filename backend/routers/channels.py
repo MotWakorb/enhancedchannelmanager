@@ -16,8 +16,9 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, PositiveInt, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, ValidationError, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
 from auth import RequireAdminIfEnabled
@@ -655,10 +656,15 @@ class ExpectedChannelNumber(BaseModel):
     the UI.
     """
 
+    #: An object without exactly this key is refused rather than read as a
+    #: claim of "no number": ``{}`` or a misspelt key would otherwise be one.
+    model_config = ConfigDict(extra="forbid")
+
     #: The number READ, so any finite value: a number set outside ECM, such as
     #: ``8.25``, must still be expressible as what the caller saw. The write
     #: contract stays on ``data.channel_number`` (:data:`ChannelNumberBaseline`).
-    number: Optional[ChannelNumberBaseline] = None
+    #: Required, with an explicit ``null`` for "I read no number".
+    number: Optional[ChannelNumberBaseline]
 
 
 # Bulk commit operation types
@@ -2540,11 +2546,12 @@ def _stale_number_baselines(
 ) -> list[dict]:
     """Every channel whose number is not the one its caller last read.
 
-    The one comparison both numbering paths make before they write: the staged
-    executor against the lineup it read at the start of the run, and
+    The one comparison every numbering path makes before it writes: the staged
+    executor against the lineup it read at the start of the run,
     ``POST /assign-numbers`` against the per-channel reads it makes just before
-    its upstream call. A channel absent from ``current_numbers`` counts as
-    holding no number.
+    its upstream call, and ``PATCH /{channel_id}`` against the read of the
+    channel it makes just before its own. A channel absent from
+    ``current_numbers`` counts as holding no number.
 
     This narrows the window between the caller's read and ECM's write; it does
     not close it. Dispatcharr 0.28.x has no conditional write (no ``If-Match``,
@@ -2569,7 +2576,52 @@ def _stale_number_baselines(
     return stale
 
 
-def _stale_baselines_message(stale: list[dict], *, subject: str) -> str:
+def _patch_number_baseline(data: dict) -> Optional[ExpectedChannelNumber]:
+    """The baseline a ``PATCH /{channel_id}`` body carries for its number write.
+
+    The body is the free-form field bag Dispatcharr receives, so the baseline
+    rides in it under ``expectedNumber``, in the exact shape a bulk-commit
+    ``updateChannel`` carries for the same write. The caller strips it before
+    the upstream call, so Dispatcharr never receives it.
+
+    Returns ``None`` when the body does not set ``channel_number``: such a write
+    cannot overwrite anybody's change to the number, so a baseline sent with it
+    is ignored, as on ``updateChannel``.
+
+    Raises:
+        RequestValidationError: ``channel_number`` is set and the baseline is
+            missing, not a ``{"number": ...}`` object, or not a finite number or
+            ``null``. A 422, before anything is read or written.
+    """
+    if "channel_number" not in data:
+        return None
+    if "expectedNumber" not in data:
+        raise RequestValidationError([{
+            "type": "missing_channel_number_baseline",
+            "loc": ("body", "expectedNumber"),
+            "msg": (
+                "This request changes the channel's number without expectedNumber. "
+                'Send expectedNumber as {"number": <the number you last read>} '
+                "(null for a channel you saw with no number), so a change made "
+                "since is not overwritten"
+            ),
+            "input": None,
+        }])
+    try:
+        return ExpectedChannelNumber.model_validate(data["expectedNumber"])
+    except ValidationError as exc:
+        raise RequestValidationError([
+            {**error, "loc": ("body", "expectedNumber", *error["loc"])}
+            for error in exc.errors()
+        ]) from None
+
+
+def _stale_baselines_message(
+    stale: list[dict],
+    *,
+    subject: str,
+    unchanged: str = "Nothing in this request's range was changed.",
+) -> str:
     """Name each moved channel, in the wording the single-channel refusal uses."""
     moved = "; ".join(
         f"channel {change['channelId']} is on channel number "
@@ -2579,8 +2631,7 @@ def _stale_baselines_message(stale: list[dict], *, subject: str) -> str:
     )
     return (
         f"{subject} not renumbered: {moved}. Somebody else changed it. Re-read the "
-        "channels and decide before sending this again. Nothing in this request's "
-        "range was changed."
+        f"channels and decide before sending this again. {unchanged}"
     )
 
 
@@ -5324,11 +5375,36 @@ async def update_channel(channel_id: int, data: dict, _admin=RequireAdminIfEnabl
         validate_channel_number_in_payload(data)
     except InvalidChannelNumberError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
+    # Raised before the try below, whose catch-all would turn it into a 500.
+    expected = _patch_number_baseline(data)
+    data = {key: value for key, value in data.items() if key != "expectedNumber"}
     client = get_client()
     try:
-        # Get before state for logging
+        # Get before state for logging, and for the baseline check
         start = time.time()
         before_channel = await client.get_channel(channel_id)
+
+        if expected is not None:
+            # Compared against the read just made, before the write. Dispatcharr
+            # has no conditional write, so a change landing between that read and
+            # the PATCH below is still overwritten; see _stale_number_baselines.
+            stale = _stale_number_baselines(
+                {channel_id: expected.number},
+                {channel_id: before_channel.get("channel_number")},
+            )
+            if stale:
+                logger.warning(
+                    "[CHANNELS] PATCH /channels/%s refused: number moved since the caller read it",
+                    channel_id,
+                )
+                raise HTTPException(status_code=409, detail={
+                    "message": _stale_baselines_message(
+                        stale,
+                        subject="Channel was",
+                        unchanged="Nothing about this channel was changed.",
+                    ),
+                    "concurrentNumberChanges": stale,
+                })
 
         result = await client.update_channel(channel_id, data)
         elapsed_ms = (time.time() - start) * 1000

@@ -501,6 +501,12 @@ def install_safety_policy(mcp) -> None:
                         if key != "confirmation_token"
                     }
                     return await _run(clean_arguments, context=context, convert_result=convert_result)
+            if _name == "update_channel":
+                from tools.channels import missing_number_baseline
+
+                refusal = missing_number_baseline(arguments)
+                if refusal:
+                    return present(refusal)
             oversized = _oversized_batch(arguments)
             if oversized:
                 field, count = oversized
