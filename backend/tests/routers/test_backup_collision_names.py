@@ -8,6 +8,7 @@ import asyncio
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import io
+from pathlib import Path
 import stat
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -102,7 +103,7 @@ def handoff(monkeypatch):
     async def run_task(task_id, *, parameters, run_id):
         assert task_id == "dbas_restore"
         assert run_id
-        assert parameters["cleanup_artifact"] is False
+        assert parameters["cleanup_artifact"] is True
         task = DbasRestoreTask()
         task.update_config(parameters)
         return await task.execute()
@@ -112,7 +113,9 @@ def handoff(monkeypatch):
         return MagicMock()
 
     monkeypatch.setattr(DbasRestoreTask, "_run_restore", consume)
-    monkeypatch.setattr("task_engine.get_engine", lambda: SimpleNamespace(run_task=run_task))
+    monkeypatch.setattr("task_engine.get_engine", lambda: SimpleNamespace(
+        run_task=run_task, get_status=lambda: {"active_tasks": []},
+    ))
     # Scope to each HTTP call: asyncio itself is shared with the transport.
     async def restore(client, name, *, apply=False, passphrase=None):
         from unittest.mock import patch
@@ -161,7 +164,9 @@ async def test_same_second_producer_outputs_reach_saved_consumers(
             )
             assert response.status_code == 200, response.text
             assert len(results) == 1 and results[0].success
-            assert seen[-1] == (apply, {"smtp_from_name": label}, str(art.zip_path))
+            assert seen[-1][:2] == (apply, {"smtp_from_name": label})
+            assert seen[-1][2] != str(art.zip_path)
+            assert not Path(seen[-1][2]).exists()
         _assert_private_intact(art)
 
     # Both timestamped outputs count under the EXISTING retention floor. The
@@ -260,7 +265,9 @@ async def test_legacy_random_zip_is_recoverable_but_not_newly_prunable(
         response, results = await restore(async_client, LEGACY, apply=apply, passphrase=PASSPHRASE)
         assert response.status_code == 200, response.text
         assert len(results) == 1 and results[0].success
-        assert seen[-1][2] == str(legacy)
+        assert seen[-1][2] != str(legacy)
+        assert not Path(seen[-1][2]).exists()
+        assert legacy.read_bytes() == art.zip_path.read_bytes()
     response, results = await restore(async_client, LEGACY, passphrase="<synthetic-wrong-passphrase>")
     assert response.status_code == 200
     assert len(results) == 1 and not results[0].success

@@ -108,7 +108,7 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     manifest = verifier.load_manifest(
         ROOT / "docker/alpine-native/application-source.json"
     )
-    assert len(manifest["files"]) == 1099
+    assert len(manifest["files"]) == 1100
     assert (
         manifest["baseline_application_commit"]
         == "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531"
@@ -163,6 +163,53 @@ SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
 SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
 
+SAVED_RESTORE_SNAPSHOT_FILES = (
+    "backend/routers/backup.py",
+    "backend/tasks/dbas_restore.py",
+)
+SAVED_RESTORE_SNAPSHOT_ADDED_FILES = ("backend/restore_snapshot_storage.py",)
+
+
+def _before_saved_restore_snapshot(manifest):
+    key = "saved_restore_snapshot_update"
+    update = manifest[key]
+    assert update["base_commit"] == "deda80c438b3cade69c4a03f20810c9a7f17a3a9"
+    assert update["bead"] == "enhancedchannelmanager-0m06f.3.3"
+    assert update["version"] == "0.18.2-0089"
+    assert update["previous_manifest_sha256"] == (
+        "6fe42a80de57ec12e50da581ff98a840c8826e3ed784b525c36dbb8d0ffa457c"
+    )
+    assert set(update["added_files"]) == set(SAVED_RESTORE_SNAPSHOT_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(SAVED_RESTORE_SNAPSHOT_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_saved_restore_snapshot_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_saved_restore_snapshot(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["saved_restore_snapshot_update"] == manifest["saved_restore_snapshot_update"]
+
+
 RENUMBER_BASELINES_FILES = (
     "backend/channel_number.py",
     "backend/routers/channels.py",
@@ -180,6 +227,7 @@ RENUMBER_BASELINES_ADDED_FILES = ("mcp-server/tests/test_assign_numbers_baseline
 
 def _before_renumber_baselines(manifest):
     key = "renumber_baselines_update"
+    manifest = _before_saved_restore_snapshot(manifest)
     update = manifest[key]
     assert update["base_commit"] == "73d7e03c0b3e5d8de3d1c83ad314bbf7eb0d4725"
     assert update["bead"] == "enhancedchannelmanager-jjjnh"

@@ -1,0 +1,503 @@
+"""Saved DBAS restores consume a private snapshot, never a rebindable pathname."""
+
+import asyncio
+import os
+import stat
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from routers import backup
+
+
+@pytest.fixture
+def storage(tmp_path, monkeypatch):
+    saved = tmp_path / "backups"
+    private = tmp_path / "restore_uploads"
+    saved.mkdir()
+    monkeypatch.setattr(backup, "BACKUPS_DIR", saved)
+    monkeypatch.setattr(backup, "_DBAS_RESTORE_TMP_DIR", private)
+    return saved, private
+
+
+@pytest.fixture
+def scheduled(monkeypatch):
+    create_task = asyncio.create_task
+    tasks = []
+
+    def capture(coro, *args, **kwargs):
+        task = create_task(coro, *args, **kwargs)
+        tasks.append(task)
+        return task
+
+    monkeypatch.setattr(backup.asyncio, "create_task", capture)
+    return tasks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name",
+    [
+        "ecm-backup-2026-01-01_000000.zip",
+        "ecm-backup-2026-01-01_000000-ab12cd34.zip",
+        "ecm-backup-ab12cd34.zip",
+    ],
+)
+async def test_planted_symlink_never_schedules_restore(
+    async_client, storage, tmp_path, name
+):
+    saved, _ = storage
+    outside = tmp_path / "outside.zip"
+    outside.write_bytes(b"outside bytes must not be consumed")
+    (saved / name).symlink_to(outside)
+    with patch(
+        "task_engine.get_engine", return_value=MagicMock(run_task=AsyncMock())
+    ) as engine:
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+    assert response.status_code == 404
+    engine.assert_not_called()
+    assert outside.read_bytes() == b"outside bytes must not be consumed"
+
+
+@pytest.mark.asyncio
+async def test_queued_restore_is_bound_to_selected_bytes(
+    async_client, storage, tmp_path, scheduled
+):
+    saved, private = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    original = saved / name
+    original.write_bytes(b"selected backup bytes")
+    outside = tmp_path / "outside.zip"
+    outside.write_bytes(b"replacement backup bytes")
+    consumed = []
+
+    async def consume(_task_id, *, parameters, run_id):
+        original.unlink()
+        original.symlink_to(outside)
+        selected = Path(parameters["artifact_path"])
+        assert selected != original
+        assert stat.S_IMODE(selected.stat().st_mode) == 0o600
+        assert stat.S_IMODE(selected.parent.stat().st_mode) == 0o700
+        assert parameters["cleanup_artifact"] is True
+        consumed.append(selected.read_bytes())
+
+    engine = MagicMock(run_task=AsyncMock(side_effect=consume))
+    with patch("task_engine.get_engine", return_value=engine):
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+        assert scheduled
+        await asyncio.gather(*scheduled)
+    assert response.status_code == 200
+    assert consumed == [b"selected backup bytes"]
+    assert original.is_symlink()
+    assert outside.read_bytes() == b"replacement backup bytes"
+    assert not list(private.rglob("*.zip"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["rejected", "error", "cancelled"])
+async def test_snapshot_cleanup_even_if_engine_does_not_execute(
+    async_client, storage, outcome, scheduled
+):
+    saved, private = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    original = saved / name
+    original.write_bytes(b"retained saved artifact")
+    selected_paths = []
+
+    async def consume(*args, **kwargs):
+        selected = Path(kwargs["parameters"]["artifact_path"])
+        selected_paths.append(selected)
+        assert selected != original
+        assert selected.is_file()
+        if outcome == "error":
+            raise RuntimeError("engine failed before execute")
+        if outcome == "cancelled":
+            raise asyncio.CancelledError
+
+    with patch("task_engine.get_engine", return_value=MagicMock(run_task=consume)):
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+        assert scheduled
+        results = await asyncio.gather(*scheduled, return_exceptions=True)
+    expected = {
+        "rejected": type(None),
+        "error": RuntimeError,
+        "cancelled": asyncio.CancelledError,
+    }
+    assert all(isinstance(result, expected[outcome]) for result in results)
+    assert selected_paths
+    assert all(not path.exists() for path in selected_paths)
+    assert response.status_code == 200
+    assert original.read_bytes() == b"retained saved artifact"
+    assert not list(private.rglob("*.zip"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["directory", "fifo"])
+async def test_non_regular_selection_refused(async_client, storage, kind):
+    saved, _ = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    if kind == "directory":
+        (saved / name).mkdir()
+    else:
+        os.mkfifo(saved / name)
+    with patch("task_engine.get_engine") as engine:
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+    assert response.status_code == 404
+    engine.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rebinding_between_listing_and_open_is_denied(
+    async_client, storage, tmp_path, monkeypatch
+):
+    saved, _ = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    selected = saved / name
+    selected.write_bytes(b"original")
+    outside = tmp_path / "outside.zip"
+    outside.write_bytes(b"outside")
+    real_open = os.open
+    rebound = []
+
+    def swap(path, flags, *args, **kwargs):
+        if path == name and "dir_fd" in kwargs:
+            selected.unlink()
+            selected.symlink_to(outside)
+            rebound.append(True)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(backup.os, "open", swap)
+    with patch("task_engine.get_engine") as engine:
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+    assert rebound == [True]
+    assert response.status_code == 404
+    engine.assert_not_called()
+    assert outside.read_bytes() == b"outside"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_size_cap_and_partial_cleanup(
+    async_client, storage, monkeypatch
+):
+    saved, private = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    selected = saved / name
+    selected.write_bytes(b"too much for this test budget")
+    monkeypatch.setattr(backup, "_RESTORE_MAX_UPLOAD_BYTES", 8)
+    with patch("task_engine.get_engine") as engine:
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+    assert response.status_code == 413
+    engine.assert_not_called()
+    assert not list(private.iterdir())
+    assert selected.read_bytes() == b"too much for this test budget"
+
+
+@pytest.mark.asyncio
+async def test_failed_scheduling_removes_snapshot_only(async_client, storage):
+    saved, private = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    selected = saved / name
+    selected.write_bytes(b"retained backup")
+    with patch("task_engine.get_engine", side_effect=RuntimeError("not available")):
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+    assert response.status_code == 500
+    assert not list(private.iterdir())
+    assert selected.read_bytes() == b"retained backup"
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_first_step_cleans_snapshot_with_task_reference_retained(
+    async_client, storage, monkeypatch
+):
+    saved, private = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    selected = saved / name
+    selected.write_bytes(b"retained backup")
+    create_task = asyncio.create_task
+    retained = []
+
+    def cancel_before_start(coro):
+        task = create_task(coro)
+        task.cancel()
+        retained.append(task)
+        return task
+
+    engine = MagicMock(run_task=AsyncMock())
+    with patch("task_engine.get_engine", return_value=engine):
+        monkeypatch.setattr(backup.asyncio, "create_task", cancel_before_start)
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+        assert retained
+        await asyncio.gather(*retained, return_exceptions=True)
+        await asyncio.sleep(0)  # execute completed-task callbacks
+    assert response.status_code == 200
+    engine.run_task.assert_not_awaited()
+    assert all(task.cancelled() for task in retained)
+    assert not list(private.iterdir())
+    assert selected.read_bytes() == b"retained backup"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("loose_mode", [0o777, 0o775, 0o755])
+async def test_existing_loose_private_parent_is_tightened_before_snapshot(
+    async_client, storage, scheduled, loose_mode
+):
+    # A group/world-writable parent lets another writer rename the 0700
+    # snapshot directory and plant a replacement before the task reopens it.
+    saved, private = storage
+    private.mkdir()
+    private.chmod(loose_mode)
+    name = "ecm-backup-2026-01-01_000000.zip"
+    (saved / name).write_bytes(b"selected backup bytes")
+    parent_modes = []
+
+    async def consume(_task_id, *, parameters, run_id):
+        parent_modes.append(stat.S_IMODE(private.stat().st_mode))
+
+    engine = MagicMock(run_task=AsyncMock(side_effect=consume))
+    with patch("task_engine.get_engine", return_value=engine):
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+        await asyncio.gather(*scheduled)
+    assert response.status_code == 200
+    assert parent_modes == [0o700]
+
+
+@pytest.mark.asyncio
+async def test_symlinked_private_parent_is_refused_and_target_untouched(
+    async_client, storage, tmp_path
+):
+    saved, private = storage
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    elsewhere.chmod(0o755)
+    private.symlink_to(elsewhere, target_is_directory=True)
+    name = "ecm-backup-2026-01-01_000000.zip"
+    (saved / name).write_bytes(b"retained backup")
+    with patch("task_engine.get_engine") as engine:
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+    assert response.status_code == 500
+    engine.assert_not_called()
+    assert list(elsewhere.iterdir()) == []
+    assert stat.S_IMODE(elsewhere.stat().st_mode) == 0o755
+    assert (saved / name).read_bytes() == b"retained backup"
+
+
+@pytest.mark.asyncio
+async def test_foreign_owned_private_parent_is_refused(
+    async_client, storage, monkeypatch
+):
+    import restore_snapshot_storage
+
+    saved, private = storage
+    private.mkdir(mode=0o700)
+    name = "ecm-backup-2026-01-01_000000.zip"
+    (saved / name).write_bytes(b"retained backup")
+    real_uid = os.geteuid()
+    monkeypatch.setattr(restore_snapshot_storage.os, "geteuid", lambda: real_uid + 1)
+    with patch("task_engine.get_engine") as engine:
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+    assert response.status_code == 500
+    engine.assert_not_called()
+    assert list(private.iterdir()) == []
+    assert (saved / name).read_bytes() == b"retained backup"
+
+
+def _snapshot_dirs(private):
+    if not private.exists():
+        return []
+    return sorted(p.name for p in private.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_concurrent_saved_restore_is_refused_without_second_snapshot(
+    async_client, storage, scheduled, monkeypatch
+):
+    # Each preview copies up to the size cap, so parallel requests must not
+    # stack full copies in the private pool before the engine refuses them.
+    saved, private = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    (saved / name).write_bytes(b"selected backup bytes")
+    real_stream = backup._stream_upload_to_temp
+    observed = []
+
+    async def stream_while_second_request_arrives(file, dest_dir, **kwargs):
+        if observed:  # an unguarded second request copies too; never recurse
+            observed.append(("second request copied", None, None))
+            return await real_stream(file, dest_dir, **kwargs)
+        observed.append(None)
+        second = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+        observed[0] = (second.status_code, second.json(), _snapshot_dirs(private))
+        return await real_stream(file, dest_dir, **kwargs)
+
+    monkeypatch.setattr(
+        backup, "_stream_upload_to_temp", stream_while_second_request_arrives
+    )
+    engine = MagicMock(run_task=AsyncMock())
+    with patch("task_engine.get_engine", return_value=engine):
+        first = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+        await asyncio.gather(*scheduled)
+    assert first.status_code == 200
+    assert len(observed) == 1
+    status, body, dirs_during = observed[0]
+    assert status == 409
+    assert body["detail"] == "A saved restore is already being prepared"
+    assert len(dirs_during) == 1  # only the first request's snapshot
+    assert engine.run_task.await_count == 1
+    assert _snapshot_dirs(private) == []
+
+
+@pytest.mark.asyncio
+async def test_active_dbas_restore_refused_before_any_copy(
+    async_client, storage, monkeypatch
+):
+    saved, private = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    (saved / name).write_bytes(b"selected backup bytes")
+    copies = []
+
+    async def must_not_copy(*args, **kwargs):
+        copies.append(args)
+        raise AssertionError("copied while a restore was active")
+
+    monkeypatch.setattr(backup, "_stream_upload_to_temp", must_not_copy)
+    engine = MagicMock(
+        run_task=AsyncMock(),
+        get_status=MagicMock(return_value={"active_tasks": ["dbas_restore"]}),
+    )
+    with patch("task_engine.get_engine", return_value=engine):
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Task is already running"
+    assert copies == []
+    engine.run_task.assert_not_called()
+    assert _snapshot_dirs(private) == []
+    assert (saved / name).read_bytes() == b"selected backup bytes"
+
+
+@pytest.mark.asyncio
+async def test_insufficient_free_space_refused_before_copy(
+    async_client, storage, monkeypatch
+):
+    saved, private = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    (saved / name).write_bytes(b"selected backup bytes")
+    real_statvfs = os.statvfs
+
+    class Full:
+        f_bavail = 1
+        f_frsize = 4096
+
+    monkeypatch.setattr(
+        backup.os,
+        "statvfs",
+        lambda path: Full() if Path(path) == private else real_statvfs(path),
+    )
+    engine = MagicMock(run_task=AsyncMock())
+    with patch("task_engine.get_engine", return_value=engine):
+        response = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+    assert response.status_code == 507
+    assert "free space" in response.json()["detail"]
+    engine.run_task.assert_not_called()
+    assert _snapshot_dirs(private) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["lease", "copy"])
+async def test_snapshot_oserror_is_logged_500_and_cleaned(
+    async_client, storage, monkeypatch, caplog, failure
+):
+    import errno
+
+    import restore_snapshot_storage
+
+    saved, private = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    (saved / name).write_bytes(b"selected backup bytes")
+    if failure == "lease":
+        def no_flock(*args):
+            raise OSError(errno.EOPNOTSUPP, "flock unsupported")
+
+        # Replace only this module's view: fcntl itself is shared with config.
+        real = restore_snapshot_storage.fcntl
+        monkeypatch.setattr(
+            restore_snapshot_storage,
+            "fcntl",
+            SimpleNamespace(flock=no_flock, LOCK_EX=real.LOCK_EX, LOCK_NB=real.LOCK_NB),
+        )
+    else:
+        async def disk_full(file, dest_dir, **kwargs):
+            (Path(dest_dir) / "ecm-restore-partial0.zip").write_bytes(b"partial")
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(backup, "_stream_upload_to_temp", disk_full)
+    engine = MagicMock(run_task=AsyncMock())
+    with caplog.at_level("WARNING", logger="routers.backup"):
+        with patch("task_engine.get_engine", return_value=engine):
+            response = await async_client.post(
+                "/api/backup/restore-dbas-saved", json={"filename": name}
+            )
+    # The app scrubs 500 details; the logged record proves the route mapped the
+    # OSError itself instead of letting it escape as an unlogged failure.
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Internal server error"
+    assert any(
+        "saved restore snapshot" in r.getMessage() and r.exc_info
+        for r in caplog.records
+    )
+    engine.run_task.assert_not_called()
+    assert _snapshot_dirs(private) == []
+    assert (saved / name).read_bytes() == b"selected backup bytes"
+
+
+@pytest.mark.asyncio
+async def test_saved_route_reports_saved_backup_size_and_empty_errors(
+    async_client, storage, monkeypatch
+):
+    saved, private = storage
+    name = "ecm-backup-2026-01-01_000000.zip"
+    selected = saved / name
+    selected.write_bytes(b"")
+    with patch("task_engine.get_engine", return_value=MagicMock(run_task=AsyncMock())):
+        empty = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+        selected.write_bytes(b"too much for this test budget")
+        monkeypatch.setattr(backup, "_RESTORE_MAX_UPLOAD_BYTES", 8)
+        large = await async_client.post(
+            "/api/backup/restore-dbas-saved", json={"filename": name}
+        )
+    assert (empty.status_code, empty.json()["detail"]) == (400, "Saved backup is empty")
+    assert (large.status_code, large.json()["detail"]) == (
+        413, "Saved backup is too large"
+    )
+    assert _snapshot_dirs(private) == []
