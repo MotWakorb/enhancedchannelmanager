@@ -33,25 +33,38 @@ def test_recorded_actual_selection_has_exactly_74_current_pins_per_arch(preparer
         assert sum(bool(row["native_files"]) for row in rows) == 22
 
 
+# The 72 rows other than the two pure-Python security replacements, hashed
+# before the Mako replacement was applied.
 @pytest.mark.parametrize("arch,unchanged_rows_sha256", [
-    ("amd64", "25cacfeeb60243c9e2d2c6ec59c5722317e98cc13ddcb69249fe0d89f72e389c"),
-    ("arm64", "8f01243b638c3199f5c0c298bcec4f4911cbcd6fe0e795e4f8912e41b2aaa867"),
+    ("amd64", "49f631eb243a45d386153ce93fc7530b98ea754ad1243ad3d32ef8092df36349"),
+    ("arm64", "f05ff11e776330c36f6b47a1615528c5c700a859326b4e4a5d810e5ef21e014d"),
 ])
-def test_dns_security_wheel_refresh_retains_all_other_artifact_bytes(preparer, arch, unchanged_rows_sha256):
+def test_pure_security_wheel_refreshes_retain_all_other_artifact_bytes(preparer, arch, unchanged_rows_sha256):
     rows = preparer.selection(arch)
-    unchanged = [row for row in rows if row["name"] != "dnspython"]
-    assert len(unchanged) == 73
+    unchanged = [row for row in rows if row["name"] not in {"dnspython", "mako"}]
+    assert len(unchanged) == 72
     assert hashlib.sha256(json.dumps(unchanged, sort_keys=True, separators=(",", ":")).encode()).hexdigest() == unchanged_rows_sha256
-    dns = next(row for row in rows if row["name"] == "dnspython")
-    assert dns["version"] == "2.9.2"
-    assert dns["purelib"] and dns["tags"] == ["py3-none-any"]
-    assert dns["native_files"] == []
-    metadata = ROOT / "docker/python-third-party/artifact-index" / dns["pypi_artifact"]["metadata_file"]
-    assert preparer.sha256(metadata) == dns["pypi_artifact"]["metadata_sha256"]
+
+
+@pytest.mark.parametrize("arch", ["amd64", "arm64"])
+@pytest.mark.parametrize("name,version,wheel_sha256", [
+    ("dnspython", "2.9.2", "af15f7d385a6ae2fb35a796fde2138004c8c42c7389090e2addc83e3b3340fd8"),
+    ("mako", "1.4.2", "e70a2a4308952b33a21208bfd6725da79fae5a8c224578f8cfdeb60e5ace03df"),
+])
+def test_pure_security_wheel_is_bound_to_its_recorded_pypi_artifact(preparer, arch, name, version, wheel_sha256):
+    rows = preparer.selection(arch)
+    row = next(row for row in rows if row["name"] == name)
+    assert row["version"] == version and row["sha256"] == wheel_sha256
+    assert row["filename"] == f"{name}-{version}-py3-none-any.whl"
+    assert row["purelib"] and row["tags"] == ["py3-none-any"]
+    assert row["native_files"] == []
+    metadata = ROOT / "docker/python-third-party/artifact-index" / row["pypi_artifact"]["metadata_file"]
+    assert preparer.sha256(metadata) == row["pypi_artifact"]["metadata_sha256"]
     source = json.loads(metadata.read_text())
-    wheel = next(row for row in source["urls"] if row["filename"] == dns["filename"])
-    assert wheel["digests"]["sha256"] == dns["sha256"]
-    assert wheel["url"] == dns["pypi_artifact"]["url"]
+    wheel = next(item for item in source["urls"] if item["filename"] == row["filename"])
+    assert wheel["digests"]["sha256"] == row["sha256"]
+    assert wheel["url"] == row["pypi_artifact"]["url"]
+    assert not wheel["yanked"]
 
 
 def test_offline_cache_bytes_are_rehashed_not_relabelled_as_downloads(

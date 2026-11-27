@@ -31,6 +31,24 @@ from verify_musllinux_gnu import (
 INDEX = "usr/share/doc/ecm/python-third-party/artifact-index"
 SOURCES = "usr/share/ecm/sources/wheel-gnu"
 SITE = "opt/venv/lib/python3.12/site-packages"
+# Replacement wheel -> (name, version, replacement sha256, replaced GNU-selection
+# wheel, replaced sha256). Each entry must be an ELF-free py3-none-any wheel.
+PURE_SECURITY_UPDATES = {
+    "dnspython-2.9.2-py3-none-any.whl": (
+        "dnspython",
+        "2.9.2",
+        "af15f7d385a6ae2fb35a796fde2138004c8c42c7389090e2addc83e3b3340fd8",
+        "dnspython-2.9.0-py3-none-any.whl",
+        "9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9",
+    ),
+    "mako-1.4.2-py3-none-any.whl": (
+        "mako",
+        "1.4.2",
+        "e70a2a4308952b33a21208bfd6725da79fae5a8c224578f8cfdeb60e5ace03df",
+        "mako-1.4.1-py3-none-any.whl",
+        "a359d9a94a541213958742b2698d0a7757bb83551767bc468a74b9905aba9617",
+    ),
+}
 
 
 def gnu_members(inventory: dict, manifest: dict, architecture: str) -> list[dict]:
@@ -49,24 +67,24 @@ def gnu_members(inventory: dict, manifest: dict, architecture: str) -> list[dict
         "complete native wheel selection required",
     )
     selected = {row["filename"]: row["sha256"] for row in rows}
-    # The GNU proof remains historical for unchanged native wheels. This exact
-    # reviewed purelib security update contains no ELF and does not inherit GNU
+    # The GNU proof remains historical for unchanged native wheels. These exact
+    # reviewed purelib security updates contain no ELF and do not inherit GNU
     # source clearance. Never exempt arbitrary pure wheels or native payloads.
     # Whole archives/RECORDs are independently pinned by INVENTORY_SHA256 and
     # rehashed by the installed-wheel consumer below.
-    pure_dns_update = {
+    pure_updates = {
         row["filename"] for row in rows
-        if row["name"] == "dnspython" and row["version"] == "2.9.2"
-        and row["filename"] == "dnspython-2.9.2-py3-none-any.whl"
-        and row["sha256"] == "af15f7d385a6ae2fb35a796fde2138004c8c42c7389090e2addc83e3b3340fd8"
+        if row["filename"] in PURE_SECURITY_UPDATES
+        and (row["name"], row["version"], row["sha256"])
+        == PURE_SECURITY_UPDATES[row["filename"]][:3]
         and row["purelib"] is True and row["native_files"] == []
         and row["tags"] == ["py3-none-any"]
-        and manifest["wheel_selection"].get("dnspython-2.9.0-py3-none-any.whl")
-        == "9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9"
+        and manifest["wheel_selection"].get(PURE_SECURITY_UPDATES[row["filename"]][3])
+        == PURE_SECURITY_UPDATES[row["filename"]][4]
     }
     require(
         all(
-            manifest["wheel_selection"].get(name) == digest or name in pure_dns_update
+            manifest["wheel_selection"].get(name) == digest or name in pure_updates
             for name, digest in selected.items()
         ),
         "GNU whole-wheel selection binding differs",

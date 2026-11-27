@@ -4456,6 +4456,11 @@ export type RestoreEntityType =
 
 /** Why an entity was (or would be) skipped. */
 export type RestoreSkipReason =
+  | 'existing_stream_reused'
+  /** An existing channel whose differing stream list could not be rewritten; not identical. */
+  | 'stream_attachment_rewrite_failed'
+  /** An existing channel whose archived streams could not all be resolved; nothing was written. */
+  | 'stream_attachment_incomplete'
   | 'already_exists_identical'
   /**
    * A destination row was ADOPTED because its NAME matched, with nothing beyond
@@ -4830,6 +4835,8 @@ export interface RestoreReport {
    * (status code + error class); never a URL, body or credential.
    */
   destination_unreadable?: string | null;
+  /** True when pre-flight refused the plan before any importer ran; the reasons are in `notes`. */
+  preflight_refused?: boolean;
   started_at?: string | null;
   completed_at?: string | null;
   notes: string[];

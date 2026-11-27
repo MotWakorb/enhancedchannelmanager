@@ -45,6 +45,11 @@ UPSTREAM_ROUTES = {
         "sha512": "0276d83dee90e76d50a506d22901e658212094c1191fc09b8510273b4bfc56195ab1dd1c80b5fd8288b4aa9323c62f0b60ab3f6227ea113b4712bc54cb144abb",
         "url": "https://web.mit.edu/kerberos/dist/krb5/1.22/krb5-1.22.3.tar.gz",
     },
+    # The APKBUILD source= URL; used only while the distfiles mirror lacks it.
+    ("libffi", "libffi-3.8.2.tar.gz"): {
+        "sha512": "35e863cb05ee0a36ac8ecaea1754be7931ed41da3b43f1b65e36abc0581de3cd4b0a020b78d20283502acd6d34385584f8bb5d15d94422c2bab444982b957af6",
+        "url": "https://github.com/libffi/libffi/releases/download/v3.8.2/libffi-3.8.2.tar.gz",
+    },
     ("libopenmpt", "libopenmpt-0.8.10+release.autotools.tar.gz"): {
         "sha512": "c6eba868e1f9b65a1c8a4829b461ffe8a1411527336de31131e1f2494f271d2f364ec6f884cbcd93bea7dedb85e18a601fb4537ebdee8f7a3c1eb6116ca7d592",
         "url": "https://lib.openmpt.org/files/libopenmpt/src/libopenmpt-0.8.10+release.autotools.tar.gz",
