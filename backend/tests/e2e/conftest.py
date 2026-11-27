@@ -1,17 +1,27 @@
 """
 E2E test configuration and shared fixtures.
 
-E2E tests hit the live container at localhost:6100.
-They are skipped automatically when the container is unreachable.
+E2E tests hit the live container at localhost:6100 and mutate it: they mark
+notifications read, clear the cache, and create and run pipeline rules. On a
+developer host that container is the operator's live instance, so reachability
+is not consent. Unless ECM_E2E_LIVE=1 is set, nothing in this directory is
+collected and a test file named on the command line is deselected, so neither
+depends on the skipping plugin. With the opt-in, the suite still skips when the
+container is unreachable. The probe runs only after the opt-in.
 
-Run: cd backend && python -m pytest tests/e2e/ -q
+Run (only against an instance that may be mutated):
+    ECM_E2E_LIVE=1 scripts/backend-gate.sh --subset --allow-live-e2e tests/e2e
 """
+import os
+from pathlib import Path
 import time
 
 import httpx
 import pytest
 
 BASE_URL = "http://localhost:6100"
+LIVE_OPT_IN_ENV = "ECM_E2E_LIVE"
+_E2E_DIR = Path(__file__).resolve().parent
 AUTH_CREDS = {"username": "e2e_test", "password": "e2e_test_password"}
 
 # Login rate limit: 5/minute.  On rapid reruns we may hit 429 before the
@@ -27,7 +37,7 @@ def _container_reachable() -> bool:
     try:
         resp = httpx.get(f"{BASE_URL}/api/health", timeout=3)
         return resp.status_code == 200
-    except (httpx.ConnectError, httpx.TimeoutException):
+    except httpx.HTTPError:
         return False
 
 
@@ -58,11 +68,44 @@ def _login(client: httpx.Client) -> bool:
     return False
 
 
-# Skip all E2E tests if container is not available
-pytestmark = pytest.mark.skipif(
-    not _container_reachable(),
-    reason="ECM container not reachable at localhost:6100",
-)
+_OFF_REASON = (f"live e2e is off: it mutates the ECM at {BASE_URL}; set "
+               f"{LIVE_OPT_IN_ENV}=1 only when that instance may be changed")
+
+
+def _opted_in() -> bool:
+    return os.environ.get(LIVE_OPT_IN_ENV) == "1"
+
+
+# Ignores every path below this directory, so its test modules are never
+# imported. It does not cover a path named on the command line; the collection
+# hook below deselects those.
+if not _opted_in():
+    collect_ignore_glob = ["*"]
+
+
+def pytest_collection_modifyitems(config, items):
+    """Deselect this directory's tests unless opted in; skip them if unreachable.
+
+    A collection hook, because pytestmark in a conftest applies to nothing.
+    Deselection, unlike a skip marker, does not depend on the skipping plugin.
+    """
+    ours = [item for item in items if _E2E_DIR in Path(item.path).resolve().parents]
+    if not ours:
+        return
+    if not _opted_in():
+        kept = [item for item in items if item not in ours]
+        items[:] = kept
+        config.hook.pytest_deselected(items=ours)
+        return
+    if not _container_reachable():
+        marker = pytest.mark.skip(reason="ECM container not reachable at localhost:6100")
+        for item in ours:
+            item.add_marker(marker)
+
+
+def pytest_terminal_summary(terminalreporter):
+    if not _opted_in():
+        terminalreporter.write_line(f"tests/e2e not run: {_OFF_REASON}")
 
 
 @pytest.fixture(scope="session")
@@ -82,6 +125,8 @@ def e2e_client():
     all retries the entire suite is skipped with an explanatory message
     rather than letting every authed test fail with 401.
     """
+    if not _opted_in():
+        pytest.fail(f"e2e_client reached without the opt-in: {_OFF_REASON}")
     # X-ECM-Automated-Client (bead uliyr): self-declare every request from
     # this harness as automated so the journal rows it churns out (rule
     # create/delete pairs, etc.) carry automated_client=True and are eligible
