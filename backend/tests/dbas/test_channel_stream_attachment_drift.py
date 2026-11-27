@@ -60,7 +60,11 @@ def _client(current_streams: list[int]) -> AsyncMock:
     return client
 
 
-async def _import(client: AsyncMock, *, dry_run: bool = False) -> RestoreReport:
+async def _import(
+    client: AsyncMock, *, dry_run: bool = False, archived: list[dict] | None = None
+) -> RestoreReport:
+    if archived is None:
+        archived = [dict(_A, id=9001), dict(_B, id=9002)]
     report = RestoreReport(is_dry_run=dry_run)
     await import_channels(
         archive_channels=[
@@ -68,9 +72,9 @@ async def _import(client: AsyncMock, *, dry_run: bool = False) -> RestoreReport:
                 "id": 1,
                 "name": "Recorded lineup",
                 "channel_number": 1,
-                # Archived streams carry SOURCE ids; the matcher resolves them
-                # to destination rows 101 and 102 by URL.
-                "streams": [dict(_A, id=9001), dict(_B, id=9002)],
+                # Archived streams carry SOURCE ids; by default the matcher
+                # resolves them to destination rows 101 and 102 by URL.
+                "streams": archived,
             }
         ],
         client=client,
@@ -167,3 +171,64 @@ async def test_preview_without_existing_attachments_has_no_channel_caveat():
     channels = report.category(EntityType.CHANNEL)
     assert channels.would_create == 1
     assert channels.caveat is None
+
+
+# Two archived streams that the matcher resolves to the same destination row.
+_DUPLICATED = [dict(_A, id=9001), dict(_A, id=9002, m3u_account=2)]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_matches_compare_equal_to_the_held_stream():
+    client = _client([101])
+    report = await _import(client, archived=_DUPLICATED)
+
+    client.update_channel.assert_not_awaited()
+    channels = report.category(EntityType.CHANNEL)
+    assert channels.updated == 0
+    assert _reasons(channels) == [SkipReason.ALREADY_EXISTS_IDENTICAL]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_matches_are_sent_once():
+    client = _client([102])
+    report = await _import(client, archived=_DUPLICATED)
+
+    client.update_channel.assert_awaited_once_with(50, {"streams": [101]})
+    assert report.category(EntityType.CHANNEL).updated == 1
+
+
+@pytest.mark.asyncio
+async def test_order_only_rewrite_says_the_order_changed():
+    report = await _import(_client([102, 101]))
+
+    notes = [n for n in report.notes if "Recorded lineup" in n]
+    assert len(notes) == 1
+    assert "stream order changed" in notes[0]
+    assert "replaced" not in notes[0]
+
+
+# An archived stream with no destination match whose placeholder create fails.
+_UNRESOLVABLE = dict(_C, id=9003, url="https://provider.example/live/none.ts",
+                     name="Unmatched", stream_hash="0" * 40)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "archived,held",
+    [([_UNRESOLVABLE], []), ([dict(_A, id=9001), _UNRESOLVABLE], [101])],
+    ids=["empty", "partial"],
+)
+async def test_unresolved_attachment_is_not_called_identical(archived, held):
+    client = _client(held)
+    client.get_m3u_accounts.return_value = []
+    client.create_m3u_account.return_value = {"id": 77, "name": "custom"}
+    client.create_stream.side_effect = RuntimeError("placeholder rejected")
+    report = await _import(client, archived=archived)
+
+    client.update_channel.assert_not_awaited()
+    assert report.category(EntityType.STREAM).failed >= 1
+    channels = report.category(EntityType.CHANNEL)
+    assert channels.updated == 0
+    assert [d.reason.value for d in channels.skip_details] == [
+        "stream_attachment_incomplete"
+    ]

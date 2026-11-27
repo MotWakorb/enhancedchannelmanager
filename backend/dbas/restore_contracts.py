@@ -164,6 +164,11 @@ class SkipReason(str, Enum):
     # rewrite was rejected. The row is not identical and was not changed; the
     # rejection is counted once, as the STREAM category's failure.
     STREAM_ATTACHMENT_REWRITE_FAILED = "stream_attachment_rewrite_failed"
+    # An existing channel whose archived streams could not all be resolved on
+    # the destination (a placeholder create failed), so nothing was written and
+    # the row is not known to match the archive. The unresolved streams are
+    # counted as STREAM failures.
+    STREAM_ATTACHMENT_INCOMPLETE = "stream_attachment_incomplete"
     EXCLUDED_BY_OPERATOR = "excluded_by_operator"           # category opt-out / selection
     CURRENT_ADMIN_PRESERVED = "current_admin_preserved"     # …-l1p4p D11 guard
     UNSUPPORTED_IN_THIS_VERSION = "unsupported_in_this_version"  # e.g. plugins (ADR-012 D10)

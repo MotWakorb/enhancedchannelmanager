@@ -293,3 +293,12 @@ async def test_sync_preview_channel_caveat_describes_the_sync_target():
 
     message = DbasSyncTask()._result_from_report(datetime.now(UTC), report).message
     assert "channel: " + channels.caveat in message
+
+
+def test_sync_wording_replaces_only_the_importer_channel_caveat():
+    from tasks.dbas_sync_engine import _describe_preview_caveats_for_sync
+
+    report = RestoreReport(is_dry_run=True)
+    report.category(EntityType.CHANNEL).caveat = "A different channel caveat."
+    _describe_preview_caveats_for_sync(report)
+    assert report.category(EntityType.CHANNEL).caveat == "A different channel caveat."

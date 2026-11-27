@@ -155,7 +155,7 @@ from dbas.restore_orchestrator import (
     run_restore,
 )
 from dbas.importers import logos as logos_mod
-from dbas.importers.channels import import_channels
+from dbas.importers.channels import CHANNEL_PREVIEW_ATTACHMENT_CAVEAT, import_channels
 from dbas.importers.logos import import_logos
 from dbas.importers.m3u_accounts import import_m3u_accounts
 from credential_sentinel import credential_is_present, strip_redaction_sentinels
@@ -2416,7 +2416,10 @@ def _describe_preview_caveats_for_sync(report: RestoreReport) -> None:
     for category in report.categories:
         if category.entity_type == EntityType.STREAM and category.predicted is False:
             category.caveat = SYNC_STREAM_PREVIEW_CAVEAT
-        elif category.entity_type == EntityType.CHANNEL and category.caveat:
+        elif (
+            category.entity_type == EntityType.CHANNEL
+            and category.caveat == CHANNEL_PREVIEW_ATTACHMENT_CAVEAT
+        ):
             category.caveat = SYNC_CHANNEL_PREVIEW_CAVEAT
 
 

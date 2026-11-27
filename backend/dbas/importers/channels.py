@@ -809,27 +809,38 @@ async def _attach_streams(
     channel_cat = report.category(EntityType.CHANNEL)
     stream_cat = report.category(EntityType.STREAM)
     for plan in plans:
-        ordered_ids: list[int] = []
+        resolved: list[int] = []
+        unresolved = 0
         for slot in plan.slots:
             if slot.dest_id is not None:
-                ordered_ids.append(slot.dest_id)
+                resolved.append(slot.dest_id)
                 continue
             # MISS slot: resolve the synthesized id the fallback recorded under
             # EntityType.STREAM. A synthesize failure (no id recorded) drops the
             # orphan from the attach list rather than attaching a wrong/None id.
             source_id = slot.orphan.get("id") if slot.orphan else None
-            if source_id is None:
-                continue
-            synthesized = remap.resolve(EntityType.STREAM, int(source_id))
-            if synthesized is not None:
-                ordered_ids.append(synthesized)
+            synthesized = (
+                remap.resolve(EntityType.STREAM, int(source_id))
+                if source_id is not None else None
+            )
+            if synthesized is None:
+                unresolved += 1
+            else:
+                resolved.append(synthesized)
+        # Dispatcharr holds each (channel, stream) pair once, so two archived
+        # streams matching one destination row attach it once, at its first
+        # position. Comparing the undeduplicated list would never match.
+        ordered_ids = list(dict.fromkeys(resolved))
 
         existing_channel = plan.current_stream_ids is not None
         if not ordered_ids or ordered_ids == plan.current_stream_ids:
-            # Nothing to write: the channel is left exactly as it was.
+            # Nothing to write: the channel is left exactly as it was. It only
+            # matches the archive if every archived stream was resolved.
             if existing_channel:
                 _skip(
-                    channel_cat, SkipReason.ALREADY_EXISTS_IDENTICAL,
+                    channel_cat,
+                    SkipReason.STREAM_ATTACHMENT_INCOMPLETE if unresolved
+                    else SkipReason.ALREADY_EXISTS_IDENTICAL,
                     plan.label, plan.channel_source_id, False,
                 )
             if ordered_ids:
@@ -867,11 +878,16 @@ async def _attach_streams(
         _record_reused(stream_cat, plan)
         if existing_channel:
             channel_cat.updated += 1
-            report.notes.append(
-                "channel '%s' stream attachment rewritten: %d stream(s) replaced "
-                "by %d in archived order." % (
-                    plan.label, len(plan.current_stream_ids), len(ordered_ids),
+            if sorted(ordered_ids) == sorted(plan.current_stream_ids):
+                change = "stream order changed to the archived order"
+            else:
+                change = "%d stream(s) replaced by %d in archived order" % (
+                    len(plan.current_stream_ids), len(ordered_ids),
                 )
+            if unresolved:
+                change += "; %d archived stream(s) could not be attached" % unresolved
+            report.notes.append(
+                "channel '%s' stream attachment rewritten: %s." % (plan.label, change)
             )
 
 
