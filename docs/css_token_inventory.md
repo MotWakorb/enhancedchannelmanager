@@ -76,7 +76,7 @@ and not rewritten here. Recommended remedy per token:
 | `--accent` | 4 | 4 | mistaken | `--accent-primary` |
 | `--status-success` | 4 | 2 | mistaken | `--success` |
 | `--border-warning` | 4 | 3 | needed definition | no semantic border tokens exist; add `--warning-border` family |
-| `--text-tertiary` | 3 | 3 | mistaken | `--text-secondary` (fallback value) or `--text-muted` |
+| `--text-tertiary` | 3 | 3 | mistaken | `--text-muted` (settled; this is what the fix used) |
 | `--info` | 3 | 3 | mistaken | `--info-text` |
 | `--warning-border` | 3 | 3 | needed definition | as `--border-warning` (same meaning, two spellings) |
 | `--error-border` | 3 | 3 | needed definition | semantic border family |

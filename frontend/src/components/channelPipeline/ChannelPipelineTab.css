@@ -902,7 +902,7 @@
 .log-filter-chip.active {
   background: var(--button-primary-bg);
   border-color: var(--button-primary-bg);
-  color: #fff;
+  color: var(--button-primary-text);
 }
 
 .log-filter-chip.chip-errors.active {

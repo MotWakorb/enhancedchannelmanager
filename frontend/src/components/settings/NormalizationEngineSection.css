@@ -623,7 +623,7 @@
   align-self: stretch;
   width: 100%;
   padding: 0.75rem;
-  background: var(--bg-secondary);
+  background: var(--input-bg);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);

@@ -899,7 +899,13 @@ Themes are `dark` (`:root`, also `[data-theme=""]`), `light` and
 4. **Element-local seams are accepted.** A token declared only on a component
    selector (`.modal { --modal-bg: ... }`) or inline (`style={{'--x': v}}`)
    is exempt, because ancestry is not decidable from CSS text. It must not
-   also be read as a global token.
+   also be read as a global token. The exemption applies only to a token with
+   no root-scope declaration at all: a token that is global in some themes but
+   not others still fails in the missing themes, even if a component also
+   declares it locally.
+   A `var()` nested in the fallback of another (`var(--a, var(--zz))`) is
+   checked strictly: `--zz` is reported when undefined even though `--a`
+   is defined everywhere and the fallback is never used.
 5. Comments are stripped before parsing; `var()` text in comments is ignored.
    `.tsx`/`.ts` string references (`'var(--x)'`) count as references in every
    theme.

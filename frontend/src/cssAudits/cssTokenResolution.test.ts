@@ -149,4 +149,30 @@ describe('analyze: local definitions and inline styles', () => {
     const css = `@media (min-width: 1px) { :root { --m: 1; } }\n.a { width: var(--m); }`;
     expect(run({ 'a.css': css })).toEqual([]);
   });
+
+  it('does not let a local declaration excuse a token that is global in only some themes', () => {
+    const css = ':root { --b: 1; }\n[data-theme="light"] { --a: 2; }\n.y { --a: 5; }\n.x { color: var(--a); }';
+    const f = run({ 'a.css': css });
+    expect(f).toMatchObject([{ kind: 'undefined', token: '--a' }]);
+    expect(f[0].themes).toEqual(['dark', 'high-contrast']);
+  });
+
+  it('does not let a theme-scoped local declaration excuse a partially defined token', () => {
+    const css = ':root { --b: 1; }\n[data-theme="light"] { --a: 2; }\n[data-theme="light"] .card { --a: 5; }\n.x { color: var(--a); }';
+    const f = run({ 'a.css': css });
+    expect(f).toMatchObject([{ kind: 'undefined', token: '--a' }]);
+    expect(f[0].themes).toEqual(['dark', 'high-contrast']);
+  });
+});
+
+describe('analyze: nested var() forms', () => {
+  it('reports an undefined token nested in the fallback of a fully defined token', () => {
+    const f = run({ 'a.css': `${ROOT}.a { color: var(--fg, var(--zz)); }` });
+    expect(f).toMatchObject([{ kind: 'undefined', token: '--zz' }]);
+  });
+
+  it('reports an undefined token inside calc()', () => {
+    const f = run({ 'a.css': `${ROOT}.a { width: calc(var(--nope)); }` });
+    expect(f).toMatchObject([{ kind: 'undefined', token: '--nope' }]);
+  });
 });

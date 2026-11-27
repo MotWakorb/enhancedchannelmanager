@@ -447,7 +447,7 @@
   padding: 0.5rem;
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
-  background: var(--bg-secondary);
+  background: var(--input-bg);
   color: var(--text-primary);
   font-size: 0.8125rem;
   font-family: inherit;
@@ -656,7 +656,7 @@
 .tag-test-input-row input {
   flex: 1;
   padding: 0.5rem 0.75rem;
-  background: var(--bg-secondary);
+  background: var(--input-bg);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);

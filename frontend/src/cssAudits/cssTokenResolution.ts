@@ -324,7 +324,9 @@ export function globalThemes(defs: Definition[], token: string): Set<Theme> {
  *    that theme. A declaration scoped to another theme never counts.
  *  - An element-local declaration (`.card { --x: ... }`, inline style) makes
  *    the token a "local seam": the reference is accepted, because ancestry is
- *    not decidable from CSS text. Local seams are reported separately.
+ *    not decidable from CSS text. The exemption holds only for a token with no
+ *    root-scope declaration at all; a token global in some themes must be
+ *    global in every theme it is used in.
  *  - Unresolved with no fallback: `undefined` (declaration silently dropped).
  *  - Unresolved but carrying a fallback: `fallback-masked`. The fallback is a
  *    permitted contract only for tokens named in `fallbackAllowed`.
@@ -340,17 +342,16 @@ export function analyze(c: Collected, opts: AnalyzeOptions = {}): Finding[] {
   const findings: Finding[] = [];
   const cache = new Map<string, Set<Theme>>();
   for (const ref of c.references) {
-    if (localTokens.has(ref.token) && !cache.has(ref.token) && globalThemes(c.definitions, ref.token).size === 0) {
-      cache.set(ref.token, new Set(THEMES));
-    }
     let defined = cache.get(ref.token);
     if (!defined) {
       defined = globalThemes(c.definitions, ref.token);
+      // The local-seam exemption applies only to a token with no global
+      // definition at all; a partially global token still needs every theme.
+      if (defined.size === 0 && localTokens.has(ref.token)) defined = new Set(THEMES);
       cache.set(ref.token, defined);
     }
     const missing = ref.themes.filter((t) => !defined.has(t));
     if (!missing.length) continue;
-    if (localTokens.has(ref.token)) continue;
     if (!ref.hasFallback) findings.push({ kind: 'undefined', token: ref.token, themes: missing, ref });
     else if (!allowed.has(ref.token)) findings.push({ kind: 'fallback-masked', token: ref.token, themes: missing, ref });
   }
