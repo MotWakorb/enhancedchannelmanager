@@ -144,7 +144,7 @@ verification, regardless of an external wrapper's reported zero.
 
 | Excluded | Count | Why |
 | --- | --- | --- |
-| `tests/e2e/` | 10 files | Mutates the live ECM on `localhost:6100`. Skips unless `ECM_E2E_LIVE=1` is set; see `docs/testing.md` → "The live backend e2e suite". Deferred to bead `enhancedchannelmanager-2lw25`. |
+| `tests/e2e/` | 10 files | Mutates the live ECM on `localhost:6100`. Also ignored by `pytest.ini`, and not collected unless `ECM_E2E_LIVE=1` is set; see `docs/testing.md` → "The live backend e2e suite". Deferred to bead `enhancedchannelmanager-2lw25`. |
 | `tests/performance/` | 2 files | Seeds 250k rows; runs in the `perf-benchmarks` workflow (`bd-skqln.10`). |
 | `-m "not slow"` | 2 tests | A 5ms-per-call microbenchmark (host contention false-fails it) and a 5M-row migration volume gate. Named individually in `DOCUMENTED_SLOW_TESTS` in `test_backend_gate_contract.py`. |
 
@@ -161,6 +161,9 @@ scripts/backend-gate.sh --subset tests/unit/test_foo.py -k some_case   # adds --
 A `--subset` run is **not** the gate and must never be reported as one.
 `--subset` always adds `--ignore=tests/e2e` and refuses an empty argument, `.`,
 `tests`, the backend directory, and any `tests/e2e` path before pytest starts.
+It also refuses `-c`, `-o testpaths=`/`-o addopts=`, `--noconftest` and
+`-p no:skipping`. Every gate pytest run loads the `ecm_e2e_guard` plugin, which
+fails the run (exit 4) if anything collected resolves into `tests/e2e`.
 Other extra pytest arguments are labeled `backend-custom`, also not the unmodified
 gate. Unset `PYTEST_ADDOPTS` for the canonical gate so it cannot silently override
 selection or coverage. These completion and fail-closed contracts are exercised

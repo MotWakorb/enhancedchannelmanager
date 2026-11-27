@@ -163,7 +163,7 @@ SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
 SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
 
-GATE_E2E_SAFETY_FILES = ("backend/CLAUDE.md",)
+GATE_E2E_SAFETY_FILES = ("backend/CLAUDE.md", "backend/pytest.ini")
 
 
 def _before_gate_e2e_safety(manifest):

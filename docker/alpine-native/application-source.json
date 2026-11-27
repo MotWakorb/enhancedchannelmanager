@@ -105,7 +105,7 @@
     {
       "executable": false,
       "path": "backend/CLAUDE.md",
-      "sha256": "49cf4bbe5966837a2187bd88295a27ffb81506d56fa0c6103fa68f0246d8399e",
+      "sha256": "8a43d5abe4e6e2af6f135034bb9fb92c54a4d9bdae76010618e6a52b6e09745f",
       "type": "file"
     },
     {
@@ -1080,7 +1080,7 @@
     {
       "executable": false,
       "path": "backend/pytest.ini",
-      "sha256": "df2b810304b6dcbfb1cbc619b12f3db722abe1a16ec11005f0f8a0eff143c794",
+      "sha256": "c705c9e088ce2ebcafb53d6722fadd24824b5e15f988ab0e8d3e461715a9ac62",
       "type": "file"
     },
     {
@@ -7199,11 +7199,12 @@
     "changed_files": {
       "backend/CLAUDE.md": "38c308d788fd8928266a7050014440217aff501543e435bd56804d631eb0202c",
       "backend/main.py": "d3da996c83e7104ca76007ca764ff674e3939f702fabcaaf749e2d4e608dd80b",
+      "backend/pytest.ini": "df2b810304b6dcbfb1cbc619b12f3db722abe1a16ec11005f0f8a0eff143c794",
       "backend/routers/backup.py": "39cd56d0f720fb0e9028dbd0f7aa512b94f81bb38ee6d06db3995553cf0684f1",
       "frontend/package.json": "1dd8dbd6153f60a17f81c140e540b887e5bbbbd6bf6785c7ce24457d43c54995"
     },
     "previous_manifest_sha256": "21e59652be931abd68c396a7d7ebfc5867d4867dfc7d48475192f2da8f11e5b9",
-    "scope": "Keep backend-gate subsets and the backend e2e suite off the live ECM: the gate runner refuses empty, whole-tree, tests/e2e, @file and --pyargs selections in arguments and PYTEST_ADDOPTS before pytest starts, a subset always passes --ignore=tests/e2e and runs a named tests/e2e path only with --allow-live-e2e, and the e2e suite skips unless ECM_E2E_LIVE=1; backend/CLAUDE.md documents the refusals; version touchpoints.",
+    "scope": "Keep backend-gate runs and the backend e2e suite off the live ECM: the gate runner refuses empty, whole-tree, tests/e2e, @file and --pyargs selections, alternate config files, testpaths and addopts overrides, --noconftest and -p no:skipping in arguments and PYTEST_ADDOPTS before pytest starts; every gate pytest run loads a guard plugin that fails the run when anything collected resolves into tests/e2e without --allow-live-e2e; a subset always passes --ignore=tests/e2e; backend/pytest.ini addopts ignores tests/e2e; the e2e suite is neither collected nor run unless ECM_E2E_LIVE=1; backend/CLAUDE.md documents the refusals; version touchpoints.",
     "version": "0.18.2-0095"
   }
 }

@@ -31,6 +31,15 @@ BACKEND_FLAGS = [
 # paths named on the command line, so selections are checked before pytest.
 E2E_IGNORE = "--ignore=tests/e2e"
 LIVE_E2E_FLAG = "--allow-live-e2e"
+# Token checks cannot see what testpaths, an alternate config, a symlink or a
+# '..' segment make pytest collect, so every gate pytest run also loads this
+# plugin, which refuses to collect anything that resolves into tests/e2e.
+GUARD_PLUGIN = "ecm_e2e_guard"
+GUARD_DIR = ROOT / "scripts/pytest_plugins"
+# Short options that take a value, possibly glued to a cluster: -qpno:x.
+_SHORT_WITH_VALUE = "kmpocWr"
+_DISABLED_PLUGINS = frozenset({"no:skipping", f"no:{GUARD_PLUGIN}"})
+_COLLECTION_INI_KEYS = frozenset({"testpaths", "addopts"})
 _PIN_RE = re.compile(r"([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)==([^\s;*]+)")
 _NAME_RE = re.compile(r"[-_.]+")
 
@@ -94,6 +103,48 @@ def verify_pins(requirements: Path) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _option_values(tokens: list[str]):
+    """Yield (option, value) for each value-taking option, in every spelling pytest accepts."""
+    for index, token in enumerate(tokens):
+        following = tokens[index + 1] if index + 1 < len(tokens) else ""
+        if token.startswith("--"):
+            name, equals, value = token.partition("=")
+            if name in ("--override-ini", "--config-file"):
+                yield name, value if equals else following
+        elif token.startswith("-") and len(token) > 1:
+            for position, char in enumerate(token[1:], 1):
+                if char in _SHORT_WITH_VALUE:
+                    yield "-" + char, token[position + 1:] or following
+                    break
+
+
+def check_options(tokens: list[str], source: str) -> None:
+    """Refuse options that change what pytest collects or disable the e2e guards."""
+    for token in tokens:
+        if token == "--noconftest":
+            raise ValueError(f"Refusing --noconftest ({source}): it drops the tests/e2e "
+                             "conftest that keeps the live suite from being collected")
+    for option, value in _option_values(tokens):
+        if option in ("-c", "--config-file"):
+            raise ValueError(f"Refusing {option} ({source}): an alternate config file can "
+                             "change testpaths and addopts, which the selection checks cannot see")
+        if option in ("-o", "--override-ini") and value.split("=", 1)[0].strip() in _COLLECTION_INI_KEYS:
+            raise ValueError(f"Refusing {option} {value!r} ({source}): overriding testpaths or addopts "
+                             "changes what pytest collects")
+        if option == "-p" and value.strip() in _DISABLED_PLUGINS:
+            raise ValueError(f"Refusing -p {value.strip()!r} ({source}): it disables a guard that keeps "
+                             "the live tests/e2e suite from running")
+
+
+def guard_env(allow_live_e2e: bool) -> dict[str, str]:
+    """The environment for a gate pytest run: the guard plugin and its decision."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(GUARD_DIR), env.get("PYTHONPATH")]))
+    env["ECM_GATE_ALLOW_LIVE_E2E"] = "1" if allow_live_e2e else "0"
+    env["ECM_GATE_E2E_DIR"] = str((ROOT / "backend/tests/e2e").resolve())
+    return env
+
+
 def check_selection(backend: Path, tokens: list[str], *, subset: bool,
                     allow_live_e2e: bool = False, source: str = "argument") -> None:
     """Refuse pytest arguments that could select the live tests/e2e suite.
@@ -101,11 +152,13 @@ def check_selection(backend: Path, tokens: list[str], *, subset: bool,
     Every token that does not start with '-' is treated as a possible path,
     including option values, so 'tests' after -k is refused: write -k=tests.
     A subset may name files or directories, but not a directory that contains
-    tests/e2e, and must name at least one existing path; otherwise pytest falls
-    back to testpaths, the whole tree.
+    tests/e2e. At least one of its tokens must be an existing file or directory,
+    or pytest falls back to testpaths, the whole tree; an existing path given as
+    an option value also counts.
     """
     e2e = (backend / "tests/e2e").resolve()
     named = 0
+    check_options(tokens, source)
     for token in tokens:
         if not token.strip():
             raise ValueError(f"Refusing an empty pytest {source}: pytest reads it as the "
@@ -135,10 +188,11 @@ def check_selection(backend: Path, tokens: list[str], *, subset: bool,
                          "testpaths, the whole tree")
 
 
-def run_command(argv: list[str], cwd: Path, commands: list[dict]) -> None:
+def run_command(argv: list[str], cwd: Path, commands: list[dict],
+                env: dict[str, str] | None = None) -> None:
     """One foreground invocation; keep diagnostics and bound heartbeat waits."""
     print(f"RUN {cwd}: {json.dumps(argv)}", flush=True)
-    with subprocess.Popen(argv, cwd=cwd) as process:
+    with subprocess.Popen(argv, cwd=cwd, env=env) as process:
         try:
             while True:
                 try:
@@ -224,7 +278,8 @@ def main(args: list[str]) -> int:
             if not subset:
                 print("Default exclusions: tests/e2e (live localhost:6100), "
                       "tests/performance (perf-benchmarks); slow tests named in docs/testing.md", flush=True)
-            run_command([python, "-m", "pytest", *flags, *extra], ROOT / "backend", data["commands"])
+            run_command([python, "-m", "pytest", "-p", GUARD_PLUGIN, *flags, *extra],
+                        ROOT / "backend", data["commands"], env=guard_env(allow_live_e2e))
         if quality:
             npm = shutil.which("npm")
             if not npm:
