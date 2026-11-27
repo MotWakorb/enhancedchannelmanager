@@ -865,11 +865,14 @@ class DbasSyncTask(TaskScheduler):
                     f"{total_conflict} conflict(s)"
                 )
             else:
+                scope = (
+                    "%d predicted of %d categories" % (len(predicted), len(report.categories))
+                    if unpredicted else "%d categories" % len(report.categories)
+                )
                 summary = (
                     "Sync dry-run complete: would create %d, update %d, skip %d, "
-                    "%d conflict(s) across %d categories" % (
-                        total_create, total_update, total_skip, total_conflict,
-                        len(report.categories),
+                    "%d conflict(s) across %s" % (
+                        total_create, total_update, total_skip, total_conflict, scope,
                     )
                 )
             return summary + caveats + DbasRestoreTask._credential_reentry_suffix(

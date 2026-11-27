@@ -53,7 +53,14 @@ def test_unpredicted_categories_are_named_and_excluded_from_prediction_totals():
     assert "Cannot predict logo before refresh." in result.message
     assert result.total_items == result.success_count == 2
     assert result.skipped_count == 0
-    assert result.details["sync_report"]["categories"][1]["predicted"] is False
+    by_type = {
+        c["entity_type"]: c for c in result.details["sync_report"]["categories"]
+    }
+    assert by_type["stream"]["predicted"] is False
+    assert by_type["logo"]["predicted"] is False
+    assert by_type["channel"]["predicted"] is True
+    # The category count matches the totals it introduces.
+    assert "across 1 predicted of 3 categories" in result.message
 
 
 def test_apply_counts_ignore_preview_prediction_flags():
@@ -245,3 +252,23 @@ async def test_sync_apply_refused_by_preflight_names_the_refusal(tmp_path):
     assert result.details["is_dry_run"] is False
     assert result.details["outcome"] == "unknown"
     assert result.details["sync_report"]["preflight_refused"] is True
+
+
+@pytest.mark.asyncio
+async def test_sync_preview_stream_caveat_describes_the_sync_target(tmp_path):
+    """The shared importer's caveat talks about a backup and a restore. A sync
+    preview states its own limit in terms of the sync target."""
+    from tests.tasks.test_dbas_sync_destination_readable import _preview
+    from tests.tasks.test_dbas_sync_engine import _empty_dest_client, _sync_target
+
+    report = await _preview(_sync_target(), _empty_dest_client(), tmp_path)
+    streams = report.category(EntityType.STREAM)
+    assert streams.predicted is False
+    caveat = streams.caveat.lower()
+    assert "sync target" in caveat
+    assert "backup" not in caveat
+    assert "restore" not in caveat
+
+    message = DbasSyncTask()._result_from_report(datetime.now(UTC), report).message
+    assert "stream: not predicted" in message
+    assert streams.caveat in message

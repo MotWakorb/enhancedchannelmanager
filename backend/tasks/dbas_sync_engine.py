@@ -2392,6 +2392,27 @@ def _journal_sync_run(
         logger.warning("[SYNC] Failed to journal sync run: %s", exc)
 
 
+SYNC_STREAM_PREVIEW_CAVEAT = (
+    "Streams are not previewed: the apply matches each source stream against "
+    "the sync target's own streams. A stream with no match is created on the "
+    "sync target as a placeholder."
+)
+
+
+def _describe_unpredicted_streams_for_sync(report: RestoreReport) -> None:
+    """Replace the shared importer's restore wording on a sync preview.
+
+    The channels importer explains the unpredicted STREAM category in terms of
+    a backup being restored. A sync preview has no backup, so its operator
+    summary states the same limit in terms of the sync target.
+    """
+    if not report.is_dry_run:
+        return
+    for category in report.categories:
+        if category.entity_type == EntityType.STREAM and category.predicted is False:
+            category.caveat = SYNC_STREAM_PREVIEW_CAVEAT
+
+
 async def run_sync(
     sync_target,
     *,
@@ -2568,6 +2589,7 @@ async def run_sync(
 
     # --- 4b. Surface each deduped-out duplicate name as a per-item CONFLICT. ---
     _apply_name_conflict_details(result, excluded_name_conflicts)
+    _describe_unpredicted_streams_for_sync(result)
 
     # --- 4c. A read that failed AFTER the gate still means the report describes
     # a destination it did not fully read (…-jqfxm). The importer that hit it

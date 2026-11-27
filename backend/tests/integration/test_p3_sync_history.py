@@ -69,4 +69,7 @@ async def test_history_keeps_mode_and_prediction_contract(
         assert record["status"] == "completed"
         assert "stream: not predicted" in record["message"]
         assert "Streams require destination refresh" in record["message"]
-        assert record["details"]["sync_report"]["categories"][1]["predicted"] is False
+        by_type = {
+            c["entity_type"]: c for c in record["details"]["sync_report"]["categories"]
+        }
+        assert by_type["stream"]["predicted"] is False
