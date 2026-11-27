@@ -693,7 +693,7 @@ def _plan_streams(
         if tier != MatchTier.MISS and match_id is not None:
             plan.slots.append(_StreamSlot(dest_id=match_id))
             # Matching reuses a stream row; only the CHANNEL attachment is
-            # written later. It is not a stream-row update (zcnl5).
+            # written later. It is not a stream-row update.
             _skip(
                 stream_cat, SkipReason.EXISTING_STREAM_REUSED,
                 archived_stream.get("name") or "<unknown>",

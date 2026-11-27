@@ -446,7 +446,11 @@ class DbasRestoreTask(TaskScheduler):
         self._stage("deferred")
         self._set_progress(current=_TOTAL_STAGES, status="completed", current_item="finalize")
 
-        outcome = report.outcome.value if report.outcome else "dry_run"
+        # An apply refused before it computed an outcome (pre-flight) is still an
+        # apply: label it unknown, as the summary message does, never dry_run.
+        outcome = report.outcome.value if report.outcome else (
+            "unknown" if is_apply and not report.is_dry_run else "dry_run"
+        )
         mode = "apply" if is_apply else "dry-run"
         logger.info(
             "[DBAS-RESTORE] Restore task complete (mode=%s, outcome=%s, %d categories)",

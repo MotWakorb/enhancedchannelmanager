@@ -128,3 +128,74 @@ async def test_recorded_stream_matches_are_reused_not_fictitious_row_updates(
     client.update_stream.assert_not_awaited()
     client.create_stream.assert_not_awaited()
     client.update_channel.assert_awaited_with(50, {"streams": [recorded["id"]]})
+
+
+@pytest.mark.asyncio
+async def test_restore_apply_refused_by_preflight_is_not_labelled_a_preview(
+    tmp_path, caplog
+):
+    """The archive restore shares the mapper's mode invariant.
+
+    The real orchestrator refuses the apply at pre-flight and returns a report
+    with no outcome. That run was an apply, so neither its task details nor its
+    log line may call it a dry run.
+    """
+    from unittest.mock import patch
+
+    from dbas import restore_orchestrator
+    from tests.tasks.test_dbas_restore_task import _make_task, _write_artifact
+
+    real_run_restore = restore_orchestrator.run_restore
+
+    async def refused_by_preflight(**kwargs):
+        return await real_run_restore(**kwargs, max_entities_per_category=0)
+
+    task = _make_task(_write_artifact(tmp_path), confirm_apply=True)
+    with patch("dbas.restore_orchestrator.run_restore", side_effect=refused_by_preflight), \
+         patch("dispatcharr_client.get_client", return_value=AsyncMock()), \
+         caplog.at_level(logging.INFO, logger="tasks.dbas_restore"):
+        result = await task.execute()
+
+    restore_report = result.details["restore_report"]
+    assert any(n.startswith("pre-flight refused") for n in restore_report["notes"])
+    assert restore_report["outcome"] is None
+    assert result.details["is_dry_run"] is False
+    assert result.success is False
+    assert result.details["outcome"] == "unknown"
+    assert "outcome=dry_run" not in caplog.text
+    assert "mode=apply, outcome=unknown" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_sync_apply_aborted_at_destination_read_gate_reports_apply_mode(
+    tmp_path, caplog
+):
+    """A confirmed apply that the destination-read gate aborts is still an apply.
+
+    The real engine returns a report with no outcome and the unread marker. The
+    error code keeps naming the unread destination; the recorded outcome and
+    the log line must not call the run a preview.
+    """
+    from tests.tasks.test_dbas_sync_destination_readable import (
+        _http_error,
+        _preview,
+        _refusing_dest_client,
+    )
+    from tests.tasks.test_dbas_sync_engine import _sync_target
+
+    report = await _preview(
+        _sync_target(), _refusing_dest_client(_http_error(401)), tmp_path,
+        confirm_apply=True,
+    )
+    assert report.is_dry_run is False
+    assert report.outcome is None
+    assert report.destination_unreadable is not None
+
+    with caplog.at_level(logging.INFO, logger="tasks.dbas_sync"):
+        result = DbasSyncTask()._result_from_report(datetime.now(UTC), report)
+    assert result.success is False
+    assert result.error == "SYNC_DESTINATION_UNREADABLE"
+    assert result.details["is_dry_run"] is False
+    assert result.details["outcome"] == "unknown"
+    assert "sync run could not read the destination" in result.message
+    assert "mode=apply, outcome=unknown" in caplog.text

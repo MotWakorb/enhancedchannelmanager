@@ -627,7 +627,7 @@ class DbasSyncTask(TaskScheduler):
         from dbas.restore_contracts import RestoreOutcome
 
         is_dry_run = bool(report.is_dry_run)
-        # No realized outcome is not evidence of preview mode (c7ll3). Keep the
+        # No realized outcome is not evidence of preview mode. Keep the
         # report's enum/null contract and use the journal's existing unknown
         # label for an apply that never computed an outcome.
         outcome = report.outcome.value if report.outcome else (
