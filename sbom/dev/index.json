@@ -194,7 +194,7 @@
     "scripts/prepare_alpine_rust_sources.py": "sha256:ee5c94b7733bd7e0ef17cf5867d965ab64d745a90f2b1595cebbdb099fefc2c0",
     "scripts/prepare_busybox_cache.py": "sha256:80b362acff9d7750154c5a237e362f1e845ebc1bbcdd4fbbb6f68fa43651668e",
     "scripts/prepare_musllinux_gnu_inputs.py": "sha256:908ca50f870a4ff93628aeff6cb17e1e28121f398bdd29109d7b698f61bce4d9",
-    "scripts/prepare_musllinux_gnu_sources.py": "sha256:45d0885abeff5cf8055b39caa801340ee20e6e27e56ace1f5fd61f31e92ee572",
+    "scripts/prepare_musllinux_gnu_sources.py": "sha256:3ef94941cfddea1584170a7f8883253a9e854a4a23183e1680642b83eaff2703",
     "scripts/prepare_musllinux_wheels.py": "sha256:3dd6bf62c376abdb22254bba0e2a76e71961c6c6b177b552f68ce5236b118cd2",
     "scripts/probe_busybox_runtime.py": "sha256:2f07715df4d18bfdd0dc60b8c724ec517cffcf42529cef7b4a03c73f93feec78",
     "scripts/record_dispatcharr_openapi_manifest.py": "sha256:c3ad94916858afc0aa5a3ddefccc8be4189c26e6f3a31b7792da97e49a5a514d",

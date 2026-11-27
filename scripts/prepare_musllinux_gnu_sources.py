@@ -21,15 +21,43 @@ from verify_musllinux_gnu import (
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = "docker/python-third-party/gnu-source-assets/"
+# Ordered routes per pinned file: the original publisher first, then mirrors
+# that serve the identical file. Every route is held to the same pinned sha256
+# and size, so a mirror can only ever supply the reviewed bytes.
+GNU_MIRROR = "https://mirrors.kernel.org/gnu/"
 URLS = {
-    "gcc-14.2.0.tar.xz": "https://ftp.gnu.org/gnu/gcc/gcc-14.2.0/gcc-14.2.0.tar.xz",
-    "gcc-12.4.0.tar.xz": "https://ftp.gnu.org/gnu/gcc/gcc-12.4.0/gcc-12.4.0.tar.xz",
-    "binutils-2.44.tar.gz": "https://ftp.gnu.org/gnu/binutils/binutils-2.44.tar.gz",
-    "gmp-6.3.0.tar.xz": "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz",
-    "mpc-1.3.1.tar.gz": "https://ftp.gnu.org/gnu/mpc/mpc-1.3.1.tar.gz",
-    "mpfr-4.2.2.tar.xz": "https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.2.tar.xz",
-    "musl-1.2.5.tar.gz": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
-    "linux-headers-4.19.88-2.tar.xz": "https://ftp.barfooze.de/pub/sabotage/tarballs/linux-headers-4.19.88-2.tar.xz",
+    "gcc-14.2.0.tar.xz": (
+        "https://ftp.gnu.org/gnu/gcc/gcc-14.2.0/gcc-14.2.0.tar.xz",
+        GNU_MIRROR + "gcc/gcc-14.2.0/gcc-14.2.0.tar.xz",
+    ),
+    "gcc-12.4.0.tar.xz": (
+        "https://ftp.gnu.org/gnu/gcc/gcc-12.4.0/gcc-12.4.0.tar.xz",
+        GNU_MIRROR + "gcc/gcc-12.4.0/gcc-12.4.0.tar.xz",
+    ),
+    "binutils-2.44.tar.gz": (
+        "https://ftp.gnu.org/gnu/binutils/binutils-2.44.tar.gz",
+        GNU_MIRROR + "binutils/binutils-2.44.tar.gz",
+    ),
+    "gmp-6.3.0.tar.xz": (
+        "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz",
+        GNU_MIRROR + "gmp/gmp-6.3.0.tar.xz",
+    ),
+    "mpc-1.3.1.tar.gz": (
+        "https://ftp.gnu.org/gnu/mpc/mpc-1.3.1.tar.gz",
+        GNU_MIRROR + "mpc/mpc-1.3.1.tar.gz",
+    ),
+    "mpfr-4.2.2.tar.xz": (
+        "https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.2.tar.xz",
+        GNU_MIRROR + "mpfr/mpfr-4.2.2.tar.xz",
+    ),
+    "musl-1.2.5.tar.gz": (
+        "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+        "https://distfiles.alpinelinux.org/distfiles/v3.23/musl-1.2.5.tar.gz",
+    ),
+    # No Alpine distfiles release carries this exact file, so it has one route.
+    "linux-headers-4.19.88-2.tar.xz": (
+        "https://ftp.barfooze.de/pub/sabotage/tarballs/linux-headers-4.19.88-2.tar.xz",
+    ),
 }
 
 
@@ -43,7 +71,7 @@ def source_inputs() -> tuple[dict, list[dict]]:
             name = Path(row["path"]).name
             item = {"sha256": row["sha256"], "size": row["bytes"]}
             if name in URLS:
-                item["url"] = URLS[name]
+                item["urls"] = list(URLS[name])
             elif name == "correspondence-proof.json.gz":
                 item["local"] = (
                     "docs/design/evidence/"
@@ -66,6 +94,37 @@ def source_inputs() -> tuple[dict, list[dict]]:
             else:
                 inputs[item["sha256"]] = item
     return manifest, sorted(inputs.values(), key=lambda row: row["sha256"])
+
+
+def fetch_pinned(row: dict, target: Path) -> str:
+    """Fetch one pinned input from its ordered routes and return the route used.
+
+    Only a failed fetch (network or HTTP error, after the shared per-route
+    retries) moves on to the next route. A fetch that completes but does not
+    match the pinned sha256 and size is fatal: it is never skipped in favour of
+    another route.
+    """
+    failures = []
+    for url in row["urls"]:
+        try:
+            fetch_input(
+                {"sha256": row["sha256"], "size": row["size"], "url": url},
+                target,
+                None,
+            )
+        except BuildError as exc:
+            # A failed fetch leaves no destination behind; anything else,
+            # including an identity mismatch on downloaded bytes, is fatal.
+            if not str(exc).startswith("fetch failed: ") or target.exists():
+                raise
+            failures.append(str(exc))
+            print(f"route unavailable, trying next pinned route: {exc}", flush=True)
+            continue
+        print(f"fetched {row['sha256']} from {url}", flush=True)
+        return url
+    raise BuildError(
+        f"fetch failed on all {len(failures)} pinned routes: " + "; ".join(failures)
+    )
 
 
 def canonical_directory(path: Path) -> None:
@@ -134,12 +193,13 @@ def prepare(work: Path, output: Path, *, cache: Path | None = None) -> dict:
         require(path.stat().st_size == row["size"], "GNU source input size differs")
         local[row["sha256"]] = path
     work.mkdir(mode=0o755)
+    fetched_from = {}
     for row in inputs:
         target = work / row["sha256"]
         if row["sha256"] in local:
             shutil.copyfile(local[row["sha256"]], target)
         else:
-            fetch_input(row, target, None)
+            fetched_from[row["sha256"]] = fetch_pinned(row, target)
         require(
             target.is_file()
             and not target.is_symlink()
@@ -155,6 +215,7 @@ def prepare(work: Path, output: Path, *, cache: Path | None = None) -> dict:
     require_source_closure(manifest, output)
     return {
         **copied,
+        "fetched_from": fetched_from,
         "status": "REVIEWED_GNU_SOURCE_DELIVERY_ONLY",
         "scope": "All reviewed GNU source/recipe/notice/proof bytes acquired and delivered without execution; original source statuses unchanged. No new source reproduction, binary repair, installed-image binding, other component source/advisory or aggregate clearance.",
     }
