@@ -565,7 +565,9 @@ async def test_sync_fuzzy_opt_in_attaches_and_reports_low_confidence():
     synth.assert_not_awaited()
     dest_channel_id = remap.resolve(EntityType.CHANNEL, 5)
     client.update_channel.assert_awaited_once_with(dest_channel_id, {"streams": [9001]})
-    assert report.category(EntityType.STREAM).updated == 1
+    assert report.category(EntityType.STREAM).updated == 0
+    assert report.category(EntityType.STREAM).skipped == 1
+    assert report.category(EntityType.STREAM).skip_details[0].reason.value == "existing_stream_reused"
     # NOT silent: a low-confidence note was surfaced for the fuzzy attach.
     assert any("low-confidence stream match (fuzzy)" in n for n in report.notes)
 

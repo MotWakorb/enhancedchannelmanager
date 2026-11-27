@@ -893,6 +893,7 @@ async def run_restore(
     if not preflight.passed:
         for problem in preflight.problems:
             report.notes.append(f"pre-flight refused: {problem.message}")
+        report.preflight_refused = True
         report.outcome = None  # nothing was applied — a plan has no realized outcome
         report.completed_at = datetime.now(timezone.utc)
         logger.warning(

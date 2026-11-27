@@ -1,0 +1,20 @@
+{
+  "preview": {
+    "success": true,
+    "message": "Sync dry-run complete: would create 5, update 0, skip 0, 0 conflict(s) across 10 predicted of 11 categories; counts cover predicted categories only; stream: not predicted — Streams are not previewed: the apply matches each source stream against the sync target's own streams. A stream with no match is created on the sync target as a placeholder.",
+    "total_items": 5,
+    "success_count": 5,
+    "failed_count": 0,
+    "skipped_count": 0,
+    "error": null
+  },
+  "abortedApply": {
+    "success": false,
+    "message": "Cross-instance sync run could not read the destination it describes — authentication to the destination was rejected (HTTP 401) - check the destination credentials configured on this instance. No counts are reported because they would describe this instance, not the sync target.",
+    "total_items": 0,
+    "success_count": 0,
+    "failed_count": 0,
+    "skipped_count": 0,
+    "error": "SYNC_DESTINATION_UNREADABLE"
+  }
+}

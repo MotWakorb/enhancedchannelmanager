@@ -157,6 +157,18 @@ class SkipReason(str, Enum):
     # divergence in CONTENTS is reported separately, after channels, as
     # :attr:`RestoreReport.channel_group_drift`.
     ALREADY_EXISTS_NAME_MATCH = "already_exists_name_match"
+    # A stream matcher chose a destination row for reuse, not a row update or
+    # proof that all archived fields are identical. Fuzzy warnings remain separate.
+    EXISTING_STREAM_REUSED = "existing_stream_reused"
+    # An existing channel whose stream list differs from the archive and whose
+    # rewrite was rejected. The row is not identical and was not changed; the
+    # rejection is counted once, as the STREAM category's failure.
+    STREAM_ATTACHMENT_REWRITE_FAILED = "stream_attachment_rewrite_failed"
+    # An existing channel whose archived streams could not all be resolved on
+    # the destination (a placeholder create failed), so nothing was written and
+    # the row is not known to match the archive. The unresolved streams are
+    # counted as STREAM failures.
+    STREAM_ATTACHMENT_INCOMPLETE = "stream_attachment_incomplete"
     EXCLUDED_BY_OPERATOR = "excluded_by_operator"           # category opt-out / selection
     CURRENT_ADMIN_PRESERVED = "current_admin_preserved"     # …-l1p4p D11 guard
     UNSUPPORTED_IN_THIS_VERSION = "unsupported_in_this_version"  # e.g. plugins (ADR-012 D10)
@@ -1386,6 +1398,16 @@ class RestoreReport(BaseModel):
     # that are facts about the SOURCE and do not mean the destination went
     # unread. Sanitized (status code + error class, never a URL, body or
     # credential). ADDITIVE optional — no CONTRACT_VERSION bump.
+    # Pre-flight refused the plan, so nothing ran and no outcome exists. The
+    # refusal reasons are in ``notes``; this is the structured signal callers
+    # map to an error code. Additive and optional, so no CONTRACT_VERSION bump.
+    preflight_refused: bool = Field(
+        default=False,
+        description=(
+            "True when pre-flight refused the plan before any importer ran. "
+            "The outcome stays null and the reasons are in notes."
+        ),
+    )
     destination_unreadable: str | None = Field(
         default=None,
         description=(

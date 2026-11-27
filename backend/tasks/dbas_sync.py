@@ -627,8 +627,17 @@ class DbasSyncTask(TaskScheduler):
         from dbas.restore_contracts import RestoreOutcome
 
         is_dry_run = bool(report.is_dry_run)
-        outcome = report.outcome.value if report.outcome else "dry_run"
+        # No realized outcome is not evidence of preview mode. An apply with no
+        # outcome either stopped at a destination-read gate, which the journal
+        # records as aborted, or never computed one, which it records as
+        # unknown. The report's own outcome stays null.
         unreadable = getattr(report, "destination_unreadable", None)
+        if report.outcome:
+            outcome = report.outcome.value
+        elif is_dry_run:
+            outcome = "dry_run"
+        else:
+            outcome = "aborted" if unreadable is not None else "unknown"
         succeeded = unreadable is None and (
             is_dry_run or report.outcome == RestoreOutcome.SUCCESS
         )
@@ -689,6 +698,7 @@ class DbasSyncTask(TaskScheduler):
             error=(
                 None if succeeded
                 else "SYNC_DESTINATION_UNREADABLE" if unreadable is not None
+                else "SYNC_PREFLIGHT_REFUSED" if getattr(report, "preflight_refused", False)
                 else "SYNC_%s" % outcome.upper()
             ),
             started_at=started_at,
@@ -736,8 +746,11 @@ class DbasSyncTask(TaskScheduler):
         if is_dry_run:
             success_count = sum(
                 c.would_create + c.would_update for c in report.categories
+                if c.predicted is not False
             )
-            skipped_count = sum(c.would_skip for c in report.categories)
+            skipped_count = sum(
+                c.would_skip for c in report.categories if c.predicted is not False
+            )
         else:
             success_count = sum(c.created + c.updated for c in report.categories)
             skipped_count = sum(c.skipped for c in report.categories)
@@ -827,9 +840,13 @@ class DbasSyncTask(TaskScheduler):
     @staticmethod
     def _summary_message(report, is_dry_run: bool, outcome: str) -> str:
         if is_dry_run:
-            total_create = sum(c.would_create for c in report.categories)
-            total_update = sum(c.would_update for c in report.categories)
-            total_skip = sum(c.would_skip for c in report.categories)
+            from dbas.restore_contracts import EntityType
+
+            predicted = [c for c in report.categories if c.predicted is not False]
+            unpredicted = [c for c in report.categories if c.predicted is False]
+            total_create = sum(c.would_create for c in predicted)
+            total_update = sum(c.would_update for c in predicted)
+            total_skip = sum(c.would_skip for c in predicted)
             # `failed` is populated on a dry-run preview by the per-item
             # conflict paths (source-side duplicate name, ambiguous
             # null-channel-number collision) — surface it here too so this
@@ -837,13 +854,38 @@ class DbasSyncTask(TaskScheduler):
             total_conflict = sum(c.failed for c in report.categories)
             from tasks.dbas_restore import DbasRestoreTask
 
-            return (
-                "Sync dry-run complete: would create %d, update %d, skip %d, "
-                "%d conflict(s) across %d categories" % (
-                    total_create, total_update, total_skip, total_conflict,
-                    len(report.categories),
+            caveats = ""
+            if unpredicted:
+                caveats = "; counts cover predicted categories only; " + "; ".join(
+                    f"{c.entity_type.value}: not predicted"
+                    + ((" — " + c.caveat) if c.caveat else "")
+                    for c in unpredicted
                 )
-            ) + DbasRestoreTask._credential_reentry_suffix(
+            # A predicted category's caveat qualifies its counts. Only CHANNEL's
+            # is shown: its wording is set for the sync target, while the
+            # channel-group caveat still describes an archive restore.
+            caveats += "".join(
+                "; %s: %s" % (c.entity_type.value, c.caveat)
+                for c in predicted
+                if c.caveat and c.entity_type == EntityType.CHANNEL
+            )
+            if unpredicted and not predicted:
+                summary = (
+                    "Sync dry-run complete: no category counts predicted; "
+                    f"{total_conflict} conflict(s)"
+                )
+            else:
+                scope = (
+                    "%d predicted of %d categories" % (len(predicted), len(report.categories))
+                    if unpredicted else "%d categories" % len(report.categories)
+                )
+                summary = (
+                    "Sync dry-run complete: would create %d, update %d, skip %d, "
+                    "%d conflict(s) across %s" % (
+                        total_create, total_update, total_skip, total_conflict, scope,
+                    )
+                )
+            return summary + caveats + DbasRestoreTask._credential_reentry_suffix(
                 report, is_preview=True
             ) + DbasSyncTask._account_field_convergence_suffix(
                 report, is_preview=True
