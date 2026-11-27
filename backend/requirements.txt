@@ -92,7 +92,7 @@ josepy==2.2.0
     # via -r backend/requirements.in
 limits==5.8.0
     # via slowapi
-mako==1.4.1
+mako==1.4.2
     # via alembic
 markupsafe==3.0.3
     # via mako
