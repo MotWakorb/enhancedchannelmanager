@@ -1196,8 +1196,8 @@
 }
 
 .top-watched-toggle .toggle-btn.active {
-  background: var(--color-primary);
-  color: var(--color-primary-text);
+  background: var(--button-primary-bg);
+  color: var(--button-primary-text);
 }
 
 .top-watched-list {

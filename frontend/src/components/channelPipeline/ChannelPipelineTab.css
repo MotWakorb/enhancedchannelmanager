@@ -900,9 +900,9 @@
 }
 
 .log-filter-chip.active {
-  background: var(--button-primary);
-  border-color: var(--button-primary);
-  color: #fff;
+  background: var(--button-primary-bg);
+  border-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
 }
 
 .log-filter-chip.chip-errors.active {

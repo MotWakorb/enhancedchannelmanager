@@ -357,7 +357,7 @@
 }
 
 .dep-group-selector {
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   overflow: hidden;
 }
@@ -367,7 +367,7 @@
   align-items: center;
   gap: 0.375rem;
   padding: 0.375rem 0.625rem;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-primary);
   background: var(--bg-secondary);
 }
 
@@ -392,7 +392,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 0.25rem 0.625rem;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-primary);
   background: var(--bg-secondary);
 }
 
@@ -408,7 +408,7 @@
 .dep-group-clear-btn {
   background: none;
   border: none;
-  color: var(--accent);
+  color: var(--accent-primary);
   font-size: var(--type-meta-size);
   cursor: pointer;
   padding: 0;

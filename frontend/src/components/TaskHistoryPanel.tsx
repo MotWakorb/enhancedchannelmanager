@@ -85,7 +85,7 @@ function ExecutionRow({ execution, isExpanded, onToggle }: {
     <>
       <tr
         style={{
-          borderTop: '1px solid var(--border-color)',
+          borderTop: '1px solid var(--border-primary)',
           cursor: hasDetails ? 'pointer' : 'default',
           backgroundColor: isExpanded ? 'var(--bg-tertiary)' : 'transparent',
         }}
@@ -139,7 +139,7 @@ function ExecutionRow({ execution, isExpanded, onToggle }: {
             <div style={{
               padding: '1rem',
               backgroundColor: 'var(--bg-tertiary)',
-              borderTop: '1px dashed var(--border-color)',
+              borderTop: '1px dashed var(--border-primary)',
             }}>
               {execution.message && (
                 <div style={{ marginBottom: '0.75rem' }}>
@@ -274,7 +274,7 @@ export function TaskHistoryPanel({ taskId, visible }: TaskHistoryPanelProps) {
 
   return (
     <div style={{
-      borderTop: '1px solid var(--border-color)',
+      borderTop: '1px solid var(--border-primary)',
       maxHeight: '400px',
       overflowY: 'auto',
     }}>
@@ -323,7 +323,7 @@ export function TaskHistoryPanel({ taskId, visible }: TaskHistoryPanelProps) {
                 style={{
                   padding: '0.5rem 1rem',
                   backgroundColor: 'var(--bg-secondary)',
-                  border: '1px solid var(--border-color)',
+                  border: '1px solid var(--border-primary)',
                   borderRadius: '4px',
                   color: 'var(--text-primary)',
                   cursor: loading ? 'not-allowed' : 'pointer',
@@ -341,7 +341,7 @@ export function TaskHistoryPanel({ taskId, visible }: TaskHistoryPanelProps) {
             return (
               <div style={{
                 padding: '0.75rem 1rem',
-                borderTop: '1px solid var(--border-color)',
+                borderTop: '1px solid var(--border-primary)',
                 backgroundColor: 'var(--bg-tertiary)',
                 fontSize: '0.8rem',
                 color: 'var(--text-muted)',

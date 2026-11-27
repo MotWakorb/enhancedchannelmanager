@@ -320,8 +320,8 @@
   font-size: var(--type-body-size);
   font-weight: 500;
   color: var(--text-secondary);
-  background-color: var(--button-secondary-bg);
-  border: 1px solid var(--border-color);
+  background-color: var(--button-bg);
+  border: 1px solid var(--border-primary);
   border-radius: 4px;
   cursor: pointer;
   transition: all 0.15s;

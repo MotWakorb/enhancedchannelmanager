@@ -872,6 +872,44 @@ captured at 1440x900 and `--diff` refuses any other viewport for that reason;
 blocks in the modal estate are deliberately unverified. None of them is active
 at either supported width.
 
+## Custom property resolution contract
+
+Enforced by `frontend/src/cssAudits/cssTokenResolution.audit.test.ts` (runs in
+`npm test`, so in the blocking Frontend Tests job). The analyzer is
+`cssTokenResolution.ts`; its fixtures are `cssTokenResolution.test.ts`. The
+current inventory and classification is `docs/css_token_inventory.md`.
+
+Themes are `dark` (`:root`, also `[data-theme=""]`), `light` and
+`high-contrast`. A rule applies in every theme unless its selector carries a
+`[data-theme=...]` or `:not([data-theme=...])` term.
+
+1. **A reference resolves in a theme only through a root-scope declaration
+   that matches that theme** (`:root`, `html`, `body`, `*`, optionally with a
+   theme term). A declaration scoped to another theme never satisfies it:
+   a token defined only under `[data-theme="light"]` is undefined in dark and
+   high-contrast.
+2. **No fallback, unresolved in some theme: fails.** The declaration is
+   silently dropped (a `border` shorthand loses its border entirely).
+3. **A fallback may not be what makes a reference resolve.** A reference to a
+   token that is unresolved in a theme where it applies is `fallback-masked`
+   and fails, except for sites recorded in `cssTokenFallbackBaseline.ts`.
+   The baseline is a ratchet, per file and token: a count that grows fails, and
+   a count that shrinks without the entry being lowered also fails. A fallback
+   on a token that is defined everywhere is dead code and is not flagged.
+4. **Element-local seams are accepted.** A token declared only on a component
+   selector (`.modal { --modal-bg: ... }`) or inline (`style={{'--x': v}}`)
+   is exempt, because ancestry is not decidable from CSS text. It must not
+   also be read as a global token. The exemption applies only to a token with
+   no root-scope declaration at all: a token that is global in some themes but
+   not others still fails in the missing themes, even if a component also
+   declares it locally.
+   A `var()` nested in the fallback of another (`var(--a, var(--zz))`) is
+   checked strictly: `--zz` is reported when undefined even though `--a`
+   is defined everywhere and the fallback is never used.
+5. Comments are stripped before parsing; `var()` text in comments is ignored.
+   `.tsx`/`.ts` string references (`'var(--x)'`) count as references in every
+   theme.
+
 ## Theme Variables: Critical Rules
 
 The `--accent-*` variables flip between dark/light mode:

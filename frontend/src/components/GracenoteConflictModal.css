@@ -63,7 +63,7 @@
 
 .conflict-item:hover {
   background-color: var(--bg-hover);
-  border-color: var(--border-hover);
+  border-color: var(--border-secondary);
 }
 
 .conflict-item input[type="checkbox"] {
@@ -98,7 +98,7 @@
 
 /* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .conflict-ids .arrow {
-  color: var(--text-tertiary);
+  color: var(--text-muted);
   font-size: var(--icon-status);
 }
 
@@ -111,7 +111,7 @@
 
 /* Micro role — the tracked uppercase label idiom. 12px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .id-label {
-  color: var(--text-tertiary);
+  color: var(--text-muted);
   font-size: var(--type-micro-size);
   font-weight: var(--type-micro-weight);
   text-transform: uppercase;
