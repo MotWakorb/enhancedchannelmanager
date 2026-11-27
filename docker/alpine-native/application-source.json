@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "e576d749037649aa55f71978aec5df769654b91c351fd9ff27e7f85d7a68600c",
+      "sha256": "5dae2952a6a73afda78ba044a94cb302dcd2469859a06b913d2d40d69aa6258d",
       "type": "file"
     },
     {
@@ -1134,7 +1134,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "74008064ad3dfae033e9d061746a0942071807a9c54abc507566bda49f6471c1",
+      "sha256": "cb75d3820fbad7ea67bb690933a8c522cc11e1c6e7b24d924450b1d16eabefdc",
       "type": "file"
     },
     {
@@ -1842,7 +1842,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "3626b98381ca84f939b4b87ac8b6b99072cc35acb1604fbe6ef0f4740bf9f0d6",
+      "sha256": "37c9cd6c7224db6406addaf21203a680b50ef60c849603a45fa8cd5d23bc230c",
       "type": "file"
     },
     {
@@ -2172,7 +2172,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/ChannelsPane.css",
-      "sha256": "efeb5b2a07d46790d32cd996fa3999c3b28dd3171350729d892d5e922cd48ada",
+      "sha256": "f32685d759d77fc22ad24d71cc3b29dd5e8ce294b6b75c9620c6ca9e06b506e7",
       "type": "file"
     },
     {
@@ -2232,7 +2232,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/ChannelsPane.tsx",
-      "sha256": "95fced791cf1e801a3d75246136c99f55f9b12043759bd4626e32f159a021bd0",
+      "sha256": "2bda5dc5b173afeb43576c7bfec3b26208fa5ba5ba19730e35c7860aff1a720d",
       "type": "file"
     },
     {
@@ -2394,7 +2394,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/DummyEPGProfileModal.css",
-      "sha256": "2dd4783380df05d0f4ae6e5a0d0952be8d1c52b3d858faea6dad6a61acbe9062",
+      "sha256": "7524aa2ccb18495be44ae4c93d7304610584e20258ef697cab8cc6b2fa6f2fb4",
       "type": "file"
     },
     {
@@ -2472,7 +2472,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/EditMode.css",
-      "sha256": "991a28c6fbdb9fbf43686022d3de4d1b24db9564801604087d0d8e0f4729b92e",
+      "sha256": "4b23701e1140c9d2f1acb7d3e710758f7fb2b71b4e50d7d1fd69bdb87f775850",
       "type": "file"
     },
     {
@@ -2568,7 +2568,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/FindDuplicatesModal.css",
-      "sha256": "c4aa9edb596a1b5325732f5d9e21b35a8f762b6d86799be428c467988b7953e8",
+      "sha256": "f90fc8409fd658bcb575ea199e1b42a1bdf90a7997ed4523f02fdf12e6956e50",
       "type": "file"
     },
     {
@@ -2592,7 +2592,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/GracenoteConflictModal.css",
-      "sha256": "de3c8afd34f20ae93ba426b218d1903f3315469bb06bf26ad0d17aafc5137045",
+      "sha256": "09d575f02a89bc78a45f42077fc56e0902da91034ad5763e2054f2cccce269df",
       "type": "file"
     },
     {
@@ -3096,7 +3096,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/ScheduleEditor.css",
-      "sha256": "15a9b1cc36c2925e6353f902f972ba1b8e70969908a2eb9c8d020ed1bb515884",
+      "sha256": "25d39d830d8aa6a1318cc87110a09eb1210d7d6d57b9c0a816b1c7608c09d5c0",
       "type": "file"
     },
     {
@@ -3132,7 +3132,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/ScheduledTasksSection.tsx",
-      "sha256": "5f1d37c30ab0dec1fc22a5b3edaddd5d0600948404f2849d0f1fb2f04c1ed20d",
+      "sha256": "a56e72403d35dbd28250f4f77dc3cbcea17dffecdef638390f75cd3884b03eb3",
       "type": "file"
     },
     {
@@ -3216,7 +3216,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/ShowMoreRows.css",
-      "sha256": "031e1120860988213bb13e66416e008e62c8b3a00748569de3a6e01c1cbc5784",
+      "sha256": "49bd1ce97e93c59ab1cf66fa5d07373e28b0609ad1b4991705dbe9d1e37907a8",
       "type": "file"
     },
     {
@@ -3456,7 +3456,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/TaskEditorModal.css",
-      "sha256": "d0022da81f901889165aa017f0ecd2c1fc4b1dbba5e3218b36251233d3d81d5d",
+      "sha256": "6604a681415a5a1c0cfde23cf199d5a499fd035730616bbb47930ebd89586e67",
       "type": "file"
     },
     {
@@ -3504,13 +3504,13 @@
     {
       "executable": false,
       "path": "frontend/src/components/TaskHistoryPanel.tsx",
-      "sha256": "82068c97ea103dbb5996cf48871cc5b639b09fd172c5a49a3a30c5e09807ac84",
+      "sha256": "ccbc0852cf5d4cb6ad428e60153a2a67b36ddf91d4b6c1b59a3e87310991ff99",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/components/TaskStatusPill.css",
-      "sha256": "b8fd5d060bd6528c89935288b03f9ffc0943c55a749b723bb616f593c3b85873",
+      "sha256": "10432ee26788523981d2eef1e21ff825ea0c89f983ae3ec1feec5c03098fa110",
       "type": "file"
     },
     {
@@ -3708,13 +3708,13 @@
     {
       "executable": false,
       "path": "frontend/src/components/channelPipeline/BulkRuleSettingsModal.tsx",
-      "sha256": "d9c6dbf2010f2860fbc3329c126a28f5500e5b32330584f84de1ca370db03588",
+      "sha256": "1d568158bf9344fe585c2ac595fdf5dc934f584bf4af1021fc55bb7ac253f588",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/components/channelPipeline/ChannelPipelineTab.css",
-      "sha256": "59508b0e6482f95d368acd2dd3bfd707b0882ab53ae136afdfffcae32263ba09",
+      "sha256": "10eabac7188b5ac9013563fdb2d3c3b4af329ae46a101fb8d12aa54e81452894",
       "type": "file"
     },
     {
@@ -4188,7 +4188,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/settings/BackupRestoreSection.css",
-      "sha256": "b55b75076af33fe059deb326701bce57280aee5470aa972246ab71541d3f9625",
+      "sha256": "73f618fa835857df4a4d85ca83392e6b612fa31f6fb8835997f014638c1dd3ca",
       "type": "file"
     },
     {
@@ -4320,7 +4320,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/settings/EventSyncTeamAliasesSection.css",
-      "sha256": "2dd699a614cd52a0b27d6c3674a8787c44b7fc976311165a0320eb578b1cf27d",
+      "sha256": "e2d7d1a3d61450af32bec3a23cdfa88de3d01933b13fa5fc5c3ef056910293f9",
       "type": "file"
     },
     {
@@ -4344,7 +4344,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/settings/LinkedAccountsSection.css",
-      "sha256": "7a9ccd5078fbc9e4e98d9ee2dd94064de5dd2e349f2a0d02f6ba71a45c7906b7",
+      "sha256": "7377cb88910696b14a1d775ae800401ed4c791ae684ed1f1cbd1eb07cc230b6a",
       "type": "file"
     },
     {
@@ -4392,7 +4392,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/settings/NormalizationEngineSection.css",
-      "sha256": "c378fbf3d3415062f8bf518f2c6539b3e2c768f452b8d7d580b0a65b6d601297",
+      "sha256": "eef76a327558b08800b4f09586cc93a8dfc0466d927e21a6497ab6aae2bec9a8",
       "type": "file"
     },
     {
@@ -4512,7 +4512,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/settings/TagEngineSection.css",
-      "sha256": "9ff5a6de901dc562177375989affdcbc64514d281d09ea16c78033ad24375c71",
+      "sha256": "78c8f7fff46916fa97f9abbe74c1e0487262260e049ed3e959a5287f1c21322b",
       "type": "file"
     },
     {
@@ -4842,7 +4842,7 @@
     {
       "executable": false,
       "path": "frontend/src/components/tabs/SettingsTab.css",
-      "sha256": "60ca1e538ed5d22b3e6a99bab03e7c9a1450c5846fc542e96c50681c4606d248",
+      "sha256": "d6d926ca97eadacd77441034f8682ed857c0cf78488a12a4691d44f4d682a618",
       "type": "file"
     },
     {
@@ -4896,13 +4896,13 @@
     {
       "executable": false,
       "path": "frontend/src/components/tabs/SettingsTab.tsx",
-      "sha256": "cd7dc6f577f1f17c670d17ff5610413d9f8612516126df65b6424cfd1c9d9e60",
+      "sha256": "02b1d72c8260a587ee06d7d3281805c07abefa717912d7849b0e2b63c7f25187",
       "type": "file"
     },
     {
       "executable": false,
       "path": "frontend/src/components/tabs/StatsTab.css",
-      "sha256": "89312bdf90b6d86e868c4448cca4223034f1d7369f02872a2cbd3c40d82163cd",
+      "sha256": "40fa2a2f947bab157ba7162c47f7b4c1751ddb94ef39f1744657cda12183d29a",
       "type": "file"
     },
     {
@@ -5017,6 +5017,30 @@
       "executable": false,
       "path": "frontend/src/contexts/NotificationContext.tsx",
       "sha256": "d6e2619b3fd4cac4a5668a1fc3bc9023cfec88253584faf50724d35ee7a23260",
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "frontend/src/cssAudits/cssTokenFallbackBaseline.ts",
+      "sha256": "cbf5073d0937f5e0b73e832558910c000ba9ab23967b37d77078d63cf828dfb7",
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "frontend/src/cssAudits/cssTokenResolution.audit.test.ts",
+      "sha256": "32805e7648b382204d73b549d9ccd76bb6b9b675bb19a53c888f2fc64e27c4aa",
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "frontend/src/cssAudits/cssTokenResolution.test.ts",
+      "sha256": "29555b5a75e4ef7f5be4648fd5d1529047af4eeee1563b7c6a2474d127f16a7b",
+      "type": "file"
+    },
+    {
+      "executable": false,
+      "path": "frontend/src/cssAudits/cssTokenResolution.ts",
+      "sha256": "fe2735050b65275065e01cdf7a2024644284af957d382c0b00cf702d92d5aa50",
       "type": "file"
     },
     {
@@ -7233,5 +7257,45 @@
     "previous_manifest_sha256": "920ebc2abeaa651e4a12ed96d0225a30495458d9abab87c13a333719a07975f5",
     "scope": "Clear triaged Ruff findings without behaviour change: remove an unused import from backend/main.py and annotate one intentional SQL equality comparison in backend/routers/backup.py; version touchpoints.",
     "version": "0.18.2-0097"
+  },
+  "css_token_lint_update": {
+    "added_files": [
+      "frontend/src/cssAudits/cssTokenFallbackBaseline.ts",
+      "frontend/src/cssAudits/cssTokenResolution.audit.test.ts",
+      "frontend/src/cssAudits/cssTokenResolution.test.ts",
+      "frontend/src/cssAudits/cssTokenResolution.ts"
+    ],
+    "base_commit": "91fa4d2ad5b65b2907aa72606d062852d7081702",
+    "bead": "enhancedchannelmanager-lw04j",
+    "changed_files": {
+      "backend/main.py": "e576d749037649aa55f71978aec5df769654b91c351fd9ff27e7f85d7a68600c",
+      "backend/routers/backup.py": "74008064ad3dfae033e9d061746a0942071807a9c54abc507566bda49f6471c1",
+      "frontend/package.json": "3626b98381ca84f939b4b87ac8b6b99072cc35acb1604fbe6ef0f4740bf9f0d6",
+      "frontend/src/components/ChannelsPane.css": "efeb5b2a07d46790d32cd996fa3999c3b28dd3171350729d892d5e922cd48ada",
+      "frontend/src/components/ChannelsPane.tsx": "95fced791cf1e801a3d75246136c99f55f9b12043759bd4626e32f159a021bd0",
+      "frontend/src/components/DummyEPGProfileModal.css": "2dd4783380df05d0f4ae6e5a0d0952be8d1c52b3d858faea6dad6a61acbe9062",
+      "frontend/src/components/EditMode.css": "991a28c6fbdb9fbf43686022d3de4d1b24db9564801604087d0d8e0f4729b92e",
+      "frontend/src/components/FindDuplicatesModal.css": "c4aa9edb596a1b5325732f5d9e21b35a8f762b6d86799be428c467988b7953e8",
+      "frontend/src/components/GracenoteConflictModal.css": "de3c8afd34f20ae93ba426b218d1903f3315469bb06bf26ad0d17aafc5137045",
+      "frontend/src/components/ScheduleEditor.css": "15a9b1cc36c2925e6353f902f972ba1b8e70969908a2eb9c8d020ed1bb515884",
+      "frontend/src/components/ScheduledTasksSection.tsx": "5f1d37c30ab0dec1fc22a5b3edaddd5d0600948404f2849d0f1fb2f04c1ed20d",
+      "frontend/src/components/ShowMoreRows.css": "031e1120860988213bb13e66416e008e62c8b3a00748569de3a6e01c1cbc5784",
+      "frontend/src/components/TaskEditorModal.css": "d0022da81f901889165aa017f0ecd2c1fc4b1dbba5e3218b36251233d3d81d5d",
+      "frontend/src/components/TaskHistoryPanel.tsx": "82068c97ea103dbb5996cf48871cc5b639b09fd172c5a49a3a30c5e09807ac84",
+      "frontend/src/components/TaskStatusPill.css": "b8fd5d060bd6528c89935288b03f9ffc0943c55a749b723bb616f593c3b85873",
+      "frontend/src/components/channelPipeline/BulkRuleSettingsModal.tsx": "d9c6dbf2010f2860fbc3329c126a28f5500e5b32330584f84de1ca370db03588",
+      "frontend/src/components/channelPipeline/ChannelPipelineTab.css": "59508b0e6482f95d368acd2dd3bfd707b0882ab53ae136afdfffcae32263ba09",
+      "frontend/src/components/settings/BackupRestoreSection.css": "b55b75076af33fe059deb326701bce57280aee5470aa972246ab71541d3f9625",
+      "frontend/src/components/settings/EventSyncTeamAliasesSection.css": "2dd699a614cd52a0b27d6c3674a8787c44b7fc976311165a0320eb578b1cf27d",
+      "frontend/src/components/settings/LinkedAccountsSection.css": "7a9ccd5078fbc9e4e98d9ee2dd94064de5dd2e349f2a0d02f6ba71a45c7906b7",
+      "frontend/src/components/settings/NormalizationEngineSection.css": "c378fbf3d3415062f8bf518f2c6539b3e2c768f452b8d7d580b0a65b6d601297",
+      "frontend/src/components/settings/TagEngineSection.css": "9ff5a6de901dc562177375989affdcbc64514d281d09ea16c78033ad24375c71",
+      "frontend/src/components/tabs/SettingsTab.css": "60ca1e538ed5d22b3e6a99bab03e7c9a1450c5846fc542e96c50681c4606d248",
+      "frontend/src/components/tabs/SettingsTab.tsx": "cd7dc6f577f1f17c670d17ff5610413d9f8612516126df65b6424cfd1c9d9e60",
+      "frontend/src/components/tabs/StatsTab.css": "89312bdf90b6d86e868c4448cca4223034f1d7369f02872a2cbd3c40d82163cd"
+    },
+    "previous_manifest_sha256": "7f30fcf903b35486b933dfac0d94722b4da87e48feb487ea75d1b757ed36495c",
+    "scope": "Add the per-theme CSS token resolution audit and its fallback baseline, and repoint undefined no-fallback CSS custom-property references to defined tokens in component stylesheets and in component inline styles; version touchpoints.",
+    "version": "0.18.2-0098"
   }
 }

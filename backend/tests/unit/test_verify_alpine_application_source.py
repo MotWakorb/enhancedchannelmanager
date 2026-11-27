@@ -108,7 +108,7 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     manifest = verifier.load_manifest(
         ROOT / "docker/alpine-native/application-source.json"
     )
-    assert len(manifest["files"]) == 1103
+    assert len(manifest["files"]) == 1107
     assert (
         manifest["baseline_application_commit"]
         == "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531"
@@ -162,12 +162,84 @@ M3U_EMPTY_STATE_ADDED_FILES = (
 SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
 SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
+CSS_TOKEN_LINT_FILES = (
+    "frontend/src/components/ChannelsPane.css",
+    "frontend/src/components/ChannelsPane.tsx",
+    "frontend/src/components/DummyEPGProfileModal.css",
+    "frontend/src/components/EditMode.css",
+    "frontend/src/components/FindDuplicatesModal.css",
+    "frontend/src/components/GracenoteConflictModal.css",
+    "frontend/src/components/ScheduleEditor.css",
+    "frontend/src/components/ScheduledTasksSection.tsx",
+    "frontend/src/components/ShowMoreRows.css",
+    "frontend/src/components/TaskEditorModal.css",
+    "frontend/src/components/TaskHistoryPanel.tsx",
+    "frontend/src/components/TaskStatusPill.css",
+    "frontend/src/components/channelPipeline/BulkRuleSettingsModal.tsx",
+    "frontend/src/components/channelPipeline/ChannelPipelineTab.css",
+    "frontend/src/components/settings/BackupRestoreSection.css",
+    "frontend/src/components/settings/EventSyncTeamAliasesSection.css",
+    "frontend/src/components/settings/LinkedAccountsSection.css",
+    "frontend/src/components/settings/NormalizationEngineSection.css",
+    "frontend/src/components/settings/TagEngineSection.css",
+    "frontend/src/components/tabs/SettingsTab.css",
+    "frontend/src/components/tabs/SettingsTab.tsx",
+    "frontend/src/components/tabs/StatsTab.css",
+)
+CSS_TOKEN_LINT_ADDED_FILES = (
+    "frontend/src/cssAudits/cssTokenFallbackBaseline.ts",
+    "frontend/src/cssAudits/cssTokenResolution.audit.test.ts",
+    "frontend/src/cssAudits/cssTokenResolution.test.ts",
+    "frontend/src/cssAudits/cssTokenResolution.ts",
+)
+
+
+def _before_css_token_lint(manifest):
+    key = "css_token_lint_update"
+    update = manifest[key]
+    assert update["base_commit"] == "91fa4d2ad5b65b2907aa72606d062852d7081702"
+    assert update["bead"] == "enhancedchannelmanager-lw04j"
+    assert update["version"] == "0.18.2-0098"
+    assert update["previous_manifest_sha256"] == (
+        "7f30fcf903b35486b933dfac0d94722b4da87e48feb487ea75d1b757ed36495c"
+    )
+    assert set(update["added_files"]) == set(CSS_TOKEN_LINT_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(CSS_TOKEN_LINT_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_css_token_lint_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_css_token_lint(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["css_token_lint_update"] == manifest["css_token_lint_update"]
+
 
 RUFF_TRIAGE_FILES = ()
 
 
 def _before_ruff_triage(manifest):
     key = "ruff_triage_update"
+    manifest = _before_css_token_lint(manifest)
     update = manifest[key]
     assert update["base_commit"] == "5fc66138d8025ef4ef627b0d8d212ff3cb3c37a8"
     assert update["bead"] == "enhancedchannelmanager-2ixgf.5"
