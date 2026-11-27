@@ -10,7 +10,6 @@ Install once at startup via install_safe_logging().
 """
 
 import collections
-from dataclasses import dataclass
 import fcntl
 import hashlib
 import json
@@ -18,6 +17,8 @@ import logging
 import os
 import stat
 import threading
+import traceback
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, quote_plus
 
@@ -190,13 +191,52 @@ def get_registered_sensitive_value_forms() -> tuple[str, ...]:
         return tuple(sorted(_sensitive_value_forms, key=len, reverse=True))
 
 
-def _redact_persistent_string(value: str) -> str:
-    from cloud_storage.upload_security import redact_secrets
+def _redact_persistent_string(value: str, min_form_length: int = 0) -> str:
+    try:
+        from cloud_storage.upload_security import redact_secrets
 
-    redacted = redact_secrets(value)
-    for form in get_registered_sensitive_value_forms():
-        redacted = redacted.replace(form, "***REDACTED***")
-    return redacted
+        redacted = redact_secrets(value)
+        for form in get_registered_sensitive_value_forms():
+            if len(form) >= min_form_length:
+                redacted = redacted.replace(form, "***REDACTED***")
+        return redacted
+    except Exception:  # noqa: BLE001 - preserve recovery without emitting the original value
+        return "***REDACTED***"
+
+
+def redact_log_diagnostic(value: str) -> str:
+    """Scrub scoped diagnostics using existing value and URL policies.
+
+    URL-aware obfuscation covers credential query names such as token even when
+    their value is unregistered. Unlabelled unknown non-URL secrets remain out
+    of scope. Persistence retains its existing policy separately.
+
+    The literal sweep of registered values skips spellings shorter than the
+    debug-bundle minimum: an unanchored replace of a one-to-three character
+    value would rewrite channel numbers, ids and timestamps. Such a value is
+    still removed by the structural URL rules (credential-named query
+    parameter, Xtream Codes path shape, userinfo), but not elsewhere.
+    """
+    try:
+        from obfuscate import _MIN_LITERAL_SWEEP_LENGTH, obfuscate_text
+
+        return obfuscate_text(
+            _redact_persistent_string(value, _MIN_LITERAL_SWEEP_LENGTH)
+        )
+    except Exception:  # noqa: BLE001 - never let diagnostic scrubbing interrupt recovery
+        return "***REDACTED***"
+
+
+def redact_exception(error: BaseException) -> str:
+    """Render and scrub the complete exception chain, without raw exc_info.
+
+    Pass this as a normal log argument, not to logger.exception/exception info:
+    those would append the original unsanitized traceback again.
+    """
+    try:
+        return redact_log_diagnostic("".join(traceback.format_exception(error)))
+    except Exception:  # noqa: BLE001 - a diagnostic must fail closed, not leak or abort recovery
+        return "Exception diagnostic unavailable."
 
 
 def _redact_persistent_value(value):

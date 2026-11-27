@@ -163,6 +163,59 @@ SEARCH_RELOAD_MOUNT_FILES = ("frontend/src/App.tsx",)
 SEARCH_RELOAD_MOUNT_ADDED_FILES = ("frontend/src/App.searchReload.test.tsx",)
 
 
+CREDENTIAL_ERROR_BOUNDARIES_FILES = (
+    "backend/cloud_storage/upload_security.py",
+    "backend/credential_sentinel.py",
+    "backend/dispatcharr_client.py",
+    "backend/journal.py",
+    "backend/log_utils.py",
+    "backend/obfuscate.py",
+    "backend/routers/channels.py",
+    "backend/routers/m3u.py",
+    "backend/services/profile_reconcile.py",
+)
+
+
+def _before_credential_error_boundaries(manifest):
+    key = "credential_error_boundaries_update"
+    update = manifest[key]
+    assert update["base_commit"] == "deb079b868ff71d6aa97556e84bdeddabd63a459"
+    assert update["bead"] == "enhancedchannelmanager-ej4um"
+    assert update["version"] == "0.18.2-0092"
+    assert update["previous_manifest_sha256"] == (
+        "906bbeae86a0fc5c6d88ccfa47e9a2234cc70cbaf505a82fede8c694200dcfcf"
+    )
+    assert update["added_files"] == []
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(CREDENTIAL_ERROR_BOUNDARIES_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_credential_error_boundaries_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_credential_error_boundaries(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert (
+        result["credential_error_boundaries_update"]
+        == manifest["credential_error_boundaries_update"]
+    )
+
+
 YAML_BUDGETS_FILES = (
     "backend/dbas/restore_artifact.py",
     "backend/pipeline_yaml_editor.py",
@@ -178,6 +231,7 @@ YAML_BUDGETS_ADDED_FILES = ("backend/yaml_safety.py",)
 
 def _before_yaml_budgets(manifest):
     key = "yaml_budgets_update"
+    manifest = _before_credential_error_boundaries(manifest)
     update = manifest[key]
     assert update["base_commit"] == "3f701e314cea41b8e35057540220c8e51a894023"
     assert update["bead"] == "enhancedchannelmanager-10tln"

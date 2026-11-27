@@ -195,8 +195,12 @@ def log_entries(entries: list[dict[str, Any]]) -> bool:
         session.commit()
         logger.debug("[JOURNAL] Batch logged: count=%s", len(journal_entries))
         return True
-    except Exception as e:
-        logger.exception("[JOURNAL] Failed to log journal entries batch: %s", e)
+    except Exception as e:  # noqa: BLE001 - report failure to the caller by returning False
+        # Type only: a database error's text repeats the bound row values.
+        logger.error(
+            "[JOURNAL] Failed to log journal entries batch: count=%s error=%s",
+            len(entries), type(e).__name__,
+        )
         session.rollback()
         return False
     finally:
@@ -238,9 +242,10 @@ def log_entry(
     session: Session | None = None
     try:
         session = get_session()
+        # Identifiers only: names, descriptions and values are row content.
         logger.debug(
-            "[JOURNAL] Creating entry: category=%s action=%s entity=%r (id=%s) user_initiated=%s%s",
-            category, action_type, entity_name, entity_id, user_initiated,
+            "[JOURNAL] Creating entry: category=%s action=%s entity_id=%s user_initiated=%s%s",
+            category, action_type, entity_id, user_initiated,
             (" batch_id=%s" % batch_id) if batch_id else ""
         )
         entry = _build_journal_entry(
@@ -257,10 +262,17 @@ def log_entry(
         )
         session.add(entry)
         session.commit()
-        logger.debug("[JOURNAL] Entry logged: %s/%s - %s (id=%s)", category, action_type, entity_name, entry.id)
+        logger.debug(
+            "[JOURNAL] Entry logged: %s/%s entity_id=%s (id=%s)",
+            category, action_type, entity_id, entry.id,
+        )
         return entry
-    except Exception as e:
-        logger.exception("[JOURNAL] Failed to log journal entry: %s", e)
+    except Exception as e:  # noqa: BLE001 - report failure to the caller by returning None
+        # Type only: a database error's text repeats the bound row values.
+        logger.error(
+            "[JOURNAL] Failed to log journal entry: category=%s action=%s entity_id=%s error=%s",
+            category, action_type, entity_id, type(e).__name__,
+        )
         if session is not None:
             session.rollback()
         return None
