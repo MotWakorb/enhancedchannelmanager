@@ -37,6 +37,20 @@ MOUNTINFO_FIXTURES = BACKEND_DIR / "tests" / "fixtures" / "mountinfo"
 SH = shutil.which("sh") or "/bin/sh"
 
 
+# The exact operator guidance for an unmounted config directory. Pinned
+# verbatim: a --rm container is deleted on stop, so wording that says "stop"
+# or "back up" loses the operator's data.
+EXPECTED_COPY_OUT_ADVICE = (
+    "  Before recreating, if this container already holds data you care about:",
+    "  copy the whole /config directory out while the container is still running,",
+    "  for example 'docker cp <container>:/config ./ecm-config-copy'.",
+    "  Do NOT stop the container first: a container started with --rm is",
+    "  deleted when it stops, and its data goes with it. A backup from",
+    "  Settings -> Backup & Restore is not enough on its own, because it does not",
+    "  restore ECM accounts, rules or schedules.",
+)
+
+
 def _run_check(config_dir, mountinfo=None, extra_env=None):
     """Execute the real check_config_persistence() out of entrypoint.sh."""
     script = ENTRYPOINT.read_text()
@@ -105,10 +119,18 @@ class TestUnmountedConfigWarnsLoudly:
         assert "journal.db" in out
         # ...names the exact event that destroys it...
         assert "recreate" in out.lower()
-        # ...and tells them how to fix it, plus to back up before doing the
-        # container recreate the 0oi96 fix tells them to do.
+        # ...and tells them how to fix it, plus to copy /config out before
+        # doing the container recreate that fix calls for.
         assert "-v ecm-config:/config" in out
-        assert "Back up first" in out
+        # A Configuration backup restores no accounts, rules or schedules, so
+        # the old "back up first" advice alone loses data.
+        assert "Back up first" not in out
+        for line in EXPECTED_COPY_OUT_ADVICE:
+            assert line in out
+
+    def test_copy_out_advice_is_advisory_not_fatal(self):
+        rc, _ = _run_check("/config", _fixture("container_no_mount"))
+        assert rc == 0
 
     def test_sibling_mounts_are_not_mistaken_for_config(self):
         # The no-mount fixture still contains /proc, /dev, /etc/hosts and

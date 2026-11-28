@@ -129,8 +129,8 @@ There are two, and both are read from your instance *after* the restore rather t
 
 | Notice | When you see it | What to do |
 |-|-|-|
-| **First-run setup required** | The instance ends up with no ECM account, which is the normal outcome of restoring a standard backup onto a fresh instance. | Create your admin account through first-run setup, then sign in. To migrate accounts between instances instead, take an encrypted backup with **Include credentials**. |
-| **Re-establish configured surfaces** | Something you had configured before the restore is gone after it, because a standard backup omits credential stores and personal data. It names only what this instance actually lost: cloud storage targets, sync targets, M3U digest settings, or event-sync exclusions. | Re-create the named items. |
+| **First-run setup required** | The instance ends up with no ECM account, which is the normal outcome of restoring a standard backup onto a fresh instance. | Create your admin account through first-run setup, then sign in. No current backup restore brings accounts back, even an encrypted backup with **Include credentials**. To move accounts to another instance, copy the whole `/config` directory instead. |
+| **Re-establish configured surfaces** | Something you had configured before the restore is gone after it, because a standard backup omits credential stores and personal data. It names only what this instance actually lost: cloud storage targets, sync targets, M3U digest settings, or event-sync exclusions. | Re-create the named items. To keep them across a move, copy the whole `/config` directory instead. |
 
 If you restore onto an instance that already has ECM accounts, those accounts are preserved across the restore and you will not see the first notice. The restore does not sign you out.
 

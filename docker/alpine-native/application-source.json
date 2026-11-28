@@ -942,7 +942,7 @@
     {
       "executable": true,
       "path": "backend/entrypoint.sh",
-      "sha256": "4aaba511aefc767be0c61f88ecb32d2c0bc28dc277545abb9fd13cb84cb5bc58",
+      "sha256": "de4dfbadd44932a3e785c6f7cba944b5ac4726b0fa6277020f6ce35a4d2af787",
       "type": "file"
     },
     {
@@ -1008,7 +1008,7 @@
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "03882c5088c9f347c78632f124701f3fa842461942332b80b18e27985fec1041",
+      "sha256": "24d96c9c6aaf2f78ac561806ca373d6e5f5a6ac52d733f5d8ebf63132ae1691e",
       "type": "file"
     },
     {
@@ -1134,7 +1134,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "b749e1cbcb4874d83582a253c94265f30e6603cb7c13b947bd6de42a6ce5bdd9",
+      "sha256": "abdd36cd63a157c3210bc7677ca648fa19eb9f5bf2b3fc4e66bdc5580220108d",
       "type": "file"
     },
     {
@@ -1842,7 +1842,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "ed4bd1fb4830edb1518b9338ff43ae097cd15a4daf0da3cd9ea7c25621960c01",
+      "sha256": "bc5bd668918bcec47483d9a801e8b59692daa520558f807a00f42583f9ce3d70",
       "type": "file"
     },
     {
@@ -7311,5 +7311,19 @@
     "previous_manifest_sha256": "21694433896faa00369a2c51914255374293e4374c983698dc9f35bb849d3cc3",
     "scope": "Escape provider-controlled group and stream names, and every other interpolated value, in the M3U digest email HTML; version touchpoints.",
     "version": "0.18.2-0099"
+  },
+  "backup_notice_accuracy_update": {
+    "added_files": [],
+    "base_commit": "029e81d15005a3305c38500c38591c06131cc84c",
+    "bead": "enhancedchannelmanager-cvgd4",
+    "changed_files": {
+      "backend/entrypoint.sh": "4aaba511aefc767be0c61f88ecb32d2c0bc28dc277545abb9fd13cb84cb5bc58",
+      "backend/main.py": "03882c5088c9f347c78632f124701f3fa842461942332b80b18e27985fec1041",
+      "backend/routers/backup.py": "b749e1cbcb4874d83582a253c94265f30e6603cb7c13b947bd6de42a6ce5bdd9",
+      "frontend/package.json": "ed4bd1fb4830edb1518b9338ff43ae097cd15a4daf0da3cd9ea7c25621960c01"
+    },
+    "previous_manifest_sha256": "03559c02a47435b53e2de092d275973866607dc98d89f733803a55084eca58fe",
+    "scope": "Correct the restore-notice and unmounted-config warning text so that neither points operators at an encrypted backup to migrate ECM accounts or tells them to back up before copying /config; version touchpoints.",
+    "version": "0.18.2-0100"
   }
 }

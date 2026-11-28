@@ -2110,7 +2110,7 @@ The three legacy-ZIP restore endpoints above (`/restore`, `/restore-initial`, `/
   "backup_date": "2026-08-17T11:00:00Z",
   "restored_files": ["settings.json", "journal.db"],
   "notices": [
-    "This instance has no ECM user account. A standard (non-encrypted) backup carries no account credentials by design, so accounts are not restored from one — create your admin account through first-run setup. To migrate accounts between instances instead, take an encrypted backup with credentials included."
+    "This instance has no ECM user account. A current backup does not carry ECM accounts: a Full Backup keeps only a fixed list of configuration tables, and a Configuration (DBAS) restore never applies journal.db, even from an encrypted backup with credentials included. Create your admin account through first-run setup. To move accounts to another instance, copy the whole /config directory instead."
   ]
 }
 ```

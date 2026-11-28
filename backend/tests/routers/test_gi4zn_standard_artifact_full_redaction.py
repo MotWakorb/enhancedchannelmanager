@@ -1501,7 +1501,12 @@ def test_the_restore_names_the_configured_surfaces_this_instance_lost(tmp_path):
     assert len(notices) == 1, notices
     assert "cloud storage target" in notices[0]
     assert "M3U digest settings" in notices[0]
-    assert "encrypted backup" in notices[0]
+    # No restore path applies the journal.db an encrypted backup carries, so the
+    # notice must not send the operator there.
+    assert "encrypted backup" not in notices[0]
+    assert notices[0].endswith(
+        "To keep these, copy the whole /config directory instead."
+    )
     # Cleared on read: a second call must not repeat a stale notice.
     with patch.object(backup_mod, "JOURNAL_DB_FILE", live):
         assert backup_mod._post_restore_account_notices() == []
@@ -2001,7 +2006,15 @@ def test_an_account_less_restore_tells_the_operator_to_run_first_run_setup(
     notices = backup_mod._post_restore_account_notices()
     assert notices == [backup_mod.FIRST_RUN_SETUP_NOTICE]
     assert "first-run setup" in notices[0]
-    assert "encrypted backup" in notices[0]
+    assert notices[0] == (
+        "This instance has no ECM user account. A current backup does not "
+        "carry ECM accounts: a Full Backup keeps only a fixed list of "
+        "configuration tables, and a Configuration (DBAS) restore never "
+        "applies journal.db, even from an encrypted backup with credentials "
+        "included. Create your admin account through first-run setup. To "
+        "move accounts to another instance, copy the whole /config "
+        "directory instead."
+    )
 
 
 def test_whole_blob_sentinel_alert_config_is_repaired_from_the_destination(
