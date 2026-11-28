@@ -483,7 +483,7 @@
     {
       "executable": false,
       "path": "backend/alert_methods_discord.py",
-      "sha256": "d441cd932b6d563d1f1690cc1d845e425c9d872b7804276b33792a4ecf0f85a3",
+      "sha256": "3851d83281e63bdf7a35a44c95e89d809422e3deda6460cc458b52d3f180cd04",
       "type": "file"
     },
     {
@@ -917,6 +917,12 @@
     },
     {
       "executable": false,
+      "path": "backend/discord_markdown.py",
+      "sha256": "2e3a42641e976a3b9f75c1a9a41194897586a9c6d4d38b5330d5598c0b41d71d",
+      "type": "file"
+    },
+    {
+      "executable": false,
       "path": "backend/dispatcharr_client.py",
       "sha256": "4417f6192b3afdf4cc091f11b1175973bc7b10c1fb0cc72b93af783338cecac5",
       "type": "file"
@@ -1002,13 +1008,13 @@
     {
       "executable": false,
       "path": "backend/m3u_digest_template.py",
-      "sha256": "d20b8db576be6f74bbedbcd216317eb9e9fed7cb28e20c1820fa4f31f0b6b964",
+      "sha256": "c6681bd0aa8c571dc21bac7064cf3b490ddc1657d0bd36a497ba458000cd2d11",
       "type": "file"
     },
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "24d96c9c6aaf2f78ac561806ca373d6e5f5a6ac52d733f5d8ebf63132ae1691e",
+      "sha256": "51f899fdce82da6c9031dad677a167412160efa9a538c4ec455fdde5f35d1c3f",
       "type": "file"
     },
     {
@@ -1134,7 +1140,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "abdd36cd63a157c3210bc7677ca648fa19eb9f5bf2b3fc4e66bdc5580220108d",
+      "sha256": "f30a2ab019d4805c1ed70c1bd13046f83b1b1838f7ed6ab2ed2dd6acd6a02aa4",
       "type": "file"
     },
     {
@@ -1266,7 +1272,7 @@
     {
       "executable": false,
       "path": "backend/routers/settings.py",
-      "sha256": "ffa40e174939a9c976b5c0ea9b7c5dac7491f777f9497cdacd067d9783a75566",
+      "sha256": "befcd9f261695082b4b5113416cd661ac704c3107479e4975cdc50e2c0eef3be",
       "type": "file"
     },
     {
@@ -1482,7 +1488,7 @@
     {
       "executable": false,
       "path": "backend/services/notification_service.py",
-      "sha256": "331072514b47538a5042c2150da991a336d8b89232c9a6a22d726aa6ed979f94",
+      "sha256": "dc00cc33d7b22a4e011eea989f75c955da85a09901bcc001a8b0ad2876999f1d",
       "type": "file"
     },
     {
@@ -1662,7 +1668,7 @@
     {
       "executable": false,
       "path": "backend/tasks/m3u_digest.py",
-      "sha256": "8f17a1b5abffc4e2e317ec28754ddebe749b5bfae1e6e5f6ff31cb5712256786",
+      "sha256": "1067323ba69dc110bacf3a43f75d5676ec5d8db32d579509045dc58600690133",
       "type": "file"
     },
     {
@@ -1842,7 +1848,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "bc5bd668918bcec47483d9a801e8b59692daa520558f807a00f42583f9ce3d70",
+      "sha256": "cb68adba3dd334482d3181722fcdf0a2fb5576fd470c67431d123406534dd5fd",
       "type": "file"
     },
     {
@@ -7325,5 +7331,25 @@
     "previous_manifest_sha256": "03559c02a47435b53e2de092d275973866607dc98d89f733803a55084eca58fe",
     "scope": "Correct the restore-notice and unmounted-config warning text so that neither points operators at an encrypted backup to migrate ECM accounts or tells them to back up before copying /config; version touchpoints.",
     "version": "0.18.2-0100"
+  },
+  "discord_digest_mentions_update": {
+    "added_files": [
+      "backend/discord_markdown.py"
+    ],
+    "base_commit": "e36152e2b65cd622b8a5213435f49c0e4d85ff84",
+    "bead": "enhancedchannelmanager-ga5r3",
+    "changed_files": {
+      "backend/alert_methods_discord.py": "d441cd932b6d563d1f1690cc1d845e425c9d872b7804276b33792a4ecf0f85a3",
+      "backend/m3u_digest_template.py": "d20b8db576be6f74bbedbcd216317eb9e9fed7cb28e20c1820fa4f31f0b6b964",
+      "backend/main.py": "24d96c9c6aaf2f78ac561806ca373d6e5f5a6ac52d733f5d8ebf63132ae1691e",
+      "backend/routers/backup.py": "abdd36cd63a157c3210bc7677ca648fa19eb9f5bf2b3fc4e66bdc5580220108d",
+      "backend/routers/settings.py": "ffa40e174939a9c976b5c0ea9b7c5dac7491f777f9497cdacd067d9783a75566",
+      "backend/services/notification_service.py": "331072514b47538a5042c2150da991a336d8b89232c9a6a22d726aa6ed979f94",
+      "backend/tasks/m3u_digest.py": "8f17a1b5abffc4e2e317ec28754ddebe749b5bfae1e6e5f6ff31cb5712256786",
+      "frontend/package.json": "bc5bd668918bcec47483d9a801e8b59692daa520558f807a00f42583f9ce3d70"
+    },
+    "previous_manifest_sha256": "6450ec40fa160ae17d0a3ce787cc8eadece6bd49fbf17dbeafcb0697f50c0786",
+    "scope": "Escape provider-controlled group and stream names in the Discord M3U digest, bound their length and split oversized sections at row boundaries, and send allowed_mentions {\"parse\": []} on every Discord webhook payload through the new shared discord_markdown helper; version touchpoints.",
+    "version": "0.18.2-0101"
   }
 }

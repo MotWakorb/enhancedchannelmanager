@@ -8,7 +8,13 @@ from typing import List, Dict
 from collections import defaultdict
 from html import escape as _escape_html
 
+from discord_markdown import escape_markdown as _escape_discord
 from models import M3UChangeLog
+
+# Longest provider name (group or stream) shown in a Discord digest row, before
+# escaping. Escaping at most doubles it, so five names plus a group stay well
+# inside one 2000-character Discord message.
+_DISCORD_NAME_MAX_LEN = 100
 
 
 class M3UDigestTemplate:
@@ -361,6 +367,28 @@ class M3UDigestTemplate:
 
         return "\n".join(lines)
 
+    @staticmethod
+    def _split_section(type_header: str, rows: List[str], budget: int) -> List[str]:
+        """Split one change-type section at row boundaries.
+
+        A section that fits in ``budget`` comes back whole, so ordinary digests
+        render exactly as before. An oversized one becomes several sections,
+        each repeating ``type_header`` and each fitting in ``budget``.
+        Escaped names are length-bounded, so a single row always fits.
+        """
+        section = type_header + "".join(rows)
+        if len(section) <= budget:
+            return [section]
+        sections = []
+        current = type_header
+        for row in rows:
+            if current != type_header and len(current) + len(row) > budget:
+                sections.append(current)
+                current = type_header
+            current += row
+        sections.append(current)
+        return sections
+
     def render_discord(self, changes: List[M3UChangeLog], since: datetime, show_detailed_list: bool = True) -> List[str]:
         """
         Render Discord-friendly content.
@@ -395,39 +423,46 @@ class M3UDigestTemplate:
             account_section = f"\n**M3U Account #{account_id}**\n"
 
             for change_type, change_list in type_changes.items():
-                label = self.LABELS.get(change_type, change_type)
+                label = _escape_discord(self.LABELS.get(change_type, change_type))
                 emoji = "🟢" if "added" in change_type else "🔴"
 
                 type_header = f"\n{emoji} __{label}__\n"
-                type_content = ""
+                rows = []
 
                 for change in change_list[:15]:  # Limit per type for Discord
                     if change.group_name:
+                        # Group and stream names come from M3U providers; each
+                        # value is escaped so it renders as text, never as
+                        # markdown or a mention, and bounded so a row can't
+                        # outgrow a message.
+                        group_name = _escape_discord(change.group_name, max_len=_DISCORD_NAME_MAX_LEN)
                         if change.change_type in ("group_added", "group_removed"):
-                            type_content += f"• **{change.group_name}** ({change.count} streams)\n"
+                            rows.append(f"• **{group_name}** ({change.count} streams)\n")
                         else:
                             stream_names = change.get_stream_names()
                             if stream_names and len(stream_names) <= 5:
-                                names_str = ", ".join(stream_names)
-                                type_content += f"• **{change.group_name}**: {names_str}\n"
+                                names_str = ", ".join(
+                                    _escape_discord(n, max_len=_DISCORD_NAME_MAX_LEN) for n in stream_names
+                                )
+                                rows.append(f"• **{group_name}**: {names_str}\n")
                             else:
-                                type_content += f"• **{change.group_name}**: {change.count} streams\n"
+                                rows.append(f"• **{group_name}**: {change.count} streams\n")
                     else:
-                        type_content += f"• {change.count} items\n"
+                        rows.append(f"• {change.count} items\n")
 
                 if len(change_list) > 15:
-                    type_content += f"• _...and {len(change_list) - 15} more_\n"
+                    rows.append(f"• _...and {len(change_list) - 15} more_\n")
 
-                section = type_header + type_content
-
-                # Check if we need to start a new chunk
-                if len(current_chunk) + len(account_section) + len(section) > DISCORD_CHAR_LIMIT:
-                    chunks.append(current_chunk)
-                    current_chunk = f"**M3U Changes (continued)**\n{account_section}{section}"
-                else:
-                    if account_section not in current_chunk:
-                        current_chunk += account_section
-                    current_chunk += section
+                continued = f"**M3U Changes (continued)**\n{account_section}"
+                for section in self._split_section(type_header, rows, DISCORD_CHAR_LIMIT - len(continued)):
+                    # Check if we need to start a new chunk
+                    if len(current_chunk) + len(account_section) + len(section) > DISCORD_CHAR_LIMIT:
+                        chunks.append(current_chunk)
+                        current_chunk = continued + section
+                    else:
+                        if account_section not in current_chunk:
+                            current_chunk += account_section
+                        current_chunk += section
 
         # Add remaining content
         if current_chunk:

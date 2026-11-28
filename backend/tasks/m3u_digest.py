@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 import safe_regex
 from database import get_session
+from discord_markdown import no_mentions
 from models import M3UChangeLog, M3UDigestSettings
 from task_scheduler import TaskScheduler, TaskResult, ScheduleConfig, ScheduleType
 from task_registry import register_task
@@ -783,6 +784,7 @@ This is a test email from Enhanced Channel Manager.
                             "When there are actual M3U changes to report, you will receive digests here."
                         ),
                         "username": "ECM M3U Digest",
+                        "allowed_mentions": no_mentions(),
                     }
 
                     async with session.post(
@@ -804,9 +806,11 @@ This is a test email from Enhanced Channel Manager.
                     return False
 
                 for i, chunk in enumerate(discord_content):
+                    # Chunks carry provider-controlled names: never let them ping.
                     payload = {
                         "content": chunk,
                         "username": "ECM M3U Digest",
+                        "allowed_mentions": no_mentions(),
                     }
 
                     async with session.post(

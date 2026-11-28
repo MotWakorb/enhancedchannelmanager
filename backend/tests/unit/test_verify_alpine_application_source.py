@@ -108,7 +108,7 @@ def test_real_recorded_application_map_retains_date_and_container_adaptations(
     manifest = verifier.load_manifest(
         ROOT / "docker/alpine-native/application-source.json"
     )
-    assert len(manifest["files"]) == 1107
+    assert len(manifest["files"]) == 1108
     assert (
         manifest["baseline_application_commit"]
         == "06cc4bf5a1b9eb1f6ef29f617513d237cda2f531"
@@ -200,7 +200,61 @@ DIGEST_HTML_ESCAPE_FILES = ("backend/m3u_digest_template.py",)
 BACKUP_NOTICE_ACCURACY_FILES = ("backend/entrypoint.sh",)
 
 
+DISCORD_DIGEST_MENTIONS_FILES = (
+    "backend/alert_methods_discord.py",
+    "backend/m3u_digest_template.py",
+    "backend/routers/settings.py",
+    "backend/services/notification_service.py",
+    "backend/tasks/m3u_digest.py",
+)
+DISCORD_DIGEST_MENTIONS_ADDED_FILES = ("backend/discord_markdown.py",)
+
+
+def _before_discord_digest_mentions(manifest):
+    key = "discord_digest_mentions_update"
+    update = manifest[key]
+    assert update["base_commit"] == "e36152e2b65cd622b8a5213435f49c0e4d85ff84"
+    assert update["bead"] == "enhancedchannelmanager-ga5r3"
+    assert update["version"] == "0.18.2-0101"
+    assert update["previous_manifest_sha256"] == (
+        "6450ec40fa160ae17d0a3ce787cc8eadece6bd49fbf17dbeafcb0697f50c0786"
+    )
+    assert set(update["added_files"]) == set(DISCORD_DIGEST_MENTIONS_ADDED_FILES)
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(DISCORD_DIGEST_MENTIONS_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        if row["path"] in update["added_files"]:
+            assert row["type"] == "file" and row["executable"] is False
+            continue
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_discord_digest_mentions_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_discord_digest_mentions(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert (
+        result["discord_digest_mentions_update"]
+        == manifest["discord_digest_mentions_update"]
+    )
+
+
 def _before_backup_notice_accuracy(manifest):
+    manifest = _before_discord_digest_mentions(manifest)
     key = "backup_notice_accuracy_update"
     update = manifest[key]
     assert update["base_commit"] == "029e81d15005a3305c38500c38591c06131cc84c"
