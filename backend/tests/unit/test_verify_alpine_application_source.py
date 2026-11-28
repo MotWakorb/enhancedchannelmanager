@@ -194,8 +194,49 @@ CSS_TOKEN_LINT_ADDED_FILES = (
 )
 
 
+DIGEST_HTML_ESCAPE_FILES = ("backend/m3u_digest_template.py",)
+
+
+def _before_digest_html_escape(manifest):
+    key = "digest_html_escape_update"
+    update = manifest[key]
+    assert update["base_commit"] == "c62c80356a93e2e3b76711446aaadd44ebf03ea8"
+    assert update["bead"] == "enhancedchannelmanager-ssokw"
+    assert update["version"] == "0.18.2-0099"
+    assert update["previous_manifest_sha256"] == (
+        "21694433896faa00369a2c51914255374293e4374c983698dc9f35bb849d3cc3"
+    )
+    assert update["added_files"] == []
+    assert set(update["changed_files"]) == (
+        set(VERSION_TOUCHPOINTS) | set(DIGEST_HTML_ESCAPE_FILES)
+    )
+    previous = {name: value for name, value in manifest.items() if name != key}
+    previous["files"] = []
+    for row in manifest["files"]:
+        prior_sha256 = update["changed_files"].get(row["path"])
+        if prior_sha256 is not None:
+            assert prior_sha256 != row["sha256"]
+            row = {**row, "sha256": prior_sha256}
+        previous["files"].append(row)
+    assert (
+        hashlib.sha256((json.dumps(previous, indent=2) + "\n").encode()).hexdigest()
+        == update["previous_manifest_sha256"]
+    )
+    return previous
+
+
+def test_digest_html_escape_update_preserves_exact_prior_manifest(verifier):
+    manifest = verifier.load_manifest(
+        ROOT / "docker/alpine-native/application-source.json"
+    )
+    _before_digest_html_escape(manifest)
+    result = verifier.verify(ROOT, manifest)
+    assert result["digest_html_escape_update"] == manifest["digest_html_escape_update"]
+
+
 def _before_css_token_lint(manifest):
     key = "css_token_lint_update"
+    manifest = _before_digest_html_escape(manifest)
     update = manifest[key]
     assert update["base_commit"] == "91fa4d2ad5b65b2907aa72606d062852d7081702"
     assert update["bead"] == "enhancedchannelmanager-lw04j"

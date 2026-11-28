@@ -1002,13 +1002,13 @@
     {
       "executable": false,
       "path": "backend/m3u_digest_template.py",
-      "sha256": "ad21a9f3ab8f2bd3b6f137559da1cc9aa66a92ca52ebb763b60ab7acfd21cd77",
+      "sha256": "d20b8db576be6f74bbedbcd216317eb9e9fed7cb28e20c1820fa4f31f0b6b964",
       "type": "file"
     },
     {
       "executable": false,
       "path": "backend/main.py",
-      "sha256": "5dae2952a6a73afda78ba044a94cb302dcd2469859a06b913d2d40d69aa6258d",
+      "sha256": "03882c5088c9f347c78632f124701f3fa842461942332b80b18e27985fec1041",
       "type": "file"
     },
     {
@@ -1134,7 +1134,7 @@
     {
       "executable": false,
       "path": "backend/routers/backup.py",
-      "sha256": "cb75d3820fbad7ea67bb690933a8c522cc11e1c6e7b24d924450b1d16eabefdc",
+      "sha256": "b749e1cbcb4874d83582a253c94265f30e6603cb7c13b947bd6de42a6ce5bdd9",
       "type": "file"
     },
     {
@@ -1842,7 +1842,7 @@
     {
       "executable": false,
       "path": "frontend/package.json",
-      "sha256": "37c9cd6c7224db6406addaf21203a680b50ef60c849603a45fa8cd5d23bc230c",
+      "sha256": "ed4bd1fb4830edb1518b9338ff43ae097cd15a4daf0da3cd9ea7c25621960c01",
       "type": "file"
     },
     {
@@ -7297,5 +7297,19 @@
     "previous_manifest_sha256": "7f30fcf903b35486b933dfac0d94722b4da87e48feb487ea75d1b757ed36495c",
     "scope": "Add the per-theme CSS token resolution audit and its fallback baseline, and repoint undefined no-fallback CSS custom-property references to defined tokens in component stylesheets and in component inline styles; version touchpoints.",
     "version": "0.18.2-0098"
+  },
+  "digest_html_escape_update": {
+    "added_files": [],
+    "base_commit": "c62c80356a93e2e3b76711446aaadd44ebf03ea8",
+    "bead": "enhancedchannelmanager-ssokw",
+    "changed_files": {
+      "backend/m3u_digest_template.py": "ad21a9f3ab8f2bd3b6f137559da1cc9aa66a92ca52ebb763b60ab7acfd21cd77",
+      "backend/main.py": "5dae2952a6a73afda78ba044a94cb302dcd2469859a06b913d2d40d69aa6258d",
+      "backend/routers/backup.py": "cb75d3820fbad7ea67bb690933a8c522cc11e1c6e7b24d924450b1d16eabefdc",
+      "frontend/package.json": "37c9cd6c7224db6406addaf21203a680b50ef60c849603a45fa8cd5d23bc230c"
+    },
+    "previous_manifest_sha256": "21694433896faa00369a2c51914255374293e4374c983698dc9f35bb849d3cc3",
+    "scope": "Escape provider-controlled group and stream names, and every other interpolated value, in the M3U digest email HTML; version touchpoints.",
+    "version": "0.18.2-0099"
   }
 }
