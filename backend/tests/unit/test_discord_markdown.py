@@ -23,6 +23,10 @@ CASES = [
     ("**bold**", "\\*\\*bold\\*\\*"),
     ("http://evil.example", "http\\://evil.example"),
     ("HTTPS://evil.example/a_b", "HTTPS\\://evil.example/a\\_b"),
+    ("xhttp://evil.com", "xhttp\\://evil.com"),
+    ("1https://evil.com", "1https\\://evil.com"),
+    ("_https://evil.com", "\\_https\\://evil.com"),
+    ("HtTpS://evil.com", "HtTpS\\://evil.com"),
     ("__u__ ~~s~~ ||spoiler|| `code`", "\\_\\_u\\_\\_ \\~\\~s\\~\\~ \\|\\|spoiler\\|\\| \\`code\\`"),
     ("> quote", "\\> quote"),
     ("# Heading", "\\# Heading"),
@@ -47,11 +51,32 @@ class TestEscapeMarkdown:
     def test_line_breaks_collapse_so_a_name_cannot_start_new_lines(self):
         assert escape_markdown("a\r\n# b\nc") == "a \\# b c"
 
+    def test_unicode_line_separators_collapse(self):
+        assert escape_markdown("a\u2028# b\u2029c\x85d") == "a \\# b c d"
+
     def test_plain_name_is_unchanged(self):
         assert escape_markdown("ESPN HD 4K: US/East") == "ESPN HD 4K: US/East"
 
     def test_non_string_value_is_stringified(self):
         assert escape_markdown(42) == "42"
+
+
+class TestEscapeMarkdownMaxLen:
+    def test_value_at_limit_is_not_truncated(self):
+        assert escape_markdown("a" * 10, max_len=10) == "a" * 10
+
+    def test_long_value_is_truncated_with_ellipsis(self):
+        assert escape_markdown("a" * 11, max_len=10) == "a" * 9 + "\u2026"
+
+    def test_truncation_never_splits_an_escape_sequence(self):
+        assert escape_markdown("-" * 50, max_len=10) == "\\-" * 9 + "\u2026"
+
+    def test_truncation_never_splits_a_mention_break(self):
+        assert escape_markdown("@" * 50, max_len=4) == "@\u200b" * 3 + "\u2026"
+
+    def test_escaped_length_is_bounded_at_twice_the_limit(self):
+        hostile = "<@&456> [x](http://e) **_~`|>#-" * 20
+        assert len(escape_markdown(hostile, max_len=100)) <= 200
 
 
 class TestNoMentions:

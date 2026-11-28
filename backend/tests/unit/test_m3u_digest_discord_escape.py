@@ -149,6 +149,86 @@ class TestTemplateMarkdownUnchanged:
         assert EVERYONE not in chunks[0]
 
 
+DISCORD_HARD_LIMIT = 2000
+CHUNK_TARGET = 1900
+CONTINUED = "**M3U Changes (continued)**\n"
+
+
+def _chunks(changes):
+    return M3UDigestTemplate().render_discord(changes, SINCE, show_detailed_list=True)
+
+
+def _assert_chunks_fit(chunks):
+    lengths = [len(c) for c in chunks]
+    assert max(lengths) <= DISCORD_HARD_LIMIT, lengths
+    assert max(lengths) <= CHUNK_TARGET, lengths
+    for chunk in chunks[1:]:
+        assert chunk.startswith(CONTINUED), chunk[:60]
+
+
+def _bullets(chunks):
+    return sum(c.count("\n• **") for c in chunks)
+
+
+class TestChunkLengthBound:
+    def test_reviewer_case_fifteen_dash_names_fit(self):
+        changes = [_change("group_added", "-" * 70) for _ in range(15)]
+        chunks = _chunks(changes)
+        _assert_chunks_fit(chunks)
+        assert _bullets(chunks) == 15
+
+    def test_punctuation_heavy_names_fit(self):
+        name = "<@&456>[x](http://e)**_~`|>#-" * 4
+        changes = [
+            _change("streams_added", name, stream_names=[name] * 5, count=5)
+            for _ in range(15)
+        ]
+        chunks = _chunks(changes)
+        _assert_chunks_fit(chunks)
+        assert _bullets(chunks) == 15
+
+    def test_long_names_are_truncated_and_fit(self):
+        long_group = "G" * 500
+        long_stream = "S" * 500
+        changes = [
+            _change("streams_removed", long_group, stream_names=[long_stream] * 5, count=5)
+            for _ in range(15)
+        ]
+        chunks = _chunks(changes)
+        _assert_chunks_fit(chunks)
+        text = "".join(chunks)
+        assert long_group not in text
+        assert f"• **{'G' * 99}\u2026**: " in text
+        assert ", ".join(["S" * 99 + "\u2026"] * 5) in text
+
+    def test_many_rows_across_accounts_fit_without_losing_rows(self):
+        name = "-_*" * 40
+        changes = []
+        for account_id in range(1, 5):
+            for change_type in ("group_added", "group_removed", "streams_added", "streams_removed"):
+                for _ in range(15):
+                    if change_type.startswith("group"):
+                        changes.append(_change(change_type, name, account_id=account_id))
+                    else:
+                        changes.append(_change(
+                            change_type, name, stream_names=["#" * 60] * 5,
+                            count=5, account_id=account_id,
+                        ))
+        chunks = _chunks(changes)
+        _assert_chunks_fit(chunks)
+        assert len(chunks) > 1
+        assert _bullets(chunks) == 4 * 4 * 15
+        for account_id in range(1, 5):
+            assert any(f"**M3U Account #{account_id}**" in c for c in chunks)
+
+    def test_split_section_repeats_type_header_in_each_chunk(self):
+        changes = [_change("group_added", "-" * 70) for _ in range(15)]
+        chunks = _chunks(changes)
+        assert len(chunks) >= 2
+        for chunk in chunks[1:]:
+            assert "\n**M3U Account #7**\n\n🟢 __Groups Added__\n• " in chunk
+
+
 def _mock_session(statuses):
     """aiohttp.ClientSession stand-in; each post returns the next status."""
     responses = []

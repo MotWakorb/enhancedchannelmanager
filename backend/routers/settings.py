@@ -61,6 +61,7 @@ from plex_client import PlexClient
 from media_connection_errors import media_connection_error, redact_media_diagnostic
 from cache import get_cache
 from database import get_session
+from discord_markdown import no_mentions
 from log_utils import get_persistent_log_policy
 from profile_recovery import recovery_destination
 from stream_prober import StreamProber, get_prober, set_prober
@@ -1928,6 +1929,7 @@ async def test_discord_webhook(
                 "You will receive notifications from Enhanced Channel Manager here."
             ),
             "username": "ECM Test",
+            "allowed_mentions": no_mentions(),
         }
 
         async with aiohttp.ClientSession() as session:

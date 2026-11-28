@@ -82,3 +82,21 @@ class TestLegacyNotificationDiscord:
         payload = session.post.call_args.kwargs["json"]
         assert payload["allowed_mentions"] == {"parse": []}
         assert f"Account {HOSTILE} returned an error" in payload["content"]
+
+
+class TestSettingsTestDiscord:
+    @pytest.mark.asyncio
+    async def test_test_webhook_payload_suppresses_mentions(self, async_client):
+        session = _mock_session()
+        with patch("aiohttp.ClientSession", return_value=session):
+            response = await async_client.post(
+                "/api/settings/test-discord", json={"webhook_url": FAKE_WEBHOOK}
+            )
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        session.post.assert_called_once()
+        assert session.post.call_args.args[0] == FAKE_WEBHOOK
+        payload = session.post.call_args.kwargs["json"]
+        assert payload["allowed_mentions"] == {"parse": []}
+        assert payload["username"] == "ECM Test"
