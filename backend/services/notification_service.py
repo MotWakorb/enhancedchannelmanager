@@ -12,6 +12,7 @@ from typing import Optional
 
 from config import get_settings
 from database import get_session
+from discord_markdown import no_mentions
 
 logger = logging.getLogger(__name__)
 
@@ -319,9 +320,12 @@ async def _dispatch_to_alert_channels(
                 if "duration_seconds" in metadata:
                     discord_message += f"\n**Duration:** {metadata['duration_seconds']:.1f}s"
 
+            # The alert body can carry provider-controlled values; a name such
+            # as "@everyone" in content must not ping the channel.
             payload = {
                 "content": discord_message,
                 "username": "ECM Alerts",
+                "allowed_mentions": no_mentions(),
             }
 
             async with aiohttp.ClientSession() as session:

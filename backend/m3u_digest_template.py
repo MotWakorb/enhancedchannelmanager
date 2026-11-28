@@ -8,6 +8,7 @@ from typing import List, Dict
 from collections import defaultdict
 from html import escape as _escape_html
 
+from discord_markdown import escape_markdown as _escape_discord
 from models import M3UChangeLog
 
 
@@ -395,7 +396,9 @@ class M3UDigestTemplate:
             account_section = f"\n**M3U Account #{account_id}**\n"
 
             for change_type, change_list in type_changes.items():
-                label = self.LABELS.get(change_type, change_type)
+                # Group and stream names come from M3U providers; each value is
+                # escaped so it renders as text, never as markdown or a mention.
+                label = _escape_discord(self.LABELS.get(change_type, change_type))
                 emoji = "🟢" if "added" in change_type else "🔴"
 
                 type_header = f"\n{emoji} __{label}__\n"
@@ -403,15 +406,16 @@ class M3UDigestTemplate:
 
                 for change in change_list[:15]:  # Limit per type for Discord
                     if change.group_name:
+                        group_name = _escape_discord(change.group_name)
                         if change.change_type in ("group_added", "group_removed"):
-                            type_content += f"• **{change.group_name}** ({change.count} streams)\n"
+                            type_content += f"• **{group_name}** ({change.count} streams)\n"
                         else:
                             stream_names = change.get_stream_names()
                             if stream_names and len(stream_names) <= 5:
-                                names_str = ", ".join(stream_names)
-                                type_content += f"• **{change.group_name}**: {names_str}\n"
+                                names_str = ", ".join(_escape_discord(n) for n in stream_names)
+                                type_content += f"• **{group_name}**: {names_str}\n"
                             else:
-                                type_content += f"• **{change.group_name}**: {change.count} streams\n"
+                                type_content += f"• **{group_name}**: {change.count} streams\n"
                     else:
                         type_content += f"• {change.count} items\n"
 

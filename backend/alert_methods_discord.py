@@ -8,6 +8,7 @@ import logging
 from typing import Dict, Any
 
 from alert_methods import AlertMethod, AlertMessage, register_method
+from discord_markdown import no_mentions
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +76,9 @@ class DiscordWebhookMethod(AlertMethod):
         # Clean up None values
         embed = {k: v for k, v in embed.items() if v is not None}
 
-        # Build payload
-        payload: Dict[str, Any] = {"embeds": [embed]}
+        # Alert text can carry provider-controlled values (stream, group and
+        # account names), so the payload never allows a ping.
+        payload: Dict[str, Any] = {"embeds": [embed], "allowed_mentions": no_mentions()}
 
         # Add optional username and avatar
         username = self.config.get("username")
