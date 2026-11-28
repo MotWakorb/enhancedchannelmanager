@@ -28,7 +28,7 @@
 
 /* Card panels for backup/restore sections */
 .backup-card {
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-color, #3a3a5a);
   border-radius: var(--radius-xl);
   padding: 1.25rem;

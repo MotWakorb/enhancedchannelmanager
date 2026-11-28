@@ -7,7 +7,7 @@
  */
 
 .team-alias-group {
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-radius: 6px;
   padding: 12px;
   margin-top: 12px;

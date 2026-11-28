@@ -232,7 +232,7 @@
 .edit-mode-dialog-auto-renames {
   margin: 0 0 1rem;
   padding: 0.625rem 0.75rem;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-left: 3px solid var(--warning-color, #d9822b);
   border-radius: 4px;
   background: var(--bg-secondary);
@@ -573,7 +573,7 @@
 
 .numbering-conflict-row {
   padding: 0.6rem 0;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-primary);
 }
 
 .numbering-conflict-row:last-child {

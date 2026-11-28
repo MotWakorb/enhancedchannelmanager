@@ -18,7 +18,7 @@
 .schedule-editor .form-input {
   width: 100%;
   padding: 0.5rem 0.75rem;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   background-color: var(--bg-primary);
   color: var(--text-primary);
@@ -61,7 +61,7 @@
   align-items: center;
   gap: 0.25rem;
   padding: 0.75rem 0.5rem;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   background-color: var(--bg-secondary);
   color: var(--text-primary);
@@ -121,7 +121,7 @@
 /* Body role, SIZE only. A control. 0.85rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .preset-button {
   padding: 0.5rem;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   background-color: var(--bg-tertiary);
   color: var(--text-primary);
@@ -152,7 +152,7 @@
 .schedule-editor .number-input {
   width: 60px;
   padding: 0.5rem;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   background-color: var(--bg-primary);
   color: var(--text-primary);
@@ -175,7 +175,7 @@
 /* Body role, SIZE only. 0.9rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .time-input {
   padding: 0.5rem;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   background-color: var(--bg-primary);
   color: var(--text-primary);
@@ -188,7 +188,7 @@
   flex: 1;
   min-width: 150px;
   padding: 0.5rem;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   background-color: var(--bg-primary);
   color: var(--text-primary);
@@ -205,7 +205,7 @@
 /* Body role, SIZE only. A control; grows 12px -> 13px. 0.75rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .quick-button {
   padding: 0.25rem 0.5rem;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   background-color: var(--bg-tertiary);
   color: var(--text-secondary);
@@ -230,7 +230,7 @@
 .schedule-editor .day-button {
   width: 42px;
   height: 42px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-radius: 50%;
   background-color: var(--bg-tertiary);
   color: var(--text-primary);
@@ -260,7 +260,7 @@
 /* Body role, SIZE only. A control. 0.9rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .schedule-editor .day-select {
   padding: 0.5rem;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   background-color: var(--bg-primary);
   color: var(--text-primary);
@@ -291,7 +291,7 @@
   font-size: var(--type-section-size);
   font-weight: 600;
   color: var(--text-primary);
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-primary);
   padding-bottom: 0.5rem;
 }
 
@@ -334,7 +334,7 @@
 .schedule-editor .option-list {
   max-height: 200px;
   overflow-y: auto;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   background-color: var(--bg-secondary);
 }
@@ -345,7 +345,7 @@
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
   cursor: pointer;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-primary);
   transition: background-color 0.15s ease;
 }
 
