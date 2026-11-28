@@ -2,8 +2,8 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "ecm-0.18.2-0100",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0100/ecm-2c059faa2a3bc96962dcdb3ee0d981e636971e215fd3716966e28737f0c443ce",
+  "name": "ecm-0.18.2-0101",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.2-0101/ecm-0e4422d30c3fb69a8773dd34f781461845250c8fa37602c16cb421a7c3c08f31",
   "creationInfo": {
     "created": "2026-11-18T20:52:32Z",
     "creators": [
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-ecm",
       "name": "enhanced-channel-manager",
-      "versionInfo": "0.18.2-0100",
+      "versionInfo": "0.18.2-0101",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
